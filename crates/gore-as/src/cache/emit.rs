@@ -3484,6 +3484,8 @@ fn emit_function_ctor(
         pass_trace("restore_interpolated_sample_lives", &rendered);
         let rendered = restore_scoped_event_self_argument(&rendered, f, refs, class_name, is_method);
         pass_trace("restore_scoped_event_self_argument", &rendered);
+        let rendered = restore_wait_branch_and_query_array_lives(&rendered, f, refs, class_name, is_method);
+        pass_trace("restore_wait_branch_and_query_array_lives", &rendered);
         let rendered = restore_optional_predicate_condition_lives(&rendered, f, refs, class_name, is_method);
         pass_trace("restore_optional_predicate_condition_lives", &rendered);
         let rendered = fold_copied_optional_bool_comparison(&rendered, f, refs, is_method);
@@ -27647,6 +27649,166 @@ fn restore_optional_predicate_condition_lives(body: &str, f: &Func, refs: &RefRe
         out=out.lines().filter(|line|*line!=bare).collect::<Vec<_>>().join("\n");if body.ends_with('\n'){out.push('\n');}Some(out)
     })();
     rewritten.unwrap_or_else(||body.to_owned())
+}
+
+/// Keep a query array until block exit while separating wait-default and discarded executor lives.
+fn restore_wait_branch_and_query_array_lives(body:&str,f:&Func,refs:&RefResolver,class_name:Option<&str>,is_method:bool)->String {
+    if body.matches("this.WaitForLastTaskToEnd(").count()!=1 || body.matches("FAbilityTaskExecutor()").count()!=3 {return body.to_owned();}
+    let changed=(|| {
+        let plain=|t:&super::types::DataType,token,constant:bool|t.token==token && t.type_info==0 && !t.is_reference && !t.is_object_handle
+            && t.is_object_const==constant && t.is_read_only==constant && !t.is_auto && !t.if_handle_then_const;
+        let object=|t:&super::types::DataType,p,reference:bool,constant:bool,handle:bool|t.token==5 && t.type_info==p && t.is_reference==reference
+            && t.is_object_const==constant && t.is_read_only==(constant && !handle) && t.is_object_handle==handle && !t.is_auto && !t.if_handle_then_const;
+        let native=|p,name|refs.type_identity_by_ptr(p).is_some_and(|t|t.name==name && t.module.is_empty() && t.namespace.is_empty());
+        if !is_method || f.is_const_method() || !f.params.is_empty() || !plain(&f.ret,0x52,false) {return None;}
+        let class=class_name?;let code=disassemble(&f.bytecode).ok()?;
+        let w=|i:&Instr,n:usize|i.words.get(n).map(|s|*s as i16 as i32);let p=|i:&Instr|i.qwords.first().map(|p|*p as i64);
+        let id=|i:&Instr|i.dwords.first().map(|p|*p as i32);let jump=|i:&Instr|i.dwords.first().map(|d|i.offset_dw as i64+2+*d as i32 as i64);
+        let local=|s,p|s>0 && f.obj_locals.iter().filter(|(slot,_)|*slot==s).map(|(_,ty)|*ty).eq([p]);
+        let ident=|s:&str|s.as_bytes().first().is_some_and(|c|c.is_ascii_alphabetic() || *c==b'_') && s.bytes().all(|c|c.is_ascii_alphanumeric() || c==b'_');
+        let field=|i:&Instr| {let ty=id(i)?;let owner=refs.type_identity_by_id(ty)?;let (name,old)=refs.member_identity(ty,w(i,0)?)?;
+            (!owner.module.is_empty() && owner.namespace==f.namespace && refs.type_identity_by_id(old)==Some(owner)
+                && refs.is_subclass(class,&owner.name) && ident(name)).then_some((owner,name))};
+        let starts:Vec<_>=code.windows(52).enumerate().filter(|(_,c)|
+            c[..12].chunks_exact(3).all(|v|v.iter().map(|i|i.op.name).eq(["PSF","CALLSYS","PSF"]))
+            && c[12..31].iter().map(|i|i.op.name).eq(["PSF","PshVPtr","ADDSi","RDSPtr","PSF","CALL","PSF","PshVPtr","CALLINTF","STOREOBJ","PshVPtr","PSF","PshVPtr","ADDSi","RDSPtr","CALLINTF","PSF","PshVPtr","CALLSYS"])
+            && c[31..43].chunks_exact(2).all(|v|v.iter().map(|i|i.op.name).eq(["PSF","CALLSYS"]))
+            && c[43..].iter().map(|i|i.op.name).eq(["JMP","PSF","PshVPtr","ADDSi","RDSPtr","PSF","CALL","PSF","CALLSYS"]))
+            .map(|(at,_)|at).collect();let [at]=starts.as_slice() else {return None;};let a=&code[*at..at+52];
+        let slots=[w(&a[0],0)?,w(&a[3],0)?,w(&a[6],0)?,w(&a[9],0)?,w(&a[16],0)?,w(&a[23],0)?];
+        let (shared,vector,item_slot)=(slots[0],w(&a[12],0)?,w(&a[21],0)?);
+        if slots.iter().chain([&vector,&item_slot]).any(|s|*s<=0) || slots.iter().chain([&vector,&item_slot]).copied().collect::<HashSet<_>>().len()!=8 {return None;}
+        let (turn,selected,draw)=(id(&a[17])?,id(&a[20])?,id(&a[27])?);
+        let [ai,point]=refs.func_params_by_id(turn)? else {return None;};let executor=refs.func_ret_by_id(turn)?.type_info;let item=refs.func_ret_by_id(selected)?.type_info;
+        if refs.is_method_by_id(turn) || refs.func_ns_by_id(turn).is_some_and(|s|!s.is_empty()) || !refs.is_method_by_id(selected) || !refs.is_method_by_id(draw)
+            || !native(executor,"FAbilityTaskExecutor") || !object(refs.func_ret_by_id(turn)?,executor,false,false,false)
+            || !native(ai.type_info,"UGameplayAbility_AI") || !object(ai,ai.type_info,false,false,true)
+            || !native(point.type_info,"FVector") || !object(point,point.type_info,true,true,false)
+            || !native(item,"UItemDefinition") || !object(refs.func_ret_by_id(selected)?,item,false,true,true) || !refs.func_params_by_id(selected)?.is_empty()
+            || !object(refs.func_ret_by_id(draw)?,executor,false,false,false) || !matches!(refs.func_params_by_id(draw)?,[t] if object(t,item,false,true,true))
+            || !slots.iter().all(|s|local(*s,executor)) || !local(vector,point.type_info) || !local(item_slot,item) {return None;}
+        let (owner,member)=field(&a[14])?;let ability=refs.own_field_type_by_class(&owner.name,member)?;
+        // Shipping omits the native CharacterAI -> AI ancestry edge; retain this one established bridge.
+        if !(refs.is_subclass(ability,"UGameplayAbility_AI") || refs.is_subclass(ability,"UGameplayAbility_CharacterAI"))
+            || !refs.is_subclass(ability,refs.func_owner_by_id(draw)?) || !refs.is_subclass(class,refs.func_owner_by_id(selected)?)
+            || field(&a[25])!=Some((owner,member)) || field(&a[46])!=Some((owner,member)) || id(&a[49])!=Some(turn) {return None;}
+        for (n,s) in [(13,0),(18,slots[4]),(19,0),(22,item_slot),(24,0),(28,slots[5]),(29,0),(44,vector),(45,0),(48,shared),(50,shared)] {
+            if w(&a[n],0)!=Some(s) {return None;}
+        }
+        let (ctor,dtor,wait)=(p(&a[1])?,p(&a[32])?,p(&a[30])?);
+        for (v,slot) in a[..12].chunks_exact(3).zip(slots) {if p(&v[1])!=Some(ctor) || w(&v[2],0)!=Some(slot) {return None;}}
+        for (v,slot) in a[31..43].chunks_exact(2).zip(slots) {if w(&v[0],0)!=Some(slot) || p(&v[1])!=Some(dtor) {return None;}}
+        let void_method=|ptr,ty,name|refs.func_by_ptr(ptr)==Some(name) && refs.func_owner_by_ptr(ptr)==Some(ty) && refs.is_method_by_ptr(ptr)
+            && !refs.is_const_method_by_ptr(ptr) && refs.func_ns_by_ptr(ptr).unwrap_or("").is_empty()
+            && refs.func_params_by_ptr(ptr).is_some_and(|v|v.is_empty()) && refs.func_ret_by_ptr(ptr).is_some_and(|t|plain(t,0x52,false));
+        let wait_ret=refs.func_ret_by_ptr(wait)?;
+        if !void_method(ctor,"FAbilityTaskExecutor","$beh0") || !void_method(dtor,"FAbilityTaskExecutor","$beh2") || p(&a[51])!=Some(dtor)
+            || refs.func_by_ptr(wait)!=Some("WaitForLastTaskToEnd") || refs.func_owner_by_ptr(wait)!=Some("UAbilityTaskCoroutine")
+            || !refs.is_method_by_ptr(wait) || refs.is_const_method_by_ptr(wait) || !refs.func_ns_by_ptr(wait).unwrap_or("").is_empty()
+            || !native(wait_ret.type_info,"EGenericTaskResult") || !object(wait_ret,wait_ret.type_info,true,true,false)
+            || !matches!(refs.func_params_by_ptr(wait)?,v if v.len()==6 && v.iter().all(|t|object(t,executor,false,false,false))) {return None;}
+        let guards:Vec<_>=code.windows(3).enumerate().filter(|(n,g)|*n+3<=*at && g.iter().map(|i|i.op.name).eq(["PshVPtr","CALLINTF","JLowZ"])
+            && jump(&g[2])==Some(a[44].offset_dw as i64)).map(|(n,_)|n).collect();let [guard]=guards.as_slice() else {return None;};let g=&code[*guard..guard+3];
+        let can=id(&g[1])?;
+        if w(&g[0],0)!=Some(0) || !refs.is_method_by_id(can) || !refs.is_subclass(class,refs.func_owner_by_id(can)?)
+            || !refs.func_params_by_id(can)?.is_empty() || !plain(refs.func_ret_by_id(can)?,0x41,false)
+            || code[guard+3..*at].iter().any(|i|i.op.name.starts_with('J') || i.op.name=="RET")
+            || jump(&a[43])!=Some(code.get(at+52)?.offset_dw as i64) {return None;}
+        // The third shared-slot life is a value creator, a fluent receiver, then immediate destruction.
+        let later:Vec<_>=code.windows(6).enumerate().filter(|(n,c)|*n>at+51 && c.iter().map(|i|i.op.name).eq(["PSF","CALL","PSF","CALLSYS","PSF","CALLSYS"])
+            && [0,2,4].iter().all(|n|w(&c[*n],0)==Some(shared))).map(|(n,_)|n).collect();let [later]=later.as_slice() else {return None;};let l=&code[*later..later+6];
+        let create=id(&l[1])?;let fluent=p(&l[3])?;
+        if !object(refs.func_ret_by_id(create)?,executor,false,false,false) || refs.func_params_by_id(create).is_none() || p(&l[5])!=Some(dtor)
+            || !refs.is_method_by_ptr(fluent) || refs.is_const_method_by_ptr(fluent) || refs.func_owner_by_ptr(fluent)!=Some("FAbilityTaskExecutor")
+            || !object(refs.func_ret_by_ptr(fluent)?,executor,true,false,false) || refs.func_params_by_ptr(fluent).is_none()
+            || code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&shared)).map(|(n,_)|n)
+                .ne([*at,*at+2,*at+31,*at+48,*at+50,*later,*later+2,*later+4]) {return None;}
+        let arrays:Vec<_>=code.windows(27).enumerate().filter(|(n,b)|*n>later+5 && b.iter().map(|i|i.op.name).eq([
+            "SetV1","PshV4","PSF","PshVPtr","ADDSi","RDSPtr","CALLINTF","SetV1","PshV4","PSF","PshVPtr","ADDSi","RDSPtr","CALLINTF",
+            "PSF","CALLSYS","CpyRtoV4","CMPIi","JP","SetV4","JMP","PSF","CALLSYS","CpyRtoV4","CpyVtoV4","CpyVtoR1","JLowZ"]))
+            .map(|(n,_)|n).collect();let [array_at]=arrays.as_slice() else {return None;};let b=&code[*array_at..array_at+27];
+        let (enemies,hostiles)=(id(&b[6])?,id(&b[13])?);let array=refs.func_ret_by_id(hostiles)?.type_info;
+        let [element]=refs.type_subtypes(array)? else {return None;};let element_type=refs.type_identity_by_ptr(element.type_info)?;
+        if !native(array,"TArray") || !object(element,element.type_info,false,false,true) || !element_type.module.is_empty() || !element_type.namespace.is_empty()
+            || !is_object_handle_type(&element_type.name) || !ident(&element_type.name) || enemies==hostiles {return None;}
+        for script in [enemies,hostiles] {
+            if !refs.is_method_by_id(script) || !refs.is_subclass(ability,refs.func_owner_by_id(script)?) || !object(refs.func_ret_by_id(script)?,array,false,false,false)
+                || !matches!(refs.func_params_by_id(script)?,[t] if plain(t,0x41,true)) {return None;}
+        }
+        let (enemy,hostile,flag,tmp,count)=(w(&b[2],0)?,w(&b[9],0)?,w(&b[0],0)?,w(&b[7],0)?,w(&b[16],0)?);
+        if !local(enemy,array) || !local(hostile,array) || slots.contains(&enemy) || slots.contains(&hostile)
+            || HashSet::from([enemy,hostile,vector,item_slot,flag,tmp,count]).len()!=7
+            || [flag,tmp,count].iter().any(|s|*s<=0 || f.obj_locals.iter().any(|(n,_)|n==s)) {return None;}
+        for (n,s) in [(1,flag),(3,0),(8,tmp),(10,0),(14,hostile),(17,count),(19,flag),(21,enemy),(23,tmp),(24,flag),(25,flag)] {if w(&b[n],0)!=Some(s) {return None;}}
+        if w(&b[24],1)!=Some(tmp) || [0,7,17,19].iter().any(|n|b[*n].dwords.first()!=Some(&0))
+            || field(&b[4])!=Some((owner,member)) || field(&b[11])!=Some((owner,member)) {return None;}
+        for (ptr,method,token) in [(p(&b[15])?,"Num",0x44),(p(&b[22])?,"IsEmpty",0x41)] {
+            if refs.func_by_ptr(ptr)!=Some(method) || refs.func_owner_by_ptr(ptr)!=Some("TArray") || !refs.is_method_by_ptr(ptr) || !refs.is_const_method_by_ptr(ptr)
+                || !refs.func_ns_by_ptr(ptr).unwrap_or("").is_empty() || !refs.func_params_by_ptr(ptr)?.is_empty() || !plain(refs.func_ret_by_ptr(ptr)?,token,false) {return None;}
+        }
+        let ends:Vec<_>=code.windows(4).enumerate().filter(|(n,c)|*n>array_at+26 && c.iter().map(|i|i.op.name).eq(["PSF","CALLSYS","PSF","CALLSYS"])
+            && w(&c[0],0)==Some(hostile) && w(&c[2],0)==Some(enemy)).map(|(n,_)|n).collect();let [end]=ends.as_slice() else {return None;};let e=&code[*end..end+4];
+        if p(&e[1])!=p(&e[3]) || !void_method(p(&e[1])?,"TArray","$beh2")
+            || code.iter().enumerate().filter(|(_,i)|super::bytediff::addressed_slots(i).contains(&hostile)).map(|(n,_)|n).ne([*array_at+9,*array_at+14,*end]) {return None;}
+        let edges=[(*guard+2,*at+44),(*at+43,*at+52),(*array_at+18,*array_at+21),(*array_at+20,*array_at+25)];
+        if edges.iter().any(|(from,to)|jump(&code[*from])!=Some(code[*to].offset_dw as i64)) {return None;}
+        let alternative=jump(&b[26])?;if alternative<=b[26].offset_dw as i64 || alternative>e[0].offset_dw as i64 {return None;}
+        for (n,i) in code.iter().enumerate() {
+            if i.op.name=="JMPP" {return None;}
+            if (*array_at..*end).contains(&n) && i.op.name=="RET" {return None;}
+            if !i.op.name.starts_with('J') {continue;}
+            let to=jump(i)?;if !code.iter().any(|c|c.offset_dw as i64==to) {return None;}
+            if [(*guard,*at+52),(*later,*later+6),(*array_at,*array_at+27),(*end,*end+4)].iter().any(|(from,until)|
+                to>code[*from].offset_dw as i64 && to<=code[until-1].offset_dw as i64 && !edges.iter().any(|(s,d)|*s==n && code[*d].offset_dw as i64==to)) {return None;}
+            if !(*array_at..end+4).contains(&n) && to>b[0].offset_dw as i64 && to<=e[3].offset_dw as i64 {return None;}
+            if (*array_at..*end).contains(&n) && (to<b[0].offset_dw as i64 || to>e[0].offset_dw as i64) {return None;}
+        }
+        let script_name=|id|refs.func_by_id(id).filter(|n|ident(n));
+        let (turn_name,selected_name,draw_name,can_name,enemy_name,hostile_name)=(script_name(turn)?,script_name(selected)?,script_name(draw)?,script_name(can)?,script_name(enemies)?,script_name(hostiles)?);
+        let lines:Vec<_>=body.lines().collect();let mut paths=Vec::new();let mut path=Vec::new();
+        for (n,line) in lines.iter().enumerate() {if line.trim()=="}" {path.pop()?;}paths.push(path.clone());
+            if line.trim()=="{" {path.push(n);}else if brace_net(line)!=0 && line.trim()!="}" {return None;}}
+        if !path.is_empty() {return None;}
+        let named=|slot,ty:&str|{let candidates:Vec<_>=lines.iter().enumerate().filter_map(|(n,line)|declaration_with_initializer(line)
+            .filter(|(_,id,_)|line.trim_start().starts_with(&format!("{ty} ")) && slot_and_life_any(id).is_some_and(|(s,_)|s==slot)).map(|v|(n,v))).collect();
+            if let [v]=candidates.as_slice(){Some(v.clone())}else{None}};
+        let (point_row,(_,point_name,_))=named(vector,"FVector")?;let array_type=format!("TArray<{}>",element_type.name);
+        let (enemy_row,(pad,enemy_var,enemy_rhs))=named(enemy,&array_type)?;
+        if enemy_rhs!=format!("this.{member}.{enemy_name}(false)") || !paths[enemy_row].starts_with(&paths[point_row]) {return None;}
+        let declarations:Vec<_>=lines.iter().enumerate().filter_map(|(n,line)|bare_declaration(line)
+            .filter(|(_,name)|line.trim()==format!("FAbilityTaskExecutor {name};") && slot_and_life_any(name).is_some_and(|(s,_)|s==shared)).map(|(_,name)|(n,name))).collect();
+        let [(decl,shared_name)]=declarations.as_slice() else {return None;};
+        if count_ident(body,shared_name)!=3 || *decl>=point_row {return None;}
+        let draw_call=format!("this.{member}.{draw_name}(this.{selected_name}())");let turn_call=format!("::{turn_name}(this.{member}, {point_name})");
+        if body.matches(&draw_call).count()!=1 || body.matches(&turn_call).count()!=2 {return None;}
+        let waits:Vec<_>=lines.iter().enumerate().filter(|(_,line)|line.trim()==format!("this.WaitForLastTaskToEnd({draw_call}, {turn_call}, FAbilityTaskExecutor(), FAbilityTaskExecutor(), FAbilityTaskExecutor(), {shared_name});")).map(|(n,_)|n).collect();
+        let [wait_row]=waits.as_slice() else {return None;};
+        let aliases:Vec<_>=lines.windows(2).enumerate().filter_map(|(n,c)| {
+            let (alias,rhs)=c[0].trim().strip_prefix("FAbilityTaskExecutor ")?.strip_suffix(';')?.split_once(" = ")?;
+            (alias.strip_prefix("__na_t").is_some_and(|s|!s.is_empty() && s.bytes().all(|c|c.is_ascii_digit())) && rhs==turn_call
+                && count_ident(body,alias)==2 && c[1]==format!("{}{shared_name} = {alias};",indent_of(c[0]))).then_some((n,alias))
+        }).collect();let [(alias_row,_)]=aliases.as_slice() else {return None;};
+        let inner=format!("{pad}    ");let branch_start=wait_row.checked_sub(3)?;
+        if wait_row+3>=lines.len() || alias_row+2>=lines.len() || enemy_row+2>=lines.len() {return None;}
+        if lines[branch_start]!=format!("{pad}if (this.{can_name}())") || lines[branch_start+1]!=format!("{pad}{{")
+            || lines[*wait_row+1]!=format!("{pad}}}") || lines[*wait_row+2]!=format!("{pad}else") || lines[*wait_row+3]!=format!("{pad}{{")
+            || *alias_row!=wait_row+4 || lines.get(alias_row+2).copied()!=Some(format!("{pad}}}").as_str())
+            || indent_of(lines[*wait_row])!=inner || indent_of(lines[*alias_row])!=inner
+            || point_row>=branch_start || alias_row+2>=enemy_row || paths[branch_start]!=paths[enemy_row]
+            || paths[enemy_row]!=paths[point_row] || !paths[point_row].starts_with(&paths[*decl]) {return None;}
+        let query=format!("this.{member}.{hostile_name}(false)");let condition=format!("{pad}if ({query}.Num() > 0 && {enemy_var}.IsEmpty())");
+        if lines.get(enemy_row+1).copied()!=Some(condition.as_str()) || body.matches(&query).count()!=1 {return None;}
+        let new_name=format!("local_{hostile}");
+        if body.split(|c:char|!c.is_ascii_alphanumeric() && c!='_').any(|id|slot_and_life_any(id).is_some_and(|(s,_)|s==hostile)) {return None;}
+        let block=*paths[enemy_row].last()?;let close=(enemy_row+1..lines.len()).find(|n|lines[*n].trim()=="}" && paths[*n]==paths[enemy_row][..paths[enemy_row].len()-1])?;
+        if block>point_row || lines[enemy_row+2]!=format!("{pad}{{") || close<=enemy_row+3
+            || lines[enemy_row..close].iter().any(|s|s.trim_start().starts_with("return") || matches!(s.trim(),"break;"|"continue;")) {return None;}
+        let mut result:Vec<_>=lines.iter().map(|s|(*s).to_owned()).collect();
+        let edits=[(enemy_row+1,1,format!("{pad}{array_type} {new_name} = {query};\n{pad}if ({new_name}.Num() > 0 && {enemy_var}.IsEmpty())")),
+            (*alias_row,2,format!("{inner}{turn_call};")),(*wait_row,1,format!("{inner}this.WaitForLastTaskToEnd({draw_call}, {turn_call});")),(*decl,1,String::new())];
+        for (row,len,text) in edits {result.splice(row..row+len,(!text.is_empty()).then_some(text));}
+        let mut out=result.join("\n");if body.ends_with('\n'){out.push('\n');}Some(out)
+    })();changed.unwrap_or_else(||body.to_owned())
 }
 
 /// The compiler normalizes both bool operands with one NOT before CMPi.
@@ -60549,6 +60711,224 @@ mod literal_value_lifetime_tests {
         assert_eq!(super::restore_named_color_argument(source,&f,&refs,None,true),source);
         assert_eq!(super::restore_named_color_argument(source,&f,&refs,Some("UColorRule"),false),source);
         assert_eq!(super::restore_named_color_argument(source,&f,&refs,Some("UOther"),true),source);
+    }
+
+    fn wait_branch_query_fixture(bias:u16)->Func {
+        // Original3-op guard,52-op wait/else,6-op later RVO,27-op queries,4-op block teardown.
+        let mut f=function(&[
+            ("SUSPEND", &[]),
+            ("PshVPtr", &[0]),
+            ("CALLINTF", &[]),
+            ("JLowZ", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[60]),
+            ("CALLSYS", &[]),
+            ("PSF", &[60]),
+            ("PSF", &[68]),
+            ("CALLSYS", &[]),
+            ("PSF", &[68]),
+            ("PSF", &[76]),
+            ("CALLSYS", &[]),
+            ("PSF", &[76]),
+            ("PSF", &[84]),
+            ("CALLSYS", &[]),
+            ("PSF", &[84]),
+            ("PSF", &[12]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[752]),
+            ("RDSPtr", &[]),
+            ("PSF", &[30]),
+            ("CALL", &[]),
+            ("PSF", &[30]),
+            ("PshVPtr", &[0]),
+            ("CALLINTF", &[]),
+            ("STOREOBJ", &[44]),
+            ("PshVPtr", &[44]),
+            ("PSF", &[52]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[752]),
+            ("RDSPtr", &[]),
+            ("CALLINTF", &[]),
+            ("PSF", &[52]),
+            ("PshVPtr", &[0]),
+            ("CALLSYS", &[]),
+            ("PSF", &[60]),
+            ("CALLSYS", &[]),
+            ("PSF", &[68]),
+            ("CALLSYS", &[]),
+            ("PSF", &[76]),
+            ("CALLSYS", &[]),
+            ("PSF", &[84]),
+            ("CALLSYS", &[]),
+            ("PSF", &[30]),
+            ("CALLSYS", &[]),
+            ("PSF", &[52]),
+            ("CALLSYS", &[]),
+            ("JMP", &[]),
+            ("PSF", &[12]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[752]),
+            ("RDSPtr", &[]),
+            ("PSF", &[60]),
+            ("CALL", &[]),
+            ("PSF", &[60]),
+            ("CALLSYS", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[60]),
+            ("CALL", &[]),
+            ("PSF", &[60]),
+            ("CALLSYS", &[]),
+            ("PSF", &[60]),
+            ("CALLSYS", &[]),
+            ("SUSPEND", &[]),
+            ("SetV1", &[3]),
+            ("PshV4", &[3]),
+            ("PSF", &[98]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[752]),
+            ("RDSPtr", &[]),
+            ("CALLINTF", &[]),
+            ("SetV1", &[4]),
+            ("PshV4", &[4]),
+            ("PSF", &[102]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[752]),
+            ("RDSPtr", &[]),
+            ("CALLINTF", &[]),
+            ("PSF", &[102]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV4", &[93]),
+            ("CMPIi", &[93]),
+            ("JP", &[]),
+            ("SetV4", &[3]),
+            ("JMP", &[]),
+            ("PSF", &[98]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV4", &[4]),
+            ("CpyVtoV4", &[3, 4]),
+            ("CpyVtoR1", &[3]),
+            ("JLowZ", &[]),
+            ("SUSPEND", &[]),
+            ("JMP", &[]),
+            ("SUSPEND", &[]),
+            ("SUSPEND", &[]),
+            ("PSF", &[102]),
+            ("CALLSYS", &[]),
+            ("PSF", &[98]),
+            ("CALLSYS", &[]),
+            ("RET", &[2]),
+        ]);
+        f.name="Run".into();f.ret=DataType {token:0x52,..Default::default()};f.params.clear();
+        f.obj_locals=vec![(12,6),(30,7),(52,7),(60,7),(68,7),(76,7),(84,7),(44,8),(98,10),(102,10)];
+        let code=disassemble(&f.bytecode).unwrap();
+        for (at,value) in [(2, 204), (19, 1002), (22, 201), (25, 202), (30, 1002), (32, 203), (51, 1002), (54, 201), (59, 205), (65, 0), (69, 1002), (71, 206), (72, 0), (76, 1002), (78, 207), (82, 0), (84, 0)] {f.bytecode[code[at].offset_dw+1]=value;}
+        for (at,value) in [(6, 101), (9, 101), (12, 101), (15, 101), (35, 103), (37, 102), (39, 102), (41, 102), (43, 102), (45, 102), (47, 102), (56, 102), (61, 104), (63, 102), (80, 105), (87, 106), (97, 107), (99, 107)] {let value:u64=value;f.bytecode[code[at].offset_dw+1]=value as i32;f.bytecode[code[at].offset_dw+2]=(value>>32) as i32;}
+        for (from,to) in [(3, 49), (48, 57), (83, 86), (85, 90), (91, 94), (93, 96)] {f.bytecode[code[from].offset_dw+1]=code[to].offset_dw as i32-code[from].offset_dw as i32-2;}
+        for i in &code {if matches!(i.op.name,"RET"|"ADDSi"){continue;}for (n,w) in i.words.iter().enumerate() {if (*w as i16)<=0{continue;}
+            let lane=n+1;let dw=i.offset_dw+lane/2;let shift=(lane%2)*16;
+            f.bytecode[dw]=((f.bytecode[dw] as u32 & !(0xffff<<shift)) | (((*w+bias) as u32)<<shift)) as i32;
+        }}for (slot,_) in &mut f.obj_locals {*slot+=bias as i32;}f
+    }
+
+    #[test]
+    fn wait_defaults_and_query_array_keep_separate_scope_lives() {
+        let refs=RefResolver::from_test_wait_branch_query(0);let source=r#"    FAbilityTaskExecutor local_60;
+    if (this.Ready)
+    {
+        FVector local_12 = this.FindPoint();
+        if (this.CanEquip())
+        {
+            this.SelectEquipment();
+            this.WaitForLastTaskToEnd(this.Agent.DrawSelection(this.ChosenItem()), ::FacePoint(this.Agent, local_12), FAbilityTaskExecutor(), FAbilityTaskExecutor(), FAbilityTaskExecutor(), local_60);
+        }
+        else
+        {
+            FAbilityTaskExecutor __na_t1 = ::FacePoint(this.Agent, local_12);
+            local_60 = __na_t1;
+        }
+        ::GoPoint(this.Agent, local_12, 200.0, -1.0).While(n"StillWaiting");
+        TArray<AGothicCharacter> local_98 = this.Agent.KnownEnemies(false);
+        if (this.Agent.KnownHostiles(false).Num() > 0 && local_98.IsEmpty())
+        {
+            this.ReportHostiles();
+        }
+        else
+        {
+            this.ReportOther();
+        }
+    }
+    return;
+"#;let expected=r#"    if (this.Ready)
+    {
+        FVector local_12 = this.FindPoint();
+        if (this.CanEquip())
+        {
+            this.SelectEquipment();
+            this.WaitForLastTaskToEnd(this.Agent.DrawSelection(this.ChosenItem()), ::FacePoint(this.Agent, local_12));
+        }
+        else
+        {
+            ::FacePoint(this.Agent, local_12);
+        }
+        ::GoPoint(this.Agent, local_12, 200.0, -1.0).While(n"StillWaiting");
+        TArray<AGothicCharacter> local_98 = this.Agent.KnownEnemies(false);
+        TArray<AGothicCharacter> local_102 = this.Agent.KnownHostiles(false);
+        if (local_102.Num() > 0 && local_98.IsEmpty())
+        {
+            this.ReportHostiles();
+        }
+        else
+        {
+            this.ReportOther();
+        }
+    }
+    return;
+"#;
+        let fold=|s:&str,f:&Func,r:&RefResolver|super::restore_wait_branch_and_query_array_lives(s,f,r,Some("UNoticeState"),true);
+        let rename=|s:&str,bias:i32|{let mut out=s.to_owned();for old in [102,98,93,84,76,68,60,52,44,30,12,4,3] {
+            out=super::rename_ident(&out,&format!("local_{old}"),&format!("local_{}",old+bias));}out};
+        for bias in [0u16,512] {let f=wait_branch_query_fixture(bias);let s=rename(source,bias as i32);let e=rename(expected,bias as i32);
+            assert_eq!(fold(&s,&f,&refs),e);assert_eq!(fold(&e,&f,&refs),e);
+        }
+        let f=wait_branch_query_fixture(0);let code=disassemble(&f.bytecode).unwrap();
+        let reject=|f:&Func,r:&RefResolver|assert_eq!(fold(source,f,r),source);
+        for fault in 1..=37 {reject(&f,&RefResolver::from_test_wait_branch_query(fault));}
+        for at in (1..4).chain(5..57).chain(58..64).chain(65..92).chain(96..100) {
+            for (n,w) in code[at].words.iter().enumerate() {let mut bad=f.clone();let lane=n+1;let dw=code[at].offset_dw+lane/2;let shift=(lane%2)*16;
+                bad.bytecode[dw]=((bad.bytecode[dw] as u32 & !(0xffff<<shift)) | ((w.wrapping_add(1) as u32)<<shift)) as i32;reject(&bad,&refs);}
+            // The final condition may target any valid point before the common cleanup.
+            // Test that exit's actual contract below, rather than rejecting a legal gap relocation.
+            if at!=91 {for lane in 0..code[at].dwords.len() {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+1+lane]^=1;reject(&bad,&refs);}}
+            if !code[at].qwords.is_empty() {for lane in [1,2] {let mut bad=f.clone();bad.bytecode[code[at].offset_dw+lane]^=1;reject(&bad,&refs);}}
+        }
+        for target in (2..57).chain(59..64).chain(66..100) {let mut bad=f.clone();let mut head=function(&[("JMP",&[])]).bytecode;
+            head[1]=code[target].offset_dw as i32;head.extend(bad.bytecode);bad.bytecode=head;reject(&bad,&refs);}
+        for from in [91,93] {for target in [57,100] {let mut bad=f.clone();bad.bytecode[code[from].offset_dw+1]=code[target].offset_dw as i32-code[from].offset_dw as i32-2;reject(&bad,&refs);}}
+        for at in [26,54,89] {let mut bad=f.clone();let op=OPCODES.iter().find(|o|o.name=="SUSPEND").unwrap();
+            bad.bytecode[code[at].offset_dw]=(bad.bytecode[code[at].offset_dw] & !0xffff) | op.opcode as i32;reject(&bad,&refs);}
+        for slot in [12,30,52,60,68,76,84,44,98,102] {let mut bad=f.clone();bad.obj_locals.retain(|(s,_)|*s!=slot);reject(&bad,&refs);
+            let mut bad=f.clone();bad.obj_locals.push((slot,10));reject(&bad,&refs);}
+        for slot in [3,4,93] {let mut bad=f.clone();bad.obj_locals.extend([(slot,6),(slot,7)]);reject(&bad,&refs);}
+        for slot in [60,102] {let mut bad=f.clone();bad.bytecode.extend(function(&[("PSF",&[slot])]).bytecode);reject(&bad,&refs);}
+        let mut bad=f.clone();bad.bytecode.extend(function(&[("JMPP",&[])]).bytecode);reject(&bad,&refs);
+        for fault in 0..4 {let mut bad=f.clone();match fault {0=>bad.ret.token=0x41,1=>bad.traits=4,
+            2=>bad.params.push(super::super::model::Param {name:"Other".into(),ty:DataType {token:0x41,..Default::default()},flags:0}),_=>bad.namespace="Other".into(),}reject(&bad,&refs);}
+        assert_eq!(super::restore_wait_branch_and_query_array_lives(source,&f,&refs,None,true),source);
+        assert_eq!(super::restore_wait_branch_and_query_array_lives(source,&f,&refs,Some("UNoticeState"),false),source);
+        for s in [source.replace("FAbilityTaskExecutor local_60;","FVector local_60;"),source.replace("local_60 = __na_t1;","local_60 = __na_t2;"),
+            source.replace("::FacePoint(this.Agent, local_12);","::FacePoint(this.Other, local_12);"),source.replace("if (this.CanEquip())","if (this.Other())"),
+            source.replace("KnownHostiles(false)","KnownHostiles(true)"),source.replace("KnownEnemies(false)","KnownEnemies(true)"),
+            source.replace(".Num() > 0", ".Num() >= 0"),source.replace("            this.ReportOther();","            return;"),
+            source.replace("            this.ReportOther();","            break;"),source.replace("            this.ReportOther();","            continue;"),
+            source.replace("    return;","    Use(local_60);\n    return;"),source.replace("    return;","    Use(__na_t1);\n    return;"),
+            source.replace("    return;","    Use(local_102);\n    return;"),source.replace("    return;","    Use(local_102_2);\n    return;"),
+            source.replace("        TArray<AGothicCharacter> local_98", "    }\n    {\n        TArray<AGothicCharacter> local_98"),
+            source.replace("        if (this.Agent.KnownHostiles", "        Touch();\n        if (this.Agent.KnownHostiles"),source.repeat(2)] {assert_eq!(fold(&s,&f,&refs),s);}
+        let mut s=source.to_owned();let mut e=expected.to_owned();for (a,b) in [("local_60","local_60_9"),("local_12","local_12_4"),("local_98","local_98_2")] {
+            s=super::rename_ident(&s,a,b);e=super::rename_ident(&e,a,b);
+        }assert_eq!(fold(&s,&f,&refs),e);
+        let s=source.replace("    return;","    Use(local_600);\n    return;");let e=expected.replace("    return;","    Use(local_600);\n    return;");assert_eq!(fold(&s,&f,&refs),e);
+        let mut shifted=f.clone();let mut head=function(&[("SUSPEND",&[])]).bytecode;head.extend(shifted.bytecode);shifted.bytecode=head;assert_eq!(fold(source,&shifted,&refs),expected);
     }
 
     fn scoped_event_receiver_fixture(bias:u16)->Func {

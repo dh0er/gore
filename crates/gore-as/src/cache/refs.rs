@@ -9653,6 +9653,85 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_wait_branch_query(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"UNoticeState","Fixture"),(2,"UNoticeBase","Fixture"),(3,"UAbilityGothic","Fixture"),
+            (4,"UGameplayAbility_CharacterAI",""),(5,"UGameplayAbility_AI",""),(6,"FVector",""),(7,"FAbilityTaskExecutor",""),
+            (8,"UItemDefinition",""),(9,"EGenericTaskResult",""),(10,"TArray",""),(11,"AGothicCharacter",""),(12,"FName","")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+1000,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UNoticeState".into(),"UNoticeBase".into());
+        r.class_super.insert("UAbilityGothic".into(),"UGameplayAbility_CharacterAI".into());
+        let key=(1002i64<<1)|(752i64<<33)|1;r.prop_by_key.insert(key,"Agent".into());r.prop_type_id.insert(key,1002);
+        r.class_fields.entry("UNoticeBase".into()).or_default().insert("Agent".into(),"UAbilityGothic".into());
+        let scalar=|token,constant:bool|DataType {token,is_object_const:constant,is_read_only:constant,..Default::default()};
+        let object=|type_info,reference:bool,constant:bool,handle:bool|DataType {token:5,type_info,is_reference:reference,is_object_const:constant,
+            is_read_only:constant && !handle,is_object_handle:handle,..Default::default()};
+        r.type_subtypes.insert(10,vec![object(11,false,false,true)]);
+        for (ptr,name,owner,constant,ret,args) in [
+            (101,"$beh0","FAbilityTaskExecutor",false,scalar(0x52,false),vec![]),
+            (102,"$beh2","FAbilityTaskExecutor",false,scalar(0x52,false),vec![]),
+            (103,"WaitForLastTaskToEnd","UAbilityTaskCoroutine",false,object(9,true,true,false),vec![object(7,false,false,false);6]),
+            (104,"While","FAbilityTaskExecutor",false,object(7,true,false,false),vec![object(12,false,false,false)]),
+            (105,"Num","TArray",true,scalar(0x44,false),vec![]),(106,"IsEmpty","TArray",true,scalar(0x41,false),vec![]),
+            (107,"$beh2","TArray",false,scalar(0x52,false),vec![]),
+            (201,"FacePoint","",false,object(7,false,false,false),vec![object(5,false,false,true),object(6,true,true,false)]),
+            (202,"ChosenItem","UNoticeBase",false,object(8,false,true,true),vec![]),
+            (203,"DrawSelection","UAbilityGothic",false,object(7,false,false,false),vec![object(8,false,true,true)]),
+            (204,"CanEquip","UNoticeState",false,scalar(0x41,false),vec![]),
+            (205,"GoPoint","",false,object(7,false,false,false),vec![object(5,false,false,true),object(6,true,true,false),scalar(0x51,true),scalar(0x51,true)]),
+            (206,"KnownEnemies","UAbilityGothic",false,object(10,false,false,false),vec![scalar(0x41,true)]),
+            (207,"KnownHostiles","UAbilityGothic",false,object(10,false,false,false),vec![scalar(0x41,true)])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            if ptr>=200 {r.funcid_to_ptr.insert(ptr as i32,ptr);}
+            if !owner.is_empty(){r.func_is_method.insert(ptr);r.func_owner.insert(ptr,owner.into());}
+            if constant {r.const_method_ptrs.insert(ptr);}
+        }
+        match fault {
+            1=>{r.const_method_ptrs.insert(103);},
+            2=>{r.func_params.get_mut(&103).unwrap().pop();},
+            3=>r.func_params.get_mut(&103).unwrap()[2].is_reference=true,
+            4=>r.func_ret.get_mut(&103).unwrap().is_read_only=false,
+            5=>{r.const_method_ptrs.insert(101);},
+            6=>r.func_params.get_mut(&102).unwrap().push(scalar(0x44,false)),
+            7=>{r.func_is_method.insert(201);},
+            8=>r.func_params.get_mut(&201).unwrap()[0].is_object_const=true,
+            9=>r.func_params.get_mut(&201).unwrap()[1].is_object_const=false,
+            10=>r.func_ret.get_mut(&201).unwrap().is_reference=true,
+            11=>r.func_ret.get_mut(&202).unwrap().is_object_const=false,
+            12=>r.func_params.get_mut(&202).unwrap().push(scalar(0x41,false)),
+            13=>r.func_params.get_mut(&203).unwrap()[0].is_read_only=true,
+            14=>r.func_ret.get_mut(&203).unwrap().is_object_const=true,
+            15=>{r.class_fields.get_mut("UNoticeBase").unwrap().insert("Agent".into(),"Other".into());},
+            16=>{r.prop_type_id.insert(key,1001);},
+            17=>{r.class_super.insert("UAbilityGothic".into(),"Other".into());},
+            18=>{r.func_owner.insert(202,"Other".into());},
+            19=>r.func_ret.get_mut(&206).unwrap().is_reference=true,
+            20=>r.func_params.get_mut(&206).unwrap()[0].is_object_const=false,
+            21=>r.func_ret.get_mut(&207).unwrap().type_info=7,
+            22=>r.func_params.get_mut(&207).unwrap()[0].is_read_only=false,
+            23=>r.type_subtypes.get_mut(&10).unwrap()[0].is_object_handle=false,
+            24=>r.type_identity_by_ptr.get_mut(&11).unwrap().module="Script".into(),
+            25=>r.func_ret.get_mut(&105).unwrap().token=0x41,
+            26=>{r.const_method_ptrs.remove(&106);},
+            27=>{r.const_method_ptrs.insert(107);},
+            28=>r.func_ret.get_mut(&204).unwrap().token=0x44,
+            29=>{r.func_owner.insert(204,"Other".into());},
+            30=>r.func_ret.get_mut(&205).unwrap().is_reference=true,
+            31=>r.func_ret.get_mut(&104).unwrap().is_reference=false,
+            32=>r.func_ret.get_mut(&104).unwrap().is_object_const=true,
+            33=>{r.func_ns.insert(103,"Other".into());},
+            34=>{r.func_ns.insert(201,"Other".into());},
+            35=>r.func_ret.get_mut(&103).unwrap().type_info=8,
+            36=>r.type_identity_by_ptr.get_mut(&2).unwrap().namespace="Other".into(),
+            37=>r.func_params.get_mut(&207).unwrap().push(scalar(0x41,true)),
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_scoped_event_receiver(fault:u8)->Self {
         let mut r=Self::default();
         for (ptr,name,module) in [(1,"FGameplayTag",""),(2,"FGameplayTagContainer",""),(3,"AGothicCharacterState",""),(4,"AGothicCharacter",""),
