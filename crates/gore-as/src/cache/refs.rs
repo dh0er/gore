@@ -9478,6 +9478,181 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_copied_optional_bool(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"UDecisionRule","Fixture"),(2,"UNativeRule",""),(3,"AGothicCharacter",""),(4,"TOptional","")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+1000,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UDecisionRule".into(),"UNativeRule".into());
+        for (field,ty) in [("Choice","TOptional<bool>"),("ForceYes","bool"),("ForceNo","bool")] {
+            r.class_fields.entry("UDecisionRule".into()).or_default().insert(field.into(),ty.into());
+        }
+        for (offset,name) in [(736,"Choice"),(560,"ForceYes"),(561,"ForceNo")] {
+            let key=(1001i64<<1)|((offset as i64)<<33)|1;
+            r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,1001);
+        }
+        let boolean=DataType {token:0x41,..Default::default()};
+        for (ptr,name,owner,ret,args) in [
+            (101,"EvaluateActor","UNativeRule",boolean.clone(),vec![DataType {token:5,type_info:3,is_object_handle:true,..Default::default()}]),
+            (102,"GetValue","TOptional",DataType {is_reference:true,is_object_const:true,is_read_only:true,..boolean.clone()},vec![]),
+            (103,"IsSet","TOptional",boolean,vec![])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            r.func_is_method.insert(ptr);r.const_method_ptrs.insert(ptr);
+        }
+        let key=(1001i64<<1)|(736i64<<33)|1;
+        match fault {
+            1=>r.func_ret.get_mut(&101).unwrap().is_reference=true,
+            2=>r.func_ret.get_mut(&101).unwrap().token=0x44,
+            3=>{r.const_method_ptrs.remove(&101);},
+            4=>{r.func_is_method.remove(&101);},
+            5=>r.func_params.get_mut(&101).unwrap()[0].is_reference=true,
+            6=>r.func_params.get_mut(&101).unwrap()[0].is_object_const=true,
+            7=>r.func_params.get_mut(&101).unwrap()[0].type_info=1,
+            8=>r.func_params.get_mut(&101).unwrap().clear(),
+            9=>{r.func_owner.insert(101,"UUnrelated".into());},
+            10=>r.func_ret.get_mut(&102).unwrap().is_reference=false,
+            11=>r.func_ret.get_mut(&102).unwrap().is_object_const=false,
+            12=>r.func_ret.get_mut(&102).unwrap().is_read_only=false,
+            13=>r.func_ret.get_mut(&102).unwrap().token=0x44,
+            14=>{r.const_method_ptrs.remove(&102);},
+            15=>{r.func_is_method.remove(&102);},
+            16=>r.func_params.get_mut(&102).unwrap().push(DataType {token:0x44,..Default::default()}),
+            17=>{r.func_owner.insert(102,"FOtherValue".into());},
+            18=>{r.class_fields.get_mut("UDecisionRule").unwrap().insert("Choice".into(),"TOptional<int>".into());},
+            19=>{r.prop_type_id.insert(key,1002);},
+            20=>{r.prop_by_key.insert(key,"Absent".into());},
+            21=>{r.class_super.insert("UDecisionRule".into(),"UUnrelated".into());},
+            22=>r.type_identity_by_ptr.get_mut(&1).unwrap().module.clear(),
+            23=>r.type_identity_by_ptr.get_mut(&3).unwrap().module="Script".into(),
+            24=>r.func_ret.get_mut(&101).unwrap().is_auto=true,
+            25=>r.func_ret.get_mut(&102).unwrap().if_handle_then_const=true,
+            26=>{r.func_ns.insert(102,"Other".into());},
+            27=>{r.func_ns.insert(101,"Other".into());},
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_optional_predicate_conditions(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"UCriteria","Fixture"),(2,"UNativeCriteria",""),(3,"AGothicCharacter",""),(4,"EFrameKind",""),(5,"TOptional","")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+1000,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity {name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UCriteria".into(),"UNativeCriteria".into());
+        for (offset,name,ty) in [(784,"CountLimit","TOptional<int>"),(618,"CloseCase","TOptional<bool>"),(616,"IsIndoor","TOptional<bool>")] {
+            let key=(1001i64<<1)|((offset as i64)<<33)|1;r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,1001);
+            r.class_fields.entry("UCriteria".into()).or_default().insert(name.into(),ty.into());
+        }
+        let boolean=DataType {token:0x41,..Default::default()};let integer=DataType {token:0x44,..Default::default()};
+        for (ptr,name,owner,ret,args) in [
+            (101,"IsSet","TOptional",boolean.clone(),vec![]),(102,"IsSet","TOptional",boolean.clone(),vec![]),
+            (103,"GetValue","TOptional",DataType {is_reference:true,is_object_const:true,is_read_only:true,..integer.clone()},vec![]),
+            (104,"CountActors","UNativeCriteria",integer,vec![]),
+            (105,"GetValue","TOptional",DataType {is_reference:true,is_object_const:true,is_read_only:true,..boolean.clone()},vec![]),
+            (106,"TryMode","UNativeCriteria",boolean.clone(),vec![DataType {token:5,type_info:4,is_reference:true,..Default::default()}]),
+            (107,"ActorInside","UNativeCriteria",boolean,vec![DataType {token:5,type_info:3,is_object_handle:true,..Default::default()}])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,args);
+            r.func_is_method.insert(ptr);r.const_method_ptrs.insert(ptr);
+        }
+        let key=(1001i64<<1)|(784i64<<33)|1;
+        match fault {
+            1=>r.func_ret.get_mut(&101).unwrap().token=0x44,
+            2=>r.func_ret.get_mut(&102).unwrap().is_reference=true,
+            3=>r.func_ret.get_mut(&103).unwrap().is_read_only=false,
+            4=>r.func_ret.get_mut(&103).unwrap().is_object_const=false,
+            5=>r.func_ret.get_mut(&103).unwrap().is_reference=false,
+            6=>r.func_ret.get_mut(&103).unwrap().token=0x41,
+            7=>r.func_ret.get_mut(&104).unwrap().token=0x41,
+            8=>r.func_ret.get_mut(&105).unwrap().is_object_const=false,
+            9=>r.func_ret.get_mut(&105).unwrap().is_read_only=false,
+            10=>r.func_ret.get_mut(&105).unwrap().is_reference=false,
+            11=>r.func_ret.get_mut(&106).unwrap().is_reference=true,
+            12=>r.func_ret.get_mut(&107).unwrap().token=0x44,
+            13=>r.func_params.get_mut(&106).unwrap()[0].is_reference=false,
+            14=>r.func_params.get_mut(&106).unwrap()[0].is_object_const=true,
+            15=>r.func_params.get_mut(&106).unwrap()[0].is_read_only=true,
+            16=>r.func_params.get_mut(&106).unwrap()[0].is_object_handle=true,
+            17=>r.func_params.get_mut(&106).unwrap()[0].type_info=3,
+            18=>r.func_params.get_mut(&107).unwrap()[0].is_object_const=true,
+            19=>r.func_params.get_mut(&107).unwrap()[0].is_reference=true,
+            20=>r.func_params.get_mut(&107).unwrap()[0].type_info=1,
+            21=>{r.func_owner.insert(103,"Other".into());},
+            22=>{r.func_owner.insert(106,"Other".into());},
+            23=>{r.class_super.insert("UCriteria".into(),"Other".into());},
+            24=>{r.class_fields.get_mut("UCriteria").unwrap().insert("CountLimit".into(),"TOptional<float>".into());},
+            25=>{r.class_fields.get_mut("UCriteria").unwrap().insert("CloseCase".into(),"TOptional<int>".into());},
+            26=>{r.class_fields.get_mut("UCriteria").unwrap().insert("IsIndoor".into(),"TOptional<int>".into());},
+            27=>{r.prop_type_id.insert(key,1002);},
+            28=>r.type_identity_by_ptr.get_mut(&4).unwrap().module="Script".into(),
+            29=>r.type_identity_by_ptr.get_mut(&3).unwrap().module="Script".into(),
+            30=>r.type_identity_by_ptr.get_mut(&1).unwrap().namespace="Other".into(),
+            31=>r.func_params.get_mut(&104).unwrap().push(DataType {token:0x44,..Default::default()}),
+            32=>r.func_params.get_mut(&105).unwrap().push(DataType {token:0x44,..Default::default()}),
+            33=>{r.func_ns.insert(106,"Other".into());},
+            34=>r.func_ret.get_mut(&107).unwrap().if_handle_then_const=true,
+            40..=46=>{r.const_method_ptrs.remove(&(101+(fault-40) as i64));},
+            50..=56=>{r.func_is_method.remove(&(101+(fault-50) as i64));},
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_named_color_argument(fault:u8)->Self {
+        let mut r=Self::default();
+        for (ptr,name,module) in [(1,"UColorRule","Fixture"),(2,"UNativeRule",""),(3,"AGothicCharacter",""),(4,"TOptional",""),(5,"FLinearColor",""),(6,"TArray","")] {
+            r.type_by_ptr.insert(ptr,name.into());r.typeid_to_ptr.insert(ptr as i32+1000,ptr);
+            r.type_identity_by_ptr.insert(ptr,TypeIdentity{name:name.into(),module:module.into(),namespace:String::new()});
+        }
+        r.class_super.insert("UColorRule".into(),"UNativeRule".into());
+        r.type_subtypes.insert(6,vec![DataType{token:5,type_info:3,is_object_handle:true,..Default::default()}]);
+        for field in ["Desired","Tolerance"] {r.class_fields.entry("UColorRule".into()).or_default().insert(field.into(),"TOptional<FLinearColor>".into());}
+        for (id,offset,name) in [(1001,696,"Desired"),(1001,716,"Tolerance"),(1005,0,"R"),(1005,4,"G"),(1005,8,"B")] {
+            let key=((id as i64)<<1)|((offset as i64)<<33)|1;
+            r.prop_by_key.insert(key,name.into());r.prop_type_id.insert(key,id);
+        }
+        let color=DataType{token:5,type_info:5,..Default::default()};
+        let reference=DataType{is_reference:true,is_object_const:true,is_read_only:true,..color.clone()};
+        for (ptr,name,owner,ret,params) in [
+            (101,"IsSet","TOptional",DataType{token:0x41,..Default::default()},vec![]),
+            (102,"ReadColor","UNativeRule",color.clone(),vec![DataType{token:5,type_info:3,is_object_handle:true,..Default::default()}]),
+            (103,"GetValue","TOptional",reference.clone(),vec![]),
+            (104,"Difference","UNativeRule",color,vec![reference.clone(),reference])] {
+            r.func_by_ptr.insert(ptr,name.into());r.func_owner.insert(ptr,owner.into());r.func_ret.insert(ptr,ret);r.func_params.insert(ptr,params);
+            r.func_is_method.insert(ptr);r.const_method_ptrs.insert(ptr);
+        }
+        let key=(1001i64<<1)|(696i64<<33)|1;
+        match fault {
+            1=>r.func_ret.get_mut(&102).unwrap().is_reference=true,
+            2=>r.func_ret.get_mut(&104).unwrap().type_info=3,
+            3=>r.func_ret.get_mut(&103).unwrap().is_read_only=false,
+            4=>r.func_ret.get_mut(&101).unwrap().token=0x44,
+            5=>{r.const_method_ptrs.remove(&102);},
+            6=>{r.func_is_method.remove(&104);},
+            7=>{r.func_ns.insert(103,"Other".into());},
+            8=>r.func_params.get_mut(&104).unwrap()[1].is_object_const=false,
+            9=>r.func_params.get_mut(&104).unwrap().pop().map(|_|()).unwrap(),
+            10=>r.func_params.get_mut(&102).unwrap()[0].is_reference=true,
+            11=>r.func_params.get_mut(&103).unwrap().push(DataType{token:0x44,..Default::default()}),
+            12=>{r.func_owner.insert(104,"UOther".into());},
+            13=>{r.class_super.insert("UColorRule".into(),"UOther".into());},
+            14=>r.type_identity_by_ptr.get_mut(&5).unwrap().module="Script".into(),
+            15=>r.type_identity_by_ptr.get_mut(&3).unwrap().namespace="Other".into(),
+            16=>r.type_identity_by_ptr.get_mut(&1).unwrap().module.clear(),
+            17=>{r.class_fields.get_mut("UColorRule").unwrap().insert("Desired".into(),"TOptional<FColor>".into());},
+            18=>{r.prop_type_id.insert(key,1002);},
+            19=>{r.prop_by_key.insert((1005i64<<1)|(4i64<<33)|1,"A".into());},
+            20=>r.func_ret.get_mut(&102).unwrap().is_auto=true,
+            21=>r.func_params.get_mut(&104).unwrap()[0].if_handle_then_const=true,
+            _=>{},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_scoped_event_receiver(fault:u8)->Self {
         let mut r=Self::default();
         for (ptr,name,module) in [(1,"FGameplayTag",""),(2,"FGameplayTagContainer",""),(3,"AGothicCharacterState",""),(4,"AGothicCharacter",""),
