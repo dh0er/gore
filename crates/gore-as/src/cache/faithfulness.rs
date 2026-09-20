@@ -273,7 +273,7 @@ mod tests {
         let binds = measured_binds();
         let module = "AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict";
         let known = for_module(&guid, Some(&binds), module).expect("measured");
-        assert_eq!(known.divergent_functions, 2);
+        assert_eq!(known.divergent_functions, 1);
         let warning = warning_for_module(&guid, Some(&binds), module).expect("warns");
         assert!(warning.contains("does not reproduce as the same program"));
     }

@@ -3506,6 +3506,8 @@ fn emit_function_ctor(
         pass_trace("restore_query_array_across_conditional_action", &rendered);
         let rendered = restore_query_loop_and_clock_temporaries(&rendered, f, refs, class_name);
         pass_trace("restore_query_loop_and_clock_temporaries", &rendered);
+        let rendered = split_continue_guard_bool_lifetime(&rendered);
+        pass_trace("split_continue_guard_bool_lifetime", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -14144,6 +14146,117 @@ fn restore_linked_bool_guard_lifetimes(body: &str, f: &Func, refs: &RefResolver)
     edits.insert(at,format!("{indent}bool {name} = {expr};\n{indent}if (!({name}))"));
     let mut out=lines.iter().enumerate().filter(|(at,_)|!removed.contains(at)).map(|(at,line)|edits.get(&at).cloned().unwrap_or_else(||(*line).to_owned())).collect::<Vec<_>>().join("\n");
     if body.ends_with('\n') {out.push('\n');} out
+}
+
+/// A loop guard can die at its `continue` while a later predicate reuses the same primitive
+/// frame slot. Close the guard's lexical life and give the later value a fresh source name.
+/// The source proof is deliberately narrow: one positive bool guard whose body is exactly
+/// `continue`, followed in the same block by one write-only assignment and read-only uses.
+fn split_continue_guard_bool_lifetime(body: &str) -> String {
+    if !body.contains("bool local_") || !body.contains("continue;") {
+        return body.to_owned();
+    }
+    let lines: Vec<&str> = body.lines().collect();
+    let mut depth = 0i32;
+    for line in &lines {
+        depth += brace_net(line);
+        if depth < 0 {
+            return body.to_owned();
+        }
+    }
+    if depth != 0 {
+        return body.to_owned();
+    }
+
+    let mut candidates = Vec::new();
+    for declaration in 0..lines.len().saturating_sub(4) {
+        let Some((indent, name, _)) = declaration_with_initializer(lines[declaration]) else {
+            continue;
+        };
+        if !lines[declaration].trim_start().starts_with("bool ")
+            || name.strip_prefix("local_").is_none_or(|slot| {
+                slot.is_empty() || !slot.bytes().all(|byte| byte.is_ascii_digit())
+            })
+            || lines.get(declaration + 1).map(|line| line.trim())
+                != Some(format!("if ({name})").as_str())
+            || lines.get(declaration + 2).map(|line| line.trim()) != Some("{")
+            || lines.get(declaration + 3).map(|line| line.trim()) != Some("continue;")
+            || lines.get(declaration + 4).map(|line| line.trim()) != Some("}")
+            || [declaration + 1, declaration + 2, declaration + 4]
+                .iter().any(|at| indent_of(lines[*at]) != indent)
+            || indent_of(lines[declaration + 3]) != format!("{indent}    ")
+        {
+            continue;
+        }
+        let scope = block_span(&lines, declaration);
+        if scope.1 >= lines.len() || declaration + 4 >= scope.1 {
+            continue;
+        }
+        if lines[..declaration].iter().chain(&lines[scope.1 + 1..])
+            .any(|line| count_ident(line, &name) != 0)
+        {
+            continue;
+        }
+        let Some(second) = (declaration + 5..scope.1)
+            .find(|at| count_ident(lines[*at], &name) != 0)
+        else {
+            continue;
+        };
+        let Some(rhs) = assignment_rhs_for(lines[second], &name) else {
+            continue;
+        };
+        if indent_of(lines[second]) != indent || block_span(&lines, second) != scope {
+            continue;
+        }
+        let later: Vec<_> = (second + 1..scope.1)
+            .filter(|at| count_ident(lines[*at], &name) != 0)
+            .collect();
+        if later.is_empty()
+            || later.iter().any(|at| {
+                is_definition_line(lines[*at], &name)
+                    || bare_declaration(lines[*at]).is_some_and(|(_, declared)| declared == name)
+                    || declaration_with_initializer(lines[*at])
+                        .is_some_and(|(_, declared, _)| declared == name)
+            })
+        {
+            continue;
+        }
+        let mut life = 2usize;
+        let mut fresh = format!("{name}_{life}");
+        while count_ident(body, &fresh) != 0 {
+            life += 1;
+            fresh = format!("{name}_{life}");
+        }
+        candidates.push((declaration, second, scope.1, indent, name, rhs.to_owned(), fresh));
+    }
+    let [(declaration, second, scope_end, indent, name, rhs, fresh)] = candidates.as_slice()
+    else {
+        return body.to_owned();
+    };
+
+    let mut out = Vec::with_capacity(lines.len() + 2);
+    for (at, line) in lines.iter().enumerate() {
+        if at == *declaration {
+            out.push(format!("{indent}{{"));
+        }
+        if (*declaration..=*declaration + 4).contains(&at) {
+            out.push(format!("    {line}"));
+            if at == *declaration + 4 {
+                out.push(format!("{indent}}}"));
+            }
+        } else if at == *second {
+            out.push(format!("{indent}bool {fresh} = {rhs};"));
+        } else if at > *second && at < *scope_end && count_ident(line, name) != 0 {
+            out.push(rename_ident(line, name, fresh));
+        } else {
+            out.push((*line).to_owned());
+        }
+    }
+    let mut result = out.join("\n");
+    if body.ends_with('\n') {
+        result.push('\n');
+    }
+    result
 }
 
 /// Preserve a named projection and equality RHS while closing two native draw argument lives.
@@ -62110,6 +62223,35 @@ mod literal_value_lifetime_tests {
             if i.op.name=="CpyVtoV4" {shifted.bytecode[i.offset_dw+1]+=50;}}
         let shift=|text:&str| [6,12,23,35].iter().fold(text.to_owned(),|s,slot|s.replace(&format!("local_{slot}"),&format!("local_{}",slot+50)));
         assert_eq!(fold(&shift(body),&shifted,&refs),shift(expected));
+    }
+
+    #[test]
+    fn continue_guard_bool_gets_a_closed_life_before_reuse() {
+        let body = "    for (auto local_8 : Items)\n    {\n        bool local_12 = Invalid(local_8);\n        if (local_12)\n        {\n            continue;\n        }\n        AState local_14 = local_8.State();\n        local_12 = IsPlayer(local_14) || IsControlled(local_14);\n        if (!(local_12) && !(Ready(local_14)))\n        {\n            continue;\n        }\n        Use(local_14);\n    }\n";
+        let expected = "    for (auto local_8 : Items)\n    {\n        {\n            bool local_12 = Invalid(local_8);\n            if (local_12)\n            {\n                continue;\n            }\n        }\n        AState local_14 = local_8.State();\n        bool local_12_2 = IsPlayer(local_14) || IsControlled(local_14);\n        if (!(local_12_2) && !(Ready(local_14)))\n        {\n            continue;\n        }\n        Use(local_14);\n    }\n";
+        let split = super::split_continue_guard_bool_lifetime;
+        assert_eq!(split(body), expected);
+        assert_eq!(split(expected), expected);
+
+        let fallthrough = body.replace("            continue;", "            Work();");
+        assert_eq!(split(&fallthrough), fallthrough);
+        let self_read = body.replace(
+            "IsPlayer(local_14) || IsControlled(local_14)",
+            "local_12 || IsControlled(local_14)",
+        );
+        assert_eq!(split(&self_read), self_read);
+        let nested = body.replace(
+            "        local_12 = IsPlayer(local_14) || IsControlled(local_14);",
+            "        if (Ready())\n        {\n            local_12 = IsPlayer(local_14) || IsControlled(local_14);\n        }",
+        );
+        assert_eq!(split(&nested), nested);
+        let later_write = body.replace(
+            "        Use(local_14);",
+            "        local_12 = false;\n        Use(local_14);",
+        );
+        assert_eq!(split(&later_write), later_write);
+        let outside = format!("{body}Use(local_12);\n");
+        assert_eq!(split(&outside), outside);
     }
 
     #[test]

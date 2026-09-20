@@ -1661,40 +1661,18 @@ fn storage_origins_equivalent(
     entry_left_to_right: &mut HashMap<i32, i32>,
     entry_right_to_left: &mut HashMap<i32, i32>,
 ) -> bool {
-    // A join of different address lives is deliberately outside this proof even when the same
-    // source positions reach it on both sides. Only one concrete storage identity may be exposed.
-    if left.len() != 1 || right.len() != 1 {
-        return false;
-    }
-    match (left.iter().next(), right.iter().next()) {
-        (
-            Some(FlowOrigin::Write {
-                instruction: left_instruction,
-                operand: left_operand,
-            }),
-            Some(FlowOrigin::Write {
-                instruction: right_instruction,
-                operand: right_operand,
-            }),
-        ) => left_instruction == right_instruction && left_operand == right_operand,
-        (Some(FlowOrigin::Entry(left)), Some(FlowOrigin::Entry(right)))
-            if *left <= 0 || *right <= 0 =>
-        {
-            left == right
-        }
-        (Some(FlowOrigin::Entry(left)), Some(FlowOrigin::Entry(right))) => {
-            bind_bijection(*left, *right, entry_left_to_right, entry_right_to_left)
-        }
-        _ => false,
-    }
+    // At a CFG join, the concrete storage life is path-dependent. It is still allocation-only
+    // when the complete reaching-origin sets agree: every fresh life starts at the same aligned
+    // PSF and any entry storage keeps one bijection. A missing/different producer still fails.
+    origin_sets_equivalent(left, right, entry_left_to_right, entry_right_to_left)
 }
 
 /// Strong N2 proof for register reuse/splitting. Opcode and every non-slot operand must already
 /// match. At each read operand, both sides must have the exact same aligned reaching writes (or a
 /// consistent bijection of entry values). Address/lvalue storage keeps one identity until an
 /// aligned constructor/RVO/out-slot PSF proves a fresh life. This permits only physical allocation
-/// differences; a changed producer, CFG edge, operand order, ambiguous join, or escaped-storage
-/// identity remains SEMANTIC.
+/// differences; a changed producer, CFG edge, operand order, unmatched storage join, or escaped
+/// storage identity remains SEMANTIC.
 fn flow_equivalent_slots(left: &[NormInstr], right: &[NormInstr]) -> bool {
     flow_equivalent_slots_with_storage(left, right, &HashSet::new(), &HashSet::new())
 }
@@ -1736,28 +1714,35 @@ fn flow_equivalent_slots_with_storage(
                     else {
                         return false;
                     };
-                    if left_slot != right_slot
-                        && (left_flow.pinned.contains(left_slot)
-                            || right_flow.pinned.contains(right_slot))
-                        && {
-                            let Some(left_storage) =
-                                storage_origins(&left_flow, i, operand, *left_slot)
-                            else {
-                                return false;
-                            };
-                            let Some(right_storage) =
-                                storage_origins(&right_flow, i, operand, *right_slot)
-                            else {
-                                return false;
-                            };
-                            !storage_origins_equivalent(
-                                &left_storage,
-                                &right_storage,
-                                &mut entry_l2r,
-                                &mut entry_r2l,
-                            )
-                        }
-                    {
+                    let storage_exposed = matches!(left[i].op, "PSF" | "VAR" | "LDV");
+                    let storage_sensitive = if left_storage_starts.is_empty() {
+                        left_flow.pinned.contains(left_slot)
+                            || right_flow.pinned.contains(right_slot)
+                    } else {
+                        // The enhanced path has already reconstructed every typed call frame and
+                        // checked its complete PSF alias matrix. Bind storage where bytecode
+                        // actually exposes an address; ordinary value ops remain governed by the
+                        // reaching-definition proof below.
+                        storage_exposed
+                    };
+                    if left_slot != right_slot && storage_sensitive && {
+                        let Some(left_storage) =
+                            storage_origins(&left_flow, i, operand, *left_slot)
+                        else {
+                            return false;
+                        };
+                        let Some(right_storage) =
+                            storage_origins(&right_flow, i, operand, *right_slot)
+                        else {
+                            return false;
+                        };
+                        !storage_origins_equivalent(
+                            &left_storage,
+                            &right_storage,
+                            &mut entry_l2r,
+                            &mut entry_r2l,
+                        )
+                    } {
                         return false;
                     }
                     if role.read {
@@ -3884,6 +3869,18 @@ mod tests {
             &branch_start,
             &branch_start,
         ));
+        let aligned_renamed_join = vec![
+            ni_jump("JNZ", 2),
+            ni_slot("PSF", 9),
+            ni_slot("PSF", 9),
+            ni("RET"),
+        ];
+        assert!(flow_equivalent_slots_with_storage(
+            &same_ambiguous_storage,
+            &aligned_renamed_join,
+            &branch_start,
+            &branch_start,
+        ));
         let mut renamed_after_join = same_ambiguous_storage.clone();
         renamed_after_join[2] = ni_slot("PSF", 6);
         assert!(!flow_equivalent_slots_with_storage(
@@ -3891,6 +3888,32 @@ mod tests {
             &renamed_after_join,
             &branch_start,
             &branch_start,
+        ));
+
+        let reused_after_typed_call = vec![
+            ni_setv4(1, 11),
+            ni_slot("PSF", 1),
+            ni_setv4(1, 22),
+            ni_slot("PshV4", 1),
+            ni("RET"),
+        ];
+        let split_after_typed_call = vec![
+            ni_setv4(5, 11),
+            ni_slot("PSF", 5),
+            ni_setv4(6, 22),
+            ni_slot("PshV4", 6),
+            ni("RET"),
+        ];
+        let call_output = HashSet::from([(1, 0)]);
+        assert!(flow_equivalent_slots_with_storage(
+            &reused_after_typed_call,
+            &split_after_typed_call,
+            &call_output,
+            &call_output,
+        ));
+        assert!(!flow_equivalent_slots(
+            &reused_after_typed_call,
+            &split_after_typed_call,
         ));
     }
 
