@@ -10189,6 +10189,61 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_attack_vector_endpoint_lifetimes(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "FVector"), (2, "AGothicCharacter")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.typeid_to_ptr.insert(100 + ptr as i32, ptr);
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity {
+                name: name.into(), module: String::new(), namespace: String::new(),
+            });
+        }
+        let vector = DataType { token: 5, type_info: 1, ..Default::default() };
+        let vector_in = DataType { is_reference: true, is_object_const: true,
+            is_read_only: true, ..vector.clone() };
+        let scalar = DataType { token: 0x51, ..Default::default() };
+        let void = DataType { token: 0x52, ..Default::default() };
+        for (ptr, name, owner, constant, ret, params) in [
+            (10, "GetActorLocation", "AActor", true, vector.clone(), vec![]),
+            (11, "GetVelocity", "AActor", true, vector.clone(), vec![]),
+            (12, "GetSafeNormal", "FVector", true, vector.clone(),
+                vec![scalar.clone(), vector_in.clone()]),
+            (13, "Min", "", false, scalar.clone(), vec![scalar.clone(), scalar.clone()]),
+            (14, "opMul", "FVector", true, vector.clone(), vec![scalar]),
+            (15, "opAdd", "FVector", true, vector.clone(), vec![vector_in.clone()]),
+            (16, "$beh0", "FVector", false, void.clone(), vec![vector_in]),
+            (17, "$beh0", "FVector", false, void.clone(), vec![]),
+            (18, "FindNearestPointsOnLineSegments", "", false, void,
+                (0..6).map(|at| DataType { is_reference: at >= 4, ..vector.clone() }).collect()),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_ret.insert(ptr, ret);
+            r.func_params.insert(ptr, params);
+            if !owner.is_empty() {
+                r.func_owner.insert(ptr, owner.into());
+                r.func_is_method.insert(ptr);
+            }
+            if constant {
+                r.const_method_ptrs.insert(ptr);
+            }
+        }
+        r.func_ns.insert(13, "Math".into());
+        r.func_ns.insert(18, "Math".into());
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(),
+            2 => { r.func_by_ptr.insert(11, "GetPhysicsVelocity".into()); },
+            3 => { r.func_params.get_mut(&12).unwrap().pop(); },
+            4 => { r.const_method_ptrs.remove(&15); },
+            5 => r.func_params.get_mut(&16).unwrap()[0].is_reference = false,
+            6 => r.func_params.get_mut(&18).unwrap()[4].is_reference = false,
+            7 => { r.func_ns.insert(18, "Other".into()); },
+            8 => r.func_ret.get_mut(&13).unwrap().token = 0x50,
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_attack_reach_trace_lifetimes(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr, name) in [(1, "AGothicCharacter"), (2, "AActor"), (3, "FHitResult")] {

@@ -3512,6 +3512,8 @@ fn emit_function_ctor(
         pass_trace("restore_query_loop_and_clock_temporaries", &rendered);
         let rendered = restore_feign_retreat_value_lives(&rendered, f, refs, is_method);
         pass_trace("restore_feign_retreat_value_lives", &rendered);
+        let rendered = restore_attack_vector_endpoint_lifetimes(&rendered, f, refs, is_method);
+        pass_trace("restore_attack_vector_endpoint_lifetimes", &rendered);
         let rendered = restore_attack_reach_trace_lifetimes(&rendered, f, refs, is_method);
         pass_trace("restore_attack_reach_trace_lifetimes", &rendered);
         let rendered = split_continue_guard_bool_lifetime(&rendered);
@@ -6635,6 +6637,284 @@ fn restore_trig_constructor_and_clamp_lives(
         result.push('\n');
     }
     result
+}
+
+/// Build both attack-vector endpoints in their final source variables. Keeping the first scaled
+/// direction as a named vector makes the compiler reuse it for the second endpoint and emit an
+/// extra assignment; Vanilla's two direct constructions let that temporary die between them.
+fn restore_attack_vector_endpoint_lifetimes(
+    body: &str,
+    f: &Func,
+    refs: &RefResolver,
+    is_method: bool,
+) -> String {
+    if !is_method
+        || f.name != "WouldCharacterBeBlockedByAnyAttackVector"
+        || f.params.len() != 2
+        || f.params[0].ty.base_name(refs) != "AGothicCharacter"
+        || !f.params[0].ty.is_object_handle
+        || f.params[0].ty.is_reference
+        || f.params[1].ty.base_name(refs) != "float"
+        || f.params[1].ty.is_reference
+        || f.ret.base_name(refs) != "bool"
+        || f.ret.is_reference
+        || f.ret.is_object_handle
+        || body.matches("Math::FindNearestPointsOnLineSegments(").count() != 1
+    {
+        return body.to_owned();
+    }
+    let Ok(code) = disassemble(&f.bytecode) else {
+        return body.to_owned();
+    };
+    let ptr = |ins: &Instr| ins.qwords.first().map(|value| *value as i64);
+    let word = |ins: &Instr| {
+        ins.words
+            .first()
+            .map(|value| *value as i16 as i32)
+            .filter(|slot| *slot > 0)
+    };
+    let signed_word = |ins: &Instr| ins.words.first().map(|value| *value as i16 as i32);
+    let calls: Vec<_> = code
+        .windows(57)
+        .filter_map(|c| {
+            if c.iter().map(|ins| ins.op.name).ne([
+                "PSF", "PshVPtr", "CALLSYS", "PshGPtr", "PshC8", "PSF", "PSF",
+                "PshVPtr", "CALLSYS", "PSF", "CALLSYS", "PshV8", "PshV8", "CALLSYS",
+                "CpyRtoV8", "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF",
+                "CALLSYS", "PSF", "PshVPtr", "CALLSYS", "PSF", "PSF", "CALLSYS", "PSF",
+                "PshVPtr", "CALLSYS", "PSF", "PSF", "CALLSYS", "PSF", "PshVPtr",
+                "CALLSYS", "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF",
+                "CALLSYS", "PSF", "CALLSYS", "PSF", "CALLSYS", "PSF", "PSF", "PSF",
+                "PSF", "PSF", "PSF", "CALLSYS",
+            ]) {
+                return None;
+            }
+            let actor_location = ptr(&c[2])?;
+            let velocity = ptr(&c[8])?;
+            let safe_normal = ptr(&c[10])?;
+            let minimum = ptr(&c[13])?;
+            let multiply = ptr(&c[18])?;
+            let add = ptr(&c[22])?;
+            let copy_ctor = ptr(&c[28])?;
+            let default_ctor = ptr(&c[47])?;
+            let query = ptr(&c[56])?;
+            if [25, 31].iter().any(|at| ptr(&c[*at]) != Some(actor_location))
+                || ptr(&c[37]) != Some(velocity)
+                || ptr(&c[41]) != Some(multiply)
+                || ptr(&c[45]) != Some(add)
+                || ptr(&c[34]) != Some(copy_ctor)
+                || ptr(&c[49]) != Some(default_ctor)
+                || refs.func_by_ptr(actor_location) != Some("GetActorLocation")
+                || refs.func_by_ptr(velocity) != Some("GetVelocity")
+                || refs.func_by_ptr(safe_normal) != Some("GetSafeNormal")
+                || refs.func_by_ptr(minimum) != Some("Min")
+                || refs.func_ns_by_ptr(minimum) != Some("Math")
+                || refs.func_by_ptr(multiply) != Some("opMul")
+                || refs.func_by_ptr(add) != Some("opAdd")
+                || refs.func_by_ptr(copy_ctor) != Some("$beh0")
+                || refs.func_by_ptr(default_ctor) != Some("$beh0")
+                || refs.func_by_ptr(query) != Some("FindNearestPointsOnLineSegments")
+                || refs.func_ns_by_ptr(query) != Some("Math")
+            {
+                return None;
+            }
+            let query_args = refs.func_params_by_ptr(query)?;
+            let vector_type = query_args.first()?.type_info;
+            let vector = refs.type_identity_by_ptr(vector_type)?;
+            let returns_vector = |call| {
+                refs.func_ret_by_ptr(call).is_some_and(|ret| {
+                    ret.token == 5
+                        && ret.type_info == vector_type
+                        && !ret.is_reference
+                        && !ret.is_object_handle
+                })
+            };
+            if vector.name != "FVector"
+                || !vector.module.is_empty()
+                || !vector.namespace.is_empty()
+                || !refs.is_method_by_ptr(actor_location)
+                || !refs.is_method_by_ptr(velocity)
+                || !refs.is_method_by_ptr(safe_normal)
+                || !refs.is_method_by_ptr(multiply)
+                || !refs.is_method_by_ptr(add)
+                || refs.is_method_by_ptr(minimum)
+                || refs.is_method_by_ptr(query)
+                || !returns_vector(actor_location)
+                || !returns_vector(velocity)
+                || !returns_vector(safe_normal)
+                || !returns_vector(multiply)
+                || !returns_vector(add)
+                || !refs.func_params_by_ptr(actor_location)?.is_empty()
+                || !refs.func_params_by_ptr(velocity)?.is_empty()
+                || refs.func_params_by_ptr(safe_normal)?.len() != 2
+                || refs.func_params_by_ptr(minimum)?.len() != 2
+                || refs.func_params_by_ptr(multiply)?.len() != 1
+                || refs.func_params_by_ptr(add)?.len() != 1
+                || !refs.is_const_method_by_ptr(multiply)
+                || !refs.is_const_method_by_ptr(add)
+                || refs.func_ret_by_ptr(minimum)?.base_name(refs) != "float"
+                || refs.func_ret_by_ptr(query)?.base_name(refs) != "void"
+                || query_args.len() != 6
+                || query_args.iter().enumerate().any(|(at, arg)| {
+                    arg.token != 5
+                        || arg.type_info != vector_type
+                        || arg.is_object_handle
+                        || arg.is_reference != (at >= 4)
+                })
+            {
+                return None;
+            }
+            let [copy_arg] = refs.func_params_by_ptr(copy_ctor)? else {
+                return None;
+            };
+            if refs.func_owner_by_ptr(copy_ctor) != Some("FVector")
+                || refs.func_owner_by_ptr(default_ctor) != Some("FVector")
+                || !refs.is_method_by_ptr(copy_ctor)
+                || !refs.is_method_by_ptr(default_ctor)
+                || copy_arg.token != 5
+                || copy_arg.type_info != vector_type
+                || !copy_arg.is_reference
+                || !copy_arg.is_object_const
+                || !copy_arg.is_read_only
+                || !refs.func_params_by_ptr(default_ctor)?.is_empty()
+            {
+                return None;
+            }
+            let first = word(&c[0])?;
+            let attacker = word(&c[1])?;
+            let first_result = word(&c[5])?;
+            let shared = word(&c[6])?;
+            let distance = word(&c[12])?;
+            let target = word(&c[24])?;
+            let target_origin = word(&c[27])?;
+            let origin_temp = word(&c[29])?;
+            let moving_origin = word(&c[33])?;
+            let nearest_a = word(&c[46])?;
+            let nearest_b = word(&c[48])?;
+            if [21, 23, 26, 35, 40].iter().any(|at| word(&c[*at]) != Some(first))
+                || word(&c[7]) != Some(attacker)
+                || [17, 20, 55].iter().any(|at| word(&c[*at]) != Some(first_result))
+                || [9, 16, 19, 43, 52].iter().any(|at| word(&c[*at]) != Some(shared))
+                || [32, 39, 42].iter().any(|at| word(&c[*at]) != Some(origin_temp))
+                || [44, 53].iter().any(|at| word(&c[*at]) != Some(moving_origin))
+                || word(&c[54]) != Some(target_origin)
+                || word(&c[51]) != Some(nearest_a)
+                || word(&c[50]) != Some(nearest_b)
+                || signed_word(&c[30]) != Some(-2)
+                || signed_word(&c[36]) != Some(-2)
+                || signed_word(&c[38]) != Some(-4)
+                || c[4].qwords.first().copied() != Some(0x3e45_798e_e000_0000)
+            {
+                return None;
+            }
+            let vector_slots = [
+                first,
+                first_result,
+                shared,
+                target_origin,
+                origin_temp,
+                moving_origin,
+                nearest_a,
+                nearest_b,
+            ];
+            if HashSet::from(vector_slots).len() != vector_slots.len()
+                || attacker == target
+                || vector_slots.iter().any(|slot| *slot == attacker || *slot == target)
+                || vector_slots.iter().any(|slot| {
+                    f.obj_locals
+                        .iter()
+                        .filter(|(local, _)| local == slot)
+                        .map(|(_, ty)| *ty)
+                        .ne([vector_type])
+                })
+            {
+                return None;
+            }
+            Some((
+                attacker,
+                target_origin,
+                shared,
+                first_result,
+                distance,
+                word(&c[11])?,
+                moving_origin,
+                nearest_a,
+                nearest_b,
+            ))
+        })
+        .collect();
+    let [(attacker, target_origin, shared, first_result, distance, horizon, moving_origin, nearest_a, nearest_b)] =
+        calls.as_slice()
+    else {
+        return body.to_owned();
+    };
+
+    let attacker = format!("local_{attacker}");
+    let target_origin = format!("local_{target_origin}");
+    let shared = format!("local_{shared}");
+    let first_result = format!("local_{first_result}");
+    let distance = format!("local_{distance}");
+    let horizon = format!("local_{horizon}");
+    let moving_origin = format!("local_{moving_origin}");
+    let nearest_a = format!("local_{nearest_a}");
+    let nearest_b = format!("local_{nearest_b}");
+    let moving = &f.params[0].name;
+    let time = &f.params[1].name;
+    let product = format!(
+        "({attacker}.GetVelocity().GetSafeNormal(9.99999993922529e-9, FVector::ZeroVector) * (Math::Min({distance}, {horizon})))"
+    );
+    let raw_product = format!("FVector {shared} = {product};");
+    let raw_first = format!("FVector {first_result} = ({attacker}.GetActorLocation() + {shared});");
+    let direct_first =
+        format!("FVector {first_result} = ({attacker}.GetActorLocation() + {product});");
+    let raw_second = format!("{shared} = ({moving_origin} + ({moving}.GetVelocity() * {time}));");
+    let direct_second =
+        format!("FVector {shared} = ({moving_origin} + ({moving}.GetVelocity() * {time}));");
+    let query = format!(
+        "Math::FindNearestPointsOnLineSegments({first_result}, {target_origin}, {moving_origin}, {shared}, {nearest_a}, {nearest_b});"
+    );
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let rows = |needle: &str| {
+        lines
+            .iter()
+            .enumerate()
+            .filter_map(|(at, line)| (line.trim() == needle).then_some(at))
+            .collect::<Vec<_>>()
+    };
+    let raw_products = rows(&raw_product);
+    let raw_firsts = rows(&raw_first);
+    let direct_firsts = rows(&direct_first);
+    let raw_seconds = rows(&raw_second);
+    let direct_seconds = rows(&direct_second);
+    let queries = rows(&query);
+    let [query_at] = queries.as_slice() else {
+        return body.to_owned();
+    };
+    match (
+        raw_products.as_slice(),
+        raw_firsts.as_slice(),
+        direct_firsts.as_slice(),
+        raw_seconds.as_slice(),
+        direct_seconds.as_slice(),
+    ) {
+        ([product_at], [first_at], [], [second_at], [])
+            if *first_at == product_at + 1 && *first_at < *second_at && *second_at < *query_at =>
+        {
+            let first_indent = indent_of(&lines[*first_at]);
+            let second_indent = indent_of(&lines[*second_at]);
+            lines[*first_at] = format!("{first_indent}{direct_first}");
+            lines[*second_at] = format!("{second_indent}{direct_second}");
+            lines.remove(*product_at);
+        }
+        ([], [], [first_at], [], [second_at])
+            if *first_at < *second_at && *second_at < *query_at => {}
+        _ => return body.to_owned(),
+    }
+    let mut output = lines.join("\n");
+    if body.ends_with('\n') {
+        output.push('\n');
+    }
+    output
 }
 
 /// Keep the one actor handle whose source lifetime separates the two array inserts, and inline
@@ -63325,6 +63605,152 @@ mod literal_value_lifetime_tests {
             super::restore_reused_proceed_handle_lifetimes(body, &bad, &refs),
             body
         );
+    }
+
+    fn attack_vector_endpoint_lifetimes_fixture() -> Func {
+        let mut f = function(&[
+            ("PSF", &[62]),
+            ("PshVPtr", &[26]),
+            ("CALLSYS", &[]),
+            ("PshGPtr", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[44]),
+            ("PSF", &[10]),
+            ("PshVPtr", &[26]),
+            ("CALLSYS", &[]),
+            ("PSF", &[10]),
+            ("CALLSYS", &[]),
+            ("PshV8", &[38]),
+            ("PshV8", &[4]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[46]),
+            ("PshV8", &[46]),
+            ("PSF", &[10]),
+            ("PSF", &[44]),
+            ("CALLSYS", &[]),
+            ("PSF", &[10]),
+            ("PSF", &[44]),
+            ("PSF", &[62]),
+            ("CALLSYS", &[]),
+            ("PSF", &[62]),
+            ("PshVPtr", &[28]),
+            ("CALLSYS", &[]),
+            ("PSF", &[62]),
+            ("PSF", &[68]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("PshVPtr", &[65534]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("PSF", &[74]),
+            ("CALLSYS", &[]),
+            ("PSF", &[62]),
+            ("PshVPtr", &[65534]),
+            ("CALLSYS", &[]),
+            ("PshV8", &[65532]),
+            ("PSF", &[56]),
+            ("PSF", &[62]),
+            ("CALLSYS", &[]),
+            ("PSF", &[56]),
+            ("PSF", &[10]),
+            ("PSF", &[74]),
+            ("CALLSYS", &[]),
+            ("PSF", &[86]),
+            ("CALLSYS", &[]),
+            ("PSF", &[92]),
+            ("CALLSYS", &[]),
+            ("PSF", &[92]),
+            ("PSF", &[86]),
+            ("PSF", &[10]),
+            ("PSF", &[74]),
+            ("PSF", &[68]),
+            ("PSF", &[44]),
+            ("CALLSYS", &[]),
+        ]);
+        f.name = "WouldCharacterBeBlockedByAnyAttackVector".into();
+        f.ret = DataType { token: 0x41, ..Default::default() };
+        f.params = vec![
+            crate::cache::model::Param {
+                name: "MovingCharacter".into(),
+                flags: 0,
+                ty: DataType { token: 5, type_info: 2, is_object_handle: true,
+                    ..Default::default() },
+            },
+            crate::cache::model::Param {
+                name: "TimeHorizon".into(),
+                flags: 0,
+                ty: DataType { token: 0x51, is_read_only: true, ..Default::default() },
+            },
+        ];
+        f.obj_locals = [62, 44, 10, 68, 56, 74, 86, 92]
+            .into_iter()
+            .map(|slot| (slot, 1))
+            .collect();
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [
+            (2, 10i64),
+            (8, 11),
+            (10, 12),
+            (13, 13),
+            (18, 14),
+            (22, 15),
+            (25, 10),
+            (28, 16),
+            (31, 10),
+            (34, 16),
+            (37, 11),
+            (41, 14),
+            (45, 15),
+            (47, 17),
+            (49, 17),
+            (56, 18),
+        ] {
+            f.bytecode[code[at].offset_dw + 1] = ptr as i32;
+            f.bytecode[code[at].offset_dw + 2] = (ptr >> 32) as i32;
+        }
+        let epsilon = 0x3e45_798e_e000_0000u64;
+        f.bytecode[code[4].offset_dw + 1] = epsilon as i32;
+        f.bytecode[code[4].offset_dw + 2] = (epsilon >> 32) as i32;
+        f
+    }
+
+    #[test]
+    fn attack_vector_endpoints_use_separate_direct_constructions() {
+        let source = "    float local_4 = Distance();\n    float local_38 = Horizon();\n    FVector local_10 = (local_26.GetVelocity().GetSafeNormal(9.99999993922529e-9, FVector::ZeroVector) * (Math::Min(local_4, local_38)));\n    FVector local_44 = (local_26.GetActorLocation() + local_10);\n    FVector local_68(local_28.GetActorLocation());\n    FVector local_74(MovingCharacter.GetActorLocation());\n    local_10 = (local_74 + (MovingCharacter.GetVelocity() * TimeHorizon));\n    FVector local_86;\n    FVector local_92;\n    Math::FindNearestPointsOnLineSegments(local_44, local_68, local_74, local_10, local_86, local_92);\n";
+        let expected = "    float local_4 = Distance();\n    float local_38 = Horizon();\n    FVector local_44 = (local_26.GetActorLocation() + (local_26.GetVelocity().GetSafeNormal(9.99999993922529e-9, FVector::ZeroVector) * (Math::Min(local_4, local_38))));\n    FVector local_68(local_28.GetActorLocation());\n    FVector local_74(MovingCharacter.GetActorLocation());\n    FVector local_10 = (local_74 + (MovingCharacter.GetVelocity() * TimeHorizon));\n    FVector local_86;\n    FVector local_92;\n    Math::FindNearestPointsOnLineSegments(local_44, local_68, local_74, local_10, local_86, local_92);\n";
+        let f = attack_vector_endpoint_lifetimes_fixture();
+        let refs = RefResolver::from_test_attack_vector_endpoint_lifetimes(0);
+        let restore = |body: &str, function: &Func, resolver: &RefResolver, method: bool| {
+            super::restore_attack_vector_endpoint_lifetimes(body, function, resolver, method)
+        };
+        assert_eq!(restore(source, &f, &refs, true), expected);
+        assert_eq!(restore(expected, &f, &refs, true), expected);
+        assert_eq!(restore(source, &f, &refs, false), source);
+        for fault in 1..=8 {
+            assert_eq!(
+                restore(source, &f, &RefResolver::from_test_attack_vector_endpoint_lifetimes(fault), true),
+                source,
+                "metadata {fault}"
+            );
+        }
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut bad = f.clone();
+        bad.name = "Other".into();
+        assert_eq!(restore(source, &bad, &refs, true), source);
+        bad = f.clone();
+        bad.bytecode[code[21].offset_dw] ^= 1 << 16;
+        assert_eq!(restore(source, &bad, &refs, true), source);
+        bad = f.clone();
+        bad.bytecode[code[4].offset_dw + 1] ^= 1;
+        assert_eq!(restore(source, &bad, &refs, true), source);
+        for changed in [
+            source.replace("local_26.GetVelocity()", "Other.GetVelocity()"),
+            source.replace("local_10 = (local_74", "local_10 = (Other"),
+            source.replace("local_86, local_92", "local_92, local_86"),
+            source.repeat(2),
+        ] {
+            assert_eq!(restore(&changed, &f, &refs, true), changed);
+        }
     }
 
     fn attack_reach_trace_lifetimes_fixture() -> Func {
