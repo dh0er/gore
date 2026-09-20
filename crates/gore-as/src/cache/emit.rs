@@ -3510,6 +3510,8 @@ fn emit_function_ctor(
         pass_trace("restore_query_array_across_conditional_action", &rendered);
         let rendered = restore_query_loop_and_clock_temporaries(&rendered, f, refs, class_name);
         pass_trace("restore_query_loop_and_clock_temporaries", &rendered);
+        let rendered = restore_feign_retreat_value_lives(&rendered, f, refs, is_method);
+        pass_trace("restore_feign_retreat_value_lives", &rendered);
         let rendered = split_continue_guard_bool_lifetime(&rendered);
         pass_trace("split_continue_guard_bool_lifetime", &rendered);
         s.truncate(declarations_at);
@@ -6626,6 +6628,291 @@ fn restore_trig_constructor_and_clamp_lives(
     };
     let mut out: Vec<String> = lines.iter().map(|line| (*line).to_owned()).collect();
     out.splice(*at..*at + 3, replacement.iter().cloned());
+    let mut result = out.join("\n");
+    if body.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
+/// A retreat move keeps its turn angle and the three path-length limits in source variables.
+/// The ordinary expression folds erase those four names. That changes the compiler's allocation
+/// of every following vector temporary, even though the expressions themselves still read the
+/// same. Restore the names only when the complete constant prefix, vector calls, arithmetic
+/// producers, and three native path queries prove this exact source shape.
+fn restore_feign_retreat_value_lives(
+    body: &str,
+    f: &Func,
+    refs: &RefResolver,
+    is_method: bool,
+) -> String {
+    if !is_method
+        || f.name != "DoTask_Implementation"
+        || !f.params.is_empty()
+        || f.ret.token != 0x52
+        || f.ret.is_reference
+        || f.ret.is_object_handle
+        || !body.contains(".RotateAngleAxis(60.0,")
+        || body.matches("DoesPathExistWithinLengthLimit(").count() != 3
+        || !body.contains(" * 1.15))")
+    {
+        return body.to_owned();
+    }
+    let Ok(code) = disassemble(&f.bytecode) else {
+        return body.to_owned();
+    };
+    let word = |ins: &Instr, at: usize| {
+        ins.words
+            .get(at)
+            .map(|value| *value as i16 as i32)
+            .filter(|slot| *slot > 0)
+    };
+    let vector_call = |ins: &Instr, name: &str| {
+        let Some(ptr) = ins.qwords.first().map(|value| *value as i64) else {
+            return false;
+        };
+        refs.func_by_ptr(ptr) == Some(name)
+            && refs.func_owner_by_ptr(ptr) == Some("FVector")
+            && refs.is_method_by_ptr(ptr)
+            && refs.is_const_method_by_ptr(ptr)
+    };
+
+    let seed_witnesses: Vec<_> = code
+        .windows(5)
+        .filter_map(|c| {
+            if c.iter().any(|ins| ins.op.name != "SetV8")
+                || c.iter()
+                    .zip([1200.0f64, 100.0, 900.0, 100.0, 60.0])
+                    .any(|(ins, value)| ins.qwords.first().copied() != Some(value.to_bits()))
+            {
+                return None;
+            }
+            let slots = [
+                word(&c[0], 0)?,
+                word(&c[1], 0)?,
+                word(&c[2], 0)?,
+                word(&c[3], 0)?,
+                word(&c[4], 0)?,
+            ];
+            (slots.iter().copied().collect::<HashSet<_>>().len() == slots.len())
+                .then_some(slots)
+        })
+        .collect();
+    let [seed] = seed_witnesses.as_slice() else {
+        return body.to_owned();
+    };
+    let [long_distance, end_radius, middle_distance, middle_radius, angle] = *seed;
+
+    let rotation_witnesses: Vec<_> = code
+        .windows(9)
+        .filter_map(|c| {
+            if c.iter().map(|ins| ins.op.name).ne([
+                "PshV8", "PSF", "PSF", "CALLSYS", "PSF", "PshV8", "PSF", "PSF",
+                "CALLSYS",
+            ]) || word(&c[5], 0) != Some(angle)
+                || !vector_call(&c[3], "opMul")
+                || !vector_call(&c[8], "RotateAngleAxis")
+            {
+                return None;
+            }
+            Some(word(&c[7], 0)?)
+        })
+        .collect();
+    let [rotation_receiver] = rotation_witnesses.as_slice() else {
+        return body.to_owned();
+    };
+
+    let scalar_products = |left: i32, right: i32| {
+        code.windows(3)
+            .filter_map(|c| {
+                if c.iter().map(|ins| ins.op.name).ne(["ADDd", "SetV8", "MULd"])
+                    || word(&c[0], 1) != Some(left)
+                    || word(&c[0], 2) != Some(right)
+                    || c[1].qwords.first().copied() != Some(1.15f64.to_bits())
+                {
+                    return None;
+                }
+                let result = word(&c[0], 0)?;
+                let factor = word(&c[1], 0)?;
+                (word(&c[2], 0) == Some(result)
+                    && word(&c[2], 1) == Some(result)
+                    && word(&c[2], 2) == Some(factor))
+                .then_some(result)
+            })
+            .collect::<Vec<_>>()
+    };
+    let first_products = scalar_products(middle_distance, middle_radius);
+    let third_products = scalar_products(long_distance, end_radius);
+    let ([first_limit], [third_limit]) = (first_products.as_slice(), third_products.as_slice())
+    else {
+        return body.to_owned();
+    };
+
+    let distance_products: Vec<_> = code
+        .windows(9)
+        .filter_map(|c| {
+            if c.iter().map(|ins| ins.op.name).ne([
+                "PSF", "PSF", "PSF", "CALLSYS", "PSF", "CALLSYS", "CpyRtoV8",
+                "SetV8", "MULd",
+            ]) || !vector_call(&c[3], "opSub")
+                || !vector_call(&c[5], "Size")
+                || c[7].qwords.first().copied() != Some(1.15f64.to_bits())
+            {
+                return None;
+            }
+            let (right, temporary, left, result, factor) = (
+                word(&c[0], 0)?,
+                word(&c[1], 0)?,
+                word(&c[2], 0)?,
+                word(&c[6], 0)?,
+                word(&c[7], 0)?,
+            );
+            if word(&c[4], 0) != Some(temporary)
+                || word(&c[8], 0) != Some(result)
+                || word(&c[8], 1) != Some(result)
+                || word(&c[8], 2) != Some(factor)
+            {
+                return None;
+            }
+            Some((left, right, result))
+        })
+        .collect();
+    let [(distance_left, distance_right, second_limit)] = distance_products.as_slice() else {
+        return body.to_owned();
+    };
+    let restored_slots = [angle, *first_limit, *second_limit, *third_limit];
+    if restored_slots
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>()
+        .len()
+        != restored_slots.len()
+        || restored_slots.iter().any(|slot| seed[..4].contains(slot))
+    {
+        return body.to_owned();
+    }
+    let path_queries = code
+        .iter()
+        .filter(|ins| {
+            ins.op.name == "CALLSYS"
+                && ins.qwords.first().is_some_and(|ptr| {
+                    refs.func_by_ptr(*ptr as i64) == Some("DoesPathExistWithinLengthLimit")
+                })
+        })
+        .count();
+    if path_queries != 3 {
+        return body.to_owned();
+    }
+
+    let local = |slot: i32| format!("local_{slot}");
+    let (long_name, end_radius_name, middle_name, middle_radius_name, angle_name) = (
+        local(long_distance),
+        local(end_radius),
+        local(middle_distance),
+        local(middle_radius),
+        local(angle),
+    );
+    let (first_name, second_name, third_name) =
+        (local(*first_limit), local(*second_limit), local(*third_limit));
+    if [&angle_name, &first_name, &second_name, &third_name]
+        .iter()
+        .any(|name| count_ident(body, name) != 0)
+    {
+        return body.to_owned();
+    }
+    let required_declarations = [
+        format!("float {long_name} = 1200.0;"),
+        format!("float {end_radius_name} = 100.0;"),
+        format!("float {middle_name} = 900.0;"),
+        format!("float {middle_radius_name} = 100.0;"),
+    ];
+    let lines: Vec<&str> = body.lines().collect();
+    if required_declarations.iter().any(|declaration| {
+        lines
+            .iter()
+            .filter(|line| line.trim() == declaration)
+            .count()
+            != 1
+    }) {
+        return body.to_owned();
+    }
+
+    let seed_declaration = required_declarations.last().unwrap();
+    let rotation_old = format!("local_{rotation_receiver}.RotateAngleAxis(60.0,");
+    let rotation_new = format!("local_{rotation_receiver}.RotateAngleAxis({angle_name},");
+    let first_old = format!("float32((({middle_name} + {middle_radius_name}) * 1.15))");
+    let first_new = format!("float32({first_name})");
+    let second_old = format!(
+        "float32((((local_{distance_left} - local_{distance_right}).Size()) * 1.15))"
+    );
+    let second_new = format!("float32({second_name})");
+    let third_old = format!("float32((({long_name} + {end_radius_name}) * 1.15))");
+    let third_new = format!("float32({third_name})");
+    let unique_line = |needle: &str| {
+        let sites: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.matches(needle).count() == 1)
+            .map(|(at, _)| at)
+            .collect();
+        match sites.as_slice() {
+            [at] => Some(*at),
+            _ => None,
+        }
+    };
+    let Some(seed_at) = lines.iter().position(|line| line.trim() == seed_declaration) else {
+        return body.to_owned();
+    };
+    let (Some(rotation_at), Some(first_at), Some(second_at), Some(third_at)) = (
+        unique_line(&rotation_old),
+        unique_line(&first_old),
+        unique_line(&second_old),
+        unique_line(&third_old),
+    ) else {
+        return body.to_owned();
+    };
+    if !(seed_at < rotation_at
+        && rotation_at < first_at
+        && first_at < second_at
+        && second_at < third_at)
+    {
+        return body.to_owned();
+    }
+
+    let mut out = Vec::with_capacity(lines.len() + 4);
+    for (at, line) in lines.iter().enumerate() {
+        if at == first_at {
+            out.push(format!(
+                "{}float {first_name} = ({middle_name} + {middle_radius_name}) * 1.15;",
+                indent_of(line)
+            ));
+        } else if at == second_at {
+            out.push(format!(
+                "{}float {second_name} = (local_{distance_left} - local_{distance_right}).Size() * 1.15;",
+                indent_of(line)
+            ));
+        } else if at == third_at {
+            out.push(format!(
+                "{}float {third_name} = ({long_name} + {end_radius_name}) * 1.15;",
+                indent_of(line)
+            ));
+        }
+        let rewritten = if at == rotation_at {
+            line.replacen(&rotation_old, &rotation_new, 1)
+        } else if at == first_at {
+            line.replacen(&first_old, &first_new, 1)
+        } else if at == second_at {
+            line.replacen(&second_old, &second_new, 1)
+        } else if at == third_at {
+            line.replacen(&third_old, &third_new, 1)
+        } else {
+            (*line).to_owned()
+        };
+        out.push(rewritten);
+        if at == seed_at {
+            out.push(format!("{}float {angle_name} = 60.0;", indent_of(line)));
+        }
+    }
     let mut result = out.join("\n");
     if body.ends_with('\n') {
         result.push('\n');
@@ -62824,6 +63111,118 @@ mod literal_value_lifetime_tests {
             super::restore_reused_proceed_handle_lifetimes(body, &bad, &refs),
             body
         );
+    }
+
+    fn feign_retreat_value_lives_fixture() -> Func {
+        let mut f = function(&[
+            ("SetV8", &[4]),
+            ("SetV8", &[8]),
+            ("SetV8", &[10]),
+            ("SetV8", &[12]),
+            ("SetV8", &[14]),
+            ("PshV8", &[46]),
+            ("PSF", &[30]),
+            ("PSF", &[36]),
+            ("CALLSYS", &[]),
+            ("PSF", &[30]),
+            ("PshV8", &[14]),
+            ("PSF", &[20]),
+            ("PSF", &[42]),
+            ("CALLSYS", &[]),
+            ("ADDd", &[6, 10, 12]),
+            ("SetV8", &[82]),
+            ("MULd", &[6, 6, 82]),
+            ("PSF", &[77]),
+            ("dTOf", &[73, 6]),
+            ("PSF", &[96]),
+            ("PSF", &[66]),
+            ("PSF", &[72]),
+            ("CALLSYS", &[]),
+            ("PSF", &[66]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[82]),
+            ("SetV8", &[80]),
+            ("MULd", &[82, 82, 80]),
+            ("PSF", &[97]),
+            ("dTOf", &[73, 82]),
+            ("ADDd", &[100, 4, 8]),
+            ("SetV8", &[80]),
+            ("MULd", &[100, 100, 80]),
+            ("PSF", &[97]),
+            ("dTOf", &[73, 100]),
+            ("CALLSYS", &[]),
+            ("CALLSYS", &[]),
+            ("CALLSYS", &[]),
+            ("RET", &[0]),
+        ]);
+        f.name = "DoTask_Implementation".into();
+        f.ret = DataType { token: 0x52, ..Default::default() };
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, value) in [
+            (0, 1200.0f64),
+            (1, 100.0),
+            (2, 900.0),
+            (3, 100.0),
+            (4, 60.0),
+            (15, 1.15),
+            (26, 1.15),
+            (31, 1.15),
+        ] {
+            let bits = value.to_bits();
+            f.bytecode[code[at].offset_dw + 1] = bits as u32 as i32;
+            f.bytecode[code[at].offset_dw + 2] = (bits >> 32) as u32 as i32;
+        }
+        for (at, ptr) in [
+            (8, 10i64),
+            (13, 11),
+            (22, 12),
+            (24, 13),
+            (35, 14),
+            (36, 14),
+            (37, 14),
+        ] {
+            f.bytecode[code[at].offset_dw + 1] = ptr as i32;
+            f.bytecode[code[at].offset_dw + 2] = (ptr >> 32) as i32;
+        }
+        f
+    }
+
+    #[test]
+    fn feign_retreat_keeps_angle_and_path_limit_source_values() {
+        let source = "    float local_4 = 1200.0;\n    float local_8 = 100.0;\n    float local_10 = 900.0;\n    float local_12 = 100.0;\n    FVector local_20 = local_42.RotateAngleAxis(60.0, (FVector(FVector::UpVector) * local_46));\n    bool local_1 = UNavigationSystemV1::DoesPathExistWithinLengthLimit(Self(), Start(), local_72, float32(((local_10 + local_12) * 1.15)), local_77);\n    if (local_1)\n    {\n        local_98 = UNavigationSystemV1::DoesPathExistWithinLengthLimit(Self(), local_72, local_96, float32((((local_72 - local_96).Size()) * 1.15)), local_97);\n    }\n    else\n    {\n        local_98 = UNavigationSystemV1::DoesPathExistWithinLengthLimit(Self(), Start(), local_96, float32(((local_4 + local_8) * 1.15)), local_97);\n    }\n";
+        let expected = "    float local_4 = 1200.0;\n    float local_8 = 100.0;\n    float local_10 = 900.0;\n    float local_12 = 100.0;\n    float local_14 = 60.0;\n    FVector local_20 = local_42.RotateAngleAxis(local_14, (FVector(FVector::UpVector) * local_46));\n    float local_6 = (local_10 + local_12) * 1.15;\n    bool local_1 = UNavigationSystemV1::DoesPathExistWithinLengthLimit(Self(), Start(), local_72, float32(local_6), local_77);\n    if (local_1)\n    {\n        float local_82 = (local_72 - local_96).Size() * 1.15;\n        local_98 = UNavigationSystemV1::DoesPathExistWithinLengthLimit(Self(), local_72, local_96, float32(local_82), local_97);\n    }\n    else\n    {\n        float local_100 = (local_4 + local_8) * 1.15;\n        local_98 = UNavigationSystemV1::DoesPathExistWithinLengthLimit(Self(), Start(), local_96, float32(local_100), local_97);\n    }\n";
+        let f = feign_retreat_value_lives_fixture();
+        let refs = RefResolver::from_test_feign_retreat_value_lives(0);
+        let restore = |body: &str, function: &Func, refs: &RefResolver, method: bool| {
+            super::restore_feign_retreat_value_lives(body, function, refs, method)
+        };
+        assert_eq!(restore(source, &f, &refs, true), expected);
+        assert_eq!(restore(expected, &f, &refs, true), expected);
+        assert_eq!(restore(source, &f, &refs, false), source);
+        for fault in 1..=5 {
+            assert_eq!(
+                restore(source, &f, &RefResolver::from_test_feign_retreat_value_lives(fault), true),
+                source,
+                "metadata {fault}"
+            );
+        }
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut bad = f.clone();
+        bad.bytecode[code[4].offset_dw + 1] ^= 1;
+        assert_eq!(restore(source, &bad, &refs, true), source);
+        bad = f.clone();
+        bad.bytecode[code[16].offset_dw + 1] ^= 1 << 16;
+        assert_eq!(restore(source, &bad, &refs, true), source);
+        bad = f.clone();
+        bad.name = "Other".into();
+        assert_eq!(restore(source, &bad, &refs, true), source);
+        for changed in [
+            source.replace("RotateAngleAxis(60.0", "RotateAngleAxis(45.0"),
+            source.replace("(local_72 - local_96)", "(local_96 - local_72)"),
+            source.repeat(2),
+        ] {
+            assert_eq!(restore(&changed, &f, &refs, true), changed);
+        }
     }
 
     fn trig_constructor_and_clamp_fixture() -> Func {

@@ -10189,6 +10189,32 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_feign_retreat_value_lives(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(1, "FVector".into());
+        r.typeid_to_ptr.insert(101, 1);
+        r.type_identity_by_ptr.insert(1, TypeIdentity {
+            name: "FVector".into(), module: String::new(), namespace: String::new(),
+        });
+        for (ptr, name) in [(10, "opMul"), (11, "RotateAngleAxis"), (12, "opSub"), (13, "Size")] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_owner.insert(ptr, "FVector".into());
+            r.func_is_method.insert(ptr);
+            r.const_method_ptrs.insert(ptr);
+        }
+        r.func_by_ptr.insert(14, "DoesPathExistWithinLengthLimit".into());
+        match fault {
+            1 => { r.func_by_ptr.insert(11, "RotateVector".into()); },
+            2 => { r.func_owner.insert(10, "FOther".into()); },
+            3 => { r.const_method_ptrs.remove(&12); },
+            4 => { r.func_by_ptr.insert(13, "Length".into()); },
+            5 => { r.func_by_ptr.insert(14, "OtherPathQuery".into()); },
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_trig_constructor_and_clamp_lives(fault: u8) -> Self {
         let mut r = Self::default();
         r.type_by_ptr.insert(1, "FVector".into());
