@@ -3512,6 +3512,14 @@ fn emit_function_ctor(
         pass_trace("restore_query_loop_and_clock_temporaries", &rendered);
         let rendered = restore_feign_retreat_value_lives(&rendered, f, refs, is_method);
         pass_trace("restore_feign_retreat_value_lives", &rendered);
+        let rendered = restore_relay_creeping_loop_handle_lifetimes(
+            &rendered,
+            f,
+            refs,
+            class_name,
+            is_method,
+        );
+        pass_trace("restore_relay_creeping_loop_handle_lifetimes", &rendered);
         let rendered = restore_transform_spawn_lifetimes(&rendered, f, refs, is_method);
         pass_trace("restore_transform_spawn_lifetimes", &rendered);
         let rendered = restore_attack_vector_endpoint_lifetimes(&rendered, f, refs, is_method);
@@ -6639,6 +6647,257 @@ fn restore_trig_constructor_and_clamp_lives(
         result.push('\n');
     }
     result
+}
+
+/// Restore the two independent loop-local character and ability handle lives used by the
+/// creeping-alert relay. The cache reuses both physical slots across the loops; keeping the
+/// emitted function-scope declarations moves their releases ahead of value destructors.
+fn restore_relay_creeping_loop_handle_lifetimes(
+    body: &str,
+    f: &Func,
+    refs: &RefResolver,
+    class_name: Option<&str>,
+    is_method: bool,
+) -> String {
+    if !is_method
+        || class_name != Some("UAIEventResponse_RelayCreepingAlertAroundInstigator")
+        || !f.is_ufunction
+        || !f.is_const_method()
+        || f.name != "PerformResponse_Implementation"
+        || f.ret.base_name(refs) != "void"
+        || f.ret.is_reference
+        || f.ret.is_object_handle
+        || f.params.len() != 2
+        || f.params[0].name != "AIEvent"
+        || f.params[0].ty.base_name(refs) != "FGameplayTag"
+        || !f.params[0].ty.is_reference
+        || f.params[0].ty.is_object_handle
+        || f.params[1].name != "Perception"
+        || f.params[1].ty.base_name(refs) != "FRememberedPerception"
+        || !f.params[1].ty.is_reference
+        || f.params[1].ty.is_object_handle
+    {
+        return body.to_owned();
+    }
+
+    let Ok(code) = disassemble(&f.bytecode) else {
+        return body.to_owned();
+    };
+    if code.len() != 548
+        || code[547].op.name != "RET"
+        || code[547].words.first().copied() != Some(6)
+    {
+        return body.to_owned();
+    }
+    let names = |start: usize, expected: &[&str]| {
+        code.get(start..start + expected.len())
+            .is_some_and(|slice| slice.iter().map(|ins| ins.op.name).eq(expected.iter().copied()))
+    };
+    if !names(162, &[
+        "SUSPEND", "PSF", "CALLSYS", "PshRPtr", "RDSPtr", "RefCpyV", "CmpPtrNull",
+        "JZ", "TYPEID", "PSF", "PshVPtr", "CALLSYS", "JMP", "ClrVPtr", "PshVPtr",
+        "RefCpyV",
+    ]) || !names(252, &[
+        "PshVPtr", "CALLSYS", "STOREOBJ", "CmpPtrNull", "JZ", "TYPEID", "PSF",
+        "PshVPtr", "CALLSYS", "JMP", "ClrVPtr", "PshVPtr", "RefCpyV",
+    ]) || !names(434, &[
+        "SUSPEND", "PSF", "CALLSYS", "PshRPtr", "RDSPtr", "RefCpyV",
+    ]) || !names(440, &[
+        "PshVPtr", "CALLSYS", "STOREOBJ", "CmpPtrNull", "JZ", "TYPEID", "PSF",
+        "PshVPtr", "CALLSYS", "JMP", "ClrVPtr", "PshVPtr", "RefCpyV",
+    ]) {
+        return body.to_owned();
+    }
+
+    let word = |at: usize, operand: usize| {
+        code.get(at)?.words.get(operand).map(|value| *value as i16 as i32)
+    };
+    let ptr = |at: usize| code.get(at)?.qwords.first().map(|value| *value as i64);
+    let jump = |at: usize| {
+        let ins = code.get(at)?;
+        Some(ins.offset_dw as i64 + 2 + i64::from(*ins.dwords.first()? as i32))
+    };
+    let target = |at: usize| code.get(at).map(|ins| ins.offset_dw as i64);
+    let Some(first_proceed) = ptr(164) else { return body.to_owned(); };
+    let Some(second_proceed) = ptr(436) else { return body.to_owned(); };
+    let Some(cast) = ptr(173) else { return body.to_owned(); };
+    let Some(get_ai) = ptr(253) else { return body.to_owned(); };
+    if refs.func_by_ptr(first_proceed) != Some("Proceed")
+        || refs.func_owner_by_ptr(first_proceed) != Some("TArrayConstIterator")
+        || !refs.is_method_by_ptr(first_proceed)
+        || refs.func_params_by_ptr(first_proceed).is_none_or(|params| !params.is_empty())
+        || refs.func_ret_by_ptr(first_proceed).is_none_or(|ret| {
+            ret.base_name(refs) != "AActor" || !ret.is_object_handle
+        })
+        || refs.func_by_ptr(second_proceed) != Some("Proceed")
+        || refs.func_owner_by_ptr(second_proceed) != Some("TArrayIterator")
+        || !refs.is_method_by_ptr(second_proceed)
+        || refs.func_params_by_ptr(second_proceed).is_none_or(|params| !params.is_empty())
+        || refs.func_ret_by_ptr(second_proceed).is_none_or(|ret| {
+            ret.base_name(refs) != "AGothicCharacter" || !ret.is_object_handle
+        })
+        || refs.func_by_ptr(cast) != Some("opCast")
+        || ptr(260) != Some(cast)
+        || ptr(448) != Some(cast)
+        || refs.func_by_ptr(get_ai) != Some("GetAI")
+        || ptr(441) != Some(get_ai)
+        || !refs.is_method_by_ptr(get_ai)
+        || refs.func_params_by_ptr(get_ai).is_none_or(|params| !params.is_empty())
+        || refs.func_ret_by_ptr(get_ai).is_none_or(|ret| {
+            ret.base_name(refs) != "UGameplayAbility_AI" || !ret.is_object_handle || ret.is_reference
+        })
+    {
+        return body.to_owned();
+    }
+
+    let Some(character_cast_id) = code[170].dwords.first().copied().map(|id| id as i32) else {
+        return body.to_owned();
+    };
+    let Some(ability_cast_id) = code[257].dwords.first().copied().map(|id| id as i32) else {
+        return body.to_owned();
+    };
+    if character_cast_id & 0x6000_0000 != 0x4000_0000
+        || ability_cast_id & 0x6000_0000 != 0x4000_0000
+    {
+        return body.to_owned();
+    }
+    let character_type_id = character_cast_id & !0x6000_0000;
+    let ability_type_id = ability_cast_id & !0x6000_0000;
+    let (Some(character_type), Some(ability_type)) = (
+        refs.type_identity_by_id(character_type_id),
+        refs.type_identity_by_id(ability_type_id),
+    ) else {
+        return body.to_owned();
+    };
+    let local_type = |slot: i32, expected| {
+        f.obj_locals
+            .iter()
+            .filter(|(candidate, _)| *candidate == slot)
+            .filter_map(|(_, ty)| refs.type_identity_by_ptr(*ty))
+            .eq([expected])
+    };
+    if character_type.name != "AGothicCharacter"
+        || !character_type.namespace.is_empty()
+        || ability_type.name != "UGameplayAbility_CharacterAI_Gothic"
+        || !ability_type.namespace.is_empty()
+        || code[445].dwords.first().copied().map(|id| id as i32) != Some(ability_cast_id)
+        || !local_type(62, character_type)
+        || !local_type(70, ability_type)
+    {
+        return body.to_owned();
+    }
+
+    if word(163, 0) != Some(50)
+        || word(167, 0) != Some(58)
+        || word(168, 0) != Some(58)
+        || word(171, 0) != Some(60)
+        || word(172, 0) != Some(58)
+        || word(175, 0) != Some(60)
+        || word(176, 0) != Some(60)
+        || word(177, 0) != Some(62)
+        || word(252, 0) != Some(62)
+        || word(254, 0) != Some(68)
+        || word(255, 0) != Some(68)
+        || word(258, 0) != Some(2)
+        || word(259, 0) != Some(68)
+        || word(262, 0) != Some(2)
+        || word(263, 0) != Some(2)
+        || word(264, 0) != Some(70)
+        || word(435, 0) != Some(200)
+        || word(439, 0) != Some(62)
+        || word(440, 0) != Some(62)
+        || word(442, 0) != Some(68)
+        || word(443, 0) != Some(68)
+        || word(446, 0) != Some(2)
+        || word(447, 0) != Some(68)
+        || word(450, 0) != Some(2)
+        || word(451, 0) != Some(2)
+        || word(452, 0) != Some(70)
+        || jump(161) != target(423)
+        || jump(169) != target(175)
+        || jump(174) != target(176)
+        || jump(256) != target(262)
+        || jump(261) != target(263)
+        || jump(426) != target(162)
+        || jump(433) != target(541)
+        || jump(444) != target(450)
+        || jump(449) != target(451)
+        || jump(544) != target(434)
+    {
+        return body.to_owned();
+    }
+    let free_positions = |slot: i32| {
+        code.iter()
+            .enumerate()
+            .filter_map(|(at, ins)| {
+                (ins.op.name == "FreeNullV8" && word(at, 0) == Some(slot)).then_some(at)
+            })
+            .collect::<Vec<_>>()
+    };
+    if free_positions(58) != [197, 213, 219, 250, 299, 324, 411, 422]
+        || free_positions(62) != [196, 212, 218, 249, 298, 323, 410, 421, 460, 540]
+        || free_positions(70) != [297, 322, 409, 420, 459, 539]
+        || code[427].op.name != "FreeNullV8"
+        || word(427, 0) != Some(10)
+    {
+        return body.to_owned();
+    }
+
+    let declaration_character = "        AGothicCharacter local_62;\n";
+    let declaration_ability = "        UGameplayAbility_CharacterAI_Gothic local_70;\n";
+    let cast_character = "            local_62 = (Cast<AGothicCharacter>(local_58));\n";
+    let cast_ability = "            local_70 = (Cast<UGameplayAbility_CharacterAI_Gothic>(local_62.GetAI()));\n";
+    let proceed_character = "            local_62 = local_200.Proceed();\n";
+    let required = [
+        "        for (auto local_58 : local_28.FindActorsOfClassInRadius(AGothicCharacter, local_16.GetCharacter().GetActorLocation(), float32(local_22)))\n",
+        "        auto local_200 = local_32.Iterator();\n",
+        "        for (; local_200.CanProceed;)\n",
+        "            if (System::LineTraceSingle(local_106, local_100, ETraceTypeQuery(local_75), false, local_116, EDrawDebugTrace(0), local_178, true, FLinearColor(1.0f, 0.0f, 0.0f, 1.0f), FLinearColor(0.0f, 1.0f, 0.0f, 1.0f), 5.0f))\n",
+        "            local_70.AssessEvent(GameplayTag::AIEvent_Seen_Creeping, local_532);\n",
+    ];
+    if body.matches(declaration_character).count() != 1
+        || body.matches(declaration_ability).count() != 1
+        || body.matches(cast_character).count() != 1
+        || body.matches(cast_ability).count() != 2
+        || body.matches(proceed_character).count() != 1
+        || body.matches("local_62 = nullptr;").count() != 10
+        || body.matches("local_70 = nullptr;").count() != 6
+        || required.iter().any(|anchor| body.matches(anchor).count() != 1)
+    {
+        return body.to_owned();
+    }
+
+    let mut rewritten = body.replacen(declaration_character, "", 1);
+    rewritten = rewritten.replacen(declaration_ability, "", 1);
+    rewritten = rewritten.replacen(
+        cast_character,
+        "            auto local_62 = (Cast<AGothicCharacter>(local_58));\n",
+        1,
+    );
+    rewritten = rewritten.replace(
+        cast_ability,
+        "            auto local_70 = (Cast<UGameplayAbility_CharacterAI_Gothic>(local_62.GetAI()));\n",
+    );
+    rewritten = rewritten.replacen(
+        proceed_character,
+        "            auto local_62 = local_200.Proceed();\n",
+        1,
+    );
+    let mut out = String::with_capacity(rewritten.len());
+    for line in rewritten.split_inclusive('\n') {
+        if matches!(line.trim(), "local_62 = nullptr;" | "local_70 = nullptr;") {
+            continue;
+        }
+        out.push_str(line);
+    }
+    if out.matches("auto local_62 =").count() != 2
+        || out.matches("auto local_70 =").count() != 2
+        || out.contains("local_62 = nullptr;")
+        || out.contains("local_70 = nullptr;")
+    {
+        return body.to_owned();
+    }
+    out
 }
 
 /// Restore the inferred handle and value lifetimes used by the transform spawn-position source.
@@ -63863,6 +64122,181 @@ mod literal_value_lifetime_tests {
             super::restore_reused_proceed_handle_lifetimes(body, &bad, &refs),
             body
         );
+    }
+
+    fn relay_creeping_loop_handle_lifetimes_fixture() -> Func {
+        let mut ops: Vec<(&str, &[u16])> = vec![("SUSPEND", &[]); 548];
+        let first_cast: [(&str, &[u16]); 16] = [
+            ("SUSPEND", &[]), ("PSF", &[50]), ("CALLSYS", &[]), ("PshRPtr", &[]),
+            ("RDSPtr", &[]), ("RefCpyV", &[58]), ("CmpPtrNull", &[58]), ("JZ", &[]),
+            ("TYPEID", &[]), ("PSF", &[60]), ("PshVPtr", &[58]), ("CALLSYS", &[]),
+            ("JMP", &[]), ("ClrVPtr", &[60]), ("PshVPtr", &[60]), ("RefCpyV", &[62]),
+        ];
+        for (offset, op) in first_cast.into_iter().enumerate() { ops[162 + offset] = op; }
+        let ability_cast: [(&str, &[u16]); 13] = [
+            ("PshVPtr", &[62]), ("CALLSYS", &[]), ("STOREOBJ", &[68]),
+            ("CmpPtrNull", &[68]), ("JZ", &[]), ("TYPEID", &[]), ("PSF", &[2]),
+            ("PshVPtr", &[68]), ("CALLSYS", &[]), ("JMP", &[]), ("ClrVPtr", &[2]),
+            ("PshVPtr", &[2]), ("RefCpyV", &[70]),
+        ];
+        for (offset, op) in ability_cast.into_iter().enumerate() { ops[252 + offset] = op; }
+        let second_proceed: [(&str, &[u16]); 6] = [
+            ("SUSPEND", &[]), ("PSF", &[200]), ("CALLSYS", &[]), ("PshRPtr", &[]),
+            ("RDSPtr", &[]), ("RefCpyV", &[62]),
+        ];
+        for (offset, op) in second_proceed.into_iter().enumerate() { ops[434 + offset] = op; }
+        for (offset, op) in ability_cast.into_iter().enumerate() { ops[440 + offset] = op; }
+        for at in [197, 213, 219, 250, 299, 324, 411, 422] {
+            ops[at] = ("FreeNullV8", &[58]);
+        }
+        for at in [196, 212, 218, 249, 298, 323, 410, 421, 460, 540] {
+            ops[at] = ("FreeNullV8", &[62]);
+        }
+        for at in [297, 322, 409, 420, 459, 539] {
+            ops[at] = ("FreeNullV8", &[70]);
+        }
+        ops[161] = ("JMP", &[]);
+        ops[426] = ("JLowNZ", &[]);
+        ops[427] = ("FreeNullV8", &[10]);
+        ops[433] = ("JMP", &[]);
+        ops[544] = ("JLowNZ", &[]);
+        ops[547] = ("RET", &[6]);
+
+        let mut f = function(&ops);
+        f.name = "PerformResponse_Implementation".into();
+        f.is_ufunction = true;
+        f.traits = 4;
+        f.ret = DataType { token: 0x52, ..Default::default() };
+        f.params = vec![
+            crate::cache::model::Param { name: "AIEvent".into(), flags: 0,
+                ty: DataType { token: 5, type_info: 1, is_reference: true,
+                    is_object_const: true, is_read_only: true, ..Default::default() } },
+            crate::cache::model::Param { name: "Perception".into(), flags: 0,
+                ty: DataType { token: 5, type_info: 2, is_reference: true,
+                    is_object_const: true, is_read_only: true, ..Default::default() } },
+        ];
+        f.obj_locals = vec![(62, 3), (70, 4)];
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [
+            (164, 10i64), (436, 11), (173, 12), (260, 12), (448, 12),
+            (253, 13), (441, 13),
+        ] {
+            f.bytecode[code[at].offset_dw + 1] = ptr as i32;
+            f.bytecode[code[at].offset_dw + 2] = (ptr >> 32) as i32;
+        }
+        for (at, type_id) in [
+            (170, 0x4000_0000 | 103i32),
+            (257, 0x4000_0000 | 104),
+            (445, 0x4000_0000 | 104),
+        ] {
+            f.bytecode[code[at].offset_dw + 1] = type_id;
+        }
+        for (at, target) in [
+            (161, 423), (169, 175), (174, 176), (256, 262), (261, 263),
+            (426, 162), (433, 541), (444, 450), (449, 451), (544, 434),
+        ] {
+            f.bytecode[code[at].offset_dw + 1] =
+                code[target].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn relay_creeping_handles_are_inferred_inside_each_loop() {
+        let source = concat!(
+            "        AGothicCharacter local_62;\n",
+            "        UGameplayAbility_CharacterAI_Gothic local_70;\n",
+            "        for (auto local_58 : local_28.FindActorsOfClassInRadius(AGothicCharacter, local_16.GetCharacter().GetActorLocation(), float32(local_22)))\n",
+            "        {\n",
+            "            local_62 = (Cast<AGothicCharacter>(local_58));\n",
+            "            local_62 = nullptr;\n",
+            "            local_62 = nullptr;\n",
+            "            local_62 = nullptr;\n",
+            "            local_62 = nullptr;\n",
+            "            local_70 = (Cast<UGameplayAbility_CharacterAI_Gothic>(local_62.GetAI()));\n",
+            "            local_70 = nullptr;\n",
+            "            local_62 = nullptr;\n",
+            "            local_70 = nullptr;\n",
+            "            local_62 = nullptr;\n",
+            "            if (System::LineTraceSingle(local_106, local_100, ETraceTypeQuery(local_75), false, local_116, EDrawDebugTrace(0), local_178, true, FLinearColor(1.0f, 0.0f, 0.0f, 1.0f), FLinearColor(0.0f, 1.0f, 0.0f, 1.0f), 5.0f))\n",
+            "            {\n",
+            "                local_70 = nullptr;\n",
+            "                local_62 = nullptr;\n",
+            "            }\n",
+            "            local_70 = nullptr;\n",
+            "            local_62 = nullptr;\n",
+            "        }\n",
+            "        auto local_200 = local_32.Iterator();\n",
+            "        for (; local_200.CanProceed;)\n",
+            "        {\n",
+            "            local_62 = local_200.Proceed();\n",
+            "            local_70 = (Cast<UGameplayAbility_CharacterAI_Gothic>(local_62.GetAI()));\n",
+            "            local_70 = nullptr;\n",
+            "            local_62 = nullptr;\n",
+            "            local_70.AssessEvent(GameplayTag::AIEvent_Seen_Creeping, local_532);\n",
+            "            local_70 = nullptr;\n",
+            "            local_62 = nullptr;\n",
+            "        }\n",
+        );
+        let expected = concat!(
+            "        for (auto local_58 : local_28.FindActorsOfClassInRadius(AGothicCharacter, local_16.GetCharacter().GetActorLocation(), float32(local_22)))\n",
+            "        {\n",
+            "            auto local_62 = (Cast<AGothicCharacter>(local_58));\n",
+            "            auto local_70 = (Cast<UGameplayAbility_CharacterAI_Gothic>(local_62.GetAI()));\n",
+            "            if (System::LineTraceSingle(local_106, local_100, ETraceTypeQuery(local_75), false, local_116, EDrawDebugTrace(0), local_178, true, FLinearColor(1.0f, 0.0f, 0.0f, 1.0f), FLinearColor(0.0f, 1.0f, 0.0f, 1.0f), 5.0f))\n",
+            "            {\n",
+            "            }\n",
+            "        }\n",
+            "        auto local_200 = local_32.Iterator();\n",
+            "        for (; local_200.CanProceed;)\n",
+            "        {\n",
+            "            auto local_62 = local_200.Proceed();\n",
+            "            auto local_70 = (Cast<UGameplayAbility_CharacterAI_Gothic>(local_62.GetAI()));\n",
+            "            local_70.AssessEvent(GameplayTag::AIEvent_Seen_Creeping, local_532);\n",
+            "        }\n",
+        );
+        let f = relay_creeping_loop_handle_lifetimes_fixture();
+        let refs = RefResolver::from_test_relay_creeping_loop_handle_lifetimes(0);
+        let restore = |body: &str, function: &Func, resolver: &RefResolver,
+                       class: Option<&str>, method: bool| {
+            super::restore_relay_creeping_loop_handle_lifetimes(
+                body, function, resolver, class, method,
+            )
+        };
+        let class = Some("UAIEventResponse_RelayCreepingAlertAroundInstigator");
+        assert_eq!(restore(source, &f, &refs, class, true), expected);
+        assert_eq!(restore(expected, &f, &refs, class, true), expected);
+        assert_eq!(restore(source, &f, &refs, class, false), source);
+        assert_eq!(restore(source, &f, &refs, Some("UOtherResponse"), true), source);
+        for fault in 1..=8 {
+            assert_eq!(restore(source, &f,
+                &RefResolver::from_test_relay_creeping_loop_handle_lifetimes(fault), class, true),
+                source, "metadata {fault}");
+        }
+        for changed in [
+            source.replace("local_200.CanProceed", "local_200.HasNext"),
+            source.replace("System::LineTraceSingle", "System::SphereTraceSingle"),
+            source.replace("AIEvent_Seen_Creeping", "AIEvent_Heard_Noise"),
+            source.repeat(2),
+        ] {
+            assert_eq!(restore(&changed, &f, &refs, class, true), changed);
+        }
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut bad = f.clone();
+        bad.name = "Other".into();
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.bytecode[code[252].offset_dw] ^= 1 << 16;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.bytecode[code[170].offset_dw + 1] = 0x4000_0000 | 104;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.bytecode[code[169].offset_dw + 1] += 1;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.bytecode[code[409].offset_dw + 1] = 62;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
     }
 
     fn transform_spawn_lifetimes_fixture() -> Func {

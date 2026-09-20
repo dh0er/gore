@@ -10189,6 +10189,57 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_relay_creeping_loop_handle_lifetimes(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name, module) in [
+            (1, "FGameplayTag", ""),
+            (2, "FRememberedPerception", ""),
+            (3, "AGothicCharacter", ""),
+            (4, "UGameplayAbility_CharacterAI_Gothic", "AI.CharacterAI_Gothic"),
+            (5, "AActor", ""),
+            (6, "UGameplayAbility_AI", ""),
+            (7, "TArrayConstIterator", ""),
+            (8, "TArrayIterator", ""),
+            (9, "UObject", ""),
+        ] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.typeid_to_ptr.insert(100 + ptr as i32, ptr);
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity {
+                name: name.into(), module: module.into(), namespace: String::new(),
+            });
+        }
+        let value = |ptr| DataType { token: 5, type_info: ptr, ..Default::default() };
+        let handle = |ptr| DataType { is_object_handle: true, ..value(ptr) };
+        let handle_ref = |ptr, read_only| DataType {
+            is_reference: true, is_read_only: read_only, ..handle(ptr)
+        };
+        for (ptr, name, owner, ret) in [
+            (10, "Proceed", "TArrayConstIterator", handle_ref(5, true)),
+            (11, "Proceed", "TArrayIterator", handle_ref(3, false)),
+            (12, "opCast", "UObject", handle(9)),
+            (13, "GetAI", "AGothicCharacter", handle(6)),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_owner.insert(ptr, owner.into());
+            r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr, ret);
+            r.func_params.insert(ptr, Vec::new());
+        }
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&3).unwrap().name = "AOtherCharacter".into(),
+            2 => r.type_identity_by_ptr.get_mut(&4).unwrap().name = "UOtherAbility".into(),
+            3 => { r.func_by_ptr.insert(10, "Advance".into()); }
+            4 => { r.func_by_ptr.insert(13, "GetController".into()); }
+            5 => { r.func_by_ptr.insert(12, "CastChecked".into()); }
+            6 => { r.func_owner.insert(10, "TArrayIterator".into()); }
+            7 => { r.func_ret.get_mut(&11).unwrap().type_info = 5; }
+            8 => { r.func_params.get_mut(&13).unwrap().push(value(1)); }
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_transform_spawn_lifetimes(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr, name, module) in [
