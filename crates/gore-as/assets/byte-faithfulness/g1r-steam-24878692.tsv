@@ -6,6 +6,6 @@ AI.States.FightAI.CombatState.AIState_OGCombat	1	0	0
 AI.States.FightAI.CombatState.CombatMoves	2	0	0
 AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	3	0	0
 AI.States.FightAI.FearState.AIState_Fear	1	0	0
-AI.States.FightAI.WatchFightState.AIState_WatchFight	2	0	0
+AI.States.FightAI.WatchFightState.AIState_WatchFight	1	0	0
 GAS.Abilities.Spells.Spells.Transform.GA_Spell_Transform	1	0	0
 GAS.Calculations.Damage	1	0	0

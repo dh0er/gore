@@ -3175,6 +3175,8 @@ fn emit_function_ctor(
         pass_trace("drop_int_inside_enum_cast", &rendered);
         let rendered = restore_reused_proceed_handle_lifetimes(&rendered, f, refs);
         pass_trace("restore_reused_proceed_handle_lifetimes", &rendered);
+        let rendered = restore_trig_constructor_and_clamp_lives(&rendered, f, refs);
+        pass_trace("restore_trig_constructor_and_clamp_lives", &rendered);
         let rendered = drop_block_end_handle_releases(&rendered);
         pass_trace("drop_block_end_handle_releases", &rendered);
         let rendered = fold_foreach_getter_receiver(&rendered, f, refs);
@@ -6331,6 +6333,304 @@ fn split_reused_proceed_handle_source_lives(
         result.push('\n');
     }
     Some(result)
+}
+
+/// A scalar used as one constructor argument was evaluated in that argument's source position,
+/// while the following Clamp result lived in its own local until Acos consumed it. Inlining the
+/// first value too little and the second value too much reverses the constructor evaluation order
+/// and adds a compiler spill for the upper Clamp bound. Restore both source lives together, only
+/// for the complete native opcode/type shape that proves them.
+fn restore_trig_constructor_and_clamp_lives(
+    body: &str,
+    f: &Func,
+    refs: &RefResolver,
+) -> String {
+    if !body.contains("Math::Sin(")
+        || !body.contains("FVector(Math::Cos(")
+        || !body.contains("Math::Acos(Math::Clamp(")
+    {
+        return body.to_owned();
+    }
+    let Ok(code) = disassemble(&f.bytecode) else {
+        return body.to_owned();
+    };
+    let word = |ins: &Instr| {
+        ins.words
+            .first()
+            .map(|value| *value as i16 as i32)
+            .filter(|slot| *slot > 0)
+    };
+    let ptr = |ins: &Instr| ins.qwords.first().map(|value| *value as i64);
+    let scalar = |ty: &super::types::DataType| {
+        ty.token == 0x51
+            && ty.type_info == 0
+            && !ty.is_reference
+            && !ty.is_object_handle
+            && !ty.is_object_const
+            && !ty.is_read_only
+            && !ty.is_auto
+            && !ty.if_handle_then_const
+    };
+    let void = |ty: &super::types::DataType| {
+        ty.token == 0x52 && ty.type_info == 0 && !ty.is_reference && !ty.is_object_handle
+    };
+    if f.ret.token != 0x41 || f.ret.is_reference || f.ret.is_object_handle {
+        return body.to_owned();
+    }
+
+    let witnesses: Vec<_> = code
+        .windows(23)
+        .filter_map(|c| {
+            if c.iter().map(|ins| ins.op.name).ne([
+                "PshC8",
+                "PshV8",
+                "CALLSYS",
+                "CpyRtoV8",
+                "PshV8",
+                "PshV8",
+                "CALLSYS",
+                "CpyRtoV8",
+                "PshV8",
+                "PSF",
+                "CALLSYS",
+                "PshC8",
+                "PshC8",
+                "PSF",
+                "PSF",
+                "CALLSYS",
+                "CpyRtoV8",
+                "PshV8",
+                "CALLSYS",
+                "CpyRtoV8",
+                "PshV8",
+                "CALLSYS",
+                "CpyRtoV8",
+            ]) {
+                return None;
+            }
+            if c[0].qwords.first().copied() != Some(0.0f64.to_bits())
+                || c[11].qwords.first().copied() != Some(1.0f64.to_bits())
+                || c[12].qwords.first().copied() != Some((-1.0f64).to_bits())
+            {
+                return None;
+            }
+            let (angle, sin, cosine, vector, direction, dot, clamp, result) = (
+                word(&c[1])?,
+                word(&c[3])?,
+                word(&c[7])?,
+                word(&c[9])?,
+                word(&c[14])?,
+                word(&c[16])?,
+                word(&c[19])?,
+                word(&c[22])?,
+            );
+            if word(&c[4]) != Some(sin)
+                || word(&c[5]) != Some(angle)
+                || word(&c[8]) != Some(cosine)
+                || word(&c[13]) != Some(vector)
+                || word(&c[17]) != Some(dot)
+                || word(&c[20]) != Some(clamp)
+                || sin != result
+                || HashSet::from([angle, sin, cosine, vector, direction, dot, clamp]).len() != 7
+            {
+                return None;
+            }
+            let (sin_call, cos_call, ctor, dot_call, clamp_call, acos_call) = (
+                ptr(&c[2])?,
+                ptr(&c[6])?,
+                ptr(&c[10])?,
+                ptr(&c[15])?,
+                ptr(&c[18])?,
+                ptr(&c[21])?,
+            );
+            for (call, name, arity) in [
+                (sin_call, "Sin", 1usize),
+                (cos_call, "Cos", 1),
+                (clamp_call, "Clamp", 3),
+                (acos_call, "Acos", 1),
+            ] {
+                if refs.func_by_ptr(call) != Some(name)
+                    || refs.func_ns_by_ptr(call) != Some("Math")
+                    || refs.is_method_by_ptr(call)
+                    || !scalar(refs.func_ret_by_ptr(call)?)
+                    || refs
+                        .func_params_by_ptr(call)?
+                        .iter()
+                        .filter(|ty| scalar(ty))
+                        .count()
+                        != arity
+                    || refs.func_params_by_ptr(call)?.len() != arity
+                {
+                    return None;
+                }
+            }
+            let vector_type = f
+                .obj_locals
+                .iter()
+                .filter(|(slot, _)| *slot == vector)
+                .map(|(_, ty)| *ty)
+                .next()?;
+            if f.obj_locals
+                .iter()
+                .filter(|(slot, _)| *slot == vector)
+                .count()
+                != 1
+                || f.obj_locals
+                    .iter()
+                    .filter(|(slot, _)| *slot == direction)
+                    .map(|(_, ty)| *ty)
+                    .ne([vector_type])
+            {
+                return None;
+            }
+            let identity = refs.type_identity_by_ptr(vector_type)?;
+            if identity.name != "FVector"
+                || !identity.module.is_empty()
+                || !identity.namespace.is_empty()
+                || refs.func_by_ptr(ctor) != Some("$beh0")
+                || refs.func_owner_by_ptr(ctor) != Some("FVector")
+                || !refs.is_method_by_ptr(ctor)
+                || refs.is_const_method_by_ptr(ctor)
+                || !void(refs.func_ret_by_ptr(ctor)?)
+                || !matches!(refs.func_params_by_ptr(ctor)?, [x, y, z] if scalar(x) && scalar(y) && scalar(z))
+                || refs.func_by_ptr(dot_call) != Some("DotProduct")
+                || refs.func_owner_by_ptr(dot_call) != Some("FVector")
+                || !refs.is_method_by_ptr(dot_call)
+                || !refs.is_const_method_by_ptr(dot_call)
+                || !scalar(refs.func_ret_by_ptr(dot_call)?)
+            {
+                return None;
+            }
+            let [input] = refs.func_params_by_ptr(dot_call)? else {
+                return None;
+            };
+            if input.token != 5
+                || input.type_info != vector_type
+                || !input.is_reference
+                || !input.is_object_const
+                || !input.is_read_only
+                || input.is_object_handle
+            {
+                return None;
+            }
+            let start = c[0].offset_dw as i64;
+            let end = c[22].offset_dw as i64;
+            if code.iter().any(|ins| {
+                ins.op.name == "JMPP"
+                    || (ins.op.name.starts_with('J')
+                        && ins.dwords.first().is_some_and(|delta| {
+                            let target = ins.offset_dw as i64 + 2 + i64::from(*delta as i32);
+                            target >= start && target <= end
+                        }))
+            }) {
+                return None;
+            }
+            Some((angle, sin, vector, direction, clamp))
+        })
+        .collect();
+    let [(angle_slot, sin_slot, vector_slot, direction_slot, clamp_slot)] = witnesses.as_slice()
+    else {
+        return body.to_owned();
+    };
+
+    let lines: Vec<&str> = body.lines().collect();
+    let mut rewrites = Vec::new();
+    for at in 0..lines.len().saturating_sub(2) {
+        let Some((indent, sin_name, sin_init)) = declaration_with_initializer(lines[at]) else {
+            continue;
+        };
+        let Some(angle_name) = sin_init
+            .strip_prefix("Math::Sin(")
+            .and_then(|value| value.strip_suffix(')'))
+        else {
+            continue;
+        };
+        let Some((vector_indent, vector_name, _)) =
+            declaration_with_initializer(lines[at + 1])
+        else {
+            continue;
+        };
+        let Some((result_indent, result_name, result_init)) =
+            declaration_with_initializer(lines[at + 2])
+        else {
+            continue;
+        };
+        if indent != vector_indent
+            || indent != result_indent
+            || lines[at].trim()
+                != format!("float {sin_name} = Math::Sin({angle_name});")
+            || lines[at + 1].trim()
+                != format!(
+                    "FVector {vector_name} = FVector(Math::Cos({angle_name}), {sin_name}, 0.0);"
+                )
+        {
+            continue;
+        }
+        let prefix = "Math::Acos(Math::Clamp(";
+        let suffix = format!(".DotProduct({vector_name}), -1.0, 1.0))");
+        let Some(direction_name) = result_init
+            .strip_prefix(prefix)
+            .and_then(|value| value.strip_suffix(&suffix))
+        else {
+            continue;
+        };
+        if lines[at + 2].trim() != format!("float {result_name} = {result_init};") {
+            continue;
+        }
+        let (
+            Some((source_angle, _)),
+            Some((source_sin, sin_life)),
+            Some((source_vector, _)),
+            Some((source_direction, _)),
+            Some((source_result, result_life)),
+        ) = (
+            slot_and_life_any(angle_name),
+            slot_and_life_any(&sin_name),
+            slot_and_life_any(&vector_name),
+            slot_and_life_any(direction_name),
+            slot_and_life_any(&result_name),
+        )
+        else {
+            continue;
+        };
+        if source_angle != *angle_slot
+            || source_sin != *sin_slot
+            || source_vector != *vector_slot
+            || source_direction != *direction_slot
+            || source_result != *sin_slot
+            || result_life != sin_life + 1
+            || count_ident(body, &sin_name) != 2
+            || body
+                .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                .filter_map(slot_and_life_any)
+                .any(|(slot, _)| slot == *clamp_slot)
+        {
+            continue;
+        }
+        let clamp_name = format!("local_{clamp_slot}");
+        rewrites.push((
+            at,
+            [
+                format!(
+                    "{indent}FVector {vector_name} = FVector(Math::Cos({angle_name}), Math::Sin({angle_name}), 0.0);"
+                ),
+                format!(
+                    "{indent}float {clamp_name} = Math::Clamp({direction_name}.DotProduct({vector_name}), -1.0, 1.0);"
+                ),
+                format!("{indent}float {result_name} = Math::Acos({clamp_name});"),
+            ],
+        ));
+    }
+    let [(at, replacement)] = rewrites.as_slice() else {
+        return body.to_owned();
+    };
+    let mut out: Vec<String> = lines.iter().map(|line| (*line).to_owned()).collect();
+    out.splice(*at..*at + 3, replacement.iter().cloned());
+    let mut result = out.join("\n");
+    if body.ends_with('\n') {
+        result.push('\n');
+    }
+    result
 }
 
 /// The name a `local_N = nullptr;` line releases.
@@ -62524,6 +62824,87 @@ mod literal_value_lifetime_tests {
             super::restore_reused_proceed_handle_lifetimes(body, &bad, &refs),
             body
         );
+    }
+
+    fn trig_constructor_and_clamp_fixture() -> Func {
+        let mut f = function(&[
+            ("PshC8", &[]),
+            ("PshV8", &[10]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[32]),
+            ("PshV8", &[32]),
+            ("PshV8", &[10]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[40]),
+            ("PshV8", &[40]),
+            ("PSF", &[30]),
+            ("CALLSYS", &[]),
+            ("PshC8", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[30]),
+            ("PSF", &[24]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[42]),
+            ("PshV8", &[42]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[46]),
+            ("PshV8", &[46]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV8", &[32]),
+            ("RET", &[6]),
+        ]);
+        f.ret = DataType { token: 0x41, ..Default::default() };
+        f.obj_locals = vec![(24, 1), (30, 1)];
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(2, 10), (6, 11), (10, 12), (15, 13), (18, 14), (21, 15)] {
+            f.bytecode[code[at].offset_dw + 1] = ptr;
+        }
+        for (at, value) in [(0, 0.0f64), (11, 1.0), (12, -1.0)] {
+            let bits = value.to_bits();
+            f.bytecode[code[at].offset_dw + 1] = bits as u32 as i32;
+            f.bytecode[code[at].offset_dw + 2] = (bits >> 32) as u32 as i32;
+        }
+        f
+    }
+
+    #[test]
+    fn trig_constructor_and_clamp_get_their_proven_source_lives() {
+        let source = "    float local_32 = Math::Sin(local_10_3);\n    FVector local_30 = FVector(Math::Cos(local_10_3), local_32, 0.0);\n    float local_32_2 = Math::Acos(Math::Clamp(local_24.DotProduct(local_30), -1.0, 1.0));\n    Use(local_32_2);\n";
+        let expected = "    FVector local_30 = FVector(Math::Cos(local_10_3), Math::Sin(local_10_3), 0.0);\n    float local_46 = Math::Clamp(local_24.DotProduct(local_30), -1.0, 1.0);\n    float local_32_2 = Math::Acos(local_46);\n    Use(local_32_2);\n";
+        let f = trig_constructor_and_clamp_fixture();
+        let refs = RefResolver::from_test_trig_constructor_and_clamp_lives(0);
+        let restore = |body: &str, function: &Func, refs: &RefResolver| {
+            super::restore_trig_constructor_and_clamp_lives(body, function, refs)
+        };
+        assert_eq!(restore(source, &f, &refs), expected);
+        assert_eq!(restore(expected, &f, &refs), expected);
+        for fault in 1..=10 {
+            assert_eq!(
+                restore(source, &f, &RefResolver::from_test_trig_constructor_and_clamp_lives(fault)),
+                source,
+                "metadata {fault}"
+            );
+        }
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut bad = f.clone();
+        let pshv4 = OPCODES.iter().find(|op| op.name == "PshV4").unwrap().opcode as i32;
+        bad.bytecode[code[4].offset_dw] = (bad.bytecode[code[4].offset_dw] & !255) | pshv4;
+        assert_eq!(restore(source, &bad, &refs), source);
+        bad = f.clone();
+        bad.bytecode[code[11].offset_dw + 1] ^= 1;
+        assert_eq!(restore(source, &bad, &refs), source);
+        bad = f.clone();
+        bad.obj_locals[1].1 = 2;
+        assert_eq!(restore(source, &bad, &refs), source);
+        for changed in [
+            source.replace("Math::Sin(local_10_3)", "Math::Sin(Other())"),
+            source.replace(", local_32, 0.0)", ", Other(), 0.0)"),
+            source.replace("Math::Acos(Math::Clamp", "Math::Acos(Other"),
+            format!("{source}    float local_46 = 0.0;\n"),
+            source.repeat(2),
+        ] {
+            assert_eq!(restore(&changed, &f, &refs), changed);
+        }
     }
 
     #[test]

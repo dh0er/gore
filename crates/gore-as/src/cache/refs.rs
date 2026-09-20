@@ -10189,6 +10189,52 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_trig_constructor_and_clamp_lives(fault: u8) -> Self {
+        let mut r = Self::default();
+        r.type_by_ptr.insert(1, "FVector".into());
+        r.typeid_to_ptr.insert(101, 1);
+        r.type_identity_by_ptr.insert(1, TypeIdentity {
+            name: "FVector".into(), module: String::new(), namespace: String::new(),
+        });
+        let scalar = DataType { token: 0x51, ..Default::default() };
+        let void = DataType { token: 0x52, ..Default::default() };
+        let input = DataType { token: 5, type_info: 1, is_reference: true,
+            is_object_const: true, is_read_only: true, ..Default::default() };
+        for (ptr, name, arity) in [(10, "Sin", 1usize), (11, "Cos", 1),
+            (14, "Clamp", 3), (15, "Acos", 1)] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_ns.insert(ptr, "Math".into());
+            r.func_ret.insert(ptr, scalar.clone());
+            r.func_params.insert(ptr, vec![scalar.clone(); arity]);
+        }
+        r.func_by_ptr.insert(12, "$beh0".into());
+        r.func_owner.insert(12, "FVector".into());
+        r.func_is_method.insert(12);
+        r.func_ret.insert(12, void);
+        r.func_params.insert(12, vec![scalar.clone(); 3]);
+        r.func_by_ptr.insert(13, "DotProduct".into());
+        r.func_owner.insert(13, "FVector".into());
+        r.func_is_method.insert(13);
+        r.const_method_ptrs.insert(13);
+        r.func_ret.insert(13, scalar);
+        r.func_params.insert(13, vec![input]);
+        match fault {
+            1 => { r.func_by_ptr.insert(10, "Sinh".into()); },
+            2 => { r.func_ns.insert(11, "Other".into()); },
+            3 => { r.func_params.get_mut(&14).unwrap().pop(); },
+            4 => { r.func_ret.get_mut(&15).unwrap().token = 0x50; },
+            5 => { r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(); },
+            6 => { r.func_owner.insert(12, "FOther".into()); },
+            7 => { r.func_params.get_mut(&12).unwrap().pop(); },
+            8 => { r.const_method_ptrs.remove(&13); },
+            9 => { r.func_params.get_mut(&13).unwrap()[0].is_reference = false; },
+            10 => { r.func_is_method.insert(10); },
+            _ => {},
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_selected_vector_arguments(fault:u8)->Self {
         let mut r=Self::default();
         for (ptr,id,name) in [(1,101,"FVector"),(2,102,"FUnrelated")] {
