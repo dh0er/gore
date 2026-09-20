@@ -3173,6 +3173,8 @@ fn emit_function_ctor(
         // folds above can delete the statement that stood between the two.
         let rendered = drop_int_inside_enum_cast(&rendered);
         pass_trace("drop_int_inside_enum_cast", &rendered);
+        let rendered = restore_reused_proceed_handle_lifetimes(&rendered, f, refs);
+        pass_trace("restore_reused_proceed_handle_lifetimes", &rendered);
         let rendered = drop_block_end_handle_releases(&rendered);
         pass_trace("drop_block_end_handle_releases", &rendered);
         let rendered = fold_foreach_getter_receiver(&rendered, f, refs);
@@ -6113,6 +6115,222 @@ fn known_proceed_element_slots(
         return None;
     }
     Some(out)
+}
+
+/// One physical handle slot may hold several independent iterator elements and a later
+/// function-level value. Keeping the decompiler's single hoisted declaration turns every
+/// per-iteration destruction into an explicit assignment and can move that release in front of
+/// value-local destructors. Restore the separate source lives only when the bytecode contains at
+/// least two resolved `Proceed` results in the slot and two identical mixed cleanup runs of
+/// `other handle; value destructor; element handle`. The source proof then requires one closed
+/// loop block per `Proceed` assignment and one final top-level definition.
+fn restore_reused_proceed_handle_lifetimes(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if !body.contains(".Proceed();") || !body.contains(" = nullptr;") {
+        return body.to_owned();
+    }
+    let Ok(code) = disassemble(&f.bytecode) else {
+        return body.to_owned();
+    };
+    let word = |ins: &Instr| {
+        ins.words
+            .first()
+            .map(|value| *value as i16 as i32)
+            .filter(|slot| *slot > 0)
+    };
+    let callee = |ins: &Instr| match ins.op.name {
+        "CALLSYS" => ins
+            .qwords
+            .first()
+            .and_then(|ptr| refs.func_by_ptr(*ptr as i64)),
+        "CALL" | "CALLBND" | "CALLINTF" => ins
+            .dwords
+            .first()
+            .and_then(|id| refs.func_by_id(*id as i32)),
+        _ => None,
+    };
+
+    let mut proceed_lives: HashMap<i32, usize> = HashMap::new();
+    for (at, ins) in code.iter().enumerate() {
+        if callee(ins) != Some("Proceed") {
+            continue;
+        }
+        let Some(slots) = known_proceed_element_slots(&code, [at]) else {
+            return body.to_owned();
+        };
+        let mut slots = slots.into_iter();
+        let Some(slot) = slots.next() else {
+            return body.to_owned();
+        };
+        if slots.next().is_some() {
+            return body.to_owned();
+        }
+        *proceed_lives.entry(slot).or_default() += 1;
+    }
+
+    let mut mixed_cleanup: HashMap<i32, Vec<(i32, i32)>> = HashMap::new();
+    for run in code.windows(4) {
+        if run
+            .iter()
+            .map(|ins| ins.op.name)
+            .ne(["FreeNullV8", "PSF", "CALLSYS", "FreeNullV8"])
+            || callee(&run[2]) != Some("$beh2")
+        {
+            continue;
+        }
+        let (Some(other), Some(value), Some(element)) =
+            (word(&run[0]), word(&run[1]), word(&run[3]))
+        else {
+            continue;
+        };
+        if HashSet::from([other, value, element]).len() != 3 {
+            continue;
+        }
+        mixed_cleanup
+            .entry(element)
+            .or_default()
+            .push((other, value));
+    }
+
+    let mut rewrites = Vec::new();
+    for (slot, lives) in proceed_lives {
+        let Some(cleanups) = mixed_cleanup.get(&slot) else {
+            continue;
+        };
+        if lives < 2
+            || cleanups.len() != 2
+            || cleanups[0] != cleanups[1]
+            || f.obj_locals
+                .iter()
+                .filter(|(candidate, _)| *candidate == slot)
+                .count()
+                != 1
+        {
+            continue;
+        }
+        if let Some(rewritten) = split_reused_proceed_handle_source_lives(body, slot, lives) {
+            rewrites.push(rewritten);
+        }
+    }
+    match rewrites.as_slice() {
+        [rewritten] => rewritten.clone(),
+        _ => body.to_owned(),
+    }
+}
+
+fn split_reused_proceed_handle_source_lives(
+    body: &str,
+    slot: i32,
+    proceed_lives: usize,
+) -> Option<String> {
+    let name = format!("local_{slot}");
+    let lines: Vec<&str> = body.lines().collect();
+    let mut depth = 0i32;
+    for line in &lines {
+        depth += brace_net(line);
+        if depth < 0 {
+            return None;
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+    let body_depth = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| indent_of(line).len())
+        .min()?;
+    let declarations: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| {
+            let (indent, declared) = bare_declaration(line)?;
+            (declared == name).then_some((at, indent))
+        })
+        .collect();
+    let [(declaration, indent)] = declarations.as_slice() else {
+        return None;
+    };
+    if indent.len() != body_depth {
+        return None;
+    }
+    let declaration_text = lines[*declaration].trim().strip_suffix(';')?;
+    let ty = declaration_text.strip_suffix(&format!(" {name}"))?;
+    if !is_object_handle_type(ty) {
+        return None;
+    }
+
+    let mut stripped: Vec<String> = lines.iter().map(|line| (*line).to_owned()).collect();
+    stripped.remove(*declaration);
+    let borrowed: Vec<&str> = stripped.iter().map(String::as_str).collect();
+    if !block_life_exits_preserve_handle_release(&stripped.join("\n"), slot)
+        || !lives_end_with_block_releases(&stripped.join("\n"), slot)
+    {
+        return None;
+    }
+    let definitions: Vec<_> = borrowed
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| {
+            assignment_rhs_for(line, &name)
+                .filter(|rhs| *rhs != "nullptr")
+                .map(|rhs| (at, rhs))
+        })
+        .collect();
+    if definitions.len() != proceed_lives + 1
+        || definitions[..proceed_lives]
+            .iter()
+            .any(|(_, rhs)| !rhs.ends_with(".Proceed()"))
+        || definitions[proceed_lives].1.ends_with(".Proceed()")
+        || indent_of(borrowed[definitions[proceed_lives].0]).len() != body_depth
+    {
+        return None;
+    }
+
+    let mut ranges = Vec::with_capacity(definitions.len());
+    for (life, (definition, _)) in definitions.iter().enumerate().take(proceed_lives) {
+        let (open, close) = block_span(&borrowed, *definition);
+        let header = borrowed[..open]
+            .iter()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| line.trim())?;
+        let first_statement = borrowed[open + 1..close]
+            .iter()
+            .position(|line| !line.trim().is_empty())?
+            + open
+            + 1;
+        if open == 0
+            || !header.starts_with("for (")
+            || first_statement != *definition
+            || close >= definitions[life + 1].0
+        {
+            return None;
+        }
+        ranges.push((*definition, close));
+    }
+    ranges.push((definitions[proceed_lives].0, borrowed.len()));
+    if borrowed.iter().enumerate().any(|(at, line)| {
+        count_ident(line, &name) != 0
+            && !ranges.iter().any(|(start, end)| at >= *start && at < *end)
+    }) {
+        return None;
+    }
+
+    let definitions: HashSet<usize> = definitions.into_iter().map(|(at, _)| at).collect();
+    let mut out = Vec::with_capacity(stripped.len());
+    for (at, line) in stripped.into_iter().enumerate() {
+        if definitions.contains(&at) {
+            let trimmed = line.trim_start();
+            out.push(format!("{}{ty} {trimmed}", indent_of(&line)));
+        } else {
+            out.push(line);
+        }
+    }
+    let mut result = out.join("\n");
+    if body.ends_with('\n') {
+        result.push('\n');
+    }
+    Some(result)
 }
 
 /// The name a `local_N = nullptr;` line releases.
@@ -62252,6 +62470,60 @@ mod literal_value_lifetime_tests {
         assert_eq!(split(&later_write), later_write);
         let outside = format!("{body}Use(local_12);\n");
         assert_eq!(split(&outside), outside);
+    }
+
+    #[test]
+    fn reused_proceed_handle_gets_one_closed_source_life_per_loop() {
+        let mut f = function(&[
+            ("PSF", &[28]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[172]),
+            ("FreeNullV8", &[240]),
+            ("PSF", &[236]),
+            ("CALLSYS", &[]),
+            ("FreeNullV8", &[172]),
+            ("PSF", &[30]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[172]),
+            ("FreeNullV8", &[240]),
+            ("PSF", &[236]),
+            ("CALLSYS", &[]),
+            ("FreeNullV8", &[172]),
+            ("RET", &[0]),
+        ]);
+        f.obj_locals = vec![(28, 8), (30, 8), (172, 3), (240, 2), (236, 5)];
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, callee) in [(1, 205), (5, 207), (8, 205), (12, 207)] {
+            f.bytecode[code[at].offset_dw + 1] = callee;
+        }
+        let refs = RefResolver::from_test_query_loop_clock(0);
+        let body = "    AObservedActor local_172;\n    for (; First.CanProceed;)\n    {\n        local_172 = First.Proceed();\n        if (Stop())\n        {\n            local_172 = nullptr;\n            continue;\n        }\n        Use(local_172);\n        local_172 = nullptr;\n    }\n    for (; Second.CanProceed;)\n    {\n        local_172 = Second.Proceed();\n        if (Stop())\n        {\n            local_172 = nullptr;\n            break;\n        }\n        Use(local_172);\n        local_172 = nullptr;\n    }\n    local_172 = Resolve();\n    Use(local_172);\n";
+        let expected = "    for (; First.CanProceed;)\n    {\n        AObservedActor local_172 = First.Proceed();\n        if (Stop())\n        {\n            continue;\n        }\n        Use(local_172);\n    }\n    for (; Second.CanProceed;)\n    {\n        AObservedActor local_172 = Second.Proceed();\n        if (Stop())\n        {\n            break;\n        }\n        Use(local_172);\n    }\n    AObservedActor local_172 = Resolve();\n    Use(local_172);\n";
+        let restore = |source: &str, function: &Func| {
+            let restored = super::restore_reused_proceed_handle_lifetimes(source, function, &refs);
+            super::drop_block_end_handle_releases(&restored)
+        };
+        assert_eq!(restore(body, &f), expected);
+        assert_eq!(restore(expected, &f), expected);
+
+        let outside_read = body.replace(
+            "    for (; First.CanProceed;)",
+            "    Use(local_172);\n    for (; First.CanProceed;)",
+        );
+        let missing_exit_release = body.replacen("            local_172 = nullptr;\n", "", 1);
+        let value_type = body.replace("AObservedActor local_172;", "FObservedActor local_172;");
+        for changed in [outside_read, missing_exit_release, value_type] {
+            assert_eq!(
+                super::restore_reused_proceed_handle_lifetimes(&changed, &f, &refs),
+                changed
+            );
+        }
+        let mut bad = f.clone();
+        bad.bytecode[code[12].offset_dw + 1] = 205;
+        assert_eq!(
+            super::restore_reused_proceed_handle_lifetimes(body, &bad, &refs),
+            body
+        );
     }
 
     #[test]
