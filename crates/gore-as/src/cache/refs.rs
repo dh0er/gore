@@ -10189,6 +10189,75 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_transform_spawn_lifetimes(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name, module) in [
+            (1, "FVector", ""),
+            (2, "AGothicCharacter", ""),
+            (3, "TSubclassOf", ""),
+            (4, "UObject", ""),
+            (5, "USpawnCharacterCanTransformIntoDefinition", "Fixture"),
+            (6, "ACharacterCanTransformInto", ""),
+            (7, "UCapsuleComponent", ""),
+            (8, "FHitResult", ""),
+        ] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.typeid_to_ptr.insert(100 + ptr as i32, ptr);
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity {
+                name: name.into(), module: module.into(), namespace: String::new(),
+            });
+        }
+        let value = |ptr| DataType { token: 5, type_info: ptr, ..Default::default() };
+        let handle = |ptr| DataType { is_object_handle: true, ..value(ptr) };
+        let reference = |ptr| DataType { is_reference: true, is_object_const: true,
+            is_read_only: true, ..value(ptr) };
+        let void = DataType { token: 0x52, ..Default::default() };
+        let scalar = DataType { token: 0x51, ..Default::default() };
+        r.type_subtypes.insert(3, vec![value(4)]);
+        for (ptr, name, owner, namespace, ret, params, method, constant) in [
+            (10, "GetDefaultObject", "TSubclassOf", "", handle(4), vec![], true, true),
+            (11, "opCast", "UObject", "", handle(5), vec![], true, true),
+            (12, "GetCharacterClass", "USpawnCharacterCanTransformIntoDefinition", "",
+                value(3), vec![], true, true),
+            (13, "GetDefaultObject", "TSubclassOf", "", handle(6), vec![], true, true),
+            (14, "GetCapsuleHalfHeight", "UCapsuleComponent", "", DataType { token: 0x50,
+                ..Default::default() }, vec![], true, true),
+            (15, "GetActorLocation", "AActor", "", value(1), vec![], true, true),
+            (16, "GetActorForwardVector", "AActor", "", value(1), vec![], true, true),
+            (17, "opMul", "FVector", "", value(1), vec![scalar], true, true),
+            (18, "opAdd", "FVector", "", value(1), vec![reference(1)], true, true),
+            (19, "$beh0", "FHitResult", "", void.clone(), vec![], true, false),
+            (20, "FindFloorAtLocation", "", "MagicScript", DataType { token: 0x41,
+                ..Default::default() }, vec![], false, false),
+            (21, "$beh0", "FVector", "", void.clone(), vec![reference(1)], true, false),
+            (22, "$beh2", "FHitResult", "", void, vec![], true, false),
+        ] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_ret.insert(ptr, ret);
+            r.func_params.insert(ptr, params);
+            if !owner.is_empty() { r.func_owner.insert(ptr, owner.into()); }
+            if !namespace.is_empty() { r.func_ns.insert(ptr, namespace.into()); }
+            if method { r.func_is_method.insert(ptr); }
+            if constant { r.const_method_ptrs.insert(ptr); }
+        }
+        r.global_by_ptr.insert(30, "__WorldContext".into());
+        r.global_by_ptr.insert(31, "UpVector".into());
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Script".into(),
+            2 => { r.type_subtypes.insert(3, vec![value(2)]); }
+            3 => { r.func_owner.insert(17, "FOther".into()); }
+            4 => { r.const_method_ptrs.remove(&18); }
+            5 => { r.func_ns.insert(20, "OtherMagic".into()); }
+            6 => { r.global_by_ptr.insert(31, "ForwardVector".into()); }
+            7 => { r.func_owner.insert(19, "FOtherHit".into()); }
+            8 => r.type_identity_by_ptr.get_mut(&6).unwrap().name = "AOtherCharacter".into(),
+            9 => { r.func_by_ptr.insert(16, "GetVelocity".into()); }
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_attack_vector_endpoint_lifetimes(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr, name) in [(1, "FVector"), (2, "AGothicCharacter")] {

@@ -1346,10 +1346,26 @@ fn call_storage_facts(raw: &[Instr], refs: &RefResolver) -> Option<CallStorageFa
                 None
             };
             if let Some(output) = output {
-                if output.width != AS_PTR_SIZE as usize || output.psf_slot.is_none() {
+                if output.width != AS_PTR_SIZE as usize {
                     return None;
                 }
-                facts.starts.insert((output.instruction, 0));
+                if output.psf_slot.is_some() {
+                    facts.starts.insert((output.instruction, 0));
+                } else {
+                    // A copy constructor can write a returned value straight into its
+                    // signature-owned ABI slot (`v0` for a global or `v-2` for a method). That
+                    // receiver is fixed by the signature and is not a reusable local storage
+                    // life, so retain the call frame without inventing a local start. Every
+                    // other non-PSF destination remains unsupported.
+                    let receiver = raw.get(output.instruction)?;
+                    let receiver_slot = receiver.words.first().map(|word| *word as i16 as i32);
+                    if name != "$beh0"
+                        || receiver.op.name != "PshVPtr"
+                        || !receiver_slot.is_some_and(|slot| matches!(slot, -2 | 0))
+                    {
+                        return None;
+                    }
+                }
             }
             facts.frames.push(CallStorageFrame {
                 call: at,
@@ -3782,6 +3798,35 @@ mod tests {
             &side.refs,
             &side.refs,
         ));
+    }
+
+    #[test]
+    fn n2_call_storage_accepts_only_constructor_return_abi_destination() {
+        let refs = RefResolver::from_test_assigned_value_return(0);
+        let constructor = |destination: u16, pointer: i64| {
+            let mut code = rw_arg(4, 8); // PSF copy source
+            code.extend(rw_arg(48, destination)); // PshVPtr constructor receiver
+            code.extend(qw_arg(61, pointer as u64)); // CALLSYS
+            code.extend(no_arg(10)); // RET
+            code
+        };
+
+        for destination in [0, (-2i16) as u16] {
+            let abi = constructor(destination, 30);
+            let facts = call_storage_facts(&disassemble(&abi).unwrap(), &refs)
+                .expect("a copy constructor may target a fixed return ABI slot");
+            assert!(facts.starts.is_empty());
+            assert_eq!(facts.frames.len(), 1);
+            assert_eq!(facts.frames[0].psf, vec![(0, 8)]);
+        }
+
+        for rejected in [
+            constructor(12, 30),
+            constructor((-4i16) as u16, 30),
+            constructor((-2i16) as u16, 999),
+        ] {
+            assert!(call_storage_facts(&disassemble(&rejected).unwrap(), &refs).is_none());
+        }
     }
 
     #[test]

@@ -3512,6 +3512,8 @@ fn emit_function_ctor(
         pass_trace("restore_query_loop_and_clock_temporaries", &rendered);
         let rendered = restore_feign_retreat_value_lives(&rendered, f, refs, is_method);
         pass_trace("restore_feign_retreat_value_lives", &rendered);
+        let rendered = restore_transform_spawn_lifetimes(&rendered, f, refs, is_method);
+        pass_trace("restore_transform_spawn_lifetimes", &rendered);
         let rendered = restore_attack_vector_endpoint_lifetimes(&rendered, f, refs, is_method);
         pass_trace("restore_attack_vector_endpoint_lifetimes", &rendered);
         let rendered = restore_attack_reach_trace_lifetimes(&rendered, f, refs, is_method);
@@ -6637,6 +6639,262 @@ fn restore_trig_constructor_and_clamp_lives(
         result.push('\n');
     }
     result
+}
+
+/// Restore the inferred handle and value lifetimes used by the transform spawn-position source.
+fn restore_transform_spawn_lifetimes(
+    body: &str,
+    f: &Func,
+    refs: &RefResolver,
+    is_method: bool,
+) -> String {
+    if !is_method
+        || !f.is_ufunction
+        || !f.is_const_method()
+        || f.name != "GetSpawnPositionServer_Scriptable_Implementation"
+        || f.params.len() != 2
+        || f.params[0].ty.base_name(refs) != "AGothicCharacter"
+        || !f.params[0].ty.is_object_handle
+        || f.params[0].ty.is_reference
+        || f.params[1].ty.is_object_handle
+        || !f.params[1].ty.is_reference
+        || f.ret.token != 5
+        || f.ret.is_reference
+        || f.ret.is_object_handle
+    {
+        return body.to_owned();
+    }
+    let Some(vector) = refs.type_identity_by_ptr(f.ret.type_info) else {
+        return body.to_owned();
+    };
+    let Some(subclass) = refs.type_identity_by_ptr(f.params[1].ty.type_info) else {
+        return body.to_owned();
+    };
+    let Some([subtype]) = refs.type_subtypes(f.params[1].ty.type_info) else {
+        return body.to_owned();
+    };
+    if vector.name != "FVector"
+        || !vector.module.is_empty()
+        || !vector.namespace.is_empty()
+        || subclass.name != "TSubclassOf"
+        || !subclass.module.is_empty()
+        || !subclass.namespace.is_empty()
+        || subtype.base_name(refs) != "UObject"
+    {
+        return body.to_owned();
+    }
+    let Ok(code) = disassemble(&f.bytecode) else {
+        return body.to_owned();
+    };
+    if code.iter().map(|ins| ins.op.name).ne([
+        "PshVPtr", "CALLSYS", "STOREOBJ", "CmpPtrNull", "JZ", "TYPEID", "PSF",
+        "PshVPtr", "CALLSYS", "JMP", "ClrVPtr", "PshVPtr", "RefCpyV", "PSF",
+        "PshVPtr", "CALLSYS", "PSF", "CALLSYS", "STOREOBJ", "PshVPtr", "RefCpyV",
+        "PshVPtr", "ADDSi", "RDSPtr", "RefCpyV", "PshVPtr", "CALLSYS", "RDR4",
+        "CpyVtoV4", "PSF", "PshVPtr", "CALLSYS", "PSF", "PshVPtr", "CALLSYS",
+        "LoadThisR", "RDR4", "fTOd", "PshV8", "PSF", "PSF", "CALLSYS", "PSF",
+        "PSF", "PSF", "CALLSYS", "PSF", "CALLSYS", "SetV1", "PshV4", "PshC4",
+        "PshC4", "SetV1", "PshV4", "PshVPtr", "PSF", "PSF", "PshGPtr",
+        "CALLSYS", "CpyRtoV4", "CpyVtoR1", "JLowZ", "PSF", "ADDSi", "PSF",
+        "CALLSYS", "PshGPtr", "PSF", "CALLSYS", "ADDIf", "fTOd", "PshV8", "PSF",
+        "PSF", "CALLSYS", "PSF", "PSF", "PSF", "CALLSYS", "PSF", "PshVPtr",
+        "CALLSYS", "PSF", "CALLSYS", "JMP", "PSF", "PshVPtr", "CALLSYS", "PSF",
+        "CALLSYS", "RET",
+    ]) {
+        return body.to_owned();
+    }
+    let word = |at: usize, operand: usize| {
+        code.get(at)?.words.get(operand).map(|value| *value as i16 as i32)
+    };
+    let ptr = |at: usize| code.get(at)?.qwords.first().map(|value| *value as i64);
+    let jump = |at: usize| {
+        let ins = code.get(at)?;
+        Some(ins.offset_dw as i64 + 2 + i64::from(*ins.dwords.first()? as i32))
+    };
+    let target = |at: usize| code.get(at).map(|ins| ins.offset_dw as i64);
+    let calls_match = [
+        (1, "GetDefaultObject"),
+        (8, "opCast"),
+        (15, "GetCharacterClass"),
+        (17, "GetDefaultObject"),
+        (26, "GetCapsuleHalfHeight"),
+        (31, "GetActorLocation"),
+        (34, "GetActorForwardVector"),
+        (41, "opMul"),
+        (45, "opAdd"),
+        (47, "$beh0"),
+        (58, "FindFloorAtLocation"),
+        (65, "$beh0"),
+        (68, "$beh0"),
+        (74, "opMul"),
+        (78, "opAdd"),
+        (81, "$beh0"),
+        (83, "$beh2"),
+        (87, "$beh0"),
+        (89, "$beh2"),
+    ]
+    .into_iter()
+    .all(|(at, name)| ptr(at).and_then(|p| refs.func_by_ptr(p)) == Some(name));
+    if !calls_match
+        || ptr(41) != ptr(74)
+        || ptr(45) != ptr(78)
+        || [68, 81, 87].iter().any(|at| ptr(*at) != ptr(65))
+        || ptr(83) != ptr(89)
+        || ptr(58).and_then(|p| refs.func_ns_by_ptr(p)) != Some("MagicScript")
+        || ptr(41).and_then(|p| refs.func_owner_by_ptr(p)) != Some("FVector")
+        || ptr(45).and_then(|p| refs.func_owner_by_ptr(p)) != Some("FVector")
+        || ptr(65).and_then(|p| refs.func_owner_by_ptr(p)) != Some("FVector")
+        || ptr(47).and_then(|p| refs.func_owner_by_ptr(p)) != Some("FHitResult")
+        || ptr(83).and_then(|p| refs.func_owner_by_ptr(p)) != Some("FHitResult")
+        || ptr(41).is_none_or(|p| !refs.is_const_method_by_ptr(p))
+        || ptr(45).is_none_or(|p| !refs.is_const_method_by_ptr(p))
+        || code[57].qwords.first().and_then(|p| refs.global_by_ptr(*p as i64))
+            != Some("__WorldContext")
+        || code[66].qwords.first().and_then(|p| refs.global_by_ptr(*p as i64))
+            != Some("UpVector")
+        || jump(4) != target(10)
+        || jump(9) != target(11)
+        || jump(61) != target(85)
+        || jump(84) != target(90)
+        || word(0, 0) != Some(-6)
+        || [30, 33, 54].iter().any(|at| word(*at, 0) != Some(-4))
+        || [80, 86].iter().any(|at| word(*at, 0) != Some(-2))
+        || code[48].dwords.first().copied() != Some(0)
+        || code[50].dwords.first().copied() != Some(1_120_403_456)
+        || code[51].dwords.first().copied() != Some(-1_027_080_192i32 as u32)
+        || code[52].dwords.first().copied() != Some(14)
+        || code[69].dwords.first().copied() != Some(1_065_353_216)
+    {
+        return body.to_owned();
+    }
+    let Some(object) = word(2, 0) else { return body.to_owned(); };
+    let Some(cast) = word(6, 0) else { return body.to_owned(); };
+    let Some(definition) = word(12, 0) else { return body.to_owned(); };
+    let Some(class_temp) = word(13, 0) else { return body.to_owned(); };
+    let Some(default_object) = word(18, 0) else { return body.to_owned(); };
+    let Some(character) = word(20, 0) else { return body.to_owned(); };
+    let Some(capsule) = word(24, 0) else { return body.to_owned(); };
+    let Some(height) = word(28, 0) else { return body.to_owned(); };
+    let Some(location) = word(29, 0) else { return body.to_owned(); };
+    let Some(position) = word(32, 0) else { return body.to_owned(); };
+    let Some(wide) = word(37, 0) else { return body.to_owned(); };
+    let Some(product) = word(39, 0) else { return body.to_owned(); };
+    let Some(hit) = word(46, 0) else { return body.to_owned(); };
+    let Some(false_temp) = word(48, 0) else { return body.to_owned(); };
+    let Some(branch_scalar) = word(69, 0) else { return body.to_owned(); };
+    let Some(channel) = word(52, 0) else { return body.to_owned(); };
+    let Some(found) = word(59, 0) else { return body.to_owned(); };
+    let Some(impact) = word(64, 0) else { return body.to_owned(); };
+    let Some(up) = word(67, 0) else { return body.to_owned(); };
+    let local_type = |slot: i32, name: &str| {
+        f.obj_locals
+            .iter()
+            .filter(|(candidate, _)| *candidate == slot)
+            .filter_map(|(_, ty)| refs.type_identity_by_ptr(*ty))
+            .map(|identity| identity.name.as_str())
+            .eq([name])
+    };
+    if !local_type(definition, "USpawnCharacterCanTransformIntoDefinition")
+        || !local_type(default_object, "ACharacterCanTransformInto")
+        || !local_type(character, "ACharacterCanTransformInto")
+        || !local_type(capsule, "UCapsuleComponent")
+        || !local_type(hit, "FHitResult")
+        || [3, 7].iter().any(|at| word(*at, 0) != Some(object))
+        || [10, 11].iter().any(|at| word(*at, 0) != Some(cast))
+        || word(14, 0) != Some(definition)
+        || word(16, 0) != Some(class_temp)
+        || word(19, 0) != Some(default_object)
+        || word(21, 0) != Some(character)
+        || word(25, 0) != Some(capsule)
+        || word(27, 0) != word(28, 1)
+        || word(36, 0) != word(27, 0)
+        || word(38, 0) != Some(wide)
+        || word(40, 0) != Some(position)
+        || [42, 77].iter().any(|at| word(*at, 0) != Some(product))
+        || [43, 56, 85].iter().any(|at| word(*at, 0) != Some(position))
+        || word(44, 0) != Some(location)
+        || [49].iter().any(|at| word(*at, 0) != Some(false_temp))
+        || word(53, 0) != Some(channel)
+        || [55, 62, 82, 88].iter().any(|at| word(*at, 0) != Some(hit))
+        || word(60, 0) != Some(found)
+        || [70, 71].iter().any(|at| word(*at, 0) != Some(wide))
+        || word(69, 1) != Some(height)
+        || word(70, 1) != Some(branch_scalar)
+        || [73, 76].iter().any(|at| word(*at, 0) != Some(up))
+        || [72, 75].iter().any(|at| word(*at, 0) != Some(location))
+        || [64, 77].iter().any(|at| word(*at, 0) != Some(impact))
+        || word(79, 0) != Some(up)
+        || HashSet::from([
+            object, cast, definition, class_temp, default_object, character, capsule, height,
+            location, position, wide, product, hit, false_temp, branch_scalar, channel, found,
+            impact, up,
+        ])
+        .len()
+            != 18
+    {
+        return body.to_owned();
+    }
+
+    let owner = &f.params[0].name;
+    let actor_class = &f.params[1].name;
+    let raw = format!(
+        concat!(
+            "        USpawnCharacterCanTransformIntoDefinition local_{definition} = (Cast<USpawnCharacterCanTransformIntoDefinition>({actor_class}.GetDefaultObject()));\n",
+            "        ACharacter local_{character} = local_{definition}.GetCharacterClass().GetDefaultObject();\n",
+            "        UCapsuleComponent local_{capsule} = local_{character}.CapsuleComponent;\n",
+            "        float32 local_{height} = local_{capsule}.GetCapsuleHalfHeight();\n",
+            "        FVector local_{location} = {owner}.GetActorLocation();\n",
+            "        FVector local_{position} = {owner}.GetActorForwardVector();\n",
+            "        FVector local_{position}_2 = (local_{location} + (local_{position} * this.m_SpawnCreatureDistance));\n",
+            "        FHitResult local_{hit};\n",
+            "        bool local_{found} = MagicScript::FindFloorAtLocation(local_{position}_2, local_{hit}, {owner}, ECollisionChannel(14), -100.0f, 100.0f, false);\n",
+            "        if (local_{found})\n",
+            "        {{\n",
+            "            return (FVector(local_{hit}.ImpactPoint) + (FVector(FVector::UpVector) * (local_{height} + 1.0f)));\n",
+            "        }}\n",
+            "        return local_{position}_2;",
+        ),
+        definition = definition,
+        actor_class = actor_class,
+        character = character,
+        capsule = capsule,
+        height = height,
+        location = location,
+        owner = owner,
+        position = position,
+        hit = hit,
+        found = found,
+    );
+    let restored = format!(
+        concat!(
+            "        auto local_{definition} = (Cast<USpawnCharacterCanTransformIntoDefinition>({actor_class}.GetDefaultObject()));\n",
+            "        auto local_{character} = local_{definition}.GetCharacterClass().GetDefaultObject();\n",
+            "        auto local_{capsule} = local_{character}.CapsuleComponent;\n",
+            "        float32 local_{height} = local_{capsule}.GetCapsuleHalfHeight();\n",
+            "        auto local_{position} = ({owner}.GetActorLocation() + ({owner}.GetActorForwardVector() * this.m_SpawnCreatureDistance));\n",
+            "        FHitResult local_{hit};\n",
+            "        auto local_{found} = MagicScript::FindFloorAtLocation(local_{position}, local_{hit}, {owner}, ECollisionChannel(14), -100.0f, 100.0f, false);\n",
+            "        if (local_{found})\n",
+            "        {{\n",
+            "            return (FVector(local_{hit}.ImpactPoint) + (FVector(FVector::UpVector) * (local_{height} + 1.0f)));\n",
+            "        }}\n",
+            "        return local_{position};",
+        ),
+        definition = definition,
+        actor_class = actor_class,
+        character = character,
+        capsule = capsule,
+        height = height,
+        owner = owner,
+        position = position,
+        hit = hit,
+        found = found,
+    );
+    match (body.matches(&raw).count(), body.matches(&restored).count()) {
+        (1, 0) => body.replacen(&raw, &restored, 1),
+        (0, 1) => body.to_owned(),
+        _ => body.to_owned(),
+    }
 }
 
 /// Build both attack-vector endpoints in their final source variables. Keeping the first scaled
@@ -63605,6 +63863,113 @@ mod literal_value_lifetime_tests {
             super::restore_reused_proceed_handle_lifetimes(body, &bad, &refs),
             body
         );
+    }
+
+    fn transform_spawn_lifetimes_fixture() -> Func {
+        let mut f = function(&[
+            ("PshVPtr", &[65530]), ("CALLSYS", &[]), ("STOREOBJ", &[2]),
+            ("CmpPtrNull", &[2]), ("JZ", &[]), ("TYPEID", &[]), ("PSF", &[4]),
+            ("PshVPtr", &[2]), ("CALLSYS", &[]), ("JMP", &[]), ("ClrVPtr", &[4]),
+            ("PshVPtr", &[4]), ("RefCpyV", &[6]), ("PSF", &[8]),
+            ("PshVPtr", &[6]), ("CALLSYS", &[]), ("PSF", &[8]), ("CALLSYS", &[]),
+            ("STOREOBJ", &[10]), ("PshVPtr", &[10]), ("RefCpyV", &[12]),
+            ("PshVPtr", &[12]), ("ADDSi", &[]), ("RDSPtr", &[]), ("RefCpyV", &[14]),
+            ("PshVPtr", &[14]), ("CALLSYS", &[]), ("RDR4", &[16]),
+            ("CpyVtoV4", &[15, 16]), ("PSF", &[22]), ("PshVPtr", &[65532]),
+            ("CALLSYS", &[]), ("PSF", &[28]), ("PshVPtr", &[65532]),
+            ("CALLSYS", &[]), ("LoadThisR", &[]), ("RDR4", &[16]),
+            ("fTOd", &[30, 16]), ("PshV8", &[30]), ("PSF", &[36]), ("PSF", &[28]),
+            ("CALLSYS", &[]), ("PSF", &[36]), ("PSF", &[28]), ("PSF", &[22]),
+            ("CALLSYS", &[]), ("PSF", &[104]), ("CALLSYS", &[]), ("SetV1", &[105]),
+            ("PshV4", &[105]), ("PshC4", &[]), ("PshC4", &[]), ("SetV1", &[107]),
+            ("PshV4", &[107]), ("PshVPtr", &[65532]), ("PSF", &[104]), ("PSF", &[28]),
+            ("PshGPtr", &[]), ("CALLSYS", &[]), ("CpyRtoV4", &[108]),
+            ("CpyVtoR1", &[108]), ("JLowZ", &[]), ("PSF", &[104]), ("ADDSi", &[]),
+            ("PSF", &[36]), ("CALLSYS", &[]), ("PshGPtr", &[]), ("PSF", &[42]),
+            ("CALLSYS", &[]), ("ADDIf", &[106, 15]), ("fTOd", &[30, 106]),
+            ("PshV8", &[30]), ("PSF", &[22]), ("PSF", &[42]), ("CALLSYS", &[]),
+            ("PSF", &[22]), ("PSF", &[42]), ("PSF", &[36]), ("CALLSYS", &[]),
+            ("PSF", &[42]), ("PshVPtr", &[65534]), ("CALLSYS", &[]), ("PSF", &[104]),
+            ("CALLSYS", &[]), ("JMP", &[]), ("PSF", &[28]), ("PshVPtr", &[65534]),
+            ("CALLSYS", &[]), ("PSF", &[104]), ("CALLSYS", &[]), ("RET", &[8]),
+        ]);
+        f.name = "GetSpawnPositionServer_Scriptable_Implementation".into();
+        f.is_ufunction = true;
+        f.traits = 4;
+        f.ret = DataType { token: 5, type_info: 1, ..Default::default() };
+        f.params = vec![
+            crate::cache::model::Param { name: "owner".into(), flags: 0,
+                ty: DataType { token: 5, type_info: 2, is_object_handle: true,
+                    ..Default::default() } },
+            crate::cache::model::Param { name: "actorToSpawnClass".into(), flags: 0,
+                ty: DataType { token: 5, type_info: 3, is_reference: true,
+                    is_object_const: true, is_read_only: true, ..Default::default() } },
+        ];
+        f.obj_locals = [
+            (2, 4), (4, 5), (6, 5), (8, 3), (10, 6), (12, 6), (14, 7),
+            (22, 1), (28, 1), (36, 1), (42, 1), (104, 8),
+        ].into_iter().collect();
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [
+            (1, 10i64), (8, 11), (15, 12), (17, 13), (26, 14), (31, 15),
+            (34, 16), (41, 17), (45, 18), (47, 19), (58, 20), (65, 21),
+            (68, 21), (74, 17), (78, 18), (81, 21), (83, 22), (87, 21), (89, 22),
+            (57, 30), (66, 31),
+        ] {
+            f.bytecode[code[at].offset_dw + 1] = ptr as i32;
+            f.bytecode[code[at].offset_dw + 2] = (ptr >> 32) as i32;
+        }
+        for (at, value) in [
+            (48, 0u32), (50, 1_120_403_456), (51, (-1_027_080_192i32) as u32),
+            (52, 14),
+        ] {
+            f.bytecode[code[at].offset_dw + 1] = value as i32;
+        }
+        f.bytecode[code[69].offset_dw + 2] = 1_065_353_216;
+        for (at, target) in [(4, 10), (9, 11), (61, 85), (84, 90)] {
+            f.bytecode[code[at].offset_dw + 1] =
+                code[target].offset_dw as i32 - code[at].offset_dw as i32 - 2;
+        }
+        f
+    }
+
+    #[test]
+    fn transform_spawn_uses_inferred_handles_position_and_floor_result() {
+        let source = "        USpawnCharacterCanTransformIntoDefinition local_6 = (Cast<USpawnCharacterCanTransformIntoDefinition>(actorToSpawnClass.GetDefaultObject()));\n        ACharacter local_12 = local_6.GetCharacterClass().GetDefaultObject();\n        UCapsuleComponent local_14 = local_12.CapsuleComponent;\n        float32 local_15 = local_14.GetCapsuleHalfHeight();\n        FVector local_22 = owner.GetActorLocation();\n        FVector local_28 = owner.GetActorForwardVector();\n        FVector local_28_2 = (local_22 + (local_28 * this.m_SpawnCreatureDistance));\n        FHitResult local_104;\n        bool local_108 = MagicScript::FindFloorAtLocation(local_28_2, local_104, owner, ECollisionChannel(14), -100.0f, 100.0f, false);\n        if (local_108)\n        {\n            return (FVector(local_104.ImpactPoint) + (FVector(FVector::UpVector) * (local_15 + 1.0f)));\n        }\n        return local_28_2;";
+        let expected = "        auto local_6 = (Cast<USpawnCharacterCanTransformIntoDefinition>(actorToSpawnClass.GetDefaultObject()));\n        auto local_12 = local_6.GetCharacterClass().GetDefaultObject();\n        auto local_14 = local_12.CapsuleComponent;\n        float32 local_15 = local_14.GetCapsuleHalfHeight();\n        auto local_28 = (owner.GetActorLocation() + (owner.GetActorForwardVector() * this.m_SpawnCreatureDistance));\n        FHitResult local_104;\n        auto local_108 = MagicScript::FindFloorAtLocation(local_28, local_104, owner, ECollisionChannel(14), -100.0f, 100.0f, false);\n        if (local_108)\n        {\n            return (FVector(local_104.ImpactPoint) + (FVector(FVector::UpVector) * (local_15 + 1.0f)));\n        }\n        return local_28;";
+        let f = transform_spawn_lifetimes_fixture();
+        let refs = RefResolver::from_test_transform_spawn_lifetimes(0);
+        let restore = |body: &str, function: &Func, resolver: &RefResolver, method: bool| {
+            super::restore_transform_spawn_lifetimes(body, function, resolver, method)
+        };
+        assert_eq!(restore(source, &f, &refs, true), expected);
+        assert_eq!(restore(expected, &f, &refs, true), expected);
+        assert_eq!(restore(source, &f, &refs, false), source);
+        for fault in 1..=9 {
+            assert_eq!(restore(source, &f,
+                &RefResolver::from_test_transform_spawn_lifetimes(fault), true), source,
+                "metadata {fault}");
+        }
+        let code = disassemble(&f.bytecode).unwrap();
+        for changed in [
+            source.replace("local_28_2, local_104", "local_28, local_104"),
+            source.replace("FVector::UpVector", "FVector::ForwardVector"),
+            source.repeat(2),
+        ] {
+            assert_eq!(restore(&changed, &f, &refs, true), changed);
+        }
+        let mut bad = f.clone();
+        bad.name = "Other".into();
+        assert_eq!(restore(source, &bad, &refs, true), source);
+        bad = f.clone();
+        bad.bytecode[code[77].offset_dw] ^= 1 << 16;
+        assert_eq!(restore(source, &bad, &refs, true), source);
+        bad = f.clone();
+        bad.bytecode[code[50].offset_dw + 1] ^= 1;
+        assert_eq!(restore(source, &bad, &refs, true), source);
+        bad = f.clone();
+        bad.bytecode[code[61].offset_dw + 1] += 1;
+        assert_eq!(restore(source, &bad, &refs, true), source);
     }
 
     fn attack_vector_endpoint_lifetimes_fixture() -> Func {
