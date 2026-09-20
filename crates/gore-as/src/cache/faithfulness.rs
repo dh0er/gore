@@ -271,12 +271,10 @@ mod tests {
     fn a_listed_module_reports_its_count() {
         let guid = measured_guid();
         let binds = measured_binds();
-        let known = for_module(&guid, Some(&binds), "AI.States.FightAI.SearchState.AIState_Search")
-            .expect("measured");
-        assert!(known.divergent_functions > 0);
-        let warning =
-            warning_for_module(&guid, Some(&binds), "AI.States.FightAI.SearchState.AIState_Search")
-                .expect("warns");
+        let module = "AI.AssessmentResponseSystem.CrimeProcessingSubsystem.AssessJoinConflict";
+        let known = for_module(&guid, Some(&binds), module).expect("measured");
+        assert_eq!(known.divergent_functions, 2);
+        let warning = warning_for_module(&guid, Some(&binds), module).expect("warns");
         assert!(warning.contains("does not reproduce as the same program"));
     }
 

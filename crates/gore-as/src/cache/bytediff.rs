@@ -18,6 +18,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use super::cfg;
 use super::disasm::{disassemble, Instr};
 use super::isa::{BcType, OPCODES};
+use super::model::{returns_struct_by_value, slot_width_dwords, AS_PTR_SIZE};
 use super::refs::RefResolver;
 use super::remap::{
     ref_sites, split_type_id_operand, valid_type_id_core, OperandId, RefIdentity, RefKind,
@@ -1193,10 +1194,230 @@ type FlowState = HashMap<i32, OriginSet>;
 #[derive(Debug)]
 struct SlotFlow {
     incoming: Vec<FlowState>,
+    storage_incoming: Vec<FlowState>,
     roles: Vec<Vec<NormSlotRole>>,
     /// Slots whose storage identity escapes (address/lvalue push). These retain a strict global
     /// bijection; physical live-range splitting is permitted only for non-escaping value slots.
     pinned: HashSet<i32>,
+    storage_starts: HashSet<(usize, usize)>,
+}
+
+#[derive(Debug, Clone)]
+struct CallStorageFrame {
+    call: usize,
+    /// `(push instruction, physical frame slot)` for every PSF in this call's own frame.
+    psf: Vec<(usize, i32)>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CallStorageFacts {
+    /// PSF operands that start a fresh storage life: in-place construction, hidden struct RVO,
+    /// or the exact `opCast` out slot.
+    starts: HashSet<(usize, usize)>,
+    frames: Vec<CallStorageFrame>,
+}
+
+#[derive(Debug, Clone)]
+struct StackToken {
+    instruction: usize,
+    width: usize,
+    psf_slot: Option<i32>,
+}
+
+fn pop_stack_width(stack: &mut Vec<StackToken>, width: usize) -> Option<Vec<StackToken>> {
+    let mut popped = Vec::new();
+    let mut total = 0usize;
+    while total < width {
+        let token = stack.pop()?;
+        total = total.checked_add(token.width)?;
+        popped.push(token);
+    }
+    if total != width {
+        return None;
+    }
+    popped.reverse();
+    Some(popped)
+}
+
+/// Recover the exact PSF entries in each physical call frame and the subset that the VM writes
+/// as a new object life. The proof is deliberately all-or-nothing: every basic block starts and
+/// ends with an empty operand stack, every call has a complete typed signature, and every hidden
+/// output is the expected pointer-width PSF token. An under-counted native signature or any
+/// unfamiliar variable-stack opcode declines the stronger N2 path.
+fn call_storage_facts(raw: &[Instr], refs: &RefResolver) -> Option<CallStorageFacts> {
+    if raw.is_empty() {
+        return Some(CallStorageFacts::default());
+    }
+    let graph = cfg::build(raw);
+    let mut covered = vec![false; raw.len()];
+    let mut facts = CallStorageFacts::default();
+
+    for block in &graph.blocks {
+        if block.instr_lo >= block.instr_hi || block.instr_hi > raw.len() {
+            return None;
+        }
+        let mut stack = Vec::<StackToken>::new();
+        for at in block.instr_lo..block.instr_hi {
+            if std::mem::replace(&mut covered[at], true) {
+                return None;
+            }
+            let ins = &raw[at];
+            if ins.op.name == "RET" {
+                if !stack.is_empty() {
+                    return None;
+                }
+                continue;
+            }
+            if !ins.op.is_call() {
+                match ins.op.stack_inc {
+                    delta if delta > 0 => stack.push(StackToken {
+                        instruction: at,
+                        width: delta as usize,
+                        psf_slot: (ins.op.name == "PSF")
+                            .then(|| ins.words.first().map(|word| *word as i16 as i32))
+                            .flatten(),
+                    }),
+                    delta if delta < 0 => {
+                        pop_stack_width(&mut stack, (-delta) as usize)?;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Thiscall1 has a fork-defined fixed physical frame and no trustworthy declaration
+            // relationship for a hidden result. Preserve its alias frame, but never invent a
+            // storage start from it.
+            if ins.op.name == "Thiscall1" {
+                let frame = pop_stack_width(&mut stack, (-ins.op.stack_inc) as usize)?;
+                facts.frames.push(CallStorageFrame {
+                    call: at,
+                    psf: frame
+                        .iter()
+                        .filter_map(|token| token.psf_slot.map(|slot| (token.instruction, slot)))
+                        .collect(),
+                });
+                continue;
+            }
+
+            let (name, params, ret, is_method) = match ins.op.name {
+                "CALLSYS" => {
+                    let ptr = *ins.qwords.first()? as i64;
+                    (
+                        refs.func_by_ptr(ptr)?,
+                        refs.func_params_by_ptr(ptr)?,
+                        refs.func_ret_by_ptr(ptr)?,
+                        refs.is_method_by_ptr(ptr),
+                    )
+                }
+                "CALL" | "CALLBND" | "CALLINTF" => {
+                    let id = *ins.dwords.first()? as i32;
+                    (
+                        refs.func_by_id(id)?,
+                        refs.func_params_by_id(id)?,
+                        refs.func_ret_by_id(id)?,
+                        refs.is_method_by_id(id),
+                    )
+                }
+                _ => return None,
+            };
+            let behaviour = name.starts_with('$') || name.starts_with('~');
+            let rvo = !behaviour && name != "opCast" && returns_struct_by_value(ret, refs);
+            let param_width = params.iter().try_fold(0usize, |sum, param| {
+                sum.checked_add(slot_width_dwords(param, Some(refs)) as usize)
+            })?;
+            let frame_width = if name == "opCast" {
+                // Dynamic casts receive the one-dword TYPEID token in addition to the hidden
+                // out pointer and the source object pointer:
+                // `TYPEID; PSF(out); PshVPtr(object); CALLSYS opCast`.
+                1 + 2 * AS_PTR_SIZE as usize
+            } else {
+                param_width
+                    .checked_add((is_method || behaviour) as usize * AS_PTR_SIZE as usize)?
+                    .checked_add(rvo as usize * AS_PTR_SIZE as usize)?
+            };
+            let frame = pop_stack_width(&mut stack, frame_width)?;
+            let output = if name == "$beh0" {
+                frame.last()
+            } else if name == "opCast" || rvo {
+                let from_top = if is_method || name == "opCast" { 2 } else { 1 };
+                frame.get(frame.len().checked_sub(from_top)?)
+            } else {
+                None
+            };
+            if let Some(output) = output {
+                if output.width != AS_PTR_SIZE as usize || output.psf_slot.is_none() {
+                    return None;
+                }
+                facts.starts.insert((output.instruction, 0));
+            }
+            facts.frames.push(CallStorageFrame {
+                call: at,
+                psf: frame
+                    .iter()
+                    .filter_map(|token| token.psf_slot.map(|slot| (token.instruction, slot)))
+                    .collect(),
+            });
+        }
+        if !stack.is_empty() {
+            return None;
+        }
+    }
+    covered.iter().all(|covered| *covered).then_some(facts)
+}
+
+fn call_storage_facts_equivalent(left: &CallStorageFacts, right: &CallStorageFacts) -> bool {
+    if left.starts != right.starts || left.frames.len() != right.frames.len() {
+        return false;
+    }
+    left.frames.iter().zip(&right.frames).all(|(left, right)| {
+        if left.call != right.call
+            || left
+                .psf
+                .iter()
+                .map(|(at, _)| at)
+                .ne(right.psf.iter().map(|(at, _)| at))
+        {
+            return false;
+        }
+        // A call can observe aliasing between any two address arguments. Preserve that complete
+        // equality matrix even when the individual storage lives are otherwise disjoint.
+        (0..left.psf.len()).all(|a| {
+            (0..left.psf.len())
+                .all(|b| (left.psf[a].1 == left.psf[b].1) == (right.psf[a].1 == right.psf[b].1))
+        })
+    })
+}
+
+fn call_storage_flow_equivalent(
+    left_raw: &[Instr],
+    right_raw: &[Instr],
+    left: &[NormInstr],
+    right: &[NormInstr],
+    left_refs: &RefResolver,
+    right_refs: &RefResolver,
+) -> bool {
+    let raw_aligned = |normalized: &[NormInstr], raw: &[Instr]| {
+        normalized.len() == raw.len()
+            && normalized
+                .iter()
+                .zip(raw)
+                .all(|(normalized, raw)| normalized.op == raw.op.name)
+    };
+    if !raw_aligned(left, left_raw) || !raw_aligned(right, right_raw) {
+        return false;
+    }
+    call_storage_facts(left_raw, left_refs)
+        .zip(call_storage_facts(right_raw, right_refs))
+        .is_some_and(|(left_facts, right_facts)| {
+            call_storage_facts_equivalent(&left_facts, &right_facts)
+                && flow_equivalent_slots_with_storage(
+                    left,
+                    right,
+                    &left_facts.starts,
+                    &right_facts.starts,
+                )
+        })
 }
 
 fn merge_flow_state(into: &mut FlowState, from: &FlowState) {
@@ -1208,16 +1429,34 @@ fn merge_flow_state(into: &mut FlowState, from: &FlowState) {
 /// Reaching-definition analysis for normalized frame slots. Every explicit write is named by its
 /// aligned instruction/operand position, independent of the compiler's chosen physical slot.
 /// All instructions must be reachable from entry; otherwise this stronger N2 proof declines.
-fn analyze_slot_flow(instrs: &[NormInstr]) -> Option<SlotFlow> {
+fn analyze_slot_flow(
+    instrs: &[NormInstr],
+    storage_starts: &HashSet<(usize, usize)>,
+) -> Option<SlotFlow> {
     if instrs.is_empty() {
         return Some(SlotFlow {
             incoming: Vec::new(),
+            storage_incoming: Vec::new(),
             roles: Vec::new(),
             pinned: HashSet::new(),
+            storage_starts: HashSet::new(),
         });
     }
     let successors = norm_successors(instrs)?;
-    let roles: Vec<_> = instrs.iter().map(norm_slot_roles).collect::<Option<_>>()?;
+    let mut roles: Vec<_> = instrs.iter().map(norm_slot_roles).collect::<Option<_>>()?;
+    for &(instruction, operand) in storage_starts {
+        let role = roles
+            .get_mut(instruction)?
+            .iter_mut()
+            .find(|role| role.operand == operand)?;
+        if instrs.get(instruction)?.op != "PSF" || !role.read || role.write {
+            return None;
+        }
+        // A hidden RVO/out slot or constructor receiver exposes the address in this instruction,
+        // but its old contents are not an input. Treat the aligned PSF as the defining write.
+        role.read = false;
+        role.write = true;
+    }
 
     let mut reachable = vec![false; instrs.len()];
     let mut stack = vec![0usize];
@@ -1249,44 +1488,52 @@ fn analyze_slot_flow(instrs: &[NormInstr]) -> Option<SlotFlow> {
         .iter()
         .map(|&slot| (slot, BTreeSet::from([FlowOrigin::Entry(slot)])))
         .collect();
-    let mut incoming = vec![FlowState::new(); instrs.len()];
-    let mut outgoing = vec![FlowState::new(); instrs.len()];
-    loop {
-        let mut changed = false;
-        for i in 0..instrs.len() {
-            let mut next_in = FlowState::new();
-            if i == 0 {
-                merge_flow_state(&mut next_in, &entry);
+    let solve = |is_write: &dyn Fn(usize, &NormSlotRole) -> bool| -> Option<Vec<FlowState>> {
+        let mut incoming = vec![FlowState::new(); instrs.len()];
+        let mut outgoing = vec![FlowState::new(); instrs.len()];
+        loop {
+            let mut changed = false;
+            for i in 0..instrs.len() {
+                let mut next_in = FlowState::new();
+                if i == 0 {
+                    merge_flow_state(&mut next_in, &entry);
+                }
+                for &pred in &predecessors[i] {
+                    merge_flow_state(&mut next_in, &outgoing[pred]);
+                }
+                let mut next_out = next_in.clone();
+                for role in roles[i].iter().filter(|role| is_write(i, role)) {
+                    let Operand::Slot(slot) = instrs[i].operands[role.operand] else {
+                        return None;
+                    };
+                    next_out.insert(
+                        slot,
+                        BTreeSet::from([FlowOrigin::Write {
+                            instruction: i,
+                            operand: role.operand,
+                        }]),
+                    );
+                }
+                if incoming[i] != next_in {
+                    incoming[i] = next_in;
+                    changed = true;
+                }
+                if outgoing[i] != next_out {
+                    outgoing[i] = next_out;
+                    changed = true;
+                }
             }
-            for &pred in &predecessors[i] {
-                merge_flow_state(&mut next_in, &outgoing[pred]);
-            }
-            let mut next_out = next_in.clone();
-            for role in roles[i].iter().filter(|role| role.write) {
-                let Operand::Slot(slot) = instrs[i].operands[role.operand] else {
-                    return None;
-                };
-                next_out.insert(
-                    slot,
-                    BTreeSet::from([FlowOrigin::Write {
-                        instruction: i,
-                        operand: role.operand,
-                    }]),
-                );
-            }
-            if incoming[i] != next_in {
-                incoming[i] = next_in;
-                changed = true;
-            }
-            if outgoing[i] != next_out {
-                outgoing[i] = next_out;
-                changed = true;
+            if !changed {
+                break;
             }
         }
-        if !changed {
-            break;
-        }
-    }
+        Some(incoming)
+    };
+    let incoming = solve(&|_, role| role.write)?;
+    // Storage identity changes only at an independently proven constructor/RVO/out-slot start.
+    // Ordinary SetV/STOREOBJ writes do not license a new address identity.
+    let storage_incoming =
+        solve(&|instruction, role| storage_starts.contains(&(instruction, role.operand)))?;
 
     let mut pinned = HashSet::new();
     for (i, ni) in instrs.iter().enumerate() {
@@ -1310,8 +1557,10 @@ fn analyze_slot_flow(instrs: &[NormInstr]) -> Option<SlotFlow> {
 
     Some(SlotFlow {
         incoming,
+        storage_incoming,
         roles,
         pinned,
+        storage_starts: storage_starts.clone(),
     })
 }
 
@@ -1390,23 +1639,86 @@ fn origin_sets_equivalent(
     }
 }
 
+fn storage_origins<'a>(
+    flow: &'a SlotFlow,
+    instruction: usize,
+    operand: usize,
+    slot: i32,
+) -> Option<OriginSet> {
+    if flow.storage_starts.contains(&(instruction, operand)) {
+        Some(BTreeSet::from([FlowOrigin::Write {
+            instruction,
+            operand,
+        }]))
+    } else {
+        flow.storage_incoming.get(instruction)?.get(&slot).cloned()
+    }
+}
+
+fn storage_origins_equivalent(
+    left: &OriginSet,
+    right: &OriginSet,
+    entry_left_to_right: &mut HashMap<i32, i32>,
+    entry_right_to_left: &mut HashMap<i32, i32>,
+) -> bool {
+    // A join of different address lives is deliberately outside this proof even when the same
+    // source positions reach it on both sides. Only one concrete storage identity may be exposed.
+    if left.len() != 1 || right.len() != 1 {
+        return false;
+    }
+    match (left.iter().next(), right.iter().next()) {
+        (
+            Some(FlowOrigin::Write {
+                instruction: left_instruction,
+                operand: left_operand,
+            }),
+            Some(FlowOrigin::Write {
+                instruction: right_instruction,
+                operand: right_operand,
+            }),
+        ) => left_instruction == right_instruction && left_operand == right_operand,
+        (Some(FlowOrigin::Entry(left)), Some(FlowOrigin::Entry(right)))
+            if *left <= 0 || *right <= 0 =>
+        {
+            left == right
+        }
+        (Some(FlowOrigin::Entry(left)), Some(FlowOrigin::Entry(right))) => {
+            bind_bijection(*left, *right, entry_left_to_right, entry_right_to_left)
+        }
+        _ => false,
+    }
+}
+
 /// Strong N2 proof for register reuse/splitting. Opcode and every non-slot operand must already
 /// match. At each read operand, both sides must have the exact same aligned reaching writes (or a
-/// consistent bijection of entry values). Address/lvalue slots additionally keep a global storage
-/// bijection. This permits only physical allocation differences; a changed producer, CFG edge,
-/// operand order, reaching definition, or escaped-storage identity remains SEMANTIC.
+/// consistent bijection of entry values). Address/lvalue storage keeps one identity until an
+/// aligned constructor/RVO/out-slot PSF proves a fresh life. This permits only physical allocation
+/// differences; a changed producer, CFG edge, operand order, ambiguous join, or escaped-storage
+/// identity remains SEMANTIC.
 fn flow_equivalent_slots(left: &[NormInstr], right: &[NormInstr]) -> bool {
+    flow_equivalent_slots_with_storage(left, right, &HashSet::new(), &HashSet::new())
+}
+
+fn flow_equivalent_slots_with_storage(
+    left: &[NormInstr],
+    right: &[NormInstr],
+    left_storage_starts: &HashSet<(usize, usize)>,
+    right_storage_starts: &HashSet<(usize, usize)>,
+) -> bool {
     if left.len() != right.len() {
         return false;
     }
-    let (Some(left_flow), Some(right_flow)) = (analyze_slot_flow(left), analyze_slot_flow(right))
-    else {
+    if left_storage_starts != right_storage_starts {
+        return false;
+    }
+    let (Some(left_flow), Some(right_flow)) = (
+        analyze_slot_flow(left, left_storage_starts),
+        analyze_slot_flow(right, right_storage_starts),
+    ) else {
         return false;
     };
     let mut entry_l2r = HashMap::new();
     let mut entry_r2l = HashMap::new();
-    let mut storage_l2r = HashMap::new();
-    let mut storage_r2l = HashMap::new();
 
     for i in 0..left.len() {
         if left[i].op != right[i].op
@@ -1424,15 +1736,27 @@ fn flow_equivalent_slots(left: &[NormInstr], right: &[NormInstr]) -> bool {
                     else {
                         return false;
                     };
-                    if (left_flow.pinned.contains(left_slot)
-                        || right_flow.pinned.contains(right_slot))
-                        && ((*left_slot <= 0 || *right_slot <= 0) && left_slot != right_slot
-                            || !bind_bijection(
-                                *left_slot,
-                                *right_slot,
-                                &mut storage_l2r,
-                                &mut storage_r2l,
-                            ))
+                    if left_slot != right_slot
+                        && (left_flow.pinned.contains(left_slot)
+                            || right_flow.pinned.contains(right_slot))
+                        && {
+                            let Some(left_storage) =
+                                storage_origins(&left_flow, i, operand, *left_slot)
+                            else {
+                                return false;
+                            };
+                            let Some(right_storage) =
+                                storage_origins(&right_flow, i, operand, *right_slot)
+                            else {
+                                return false;
+                            };
+                            !storage_origins_equivalent(
+                                &left_storage,
+                                &right_storage,
+                                &mut entry_l2r,
+                                &mut entry_r2l,
+                            )
+                        }
                     {
                         return false;
                     }
@@ -1939,6 +2263,8 @@ fn classify(
     r_raw: &[Instr],
     v_norm: &[NormInstr],
     r_norm: &[NormInstr],
+    v_side: &Side,
+    r_side: &Side,
     opts: &NormOpts,
     context: usize,
 ) -> FuncDiff {
@@ -2015,7 +2341,31 @@ fn classify(
                 .iter()
                 .zip(&r_simple)
                 .all(|(left, right)| left.norm_eq(right));
-        let flow = !simple && flow_equivalent_slots(&v_cmp, &r_cmp);
+        // First try the untouched one-to-one stream. N2b can remove aligned dead copies before
+        // the retained comparison, at which point raw call indices cannot be attached safely.
+        let original_storage_flow = !simple
+            && call_storage_flow_equivalent(
+                v_raw,
+                r_raw,
+                v_norm,
+                r_norm,
+                &v_side.refs,
+                &r_side.refs,
+            );
+        // Also admit a retained stream when no strip/coalescing changed its raw indexing.
+        let retained_storage_flow = !simple
+            && call_storage_flow_equivalent(
+                v_raw,
+                r_raw,
+                &v_cmp,
+                &r_cmp,
+                &v_side.refs,
+                &r_side.refs,
+            );
+        let flow = !simple
+            && (flow_equivalent_slots(&v_cmp, &r_cmp)
+                || original_storage_flow
+                || retained_storage_flow);
         (simple, flow)
     } else {
         (false, false)
@@ -2516,6 +2866,8 @@ fn diff_one(
         &r_raw,
         &v_norm,
         &r_norm,
+        v_side,
+        r_side,
         opts,
         context,
     )
@@ -3405,6 +3757,49 @@ mod tests {
     }
 
     #[test]
+    fn n2_call_storage_tracks_opcast_typeid_and_out_slot() {
+        const OPCAST: i64 = 0x7010;
+        let side = n1_side_with_functions(&[], &[], &[(OPCAST, "opCast")]);
+        let mut code = dw_arg(76, 0x4800_3464u32 as i32); // TYPEID
+        code.extend(rw_arg(4, 5)); // PSF out
+        code.extend(rw_arg(48, 7)); // PshVPtr source object
+        code.extend(qw_arg(61, OPCAST as u64)); // CALLSYS opCast
+        code.extend(no_arg(10)); // RET
+        let raw = disassemble(&code).expect("disasm");
+        let facts = call_storage_facts(&raw, &side.refs).expect("complete opCast frame");
+        assert_eq!(facts.starts, HashSet::from([(1, 0)]));
+        assert_eq!(facts.frames.len(), 1);
+        assert_eq!(facts.frames[0].psf, vec![(1, 5)]);
+
+        let make_two_casts = |outputs: [u16; 2]| {
+            let mut code = Vec::new();
+            for output in outputs {
+                code.extend(dw_arg(76, 0x4800_3464u32 as i32));
+                code.extend(rw_arg(4, output));
+                code.extend(rw_arg(48, 20));
+                code.extend(qw_arg(61, OPCAST as u64));
+            }
+            code.extend(no_arg(10));
+            code
+        };
+        let left_code = make_two_casts([5, 5]);
+        let right_code = make_two_casts([9, 10]);
+        let left_raw = disassemble(&left_code).expect("left disasm");
+        let right_raw = disassemble(&right_code).expect("right disasm");
+        let opts = NormOpts::default();
+        let left_norm = normalize(&left_code, &left_raw, &side, &opts);
+        let right_norm = normalize(&right_code, &right_raw, &side, &opts);
+        assert!(call_storage_flow_equivalent(
+            &left_raw,
+            &right_raw,
+            &left_norm,
+            &right_norm,
+            &side.refs,
+            &side.refs,
+        ));
+    }
+
+    #[test]
     fn n2_flow_rejects_escaping_storage_split_and_abi_slot_rename() {
         let escaped_left = vec![
             ni_setv4(1, 11),
@@ -3431,6 +3826,72 @@ mod tests {
             !flow_equivalent_slots(&abi_left, &abi_right),
             "signature-defined parameter/this offsets must never be alpha-renamed"
         );
+    }
+
+    #[test]
+    fn n2_flow_accepts_only_proven_disjoint_storage_lives() {
+        let left = vec![
+            ni_slot("PSF", 1),
+            ni_slot("PSF", 1),
+            ni_slot("PSF", 1),
+            ni_slot("PSF", 1),
+            ni("RET"),
+        ];
+        let right = vec![
+            ni_slot("PSF", 5),
+            ni_slot("PSF", 5),
+            ni_slot("PSF", 6),
+            ni_slot("PSF", 6),
+            ni("RET"),
+        ];
+        let starts = HashSet::from([(0, 0), (2, 0)]);
+        assert!(flow_equivalent_slots_with_storage(
+            &left, &right, &starts, &starts
+        ));
+        assert!(
+            !flow_equivalent_slots(&left, &right),
+            "without constructor/RVO evidence, address-taken storage stays globally pinned"
+        );
+
+        let joined = vec![
+            ni_jump("JNZ", 2),
+            ni_slot("PSF", 5),
+            ni_slot("PSF", 6),
+            ni_slot("PSF", 6),
+            ni("RET"),
+        ];
+        assert!(
+            !flow_equivalent_slots_with_storage(&left, &joined, &starts, &starts),
+            "changed CFG or ambiguous storage flow must remain semantic"
+        );
+        assert!(!flow_equivalent_slots_with_storage(
+            &left,
+            &right,
+            &starts,
+            &HashSet::from([(0, 0)])
+        ));
+
+        let same_ambiguous_storage = vec![
+            ni_jump("JNZ", 2),
+            ni_slot("PSF", 5),
+            ni_slot("PSF", 5),
+            ni("RET"),
+        ];
+        let branch_start = HashSet::from([(1, 0)]);
+        assert!(flow_equivalent_slots_with_storage(
+            &same_ambiguous_storage,
+            &same_ambiguous_storage,
+            &branch_start,
+            &branch_start,
+        ));
+        let mut renamed_after_join = same_ambiguous_storage.clone();
+        renamed_after_join[2] = ni_slot("PSF", 6);
+        assert!(!flow_equivalent_slots_with_storage(
+            &same_ambiguous_storage,
+            &renamed_after_join,
+            &branch_start,
+            &branch_start,
+        ));
     }
 
     #[test]
@@ -3465,7 +3926,7 @@ mod tests {
             ni_slot("PshV4", 1),
             ni("RET"),
         ];
-        let flow = analyze_slot_flow(&instrs).expect("flow");
+        let flow = analyze_slot_flow(&instrs, &HashSet::new()).expect("flow");
         assert_eq!(
             flow.incoming[2].get(&1),
             Some(&BTreeSet::from([FlowOrigin::Write {
@@ -3523,11 +3984,6 @@ mod tests {
         );
     }
 
-    /// GAP-C negative gate: a `TYPEID <large>` whose value is a large runtime object type-id but
-    /// which does NOT feed an `opCast` (no matching call follows) must stay raw, so two different
-    /// large ids still differ (SEMANTIC). This proves the gate requires the opCast, not merely a
-    /// large id.
-    #[test]
     /// N7 keeps the handle bits in the token: the same registered type used as a value, as a
     /// handle and as a const handle are three different operands, and only the drifting index
     /// below those bits is normalized away.
@@ -3538,13 +3994,20 @@ mod tests {
         let const_handle = type_identity_token("AGothicCharacter", 0x6C00_1234);
         let other_index = type_identity_token("AGothicCharacter", 0x4C00_9999);
         assert_ne!(value, handle, "a value must not equal a handle");
-        assert_ne!(handle, const_handle, "a handle must not equal a const handle");
+        assert_ne!(
+            handle, const_handle,
+            "a handle must not equal a const handle"
+        );
         assert_eq!(
             handle, other_index,
             "the same type with the same flags is the same operand whatever index it drifted to"
         );
     }
 
+    /// GAP-C negative gate: a `TYPEID <large>` whose value is a large runtime object type-id but
+    /// which does NOT feed an `opCast` (no matching call follows) must stay raw, so two different
+    /// large ids still differ (SEMANTIC). This proves the gate requires the opCast, not merely a
+    /// large id.
     #[test]
     fn gap_c_typeid_without_opcast_stays_primitive() {
         let side = side_or_skip!();
