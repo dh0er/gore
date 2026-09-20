@@ -3512,6 +3512,8 @@ fn emit_function_ctor(
         pass_trace("restore_query_loop_and_clock_temporaries", &rendered);
         let rendered = restore_feign_retreat_value_lives(&rendered, f, refs, is_method);
         pass_trace("restore_feign_retreat_value_lives", &rendered);
+        let rendered = restore_attack_reach_trace_lifetimes(&rendered, f, refs, is_method);
+        pass_trace("restore_attack_reach_trace_lifetimes", &rendered);
         let rendered = split_continue_guard_bool_lifetime(&rendered);
         pass_trace("split_continue_guard_bool_lifetime", &rendered);
         s.truncate(declarations_at);
@@ -6633,6 +6635,218 @@ fn restore_trig_constructor_and_clamp_lives(
         result.push('\n');
     }
     result
+}
+
+/// Keep the one actor handle whose source lifetime separates the two array inserts, and inline
+/// the trace's debug flag.  Folding both makes this compiler merge the actor handle with its
+/// neighboring call temporaries and allocate a second bool for the trace.  Vanilla's bytecode
+/// proves the retained handle and the reused false flag independently.
+fn restore_attack_reach_trace_lifetimes(
+    body: &str,
+    f: &Func,
+    refs: &RefResolver,
+    is_method: bool,
+) -> String {
+    if !is_method
+        || f.name != "CanMoveToTargetIntoAttackReachInStraightLine"
+        || f.params.len() != 1
+        || f.params[0].ty.base_name(refs) != "float"
+        || f.params[0].ty.is_reference
+        || f.ret.base_name(refs) != "bool"
+        || f.ret.is_reference
+        || f.ret.is_object_handle
+        || body.matches("UNavigationSystemV1::CanMoveInDirection(").count() != 1
+        || body.matches("System::SphereTraceSingleByProfile(").count() != 1
+    {
+        return body.to_owned();
+    }
+    let Ok(code) = disassemble(&f.bytecode) else {
+        return body.to_owned();
+    };
+    let word = |ins: &Instr, at: usize| {
+        ins.words
+            .get(at)
+            .map(|value| *value as i16 as i32)
+            .filter(|slot| *slot > 0)
+    };
+    let ptr = |ins: &Instr| match ins.op.name {
+        "CALL" | "CALLINTF" | "CALLBND" => ins
+            .dwords
+            .first()
+            .and_then(|value| refs.func_ptr_by_id(*value as i32)),
+        _ => ins.qwords.first().map(|value| *value as i64),
+    };
+    let named = |ins: &Instr, name: &str| {
+        ptr(ins).and_then(|value| refs.func_by_ptr(value)) == Some(name)
+    };
+
+    let array_frames: Vec<_> = code
+        .windows(11)
+        .filter_map(|c| {
+            if c.iter().map(|ins| ins.op.name).ne([
+                "CALLSYS", "STOREOBJ", "PSF", "PSF", "CALLSYS", "PshVPtr",
+                "CALLINTF", "STOREOBJ", "PSF", "PSF", "CALLSYS",
+            ]) || !named(&c[0], "GetSelf")
+                || !named(&c[4], "Add")
+                || c[5].words.first().copied() != Some(0)
+                || !named(&c[6], "GetCharacterOfInterest")
+                || ptr(&c[4]) != ptr(&c[10])
+            {
+                return None;
+            }
+            let self_ptr = ptr(&c[0])?;
+            let interest_ptr = ptr(&c[6])?;
+            let add_ptr = ptr(&c[4])?;
+            if !refs.is_method_by_ptr(self_ptr)
+                || !refs.is_method_by_ptr(interest_ptr)
+                || !refs.is_method_by_ptr(add_ptr)
+                || !refs.func_params_by_ptr(self_ptr)?.is_empty()
+                || !refs.func_params_by_ptr(interest_ptr)?.is_empty()
+                || refs.func_params_by_ptr(add_ptr)?.len() != 1
+                || refs.func_ret_by_ptr(self_ptr)?.base_name(refs) != "AGothicCharacter"
+                || refs.func_ret_by_ptr(interest_ptr)?.base_name(refs) != "AGothicCharacter"
+            {
+                return None;
+            }
+            let handle = word(&c[1], 0)?;
+            let array = word(&c[3], 0)?;
+            let other = word(&c[7], 0)?;
+            (word(&c[2], 0) == Some(handle)
+                && word(&c[8], 0) == Some(other)
+                && word(&c[9], 0) == Some(array)
+                && handle != other
+                && handle != array
+                && other != array)
+                .then_some((handle, array))
+        })
+        .collect();
+    let [(handle, array)] = array_frames.as_slice() else {
+        return body.to_owned();
+    };
+
+    let trace_frames: Vec<_> = code
+        .windows(23)
+        .filter_map(|c| {
+            if c.iter().map(|ins| ins.op.name).ne([
+                "PSF", "CALLSYS", "PshC4", "PshGPtr", "PshGPtr", "SetV1",
+                "PshV4", "PSF", "SetV1", "PshV4", "PSF", "SetV1", "PshV4",
+                "PshC4", "CALLSYS", "PshRPtr", "dTOf", "PshV4", "PSF", "PSF",
+                "PshGPtr", "CALLSYS", "CpyRtoV4",
+            ]) || !named(&c[1], "$beh0")
+                || refs.func_owner_by_ptr(ptr(&c[1])?) != Some("FHitResult")
+                || !named(&c[21], "SphereTraceSingleByProfile")
+                || c[2].dwords.first().copied() != Some(5.0f32.to_bits())
+                || c[5].dwords.as_slice() != [0]
+                || c[8].dwords.as_slice() != [0]
+                || c[11].dwords.as_slice() != [0]
+            {
+                return None;
+            }
+            let sphere = ptr(&c[21])?;
+            if refs.func_ns_by_ptr(sphere) != Some("System")
+                || refs.is_method_by_ptr(sphere)
+                || refs.func_params_by_ptr(sphere)?.len() != 13
+                || refs.func_ret_by_ptr(sphere)?.base_name(refs) != "bool"
+            {
+                return None;
+            }
+            let hit = word(&c[0], 0)?;
+            let debug = word(&c[5], 0)?;
+            let draw = word(&c[8], 0)?;
+            let ignore = word(&c[11], 0)?;
+            let result = word(&c[22], 0)?;
+            (word(&c[6], 0) == Some(debug)
+                && word(&c[7], 0) == Some(hit)
+                && word(&c[9], 0) == Some(draw)
+                && word(&c[10], 0) == Some(*array)
+                && word(&c[12], 0) == Some(ignore)
+                && [hit, debug, draw, ignore, result]
+                    .iter()
+                    .copied()
+                    .collect::<HashSet<_>>()
+                    .len()
+                    == 5)
+                .then_some((debug, result))
+        })
+        .collect();
+    let [(debug, result)] = trace_frames.as_slice() else {
+        return body.to_owned();
+    };
+
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let raw_add = format!("local_{array}.Add(this.GetSelf());");
+    let other_add = format!("local_{array}.Add(this.GetCharacterOfInterest());");
+    let handle_name = format!("local_{handle}_4");
+    let named_decl = format!("AGothicCharacter {handle_name} = this.GetSelf();");
+    let named_add = format!("local_{array}.Add({handle_name});");
+    let raw_rows: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| (line.trim() == raw_add).then_some(at))
+        .collect();
+    let named_rows: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| (line.trim() == named_decl).then_some(at))
+        .collect();
+    match (raw_rows.as_slice(), named_rows.as_slice()) {
+        ([at], []) => {
+            if lines.get(at + 1).map(|line| line.trim()) != Some(other_add.as_str())
+                || count_ident(body, &handle_name) != 0
+            {
+                return body.to_owned();
+            }
+            let indent = indent_of(&lines[*at]);
+            lines.splice(
+                *at..=*at,
+                [
+                    format!("{indent}{named_decl}"),
+                    format!("{indent}{named_add}"),
+                ],
+            );
+        }
+        ([], [at]) => {
+            if lines.get(at + 1).map(|line| line.trim()) != Some(named_add.as_str())
+                || lines.get(at + 2).map(|line| line.trim()) != Some(other_add.as_str())
+                || count_ident(body, &handle_name) != 2
+            {
+                return body.to_owned();
+            }
+        }
+        _ => return body.to_owned(),
+    }
+
+    let declaration = format!("bool local_{debug} = false;");
+    let argument = format!(", local_{debug}, FLinearColor::Green,");
+    let direct = ", false, FLinearColor::Green,";
+    let trace_prefix = format!("bool local_{result} = System::SphereTraceSingleByProfile(");
+    let declaration_rows: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| (line.trim() == declaration).then_some(at))
+        .collect();
+    let trace_rows: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| line.trim().starts_with(&trace_prefix).then_some(at))
+        .collect();
+    let [trace_at] = trace_rows.as_slice() else {
+        return body.to_owned();
+    };
+    match declaration_rows.as_slice() {
+        [declaration_at] if lines[*trace_at].matches(&argument).count() == 1 => {
+            lines[*trace_at] = lines[*trace_at].replacen(&argument, direct, 1);
+            lines.remove(*declaration_at);
+        }
+        [] if lines[*trace_at].matches(direct).count() == 1 => {}
+        _ => return body.to_owned(),
+    }
+
+    let mut output = lines.join("\n");
+    if body.ends_with('\n') {
+        output.push('\n');
+    }
+    output
 }
 
 /// A retreat move keeps its turn angle and the three path-length limits in source variables.
@@ -63111,6 +63325,99 @@ mod literal_value_lifetime_tests {
             super::restore_reused_proceed_handle_lifetimes(body, &bad, &refs),
             body
         );
+    }
+
+    fn attack_reach_trace_lifetimes_fixture() -> Func {
+        let mut f = function(&[
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[6]),
+            ("PSF", &[6]),
+            ("PSF", &[44]),
+            ("CALLSYS", &[]),
+            ("PshVPtr", &[0]),
+            ("CALLINTF", &[]),
+            ("STOREOBJ", &[2]),
+            ("PSF", &[2]),
+            ("PSF", &[44]),
+            ("CALLSYS", &[]),
+            ("PSF", &[120]),
+            ("CALLSYS", &[]),
+            ("PshC4", &[]),
+            ("PshGPtr", &[]),
+            ("PshGPtr", &[]),
+            ("SetV1", &[3]),
+            ("PshV4", &[3]),
+            ("PSF", &[120]),
+            ("SetV1", &[123]),
+            ("PshV4", &[123]),
+            ("PSF", &[44]),
+            ("SetV1", &[124]),
+            ("PshV4", &[124]),
+            ("PshC4", &[]),
+            ("CALLSYS", &[]),
+            ("PshRPtr", &[]),
+            ("dTOf", &[125, 58]),
+            ("PshV4", &[125]),
+            ("PSF", &[26]),
+            ("PSF", &[20]),
+            ("PshGPtr", &[]),
+            ("CALLSYS", &[]),
+            ("CpyRtoV4", &[126]),
+            ("RET", &[4]),
+        ]);
+        f.name = "CanMoveToTargetIntoAttackReachInStraightLine".into();
+        f.ret = DataType { token: 0x41, ..Default::default() };
+        f.params.push(crate::cache::model::Param {
+            name: "AttackReach".into(),
+            flags: 0,
+            ty: DataType { token: 0x51, is_read_only: true, ..Default::default() },
+        });
+        let code = disassemble(&f.bytecode).unwrap();
+        for (at, ptr) in [(0, 10i64), (4, 12), (10, 12), (12, 13), (32, 14)] {
+            f.bytecode[code[at].offset_dw + 1] = ptr as i32;
+            f.bytecode[code[at].offset_dw + 2] = (ptr >> 32) as i32;
+        }
+        f.bytecode[code[6].offset_dw + 1] = 11;
+        f.bytecode[code[13].offset_dw + 1] = 5.0f32.to_bits() as i32;
+        f
+    }
+
+    #[test]
+    fn attack_reach_keeps_array_handle_and_reuses_trace_false_slot() {
+        let source = "    if (UNavigationSystemV1::CanMoveInDirection(Self(), Start(), End(), Reach()))\n    {\n        return true;\n    }\n    TArray<AActor> local_44;\n    local_44.Add(this.GetSelf());\n    local_44.Add(this.GetCharacterOfInterest());\n    FHitResult local_120;\n    bool local_3 = false;\n    bool local_126 = System::SphereTraceSingleByProfile(local_20_2, local_26, float32(local_58), n\"IgnoreOnlyPawn\", false, local_44, EDrawDebugTrace(0), local_120, local_3, FLinearColor::Green, FLinearColor::Red, 5.0f);\n    return local_126;\n";
+        let expected = "    if (UNavigationSystemV1::CanMoveInDirection(Self(), Start(), End(), Reach()))\n    {\n        return true;\n    }\n    TArray<AActor> local_44;\n    AGothicCharacter local_6_4 = this.GetSelf();\n    local_44.Add(local_6_4);\n    local_44.Add(this.GetCharacterOfInterest());\n    FHitResult local_120;\n    bool local_126 = System::SphereTraceSingleByProfile(local_20_2, local_26, float32(local_58), n\"IgnoreOnlyPawn\", false, local_44, EDrawDebugTrace(0), local_120, false, FLinearColor::Green, FLinearColor::Red, 5.0f);\n    return local_126;\n";
+        let f = attack_reach_trace_lifetimes_fixture();
+        let refs = RefResolver::from_test_attack_reach_trace_lifetimes(0);
+        let restore = |body: &str, function: &Func, resolver: &RefResolver, method: bool| {
+            super::restore_attack_reach_trace_lifetimes(body, function, resolver, method)
+        };
+        assert_eq!(restore(source, &f, &refs, true), expected);
+        assert_eq!(restore(expected, &f, &refs, true), expected);
+        assert_eq!(restore(source, &f, &refs, false), source);
+        for fault in 1..=8 {
+            assert_eq!(
+                restore(source, &f, &RefResolver::from_test_attack_reach_trace_lifetimes(fault), true),
+                source,
+                "metadata {fault}"
+            );
+        }
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut bad = f.clone();
+        bad.name = "Other".into();
+        assert_eq!(restore(source, &bad, &refs, true), source);
+        bad = f.clone();
+        bad.bytecode[code[9].offset_dw + 1] = 45;
+        assert_eq!(restore(source, &bad, &refs, true), source);
+        bad = f.clone();
+        bad.bytecode[code[13].offset_dw + 1] ^= 1;
+        assert_eq!(restore(source, &bad, &refs, true), source);
+        for changed in [
+            source.replace("local_44.Add(this.GetSelf())", "local_44.Add(Self())"),
+            source.replace("local_120, local_3,", "local_120, OtherFlag,"),
+            source.repeat(2),
+        ] {
+            assert_eq!(restore(&changed, &f, &refs, true), changed);
+        }
     }
 
     fn feign_retreat_value_lives_fixture() -> Func {

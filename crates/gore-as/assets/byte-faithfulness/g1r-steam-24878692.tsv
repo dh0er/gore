@@ -3,7 +3,6 @@ AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem	3	
 AI.AssessmentResponseSystem.EventResponses	1	0	0
 AI.NativeAICommands	1	0	0
 AI.States.FightAI.CombatState.AIGroup_Attackers	1	0	0
-AI.States.FightAI.CombatState.AIState_OGCombat	1	0	0
 AI.States.FightAI.CombatState.CombatMoves	1	0	0
 AI.States.FightAI.CombatState.Positioning.AICombat_Positioning	3	0	0
 AI.States.FightAI.FearState.AIState_Fear	1	0	0

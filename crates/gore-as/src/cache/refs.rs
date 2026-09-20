@@ -10189,6 +10189,57 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_attack_reach_trace_lifetimes(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "AGothicCharacter"), (2, "AActor"), (3, "FHitResult")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.typeid_to_ptr.insert(100 + ptr as i32, ptr);
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity {
+                name: name.into(), module: String::new(), namespace: String::new(),
+            });
+        }
+        let plain = |token| DataType { token, ..Default::default() };
+        let character = DataType { token: 5, type_info: 1, is_object_handle: true,
+            ..Default::default() };
+        let actor = DataType { token: 5, type_info: 2, is_object_handle: true,
+            ..Default::default() };
+        for (ptr, name) in [(10, "GetSelf"), (11, "GetCharacterOfInterest")] {
+            r.func_by_ptr.insert(ptr, name.into());
+            r.func_owner.insert(ptr, "UCombatState".into());
+            r.func_is_method.insert(ptr);
+            r.func_ret.insert(ptr, character.clone());
+            r.func_params.insert(ptr, Vec::new());
+        }
+        r.funcid_to_ptr.insert(11, 11);
+        r.func_by_ptr.insert(12, "Add".into());
+        r.func_owner.insert(12, "TArray<AActor>".into());
+        r.func_is_method.insert(12);
+        r.func_ret.insert(12, plain(0x52));
+        r.func_params.insert(12, vec![actor]);
+        r.func_by_ptr.insert(13, "$beh0".into());
+        r.func_owner.insert(13, "FHitResult".into());
+        r.func_is_method.insert(13);
+        r.func_ret.insert(13, plain(0x52));
+        r.func_params.insert(13, Vec::new());
+        r.func_by_ptr.insert(14, "SphereTraceSingleByProfile".into());
+        r.func_ns.insert(14, "System".into());
+        r.func_ret.insert(14, plain(0x41));
+        r.func_params.insert(14, vec![plain(0x41); 13]);
+        match fault {
+            1 => { r.func_by_ptr.insert(10, "GetOwner".into()); },
+            2 => { r.func_by_ptr.insert(11, "GetTarget".into()); },
+            3 => { r.func_by_ptr.insert(12, "Append".into()); },
+            4 => { r.func_owner.insert(13, "FOtherHit".into()); },
+            5 => { r.func_by_ptr.insert(14, "LineTraceSingleByProfile".into()); },
+            6 => { r.func_ns.insert(14, "Other".into()); },
+            7 => { r.func_params.get_mut(&14).unwrap().pop(); },
+            8 => { r.func_ret.get_mut(&10).unwrap().type_info = 2; },
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_feign_retreat_value_lives(fault: u8) -> Self {
         let mut r = Self::default();
         r.type_by_ptr.insert(1, "FVector".into());
