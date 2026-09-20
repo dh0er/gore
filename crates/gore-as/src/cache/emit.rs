@@ -3520,6 +3520,14 @@ fn emit_function_ctor(
             is_method,
         );
         pass_trace("restore_relay_creeping_loop_handle_lifetimes", &rendered);
+        let rendered = restore_fear_tick_value_lifetimes(
+            &rendered,
+            f,
+            refs,
+            class_name,
+            is_method,
+        );
+        pass_trace("restore_fear_tick_value_lifetimes", &rendered);
         let rendered = restore_transform_spawn_lifetimes(&rendered, f, refs, is_method);
         pass_trace("restore_transform_spawn_lifetimes", &rendered);
         let rendered = restore_attack_vector_endpoint_lifetimes(&rendered, f, refs, is_method);
@@ -6894,6 +6902,308 @@ fn restore_relay_creeping_loop_handle_lifetimes(
         || out.matches("auto local_70 =").count() != 2
         || out.contains("local_62 = nullptr;")
         || out.contains("local_70 = nullptr;")
+    {
+        return body.to_owned();
+    }
+    out
+}
+
+/// Restore the independent scalar and vector lives used by the fear state's tick method.
+/// The cache reuses their physical slots across early returns, the spot search and the later
+/// direction loop; spelling those lives at function scope adds stores that vanilla never ran.
+fn restore_fear_tick_value_lifetimes(
+    body: &str,
+    f: &Func,
+    refs: &RefResolver,
+    class_name: Option<&str>,
+    is_method: bool,
+) -> String {
+    if !is_method
+        || class_name != Some("UAIState_Fear")
+        || !f.is_ufunction
+        || f.is_const_method()
+        || f.name != "TickTask_Implementation"
+        || f.ret.base_name(refs) != "void"
+        || f.ret.is_reference
+        || f.ret.is_object_handle
+        || f.params.len() != 1
+        || f.params[0].name != "DeltaTimeSecs"
+        || f.params[0].ty.base_name(refs) != "float"
+        || f.params[0].ty.is_reference
+        || f.params[0].ty.is_object_handle
+    {
+        return body.to_owned();
+    }
+
+    let Ok(code) = disassemble(&f.bytecode) else {
+        return body.to_owned();
+    };
+    if code.len() != 586
+        || code[585].op.name != "RET"
+        || code[585].words.first().copied() != Some(4)
+    {
+        return body.to_owned();
+    }
+    let names = |start: usize, expected: &[&str]| {
+        code.get(start..start + expected.len())
+            .is_some_and(|slice| {
+                slice
+                    .iter()
+                    .map(|ins| ins.op.name)
+                    .eq(expected.iter().copied())
+            })
+    };
+    if !names(
+        101,
+        &[
+            "CpyVtoV4",
+            "NOT",
+            "CpyVtoV4",
+            "CpyVtoR1",
+            "JLowZ",
+            "SetV8",
+            "LoadThisR",
+            "WRTV8",
+            "JMP",
+            "PSF",
+            "PshVPtr",
+            "CALLINTF",
+            "PshGPtr",
+            "PSF",
+            "CALLSYS",
+            "JLowZ",
+            "SetV8",
+            "LoadThisR",
+            "WRTV8",
+            "JMP",
+        ],
+    ) || !names(
+        121,
+        &[
+            "PshVPtr",
+            "ADDSi",
+            "RDSPtr",
+            "CALLSYS",
+            "STOREOBJ",
+            "CmpPtrNull",
+            "JZ",
+            "PSF",
+            "CALLSYS",
+            "PSF",
+            "CALLSYS",
+            "PshGPtr",
+            "LoadThisR",
+            "RDR8",
+            "dTOf",
+            "PshV4",
+            "PSF",
+            "PshVPtr",
+            "CALLSYS",
+            "STOREOBJ",
+            "PshVPtr",
+            "CALLSYS",
+            "PSF",
+            "PSF",
+            "CALLSYS",
+            "PSF",
+            "PshVPtr",
+            "CALLSYS",
+            "STOREOBJ",
+            "PshVPtr",
+            "CALLSYS",
+            "SetV4",
+        ],
+    ) || !names(
+        198,
+        &[
+            "PshGPtr", "PshC8", "PSF", "PshGPtr", "PSF", "PSF", "CALLSYS", "PSF", "PSF", "PSF",
+            "CALLSYS", "PSF", "CALLSYS", "PSF", "PSF", "PshVPtr", "CALLINTF", "JLowZ",
+        ],
+    ) || !names(
+        348,
+        &[
+            "PshGPtr", "PSF", "CALLSYS", "PshGPtr", "PSF", "CALLSYS", "SetV1", "CpyVtoV4", "SetV1",
+            "CpyVtoV4",
+        ],
+    ) || !names(
+        360,
+        &[
+            "SUSPEND",
+            "PshV4",
+            "PshVPtr",
+            "ADDSi",
+            "Thiscall1",
+            "RDR8",
+            "CpyVtoV8",
+        ],
+    ) || !names(
+        399,
+        &[
+            "PSF", "PshVPtr", "CALLSYS", "STOREOBJ", "PshVPtr", "CALLSYS", "PSF", "PSF", "PshVPtr",
+            "CALLINTF", "CpyRtoV4", "CpyVtoR1", "JLowZ", "JMP",
+        ],
+    ) {
+        return body.to_owned();
+    }
+    let word = |at: usize, operand: usize| {
+        code.get(at)?
+            .words
+            .get(operand)
+            .map(|value| *value as i16 as i32)
+    };
+    if word(101, 0) != Some(13)
+        || word(101, 1) != Some(1)
+        || word(103, 0) != Some(14)
+        || word(103, 1) != Some(13)
+        || word(106, 0) != Some(16)
+        || word(117, 0) != Some(16)
+        || word(125, 0) != Some(30)
+        || word(126, 0) != Some(30)
+        || word(133, 0) != Some(2408)
+        || word(134, 0) != Some(16)
+        || word(135, 0) != Some(45)
+        || word(135, 1) != Some(16)
+        || word(137, 0) != Some(22)
+        || word(143, 0) != Some(22)
+        || word(144, 0) != Some(50)
+        || word(146, 0) != Some(22)
+        || word(152, 0) != Some(57)
+        || word(200, 0) != Some(56)
+        || word(202, 0) != Some(56)
+        || word(203, 0) != Some(59)
+        || word(205, 0) != Some(22)
+        || word(206, 0) != Some(74)
+        || word(207, 0) != Some(56)
+        || word(209, 0) != Some(74)
+        || word(211, 0) != Some(22)
+        || word(212, 0) != Some(56)
+        || word(349, 0) != Some(56)
+        || word(352, 0) != Some(22)
+        || word(354, 0) != Some(14)
+        || word(355, 0) != Some(85)
+        || word(355, 1) != Some(14)
+        || word(356, 0) != Some(13)
+        || word(357, 0) != Some(86)
+        || word(357, 1) != Some(13)
+        || word(361, 0) != Some(9)
+        || word(363, 0) != Some(2496)
+        || word(365, 0) != Some(78)
+        || word(366, 0) != Some(16)
+        || word(366, 1) != Some(78)
+        || word(399, 0) != Some(92)
+        || word(402, 0) != Some(4)
+        || word(405, 0) != Some(92)
+        || word(406, 0) != Some(100)
+        || word(409, 0) != Some(14)
+        || word(410, 0) != Some(14)
+    {
+        return body.to_owned();
+    }
+
+    let mut vector_slots = f
+        .obj_locals
+        .iter()
+        .filter_map(|(slot, ty)| {
+            refs.type_identity_by_ptr(*ty)
+                .filter(|identity| {
+                    identity.name == "FVector"
+                        && identity.module.is_empty()
+                        && identity.namespace.is_empty()
+                })
+                .map(|_| *slot)
+        })
+        .collect::<Vec<_>>();
+    vector_slots.sort_unstable();
+    let handle_slots = f
+        .obj_locals
+        .iter()
+        .filter_map(|(slot, ty)| {
+            refs.type_identity_by_ptr(*ty)
+                .filter(|identity| {
+                    identity.name == "FInteractionSpotHandle"
+                        && identity.module.is_empty()
+                        && identity.namespace.is_empty()
+                })
+                .map(|_| *slot)
+        })
+        .collect::<Vec<_>>();
+    if vector_slots != [22, 28, 56, 68, 74, 92, 100, 106, 112] || handle_slots != [59] {
+        return body.to_owned();
+    }
+
+    const DECLS: &str = concat!(
+        "        bool local_14;\n",
+        "        float local_16;\n",
+        "        bool local_85;\n",
+        "        bool local_86;\n",
+    );
+    const DEAD: &str = "            local_16 = -1.0;\n";
+    const VECTOR_DECLS: &str =
+        concat!("        FVector local_22;\n", "        FVector local_56;\n",);
+    const SEARCH_OLD: &str = concat!(
+        "            local_16 = this.FleeSpotSearchRadius;\n",
+        "            TArray<FInteractionSpotHandle> local_50 = InteractionSpots::FindSpotsInRadius(this.GetSelf().GetFeetLocation(), float32(local_16));\n",
+        "            local_22 = this.GetSelf().GetFeetLocation();\n",
+    );
+    const SEARCH_NEW: &str = concat!(
+        "            TArray<FInteractionSpotHandle> local_50 = InteractionSpots::FindSpotsInRadius(this.GetSelf().GetFeetLocation(), float32(this.FleeSpotSearchRadius));\n",
+        "            FVector local_22 = this.GetSelf().GetFeetLocation();\n",
+    );
+    const DIRECTION_OLD: &str = concat!(
+        "                local_56 = local_59.GetLocation();\n",
+        "                local_56 = (local_56 - local_22).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);\n",
+    );
+    const DIRECTION_NEW: &str = "                FVector local_56 = (local_59.GetLocation() - local_22).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);\n";
+    const DEFAULTS_OLD: &str = concat!(
+        "        local_56 = FVector(FVector::ZeroVector);\n",
+        "        local_22 = FVector(FVector::ZeroVector);\n",
+        "        local_85 = false;\n",
+        "        local_86 = false;\n",
+    );
+    const DEFAULTS_NEW: &str = concat!(
+        "        FVector local_56 = FVector(FVector::ZeroVector);\n",
+        "        FVector local_22 = FVector(FVector::ZeroVector);\n",
+        "        bool local_85 = false;\n",
+        "        bool local_86 = false;\n",
+    );
+    const ANGLE_OLD: &str =
+        "            local_16 = this.FleeDirectionAngleOffsetsDegrees[local_9_2];\n";
+    const ANGLE_NEW: &str =
+        "            float local_16 = this.FleeDirectionAngleOffsetsDegrees[local_9_2];\n";
+    const THREAT_OLD: &str = concat!(
+        "            local_14 = this.IsDirectionTowardAnyThreat(local_100, this.GetSelf().GetFeetLocation());\n",
+        "            if (local_14)\n",
+    );
+    const THREAT_NEW: &str = "            if (this.IsDirectionTowardAnyThreat(local_100, this.GetSelf().GetFeetLocation()))\n";
+    let rewrites = [
+        (DECLS, ""),
+        (VECTOR_DECLS, ""),
+        (SEARCH_OLD, SEARCH_NEW),
+        (DIRECTION_OLD, DIRECTION_NEW),
+        (DEFAULTS_OLD, DEFAULTS_NEW),
+        (ANGLE_OLD, ANGLE_NEW),
+        (THREAT_OLD, THREAT_NEW),
+    ];
+    if body.matches(DEAD).count() != 2
+        || rewrites
+            .iter()
+            .any(|(old, _)| body.matches(old).count() != 1)
+    {
+        return body.to_owned();
+    }
+
+    let mut out = body.replace(DEAD, "");
+    for (old, new) in rewrites {
+        out = out.replacen(old, new, 1);
+    }
+    if out.contains(DECLS)
+        || out.contains(DEAD)
+        || out.contains(VECTOR_DECLS)
+        || out.matches(SEARCH_NEW).count() != 1
+        || out.matches(DIRECTION_NEW).count() != 1
+        || out.matches(DEFAULTS_NEW).count() != 1
+        || out.matches(ANGLE_NEW).count() != 1
+        || out.matches(THREAT_NEW).count() != 1
     {
         return body.to_owned();
     }
@@ -64296,6 +64606,298 @@ mod literal_value_lifetime_tests {
         assert_eq!(restore(source, &bad, &refs, class, true), source);
         bad = f.clone();
         bad.bytecode[code[409].offset_dw + 1] = 62;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+    }
+
+    fn fear_tick_value_lifetimes_fixture() -> Func {
+        let mut ops: Vec<(&str, &[u16])> = vec![("SUSPEND", &[]); 586];
+        let early_returns: [(&str, &[u16]); 20] = [
+            ("CpyVtoV4", &[13, 1]),
+            ("NOT", &[13]),
+            ("CpyVtoV4", &[14, 13]),
+            ("CpyVtoR1", &[14]),
+            ("JLowZ", &[]),
+            ("SetV8", &[16]),
+            ("LoadThisR", &[2344]),
+            ("WRTV8", &[16]),
+            ("JMP", &[]),
+            ("PSF", &[28]),
+            ("PshVPtr", &[0]),
+            ("CALLINTF", &[]),
+            ("PshGPtr", &[]),
+            ("PSF", &[28]),
+            ("CALLSYS", &[]),
+            ("JLowZ", &[]),
+            ("SetV8", &[16]),
+            ("LoadThisR", &[2344]),
+            ("WRTV8", &[16]),
+            ("JMP", &[]),
+        ];
+        for (offset, op) in early_returns.into_iter().enumerate() {
+            ops[101 + offset] = op;
+        }
+        let spot_search: [(&str, &[u16]); 32] = [
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[752]),
+            ("RDSPtr", &[]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[30]),
+            ("CmpPtrNull", &[30]),
+            ("JZ", &[]),
+            ("PSF", &[36]),
+            ("CALLSYS", &[]),
+            ("PSF", &[40]),
+            ("CALLSYS", &[]),
+            ("PshGPtr", &[]),
+            ("LoadThisR", &[2408]),
+            ("RDR8", &[16]),
+            ("dTOf", &[45, 16]),
+            ("PshV4", &[45]),
+            ("PSF", &[22]),
+            ("PshVPtr", &[0]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[4]),
+            ("PshVPtr", &[4]),
+            ("CALLSYS", &[]),
+            ("PSF", &[22]),
+            ("PSF", &[50]),
+            ("CALLSYS", &[]),
+            ("PSF", &[22]),
+            ("PshVPtr", &[0]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[4]),
+            ("PshVPtr", &[4]),
+            ("CALLSYS", &[]),
+            ("SetV4", &[57]),
+        ];
+        for (offset, op) in spot_search.into_iter().enumerate() {
+            ops[121 + offset] = op;
+        }
+        let spot_direction: [(&str, &[u16]); 18] = [
+            ("PshGPtr", &[]),
+            ("PshC8", &[]),
+            ("PSF", &[56]),
+            ("PshGPtr", &[]),
+            ("PSF", &[56]),
+            ("PSF", &[59]),
+            ("CALLSYS", &[]),
+            ("PSF", &[22]),
+            ("PSF", &[74]),
+            ("PSF", &[56]),
+            ("CALLSYS", &[]),
+            ("PSF", &[74]),
+            ("CALLSYS", &[]),
+            ("PSF", &[22]),
+            ("PSF", &[56]),
+            ("PshVPtr", &[0]),
+            ("CALLINTF", &[]),
+            ("JLowZ", &[]),
+        ];
+        for (offset, op) in spot_direction.into_iter().enumerate() {
+            ops[198 + offset] = op;
+        }
+        let defaults: [(&str, &[u16]); 10] = [
+            ("PshGPtr", &[]),
+            ("PSF", &[56]),
+            ("CALLSYS", &[]),
+            ("PshGPtr", &[]),
+            ("PSF", &[22]),
+            ("CALLSYS", &[]),
+            ("SetV1", &[14]),
+            ("CpyVtoV4", &[85, 14]),
+            ("SetV1", &[13]),
+            ("CpyVtoV4", &[86, 13]),
+        ];
+        for (offset, op) in defaults.into_iter().enumerate() {
+            ops[348 + offset] = op;
+        }
+        let angle: [(&str, &[u16]); 7] = [
+            ("SUSPEND", &[]),
+            ("PshV4", &[9]),
+            ("PshVPtr", &[0]),
+            ("ADDSi", &[2496]),
+            ("Thiscall1", &[]),
+            ("RDR8", &[78]),
+            ("CpyVtoV8", &[16, 78]),
+        ];
+        for (offset, op) in angle.into_iter().enumerate() {
+            ops[360 + offset] = op;
+        }
+        let threat: [(&str, &[u16]); 14] = [
+            ("PSF", &[92]),
+            ("PshVPtr", &[0]),
+            ("CALLSYS", &[]),
+            ("STOREOBJ", &[4]),
+            ("PshVPtr", &[4]),
+            ("CALLSYS", &[]),
+            ("PSF", &[92]),
+            ("PSF", &[100]),
+            ("PshVPtr", &[0]),
+            ("CALLINTF", &[]),
+            ("CpyRtoV4", &[14]),
+            ("CpyVtoR1", &[14]),
+            ("JLowZ", &[]),
+            ("JMP", &[]),
+        ];
+        for (offset, op) in threat.into_iter().enumerate() {
+            ops[399 + offset] = op;
+        }
+        ops[585] = ("RET", &[4]);
+        let mut f = function(&ops);
+        f.name = "TickTask_Implementation".into();
+        f.is_ufunction = true;
+        f.ret.token = 0x52;
+        f.params = vec![crate::cache::model::Param {
+            name: "DeltaTimeSecs".into(),
+            flags: 0,
+            ty: DataType {
+                token: 0x51,
+                ..Default::default()
+            },
+        }];
+        f.obj_locals = vec![
+            (22, 1),
+            (28, 1),
+            (56, 1),
+            (68, 1),
+            (74, 1),
+            (92, 1),
+            (100, 1),
+            (106, 1),
+            (112, 1),
+            (59, 2),
+        ];
+        f
+    }
+
+    #[test]
+    fn fear_tick_values_recover_their_independent_lifetimes() {
+        let source = concat!(
+            "        bool local_14;\n",
+            "        float local_16;\n",
+            "        bool local_85;\n",
+            "        bool local_86;\n",
+            "        if (First())\n",
+            "        {\n",
+            "            local_16 = -1.0;\n",
+            "            this.StuckStartTime = -1.0;\n",
+            "            return;\n",
+            "        }\n",
+            "        if (Second())\n",
+            "        {\n",
+            "            local_16 = -1.0;\n",
+            "            this.StuckStartTime = -1.0;\n",
+            "            return;\n",
+            "        }\n",
+            "        FVector local_22;\n",
+            "        FVector local_56;\n",
+            "        if (this.AI.GetCurrentTerritory() != nullptr)\n",
+            "        {\n",
+            "            local_16 = this.FleeSpotSearchRadius;\n",
+            "            TArray<FInteractionSpotHandle> local_50 = InteractionSpots::FindSpotsInRadius(this.GetSelf().GetFeetLocation(), float32(local_16));\n",
+            "            local_22 = this.GetSelf().GetFeetLocation();\n",
+            "                local_56 = local_59.GetLocation();\n",
+            "                local_56 = (local_56 - local_22).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);\n",
+            "        }\n",
+            "        local_56 = FVector(FVector::ZeroVector);\n",
+            "        local_22 = FVector(FVector::ZeroVector);\n",
+            "        local_85 = false;\n",
+            "        local_86 = false;\n",
+            "        for (; Ready();)\n",
+            "        {\n",
+            "            local_16 = this.FleeDirectionAngleOffsetsDegrees[local_9_2];\n",
+            "            local_14 = this.IsDirectionTowardAnyThreat(local_100, this.GetSelf().GetFeetLocation());\n",
+            "            if (local_14)\n",
+            "            {\n",
+            "                continue;\n",
+            "            }\n",
+            "            local_85 = false;\n",
+            "        }\n",
+        );
+        let expected = concat!(
+            "        if (First())\n",
+            "        {\n",
+            "            this.StuckStartTime = -1.0;\n",
+            "            return;\n",
+            "        }\n",
+            "        if (Second())\n",
+            "        {\n",
+            "            this.StuckStartTime = -1.0;\n",
+            "            return;\n",
+            "        }\n",
+            "        if (this.AI.GetCurrentTerritory() != nullptr)\n",
+            "        {\n",
+            "            TArray<FInteractionSpotHandle> local_50 = InteractionSpots::FindSpotsInRadius(this.GetSelf().GetFeetLocation(), float32(this.FleeSpotSearchRadius));\n",
+            "            FVector local_22 = this.GetSelf().GetFeetLocation();\n",
+            "                FVector local_56 = (local_59.GetLocation() - local_22).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);\n",
+            "        }\n",
+            "        FVector local_56 = FVector(FVector::ZeroVector);\n",
+            "        FVector local_22 = FVector(FVector::ZeroVector);\n",
+            "        bool local_85 = false;\n",
+            "        bool local_86 = false;\n",
+            "        for (; Ready();)\n",
+            "        {\n",
+            "            float local_16 = this.FleeDirectionAngleOffsetsDegrees[local_9_2];\n",
+            "            if (this.IsDirectionTowardAnyThreat(local_100, this.GetSelf().GetFeetLocation()))\n",
+            "            {\n",
+            "                continue;\n",
+            "            }\n",
+            "            local_85 = false;\n",
+            "        }\n",
+        );
+        let f = fear_tick_value_lifetimes_fixture();
+        let refs = RefResolver::from_test_fear_tick_value_lifetimes(0);
+        let restore = |body: &str,
+                       function: &Func,
+                       resolver: &RefResolver,
+                       class: Option<&str>,
+                       method: bool| {
+            super::restore_fear_tick_value_lifetimes(body, function, resolver, class, method)
+        };
+        let class = Some("UAIState_Fear");
+        assert_eq!(restore(source, &f, &refs, class, true), expected);
+        assert_eq!(restore(expected, &f, &refs, class, true), expected);
+        assert_eq!(restore(source, &f, &refs, class, false), source);
+        assert_eq!(
+            restore(source, &f, &refs, Some("UOtherState"), true),
+            source
+        );
+        for fault in 1..=2 {
+            assert_eq!(
+                restore(
+                    source,
+                    &f,
+                    &RefResolver::from_test_fear_tick_value_lifetimes(fault),
+                    class,
+                    true
+                ),
+                source,
+                "metadata {fault}"
+            );
+        }
+        for changed in [
+            source.replace("local_59.GetLocation()", "local_59.GetActorLocation()"),
+            source.replace("FleeSpotSearchRadius", "SearchRadius"),
+            source.replace("local_85 = false;", "local_85 = true;"),
+            source.repeat(2),
+        ] {
+            assert_eq!(restore(&changed, &f, &refs, class, true), changed);
+        }
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut bad = f.clone();
+        bad.name = "Other".into();
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.params[0].name = "DeltaSeconds".into();
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.bytecode[code[203].offset_dw + 1] = 60;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.bytecode[code[585].offset_dw] ^= 4 << 16;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.obj_locals[0].1 = 2;
         assert_eq!(restore(source, &bad, &refs, class, true), source);
     }
 

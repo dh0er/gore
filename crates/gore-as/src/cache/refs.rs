@@ -10240,6 +10240,28 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_fear_tick_value_lifetimes(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name) in [(1, "FVector"), (2, "FInteractionSpotHandle")] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(
+                ptr,
+                TypeIdentity {
+                    name: name.into(),
+                    module: String::new(),
+                    namespace: String::new(),
+                },
+            );
+        }
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&1).unwrap().name = "FOtherVector".into(),
+            2 => r.type_identity_by_ptr.get_mut(&2).unwrap().module = "Other".into(),
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_transform_spawn_lifetimes(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr, name, module) in [
