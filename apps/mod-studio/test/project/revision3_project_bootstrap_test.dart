@@ -30,6 +30,10 @@ const _v4ShippingSha256 =
     '7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511';
 const _v4BindsSha256 =
     'aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2';
+const _v5ExecutableSha256 =
+    'dafd816b62230087cdb65ad504f4d8d003cd6013dba1b2b5b4f51457d78f729a';
+const _v5ShippingSha256 =
+    'b913264a50327da30b48c3b35f431e90197f3eafdebe431501a90ffd2d793d54';
 
 void main() {
   late AuthoringStoryCatalogGeneration generation;
@@ -245,10 +249,19 @@ void main() {
       bindsCacheByteLength: 5908985,
       bindsCacheSha256: _v4BindsSha256,
     );
+    final v5 = await _trustedGeneration(
+      executableByteLength: 171796992,
+      executableSha256: _v5ExecutableSha256,
+      shippingCacheByteLength: 124459998,
+      shippingCacheSha256: _v5ShippingSha256,
+      bindsCacheByteLength: 5908985,
+      bindsCacheSha256: _v4BindsSha256,
+    );
     expect(_create(v1).target.executableSha256, _v1ExecutableSha256);
     expect(_create(generation).target.executableSha256, _v2ExecutableSha256);
     expect(_create(v3).target.executableSha256, _v3ExecutableSha256);
     expect(_create(v4).target.executableSha256, _v4ExecutableSha256);
+    expect(_create(v5).target.executableSha256, _v5ExecutableSha256);
 
     final hybrids = <AuthoringStoryCatalogGeneration>[
       await _trustedGeneration(executableByteLength: 171698176),
@@ -285,6 +298,10 @@ void main() {
         shippingCacheSha256: _v4ShippingSha256,
         bindsCacheByteLength: 5908985,
         bindsCacheSha256: _v4BindsSha256,
+      ),
+      await _trustedGeneration(
+        executableByteLength: 171796992,
+        executableSha256: _v5ExecutableSha256,
       ),
     ];
     for (final hybrid in hybrids) {
