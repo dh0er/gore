@@ -1,13 +1,16 @@
 # NPC-Testpakete: restliche Faelle
 
-Stand 2026-09-21: **Alle fuenf Pakete sind gebaut und geprueft.** Der Kopf-/Barttest
+Stand 2026-09-21: **Die Spieltests aller fuenf Pakete sind abgeschlossen.** Der Kopf-/Barttest
 ist bestanden. Beim Sprachtest sind Begruessungen, Alltagszeilen von B/C und Bs
 Routine sowie der vollstaendige Neustart ohne erneuten Aufbau bestaetigt.
 Die Lehrerpruefungen einschliesslich Neustart sowie Kaufen/Verkaufen/Abbrechen
 und die Bestands-Persistenz sind bestanden. Die doppelte Vergabe wurde mit dem
 nativen Anfangsbestand behoben; beide Ladepruefungen in0.1.3 sind bestaetigt.
 Die Feldrollen einschliesslich Flucht und Wiederbelebung sind bestanden.
-Als Naechstes folgt das Questpaket. In Profil4 bleibt **071**.
+Auch die gesamte Questliste ist bestanden: eigenes Journal, automatische Ziele,
+einmalige Abgabe/Belohnung, Erfolg, Abbruch und alle Neustarts.
+Siehe [Questergebnis](quest/runtime-0.1.2.json). Die Queststaende einschliesslich
+Start071 sind [ausserhalb der Spielliste archiviert](profile-cleanup-after-quest-complete.json).
 Die erledigten Kopf-/Voice-Starts und Ergebnisse sind ausserhalb des Spiels
 archiviert. Zuletzt wurden **003 „npc natuerlich - beobachtet“**, **022 „npc
 natuerlich - start“** und **066 „NPC 02 Voice - START“** aus der Spielliste
@@ -58,7 +61,7 @@ den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
 | 2 | NpcNaturalVoiceTest | 066: NPC 02 Voice - START (archiviert) | Begruessung/Alltagsstimme B und C, Routine und Neustart bestanden; kurze Sprechblase und hoerbarer Profilvergleich offen |
 | 3 | NpcEconomyRolesTest | Starts/Ergebnisse archiviert | Lehrer, Handel und Bestand nach wiederholtem Laden bestanden |
 | 4 | NpcFieldRolesTest | Starts070/072 und Ergebnisse archiviert | Folgen/Warten, Feindschaft/Gilde, Flucht, Niederlage/Tod und Wiederbelebung bestanden; Waffenwahl-Ursache offen |
-| 5 | NpcQuestCallbacksTest | 071: NPC 05 Quest - START | Eigenes Journal, zwei automatische Ziele, Abgabe, einmalige Belohnung, Erfolg/Abbruch, Neustart |
+| 5 | NpcQuestCallbacksTest | Start071 und Ergebnisse archiviert | Bestanden: eigenes Journal, zwei automatische Ziele, Abgabe, einmalige Belohnung, Erfolg/Abbruch und Neustarts |
 
 ## 1. Koepfe
 
@@ -138,16 +141,21 @@ den Flucht-Nachtest bestaetigt; die Ursache der Waffenwahl bleibt separat offen.
 
 ## 5. Quest
 
-071 laden, bei A **Q1 Auftrag: Proviant fuer die Wache** waehlen.
-Die [deutsche Questliste](quest/FIELD-TEST.md) prueft Q1–Q7 einschliesslich Neustarts im
-Zwischenstand sowie auf Erfolgs- und Abbruchpfad. Die Belohnung sind einmalig
-25 Erz fuer zwei Kaese. Q3 liefert den Testvorrat genau einmal.
+**Die gesamte [deutsche Questliste](quest/FIELD-TEST.md) ist bestanden.**
+Der Nutzer bestaetigt Q1–Q7 einschliesslich Neustarts im Zwischenstand sowie auf
+Erfolgs- und Abbruchpfad. Die Belohnung sind einmalig25 Erz fuer zwei Kaese;
+Q3 liefert den Testvorrat genau einmal. Siehe [Ergebnis](quest/runtime-0.1.2.json).
+Zur spaeteren Reproduktion zuerst den archivierten Start071 wiederherstellen.
+Die separaten [offenen Punkte](../../../docs/guide/npc-open-items.md) bleiben
+dokumentiert, insbesondere Waffenwahl, spaete Haendlerbestandsvergabe und
+die noch nicht eindeutig eingeordneten Sprachbeobachtungen.
 
 ## Profil 4 und Rueckmeldungen
 
-Aktuell bleibt **nur071** fuer Paket5 im Spiel. Die abgeschlossenen
-Feld-Starts070/072 und `rolle-flucht-v4` sind extern gesichert:
-[letzte Bereinigung](profile-cleanup-after-field-complete.json).
+Nach Abschluss von Paket5 sind auch die Queststaende samt Start071 extern
+gesichert und aus Profil4 entfernt: [letzte Bereinigung](profile-cleanup-after-quest-complete.json).
+Die zuvor abgeschlossenen Feld-Starts070/072 und `rolle-flucht-v4` bleiben
+[extern gesichert](profile-cleanup-after-field-complete.json).
 Die folgenden Zahlen beschreiben fruehere Bereinigungen.
 
 Nach dem bestandenen Kopf-/Barttest wurden auf Wunsch des Benutzers weitere

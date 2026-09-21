@@ -1,6 +1,6 @@
 # NPC modding: open work
 
-Updated 2026-09-12. The user sets this order: **heads, objects, voice triggers,
+Updated 2026-09-21. The user sets this order: **heads, objects, voice triggers,
 NPC roles**. Game tests are performed by the user. Complete each focused change,
 then batch offline checks and provide a short game checklist. An untested behavior
 is not automatically a missing CLI capability.
@@ -188,7 +188,8 @@ The0.1.3 correction uses native `OnWorldStart` initial stock without a manual ev
 call. The [0.1.3 result](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.3.json)
 passes both loads with unchanged traded stock and Hero inventory. Completed
 starts/results are archived outside the game. After the field campaign,
-Profile4 retains only071 for the quest tests.
+Profile4 retained only071 for the subsequent quest tests; that campaign has
+now also passed and its completed saves are archived externally.
 The earlier NPC-container readback was not shop-stock proof.
 
 - [x] Trader with actual stock and working buying/selling/cancel, tested0.1.2.
@@ -228,10 +229,12 @@ These are focused role tests still to perform, not claims that the corresponding
 engine features or script paths are absent. `npc new --trader` currently creates
 an empty trader configuration; it does not by itself qualify a working shop.
 
-## 5. Quest completion beyond the basic session fixture — current test
+## 5. Quest completion beyond the basic session fixture — tested campaign passed
 
-NpcQuestCallbacksTest0.1.2 is the current test package, using Profile4 slot071
-at noon. Follow the [German quest checklist](../../scripts/fixtures/npc-batch-tests/quest/FIELD-TEST.md).
+On2026-09-21 the user confirms all seven steps of NpcQuestCallbacksTest0.1.2
+passed, starting from Profile4 slot071 at noon. See the
+[runtime result](../../scripts/fixtures/npc-batch-tests/quest/runtime-0.1.2.json)
+and [completed German checklist](../../scripts/fixtures/npc-batch-tests/quest/FIELD-TEST.md).
 The package was rebuilt for Steam hotfix 25168047 after rebasing onto the current
 main decompiler. Its quest sources and start save are unchanged; the new game's
 unselected modules are preserved. See the
@@ -239,7 +242,8 @@ unselected modules are preserved. See the
 In0.1.0 A had no dialogue menu. All29 authored events were incorrectly registered
 as ordinary callables;0.1.1 fixes dialog, quest and document event bindings and
 const predicate signatures. Generator v6 and revision3 generator v5 now emit the
-correct native overrides too. Runtime progression remains unverified;
+correct native overrides too. The corrected fixture's runtime progression is
+now confirmed; the earlier failure remains documented:
 [failure and diagnosis](../../scripts/fixtures/npc-batch-tests/quest/runtime-0.1.0.json).
 
 The [session campaign](../../scripts/fixtures/npc-session/RESULTS.md) passed
@@ -247,19 +251,18 @@ quest acceptance, active/completed journal presence, direct start/success calls,
 stage-dependent dialogue and persistence across save/load and full restart.
 It did not qualify every generated quest transition or a finished quest journal.
 
-- [ ] Own questlog document and complete authored journal presentation. The
-  session fixture retained `<GORE_TEST_A>` and unrelated vanilla letter text.
-- [ ] Multiple objectives and automatic progression callbacks. The draft quest
-  generator can emit subobjectives and availability/start/success/failure logic,
-  but marks that broader generated behavior runtime-unqualified. The successful
-  fixture invoked StartQuest/SucceedQuest directly from dialogue.
-- [ ] Item hand-in and exactly-once quest rewards. A separately tested dialogue
-  ore grant does not establish the complete quest reward workflow.
-- [ ] Alternate branches and failure outcomes, with reload/restart checks at
-  intermediate and terminal stages.
+- [x] Own questlog document, objective text and authored journal paragraphs,
+  without the unrelated vanilla letter from the earlier session fixture.
+- [x] Two objectives with automatic start/success/failure callbacks and
+  progression from agreement to delivery.
+- [x] Exactly two cheese handed in for exactly25 ore once; the supply option
+  and reward remain single-use after reload/restart and repeated dialogue.
+- [x] Success and cancellation branches, with full restarts at intermediate
+  and terminal stages. Cancellation grants no reward and consumes no items.
 
-One focused quest with two objectives, item hand-in, a reward, an alternate
-outcome and dedicated journal text can cover those related cases together.
+This qualifies the tested handwritten two-objective quest on Steam25168047.
+It does not establish every generated quest graph, arbitrary branching or all
+game versions; broader generated behavior retains its separate qualification.
 
 ## Dialog and voice boundaries
 

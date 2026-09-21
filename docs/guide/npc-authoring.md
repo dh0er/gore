@@ -599,6 +599,21 @@ to A and targets Hero; startup code does not recreate it. The
 [results](../../scripts/fixtures/npc-session/RESULTS.md) distinguish user
 observations from save inspection and retain artifact and evidence hashes.
 
+### Authored quest with automatic progression
+
+The user completed every step of [NpcQuestCallbacksTest0.1.2](../../scripts/fixtures/npc-batch-tests/quest/README.md)
+on2026-09-21, Steam build25168047. The quest has its own journal document and
+two objectives. Native callbacks advance from agreement to delivery, consume
+exactly two cheese and award25 ore once. Repeated final dialogue grants nothing
+further. The alternate cancellation path consumes nothing and grants no reward.
+Intermediate, successful and failed states survive the requested full restarts.
+See the [runtime result](../../scripts/fixtures/npc-batch-tests/quest/runtime-0.1.2.json).
+
+This extends the earlier direct-start/direct-success session evidence to this
+handwritten callback-driven quest. It does not qualify every generated quest
+graph or arbitrary branching. Completed start and result saves are archived
+outside the game's save list for later reproduction.
+
 ### Voice on an invented identity
 
 The [voice campaign](../../scripts/fixtures/npc-voice/RESULTS.md) passed on

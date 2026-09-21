@@ -1,6 +1,22 @@
 # Quest: Proviant fuer die Wache
 
-**Aktuelle deutsche Spielanleitung: [Paket 5 testen](FIELD-TEST.md).**
+**All seven game-test steps passed, confirmed by the user on2026-09-21.**
+See the [runtime result](runtime-0.1.2.json) and the
+[completed German checklist](FIELD-TEST.md). Start and result saves are
+[archived outside the game](../profile-cleanup-after-quest-complete.json).
+
+Save inspection corroborates the reported result:
+
+| Checkpoint | Root / agreement / delivery | Hero cheese / ore |
+|---|---|---|
+| 022 `quest-absprache` | Running / Running / Available | 0 / 0 |
+| 025 `quest-lieferung` | Running / Succeeded / Running | 2 / 0 |
+| 026 / 027 success and restart | Succeeded / Succeeded / Succeeded | 0 / 25 |
+| 029 / 030 cancellation and restart | Failed / Succeeded / Failed | 2 / 0 |
+
+A gains exactly two cheese on success. Both terminal pairs retain the same
+quest states, knowledge and item totals. Full process restarts and visible
+journal/menu behavior are confirmed by the user; save files alone do not prove them.
 
 Version 0.1.2 rebuilds the unchanged corrected quest for Steam hotfix 25168047
 after rebasing onto main `24e072595`. The new pristine cache and current
@@ -8,7 +24,8 @@ decompiler are used; the hotfix's crime-AI change stays intact. Native additions
 retain their exact generation guards with a separately
 [qualified hotfix snapshot](native-api-25168047-qualification.json).
 See [the hotfix deployment](hotfix-0.1.2.json). Slot 071 and the seven test steps
-are unchanged; quest runtime progression still awaits the user's test.
+were unchanged. The user confirms the journal, both objectives, one-time supply
+and reward, success/cancellation paths and all requested full restarts.
 
 Version0.1.0 did not open A's dialogue menu in the user's game. Live-cache
 inspection found all29 new dialog/quest/document methods registered as ordinary
@@ -30,7 +47,8 @@ module. Every original A class, helper, field and default remains available for
 references in existing saves, including `UQuest_GORE_NPC_SESSION`. Only the
 29 original choice visibility methods return false, hiding the old menu. B and C
 are unchanged.
-Load this bundle by itself, using **Profil 4, Slot 071, NPC 05 Quest - START**,
+For later reproduction, restore the archived start and load this bundle by
+itself, using **Profil 4, Slot 071, NPC 05 Quest - START**,
 where A exists and this quest has not been accepted. Its journal title,
 description, objective titles and four journal paragraphs are authored here;
 they do not reference a vanilla letter or a vanilla localization row.

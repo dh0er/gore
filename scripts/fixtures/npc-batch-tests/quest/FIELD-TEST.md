@@ -1,12 +1,13 @@
 # Paket 5: Proviant fuer die Wache
 
-**Aktueller Stand: 0.1.2, fuer Steam-Hotfix 25168047 neu gebaut.**
-Questinhalt und Testfolge entsprechen dem korrigierten Stand 0.1.1.
-In0.1.0 waren die neuen Ereignisse nicht korrekt
-an das Spiel gebunden; dadurch blieb As Menue aus. Der neue Stand korrigiert
-Dialog-, Quest- und Journal-Callbacks gemeinsam. Bitte wieder bei Schritt1 beginnen.
+**Abgeschlossen: Alle sieben Schritte wurden am 2026-09-21 vom Benutzer
+mit Version0.1.2 auf Steam-Hotfix25168047 als bestanden bestaetigt.**
+Siehe [Ergebnisbericht](runtime-0.1.2.json). Die Liste bleibt zur Reproduktion
+erhalten; sie muss jetzt nicht nochmals getestet werden.
+Der Startstand und die Ergebnisse liegen [im externen Archiv](../profile-cleanup-after-quest-complete.json).
 
-**Profil 4, 071 „NPC 05 Quest - START“ laden.** Der Start ist auf Mittag
+Fuer einen spaeteren Nachtest zuerst den archivierten Startstand wiederherstellen
+und das passende Paket aktivieren. Dann **Profil4, 071 „NPC 05 Quest - START“ laden.** Der Start ist auf Mittag
 gestellt. **Proviantmeister A steht direkt vor dir.**
 **Q1 bis Q7 sind die Beschriftungen der Gespraechsoptionen bei A, keine
 Questnummern. Es geht um eine einzige Quest: „Proviant fuer die Wache“.**
