@@ -7,8 +7,13 @@ an das Spiel gebunden; dadurch blieb As Menue aus. Der neue Stand korrigiert
 Dialog-, Quest- und Journal-Callbacks gemeinsam. Bitte wieder bei Schritt1 beginnen.
 
 **Profil 4, 071 „NPC 05 Quest - START“ laden.** Der Start ist auf Mittag
-gestellt. **Proviantmeister A steht direkt vor dir.** Mit ihm sprechen;
-die Optionen beginnen mit Q1 bis Q7.
+gestellt. **Proviantmeister A steht direkt vor dir.**
+**Q1 bis Q7 sind die Beschriftungen der Gespraechsoptionen bei A, keine
+Questnummern. Es geht um eine einzige Quest: „Proviant fuer die Wache“.**
+Welche Gespraechsoptionen A anbietet, aendert sich mit deinem Fortschritt.
+„Q2 erscheint“ bedeutet: Beim erneuten Ansprechen von A ist die Zeile
+„Q2 Abgemacht: zwei Kaese fuer 25 Erz“ im Dialogmenue waehlbar.
+Du musst sie dazu noch nicht ausgewaehlt haben.
 Es ist kein neuer Aufbau erforderlich. Alle folgenden Ergebnisstaende unter
 neuem Namen speichern; besonders `quest-lieferung` fuer den zweiten Zweig behalten.
 
@@ -16,35 +21,48 @@ Nach jeder Auswahl den Dialog schliessen lassen und einige Sekunden warten,
 bevor du Journal oder Menue pruefst. Bei einem Fehler an dieser Stelle stoppen
 und den Befund melden; den Fortschritt nicht erzwingen.
 
-1. **Q1 Auftrag: Proviant fuer die Wache.** Im aktiven Journal sollen der eigene
+1. A ansprechen und **Q1 Auftrag: Proviant fuer die Wache** waehlen.
+   Damit nimmst du die eine Quest an. Im aktiven Journal sollen der eigene
    Titel, die zugesagten **25 Erz** und das Ziel **„Sprich die Lieferung mit dem
-   Proviantmeister ab“** stehen. Kein fremder Brieftext. Q1 verschwindet, Q2
-   erscheint. Als **`quest-absprache`** speichern.
+   Proviantmeister ab“** stehen. Kein fremder Brieftext.
+   **A erneut ansprechen:** Die Gespraechsoption Q1 darf nicht mehr angeboten
+   werden; stattdessen soll die Gespraechsoption Q2 waehlbar sein.
+   **Q2 jetzt noch nicht waehlen.** Das Gespraech verlassen und als
+   **`quest-absprache`** speichern.
 2. Spiel vollstaendig beenden, neu starten und **`quest-absprache`** laden.
-   Journal und Q2 muessen erhalten sein. **Q2 Abgemacht: zwei Kaese fuer 25 Erz**
-   waehlen. Das erste Ziel wird automatisch erledigt; **„Gib dem Proviantmeister
+   Im Journal muss weiterhin dieselbe angenommene Quest stehen.
+   **A erneut ansprechen:** Er muss weiterhin die noch nicht gewaehlte
+   Gespraechsoption **Q2 Abgemacht: zwei Kaese fuer 25 Erz** anbieten.
+   **Jetzt Q2 waehlen.** Das erste Ziel wird automatisch erledigt; **„Gib dem Proviantmeister
    zwei Kaese“** beginnt. Der Journaleintrag **„Die Lieferung ist abgesprochen“**
    kommt hinzu.
-3. **Q3 Testvorrat: zwei Kaese nehmen (einmalig).** Der Held bekommt genau
-   **zwei Kaese**, kein Erz. Q3 verschwindet. Kaese- und Erzmenge notieren und
+3. A erneut ansprechen und **Q3 Testvorrat: zwei Kaese nehmen (einmalig)** waehlen.
+   Der Held bekommt genau **zwei Kaese**, kein Erz. Beim naechsten Ansprechen
+   darf A die Gespraechsoption Q3 nicht mehr anbieten. Kaese- und Erzmenge notieren und
    als **`quest-lieferung`** speichern. Diesen Stand nicht ueberschreiben.
 4. Spiel vollstaendig beenden, neu starten und **`quest-lieferung`** laden.
-   Mengen unveraendert, zweites Ziel aktiv, Q3 weiterhin weg.
+   Mengen unveraendert, zweites Ziel aktiv. A ansprechen: Die Gespraechsoption
+   Q3 darf weiterhin nicht angeboten werden. Im Dialog
    **Q4 Hier sind die zwei Kaese** waehlen: genau **zwei Kaese weniger und
    25 Erz mehr** beim Helden. Beide Ziele und die Quest werden automatisch
-   abgeschlossen; ein passender Abschlussabsatz erscheint. Q4/Q5 verschwinden,
-   Q6 erscheint. Als **`quest-erfolg`** speichern.
-5. **Q6 Die Lieferung ist bezahlt. Danke.** mehrmals waehlen: keine weiteren
+   abgeschlossen; ein passender Abschlussabsatz erscheint. A erneut ansprechen:
+   Die Gespraechsoptionen Q4/Q5 sind weg, Q6 ist waehlbar.
+   Gespraech verlassen und als **`quest-erfolg`** speichern.
+5. A wiederholt ansprechen und **Q6 Die Lieferung ist bezahlt. Danke.**
+   mehrmals waehlen: keine weiteren
    Gegenstaende oder Erz. Spiel vollstaendig beenden, neu starten und
    **`quest-erfolg`** laden. Abschluss, Journal und Mengen bleiben erhalten;
-   Q6 nochmals probieren. Als **`quest-erfolg-neustart`** speichern.
+   A ansprechen und die Gespraechsoption Q6 nochmals probieren.
+   Als **`quest-erfolg-neustart`** speichern.
 6. Jetzt den behaltenen Zwischenstand **`quest-lieferung`** laden.
-   **Q5 Ich sage die Lieferung ab (Auftrag scheitert)** waehlen. Quest und
+   A ansprechen und **Q5 Ich sage die Lieferung ab (Auftrag scheitert)** waehlen. Quest und
    zweites Ziel scheitern; das erste Ziel bleibt erledigt. Ein Abbruchabsatz
    erscheint. Keine Abgabe, keine Belohnung: Mengen wie in Schritt 3.
-   Q3/Q4/Q5 verschwinden, Q7 erscheint. Als **`quest-abbruch`** speichern.
+   A erneut ansprechen: Die Gespraechsoptionen Q3/Q4/Q5 sind weg, Q7 ist
+   waehlbar. Gespraech verlassen und als **`quest-abbruch`** speichern.
 7. Spiel vollstaendig beenden, neu starten und **`quest-abbruch`** laden.
-   Gescheiterte Quest, Journal, Q7 und Mengen bleiben erhalten. Q7 waehlen:
+   Gescheiterte Quest, Journal und Mengen bleiben erhalten.
+   A ansprechen: Die Gespraechsoption Q7 ist weiterhin waehlbar. Q7 waehlen:
    weiterhin keine Abgabe oder Belohnung. Als **`quest-abbruch-neustart`** speichern.
 
 Bitte Abweichungen und die Ergebnisse melden. Die Slots leite ich aus den

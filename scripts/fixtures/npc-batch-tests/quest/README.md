@@ -42,6 +42,11 @@ payload; its technical identity remains `GORE_TEST_A`.
 
 ## Game campaign
 
+Q1 through Q7 label dialogue choices offered by A, not separate quests.
+There is one quest, **Proviant fuer die Wache**. To check whether a choice
+appears or disappears, talk to A again after the previous conversation ends.
+An available choice has not necessarily been selected yet.
+
 Use free save slots. Keep the starting save and every named checkpoint below.
 After each choice, let the conversation close and wait a few seconds for the
 quest system before checking the journal or opening A's menu again. If a stage
@@ -50,9 +55,13 @@ does not advance, record that result; do not use a console to force completion.
 1. Talk to A and select **Q1 Auftrag: Proviant fuer die Wache**. The active
    journal must show that title, the promised **25 Erz**, and objective
    **Sprich die Lieferung mit dem Proviantmeister ab**. There must be no unrelated
-   vanilla letter. Q1 must disappear and Q2 must appear. Save `quest-absprache`.
+   vanilla letter. Talk to A again: the Q1 dialogue choice must disappear and
+   Q2 must be available. Do not select Q2 yet; leave the conversation and save
+   `quest-absprache`.
 2. Exit the game completely, restart and load `quest-absprache`. The active
-   journal and Q2 must persist. Select **Q2 Abgemacht: zwei Kaese fuer 25 Erz**.
+   journal must still show the accepted quest. Talk to A: the as-yet-unselected
+   Q2 dialogue choice must still be available. Now select
+   **Q2 Abgemacht: zwei Kaese fuer 25 Erz**.
    The first objective must succeed automatically, the second objective
    **Gib dem Proviantmeister zwei Kaese** must start, and the journal must gain
    the paragraph beginning **Die Lieferung ist abgesprochen**.
