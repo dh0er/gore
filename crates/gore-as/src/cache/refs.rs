@@ -925,8 +925,8 @@ impl RefResolver {
     /// exact (member-load type-id -> owner, member) pair observed at enum stores/argument pushes.
     /// The Binds field-type table (when loaded, dev runs) extends coverage as a fallback.
     pub fn native_field_type(&self, class: &str, field: &str) -> Option<&str> {
-        // Keep authored-default rendering on the same sealed evidence that admitted mutation.
-        // Unqualified generations still fall through to the read-only sources below.
+        // Prefer exact cache/Binds evidence for authored-default rendering. This read-only
+        // witness may exist before the separate mutation and ancestry gates are admitted.
         if let Some(verified) = self.verified_source_cache_native_default_field_type(class, field) {
             return Some(verified);
         }
@@ -1213,7 +1213,11 @@ impl RefResolver {
     ) -> Option<&str> {
         self.script_cache_guid
             .as_ref()
-            .and_then(|guid| self.verified_native_default_field_type(guid, class, field))
+            .and_then(|guid| {
+                self.native
+                    .as_ref()
+                    .and_then(|native| native.emittable_default_field_type(guid, class, field))
+            })
     }
     /// batch-32d: CONST object-handle fields of NATIVE structs — the live compiler treats a
     /// read of these as `const U*`, so a plain store into a same-typed local fails "Can't

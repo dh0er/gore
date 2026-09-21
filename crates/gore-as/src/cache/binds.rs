@@ -62,6 +62,11 @@ fn is_verified_default_pairing(
         .is_some_and(|row| row.binds_cache.sha256 == *loaded)
 }
 
+const HOTFIX_25168047_GUID: [u8; 16] = [
+    0xcc, 0x07, 0x2d, 0x82, 0x36, 0x7a, 0xd3, 0x4b, 0xbf, 0x51, 0x11, 0x75, 0x46, 0xa8,
+    0xc7, 0xce,
+];
+
 type VerifiedDefaultClassProfileDigests = ([u8; 32], [u8; 32]);
 
 /// Native AngelScript method/function arities extracted from `Binds.Cache`.
@@ -273,6 +278,33 @@ impl NativeApi {
             && class == "UGameplayAbilityUnControl"
             && field == "m_CameraTravelInitialDelay")
             .then_some("float32")
+    }
+
+    /// Read-only source evidence for the 25168047 cache, which shipped the identical audited
+    /// Binds file. This does not extend the mutation gate in `verified_default_field_type`.
+    pub(crate) fn emittable_default_field_type(
+        &self,
+        script_cache_guid: &[u8; 16],
+        class: &str,
+        field: &str,
+    ) -> Option<&str> {
+        if let Some(known) = self.verified_default_field_type(script_cache_guid, class, field) {
+            return Some(known);
+        }
+        if script_cache_guid != &HOTFIX_25168047_GUID
+            || self.verified_default_binds_sha256.as_ref()
+                != Some(&gore_generation::ROW_G1R_24878692.binds_cache.sha256)
+        {
+            return None;
+        }
+        self.verified_default_field_types
+            .get(&(class.to_string(), field.to_string()))
+            .map(String::as_str)
+            .or_else(|| {
+                (class == "UGameplayAbilityUnControl"
+                    && field == "m_CameraTravelInitialDelay")
+                    .then_some("float32")
+            })
     }
 
     /// Sealed AngelScript type-to-Unreal path map for native default ancestry. The full map is
@@ -1049,6 +1081,49 @@ mod tests {
         std::env::var_os("GORE_AS_BINDS")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_REAL_BINDS))
+    }
+
+    #[test]
+    fn hotfix_default_types_are_read_only_and_require_the_exact_binds() {
+        let mut api = NativeApi::from_test_arities(&[], &[]);
+        api.verified_default_binds_sha256 =
+            Some(gore_generation::ROW_G1R_24878692.binds_cache.sha256);
+        api.verified_default_field_types.insert(
+            ("UQuest".to_owned(), "ParentQuestClass".to_owned()),
+            "TSubclassOf<UQuest>".to_owned(),
+        );
+
+        assert_eq!(
+            api.emittable_default_field_type(&HOTFIX_25168047_GUID, "UQuest", "ParentQuestClass"),
+            Some("TSubclassOf<UQuest>")
+        );
+        assert_eq!(
+            api.emittable_default_field_type(
+                &HOTFIX_25168047_GUID,
+                "UGameplayAbilityUnControl",
+                "m_CameraTravelInitialDelay"
+            ),
+            Some("float32")
+        );
+        assert_eq!(
+            api.verified_default_field_type(
+                &HOTFIX_25168047_GUID,
+                "UGameplayAbilityUnControl",
+                "m_CameraTravelInitialDelay"
+            ),
+            None,
+            "read-only emission must not grant mutation evidence"
+        );
+
+        api.verified_default_binds_sha256 = Some([0; 32]);
+        assert_eq!(
+            api.emittable_default_field_type(
+                &HOTFIX_25168047_GUID,
+                "UGameplayAbilityUnControl",
+                "m_CameraTravelInitialDelay"
+            ),
+            None
+        );
     }
 
     #[test]
