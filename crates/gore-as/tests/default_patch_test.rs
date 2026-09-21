@@ -810,7 +810,7 @@ struct DefaultCensus {
 
 /// One entry per row of `gore_generation::rows()`;
 /// `every_audited_generation_has_a_recorded_default_census` is what keeps that true.
-static DEFAULT_CENSUS: [DefaultCensus; 4] = [
+static DEFAULT_CENSUS: [DefaultCensus; 5] = [
     DefaultCensus {
         generation: "g1r-steam-1.0.3",
         bridged_classes: 6_572,
@@ -862,6 +862,19 @@ static DEFAULT_CENSUS: [DefaultCensus; 4] = [
     // fields across the unchanged 6,582-class bridge.
     DefaultCensus {
         generation: "g1r-steam-24878692",
+        bridged_classes: 6_582,
+        init_functions: 30_013,
+        plain_initializers: 3_255,
+        ufunction_initializers: 26_758,
+        branched_init_functions: 1,
+        unresolved_fields: 5_209,
+        unresolved_types: 1,
+        ambiguous_fields: 1,
+    },
+    // The hotfix adds one ordinary AI-state function and changes no initializer shape or scalar
+    // default window. The configured cache golden measures these values against its sealed cache.
+    DefaultCensus {
+        generation: "g1r-steam-25168047",
         bridged_classes: 6_582,
         init_functions: 30_013,
         plain_initializers: 3_255,

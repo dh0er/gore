@@ -343,7 +343,7 @@ Output directories must not exist and are never placed in the game tree.
 | `decompile <FILE> [NEEDLE]` | `--max <N>` (default 20) |
 | `disasm <FILE> [NEEDLE]` | `--max <N>` (default 20) |
 | `emit <FILE> [NEEDLE]` | `--max <N>` (default 5) · `--no-defaults` (omit class `default` statements) |
-| `emit-all <FILE> <OUTDIR>` | `--no-defaults` (omit class `default` statements); every module, mirroring `ScriptRelativeFilename` |
+| `emit-all <FILE> <OUTDIR>` | `--no-defaults` (omit class `default` statements) · repeatable `--skip <MODULE>` (leave named modules out of a prepared tree); every other module mirrors `ScriptRelativeFilename` |
 | `static-names <FILE> [INDICES]...` | no indices → count + first 10 |
 | `default-sites <CACHE>` | `--module` · `--class` · `--field` · `--json` |
 | `patch-default <CACHE>` | `--selector <JSON>` · `--expected-hex` · `--replacement-hex` · `-o, --out` · `--json` |

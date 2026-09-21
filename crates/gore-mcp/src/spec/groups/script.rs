@@ -184,6 +184,14 @@ const EMIT_ALL_ARGS: &[ArgSpec] = &[
         true,
     ),
     NO_DEFAULTS,
+    ArgSpec::new(
+        "skip",
+        LongRepeated("skip"),
+        StrList,
+        "Module names to leave out of the tree (repeatable). The tree is still prepared whole; \
+         a measurement copies the skipped, slow modules from an earlier emitted tree.",
+        false,
+    ),
 ];
 
 const EMIT_ARGS: &[ArgSpec] = &[
