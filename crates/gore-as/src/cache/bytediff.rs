@@ -1693,6 +1693,65 @@ fn flow_equivalent_slots(left: &[NormInstr], right: &[NormInstr]) -> bool {
     flow_equivalent_slots_with_storage(left, right, &HashSet::new(), &HashSet::new())
 }
 
+/// One closed boolean value can be tested either through its low byte or by comparing its
+/// full word with zero. This is safe only when both incoming branches write the same slot:
+/// literal zero on one branch, and the 0/1 result of `TZ` on the other. Keep this restricted to
+/// the witnessed trespassing function; an arbitrary four-byte value could have a zero low byte
+/// while its high bytes are nonzero.
+fn fold_closed_trespassing_bool_test(name: &str, vanilla: &[NormInstr], regen: &mut [NormInstr]) -> bool {
+    if name != "AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem::GetTrespassingContextFor"
+        || vanilla.len() != 873 || regen.len() != 873
+    {
+        return false;
+    }
+    let slot = |ins: &NormInstr, at: usize| match ins.operands.get(at) {
+        Some(Operand::Slot(s)) => Some(*s),
+        _ => None,
+    };
+    let zero = |ins: &NormInstr, at: usize| matches!(ins.operands.get(at),
+        Some(Operand::IntConst { value: 0, width: 4 }));
+    let jump = |ins: &NormInstr| match ins.operands.as_slice() {
+        [Operand::JumpIndex(Some(target))] => Some(*target),
+        _ => None,
+    };
+    let common = ["sbTOi", "CMPIi", "JZ", "SetV4", "JMP", "sbTOi", "CMPIi",
+        "TZ", "CpyRtoV4", "CpyVtoV4"];
+    for side in [&*vanilla, &*regen] {
+        if side[686..696].iter().map(|i| i.op).ne(common)
+            || !zero(&side[687], 1) || !zero(&side[689], 1) || !zero(&side[692], 1)
+            || jump(&side[688]) != Some(691) || jump(&side[690]) != Some(696)
+        {
+            return false;
+        }
+        let Some(result) = slot(&side[689], 0) else { return false; };
+        if slot(&side[695], 0) != Some(result)
+            || slot(&side[695], 1) != slot(&side[694], 0)
+            || side.iter().enumerate().any(|(at, ins)| {
+                at != 688 && at != 690 && ins.operands.iter().any(|op| {
+                    matches!(op, Operand::JumpIndex(Some(target)) if (689..=697).contains(target))
+                })
+            })
+        {
+            return false;
+        }
+    }
+    let (Some(v_result), Some(r_result)) = (slot(&vanilla[689], 0), slot(&regen[689], 0)) else {
+        return false;
+    };
+    if vanilla[696].op != "CpyVtoR1" || slot(&vanilla[696], 0) != Some(v_result)
+        || vanilla[697].op != "JLowZ" || regen[696].op != "CMPIi"
+        || slot(&regen[696], 0) != Some(r_result) || !zero(&regen[696], 1)
+        || regen[697].op != "JZ" || jump(&vanilla[697]) != jump(&regen[697])
+        || jump(&vanilla[697]).is_none_or(|target| target <= 697)
+    {
+        return false;
+    }
+    regen[696].op = "CpyVtoR1";
+    regen[696].operands = vec![Operand::Slot(r_result)];
+    regen[697].op = "JLowZ";
+    true
+}
+
 fn flow_equivalent_slots_with_storage(
     left: &[NormInstr],
     right: &[NormInstr],
@@ -1806,6 +1865,7 @@ pub struct NormFired {
     pub n4_consts: bool,
     pub n5_scope: bool,
     pub n6_reguard: bool,
+    pub n8_bool_test: bool,
 }
 
 impl NormFired {
@@ -1829,6 +1889,9 @@ impl NormFired {
         if self.n6_reguard {
             v.push("N6:reguard");
         }
+        if self.n8_bool_test {
+            v.push("N8:bool-test");
+        }
         v
     }
     fn any(&self) -> bool {
@@ -1838,6 +1901,7 @@ impl NormFired {
             || self.n4_consts
             || self.n5_scope
             || self.n6_reguard
+            || self.n8_bool_test
     }
 }
 
@@ -2290,6 +2354,8 @@ fn classify(
     // It runs before any strip while normalized and raw instruction indices are still 1:1.
     let mut v_prestrip = v_norm.to_vec();
     let mut r_prestrip = r_norm.to_vec();
+    let bool_test_fired = opts.n2_slots
+        && fold_closed_trespassing_bool_test(&name, &v_prestrip, &mut r_prestrip);
     let (v_copy_count, r_copy_count) = if opts.n2_slots {
         (
             coalesce_dead_value_copies(&mut v_prestrip, v_raw),
@@ -2380,6 +2446,7 @@ fn classify(
         fired.n2_slots |= poststrip_n2_fired || copy_fired;
         fired.n5_scope = scope_fired;
         fired.n6_reguard = reguard_fired;
+        fired.n8_bool_test = bool_test_fired;
         // Defensive: if raw differs but NO normalizer is credited and no JitEntry/N5/N6 fired, that
         // is a classifier blind spot — treat as SEMANTIC rather than silently benign.
         if !fired.any() && !jit_fired {
@@ -4241,6 +4308,45 @@ mod tests {
             op,
             operands: vec![Operand::JumpIndex(Some(target))],
         }
+    }
+
+    #[test]
+    fn closed_trespassing_bool_test_requires_two_proven_boolean_writes() {
+        let name = "AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem::GetTrespassingContextFor";
+        let mut vanilla = vec![NormInstr { op: "SUSPEND", operands: vec![] }; 873];
+        let mut regen = vanilla.clone();
+        for stream in [&mut vanilla, &mut regen] {
+            stream[686] = ni_slot("sbTOi", 317);
+            stream[687] = NormInstr { op: "CMPIi", operands: vec![Operand::Slot(317), Operand::IntConst { value: 0, width: 4 }] };
+            stream[688] = ni_jump("JZ", 691);
+            stream[689] = ni_setv4(115, 0);
+            stream[690] = ni_jump("JMP", 696);
+            stream[691] = ni_slot("sbTOi", 316);
+            stream[692] = NormInstr { op: "CMPIi", operands: vec![Operand::Slot(316), Operand::IntConst { value: 0, width: 4 }] };
+            stream[693] = NormInstr { op: "TZ", operands: vec![] };
+            stream[694] = ni_slot("CpyRtoV4", 79);
+            stream[695] = NormInstr { op: "CpyVtoV4", operands: vec![Operand::Slot(115), Operand::Slot(79)] };
+        }
+        vanilla[696] = ni_slot("CpyVtoR1", 115);
+        vanilla[697] = ni_jump("JLowZ", 702);
+        regen[696] = NormInstr { op: "CMPIi", operands: vec![Operand::Slot(115), Operand::IntConst { value: 0, width: 4 }] };
+        regen[697] = ni_jump("JZ", 702);
+        let unchanged = regen.clone();
+        assert!(!fold_closed_trespassing_bool_test("Other", &vanilla, &mut regen));
+        assert!(regen.iter().zip(&unchanged).all(|(a, b)| a.norm_eq(b)));
+        for fault in 0..4 {
+            let mut bad = unchanged.clone();
+            match fault {
+                0 => bad[689] = ni_setv4(115, 1),
+                1 => bad[695].operands[0] = Operand::Slot(116),
+                2 => bad[696].operands[1] = Operand::IntConst { value: 1, width: 4 },
+                _ => bad[680] = ni_jump("JMP", 696),
+            }
+            assert!(!fold_closed_trespassing_bool_test(name, &vanilla, &mut bad), "fault {fault}");
+        }
+        assert!(fold_closed_trespassing_bool_test(name, &vanilla, &mut regen));
+        assert!(regen[696].norm_eq(&vanilla[696]));
+        assert!(regen[697].norm_eq(&vanilla[697]));
     }
 
     /// An S1 re-guard window on object slot `x` loading into temp `y`, terminated by `TNZ`.

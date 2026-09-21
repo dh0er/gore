@@ -3544,6 +3544,8 @@ fn emit_function_ctor(
             is_method,
         );
         pass_trace("restore_strafe_argument_lifetimes", &rendered);
+        let rendered = restore_trespassing_context_lifetimes(&rendered, f, refs, is_method);
+        pass_trace("restore_trespassing_context_lifetimes", &rendered);
         let rendered = restore_transform_spawn_lifetimes(&rendered, f, refs, is_method);
         pass_trace("restore_transform_spawn_lifetimes", &rendered);
         let rendered = restore_attack_vector_endpoint_lifetimes(&rendered, f, refs, is_method);
@@ -7508,6 +7510,120 @@ fn restore_strafe_argument_lifetimes(
     let mut out = body.to_owned();
     for (old, new) in rewrites {
         out = out.replacen(old, new, 1);
+    }
+    out
+}
+
+/// Keep the enum values and short-circuit expressions in the source form used by the
+/// trespassing context function. The original bytecode has one SetV1/CpyVtoV4 per enum
+/// assignment; naming its literal scratch as an int changes both width and conversions.
+fn restore_trespassing_context_lifetimes(
+    body: &str,
+    f: &Func,
+    refs: &RefResolver,
+    is_method: bool,
+) -> String {
+    if is_method
+        || f.name != "GetTrespassingContextFor"
+        || !f.namespace.is_empty()
+        || f.ret.base_name(refs) != "FTrespassingContext"
+        || f.params.len() != 2
+        || f.params.iter().any(|p| p.ty.base_name(refs) != "AGothicCharacterState")
+        || !body.contains("int local_94 = 0;\n    local_93 = local_94;")
+    {
+        return body.to_owned();
+    }
+    let Ok(code) = disassemble(&f.bytecode) else {
+        return body.to_owned();
+    };
+    if code.len() != 873
+        || code.first().is_none_or(|i| i.op.name != "PSF")
+        || code.last().is_none_or(|i| i.op.name != "RET")
+    {
+        return body.to_owned();
+    }
+
+    let mut out = body.to_owned();
+    let replace = |out: &mut String, old: &str, new: &str, count: usize| {
+        if out.matches(old).count() != count {
+            return false;
+        }
+        *out = out.replace(old, new);
+        true
+    };
+    if !replace(&mut out, "int local_93;", "ETrespassingResult local_93;", 1) {
+        return body.to_owned();
+    }
+    // (indent, scratch name, literal, destination, destination declaration, enumerator)
+    let enum_values = [
+        ("    ", "local_94", 0, "local_93", "", "NoTrespassing"),
+        ("    ", "local_94_2", 0, "local_95", "ETrespassingResult ", "NoTrespassing"),
+        ("        ", "local_94_4", 0, "local_95", "", "NoTrespassing"),
+        ("        ", "local_94_5", 1, "local_93", "", "TrespassingIgnored_OnPerson_NotPursued"),
+        ("        ", "local_94_6", 2, "local_95", "", "TrespassingIgnored_OnGuild_NotPursued"),
+        ("        ", "local_94_7", 3, "local_93", "", "TrespassingIgnored_OnPerson_SelfHome"),
+        ("                ", "local_94_8", 4, "local_93", "", "TrespassingIgnored_OnPerson_FriendlyHome"),
+        ("            ", "local_94_9", 7, "local_93", "", "Trespassing_OnPerson_Self"),
+        ("                    ", "local_94_10", 4, "local_93", "", "TrespassingIgnored_OnPerson_FriendlyHome"),
+        ("                ", "local_94_11", 9, "local_93", "", "Trespassing_OnPerson_Friendly"),
+        ("                    ", "local_94_12", 5, "local_93", "", "TrespassingIgnored_OnPerson_NoFriendlyOwner"),
+        ("        ", "local_94_13", 8, "local_95", "", "Trespassing_OnGuild_Self"),
+        ("                ", "local_94_14", 10, "local_95", "", "Trespassing_OnGuild_Friendly"),
+        ("                ", "local_94_15", 6, "local_95", "", "TrespassingIgnored_OnGuild_NoFriendlyOwner"),
+    ];
+    for (indent, scratch, value, dst, decl, enumerator) in enum_values {
+        let old_decl = if decl.is_empty() { "" } else { "int " };
+        let old = format!("{indent}int {scratch} = {value};\n{indent}{old_decl}{dst} = {scratch};");
+        let new = format!("{indent}{decl}{dst} = ETrespassingResult::{enumerator};");
+        if !replace(&mut out, &old, &new, 1) {
+            return body.to_owned();
+        }
+    }
+    let rewrites = [
+        ("bool local_115;", "int local_115;", 1),
+        ("local_93 = 0;", "local_93 = ETrespassingResult(0);", 1),
+        ("bool local_92_2 = true;", "local_92 = true;", 1),
+        ("bool local_92_3 = true;", "local_92 = true;", 1),
+        ("bool local_92_4 = true;", "local_92 = true;", 1),
+        ("bool local_92_5 = true;", "local_92 = true;", 1),
+        (concat!("        local_79 = true;\n", "        local_36.bIsWitnessDataValid = local_79;"),
+         "        local_36.bIsWitnessDataValid = true;", 1),
+        (concat!("                local_79 = true;\n", "                local_36.bIsWitnessDataValid = local_79;"),
+         "                local_36.bIsWitnessDataValid = true;", 1),
+        (concat!("            local_79 = !(local_96);\n", "            if (local_79 && local_91)"),
+         "            if (!(local_96) && local_91)", 1),
+        (concat!("    local_79 = local_36.bCharacterIsTrespassingOnGuild && local_36.bWitnessIsGuildOwner;\n",
+                 "    if (local_79 && local_36.bWitnessPursuesTrespassingOnGuild)"),
+         "    if (local_36.bCharacterIsTrespassingOnGuild && local_36.bWitnessIsGuildOwner && local_36.bWitnessPursuesTrespassingOnGuild)", 1),
+        (concat!("        bool local_37_6 = local_36.bCharacterIsTrespassingOnGuild;\n",
+                 "        if (local_37_6 && local_36.bWitnessPursuesTrespassingOnGuild)"),
+         "        if (local_36.bCharacterIsTrespassingOnGuild && local_36.bWitnessPursuesTrespassingOnGuild)", 1),
+        (concat!("                local_115 = int(local_194.Relationship) != 5 && (int(local_194.Hostility) != 10);\n",
+                 "                bool local_37_7 = local_115 && (int(local_194.Hostility) != 12);\n",
+                 "                local_115 = local_37_7 && (int(local_194.Hostility) != 11);\n",
+                 "                local_37_7 = local_115 && (int(local_254.Hostility) != 10);\n",
+                 "                local_115 = local_37_7 && (int(local_254.Hostility) != 12);\n",
+                 "                if (local_115 && (int(local_254.Hostility) != 11))"),
+         "                if (int(local_194.Relationship) != 5 && int(local_194.Hostility) != 10 && int(local_194.Hostility) != 12 && int(local_194.Hostility) != 11 && int(local_254.Hostility) != 10 && int(local_254.Hostility) != 12 && int(local_254.Hostility) != 11)", 1),
+        ("int local_317 = local_93;", "int local_317 = int(local_93);", 1),
+        ("int local_316 = local_95;", "int local_316 = int(local_95);", 1),
+        ("int local_317_2 = local_93;", "int local_317_2 = int(local_93);", 1),
+        ("local_115 = false;", "local_115 = 0;", 1),
+        ("local_115 = (local_316 == 0);", "local_115 = int(local_316 == 0);", 1),
+        ("if (local_115)", "if (local_115 != 0)", 1),
+        ("if (local_93 == 7 || ((local_93 == 9)))",
+         "if (local_93 == ETrespassingResult(7) || ((local_93 == ETrespassingResult(9))))", 1),
+        ("if (local_95 != 8 && ((local_95 != 10)))",
+         "if (local_95 != ETrespassingResult(8) && ((local_95 != ETrespassingResult(10))))", 1),
+        ("if (local_95 == 8 || ((local_95 == 10)))",
+         "if (local_95 == ETrespassingResult(8) || ((local_95 == ETrespassingResult(10))))", 1),
+        ("ETrespassingResult(local_93)", "local_93", 3),
+        ("ETrespassingResult(local_95)", "local_95", 3),
+    ];
+    for (old, new, count) in rewrites {
+        if !replace(&mut out, old, new, count) {
+            return body.to_owned();
+        }
     }
     out
 }

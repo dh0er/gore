@@ -3806,7 +3806,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             eprintln!("B1 byte-faithful  : {b1:.2}%  (IDENTICAL+BENIGN / aligned)");
             // Per-normalizer fire counts across BENIGN functions.
             let (mut c1, mut c2, mut c3, mut c4) = (0usize, 0usize, 0usize, 0usize);
-            let (mut c5, mut c6) = (0usize, 0usize);
+            let (mut c5, mut c6, mut c8) = (0usize, 0usize, 0usize);
             for d in &report.diffs {
                 if d.verdict == Verdict::Benign {
                     c1 += d.fired.n1_refs as usize;
@@ -3815,10 +3815,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     c4 += d.fired.n4_consts as usize;
                     c5 += d.fired.n5_scope as usize;
                     c6 += d.fired.n6_reguard as usize;
+                    c8 += d.fired.n8_bool_test as usize;
                 }
             }
             eprintln!(
-                "normalizer fires  : N1:refs={c1} N2:slots={c2} N3:jumps={c3} N4:consts={c4} N5:scope={c5} N6:reguard={c6}"
+                "normalizer fires  : N1:refs={c1} N2:slots={c2} N3:jumps={c3} N4:consts={c4} N5:scope={c5} N6:reguard={c6} N8:bool-test={c8}"
             );
 
             if let Some(jpath) = &json {
@@ -3843,7 +3844,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 }
                 sem_list.push(']');
                 let json_out = format!(
-                    "{{\n  \"aligned\": {aligned},\n  \"identical\": {n_ident},\n  \"benign\": {n_benign},\n  \"semantic\": {n_sem},\n  \"b1_byte_faithful_pct\": {b1:.4},\n  \"only_in_vanilla_modules\": {},\n  \"only_in_regen_modules\": {},\n  \"only_in_vanilla_funcs\": {},\n  \"only_in_regen_funcs\": {},\n  \"normalizer_fires\": {{\"n1_refs\": {c1}, \"n2_slots\": {c2}, \"n3_jumps\": {c3}, \"n4_consts\": {c4}, \"n5_scope\": {c5}, \"n6_reguard\": {c6}}},\n  \"semantic_list\": {sem_list}\n}}\n",
+                    "{{\n  \"aligned\": {aligned},\n  \"identical\": {n_ident},\n  \"benign\": {n_benign},\n  \"semantic\": {n_sem},\n  \"b1_byte_faithful_pct\": {b1:.4},\n  \"only_in_vanilla_modules\": {},\n  \"only_in_regen_modules\": {},\n  \"only_in_vanilla_funcs\": {},\n  \"only_in_regen_funcs\": {},\n  \"normalizer_fires\": {{\"n1_refs\": {c1}, \"n2_slots\": {c2}, \"n3_jumps\": {c3}, \"n4_consts\": {c4}, \"n5_scope\": {c5}, \"n6_reguard\": {c6}, \"n8_bool_test\": {c8}}},\n  \"semantic_list\": {sem_list}\n}}\n",
                     report.only_in_vanilla_modules.len(),
                     report.only_in_regen_modules.len(),
                     report.only_in_vanilla_funcs.len(),
