@@ -3528,6 +3528,14 @@ fn emit_function_ctor(
             is_method,
         );
         pass_trace("restore_fear_tick_value_lifetimes", &rendered);
+        let rendered = restore_visual_logger_argument_lifetimes(
+            &rendered,
+            f,
+            refs,
+            class_name,
+            is_method,
+        );
+        pass_trace("restore_visual_logger_argument_lifetimes", &rendered);
         let rendered = restore_transform_spawn_lifetimes(&rendered, f, refs, is_method);
         pass_trace("restore_transform_spawn_lifetimes", &rendered);
         let rendered = restore_attack_vector_endpoint_lifetimes(&rendered, f, refs, is_method);
@@ -7204,6 +7212,202 @@ fn restore_fear_tick_value_lifetimes(
         || out.matches(DEFAULTS_NEW).count() != 1
         || out.matches(ANGLE_NEW).count() != 1
         || out.matches(THREAT_NEW).count() != 1
+    {
+        return body.to_owned();
+    }
+    out
+}
+
+/// Recover the omitted VLog category defaults and the expression-local values in the static
+/// circle positioning logger. Keeping the decompiler's shared temporaries changes slot reuse
+/// throughout this diagnostic method even though every logged value is otherwise unchanged.
+fn restore_visual_logger_argument_lifetimes(
+    body: &str,
+    f: &Func,
+    refs: &RefResolver,
+    class_name: Option<&str>,
+    is_method: bool,
+) -> String {
+    if !is_method
+        || class_name != Some("UAICombatPositioning_StaticCircleAroundTarget")
+        || f.is_ufunction
+        || f.is_const_method()
+        || f.name != "LogDebugIntoVisualLogger"
+        || f.ret.base_name(refs) != "void"
+        || f.ret.is_reference
+        || f.ret.is_object_handle
+        || !f.params.is_empty()
+    {
+        return body.to_owned();
+    }
+    let Ok(code) = disassemble(&f.bytecode) else {
+        return body.to_owned();
+    };
+    if code.len() != 416
+        || code[415].op.name != "RET"
+        || code[415].words.first().copied() != Some(2)
+        || f.obj_locals.len() != 18
+    {
+        return body.to_owned();
+    }
+
+    let slots = |name: &str| {
+        let mut found = f.obj_locals.iter().filter_map(|(slot, ty)| {
+            refs.type_identity_by_ptr(*ty)
+                .filter(|identity| identity.name == name
+                    && identity.namespace.is_empty()
+                    && (identity.module.is_empty()
+                        || name == "UAIGroup_Combat"))
+                .map(|_| *slot)
+        }).collect::<Vec<_>>();
+        found.sort_unstable();
+        found
+    };
+    if slots("AGothicCharacter") != [8, 26, 82]
+        || slots("UAIGroup_Combat") != [48]
+        || slots("FVector") != [6, 14, 24, 46, 54, 62, 88]
+        || slots("FString") != [32, 36]
+        || slots("FName") != [38]
+        || slots("TArray") != [66]
+        || slots("TArrayIterator") != [72, 78]
+        || slots("FVector2D") != [92]
+    {
+        return body.to_owned();
+    }
+    let local_type = |slot: i32| {
+        f.obj_locals.iter().find_map(|(candidate, ty)| (*candidate == slot).then_some(*ty))
+    };
+    let (Some(vector), Some(string), Some(name), Some(object)) = (
+        local_type(6),
+        local_type(32),
+        local_type(38),
+        refs.func_params_by_ptr(
+            code.iter().find_map(|ins| {
+                (ins.op.name == "CALLSYS"
+                    && ins.qwords.first().is_some_and(|ptr| {
+                        refs.func_ns_by_ptr(*ptr as i64) == Some("VLog")
+                    }))
+                .then(|| ins.qwords[0] as i64)
+            }).unwrap_or_default(),
+        ).and_then(|params| params.first()).map(|ty| ty.type_info),
+    ) else {
+        return body.to_owned();
+    };
+    if !refs.type_identity_by_ptr(object).is_some_and(|identity| {
+        identity.name == "UObject" && identity.module.is_empty() && identity.namespace.is_empty()
+    }) {
+        return body.to_owned();
+    }
+    let plain_void = |ty: &super::types::DataType| {
+        ty.token == 0x52 && ty.type_info == 0 && !ty.is_reference
+            && !ty.is_object_handle && !ty.is_object_const && !ty.is_read_only
+    };
+    let name_ctors = code.iter().filter_map(|ins| {
+        if ins.op.name != "CALLSYS" { return None; }
+        let ptr = *ins.qwords.first()? as i64;
+        (refs.func_by_ptr(ptr) == Some("$beh0")
+            && refs.func_owner_by_ptr(ptr) == Some("FName"))
+        .then_some(ptr)
+    }).collect::<Vec<_>>();
+    if name_ctors.len() != 12 || name_ctors.iter().any(|ptr| {
+        !refs.is_method_by_ptr(*ptr)
+            || refs.is_const_method_by_ptr(*ptr)
+            || refs.func_ret_by_ptr(*ptr).is_none_or(|ty| !plain_void(ty))
+            || !matches!(refs.func_params_by_ptr(*ptr), Some([ty])
+                if ty.token == 5 && ty.type_info == string && ty.is_reference
+                    && ty.is_object_const && ty.is_read_only && !ty.is_object_handle)
+    }) {
+        return body.to_owned();
+    }
+    let log_calls = code.iter().filter_map(|ins| {
+        if ins.op.name != "CALLSYS" { return None; }
+        let ptr = *ins.qwords.first()? as i64;
+        if refs.func_ns_by_ptr(ptr) != Some("VLog") { return None; }
+        Some((ptr, refs.func_by_ptr(ptr)?))
+    }).collect::<Vec<_>>();
+    let expected_logs = [
+        "Location", "Location", "Location", "Arrow", "Circle", "Circle",
+        "Location", "Location", "Location", "Circle", "Arrow", "Arrow",
+    ];
+    if log_calls.iter().map(|(_, function)| *function).ne(expected_logs)
+        || log_calls.iter().any(|(ptr, function)| {
+            let expected_arity = match *function {
+                "Circle" => 8,
+                "Location" | "Arrow" => 6,
+                _ => return true,
+            };
+            refs.func_owner_by_ptr(*ptr).is_some()
+                || refs.is_method_by_ptr(*ptr)
+                || refs.func_ret_by_ptr(*ptr).is_none_or(|ty| !plain_void(ty))
+                || refs.func_params_by_ptr(*ptr).is_none_or(|params| {
+                    params.len() != expected_arity
+                        || params.first().is_none_or(|ty| {
+                            ty.token != 5 || ty.type_info != object || !ty.is_object_handle
+                        })
+                        || params.last().is_none_or(|ty| {
+                            ty.token != 5 || ty.type_info != name || ty.is_reference
+                                || ty.is_object_handle
+                        })
+                        || params.iter().filter(|ty| ty.type_info == vector).count()
+                            < if *function == "Location" { 1 } else { 2 }
+                })
+        })
+    {
+        return body.to_owned();
+    }
+
+    let rewrites = [
+        (concat!(
+            "        FName local_38 = FName(\"Angelscript\");\n",
+            "        FVector local_14(FVector::UpVector);\n",
+            "        FVector local_14_2 = (local_6 + (local_14 * 100.0));\n",
+            "        VLog::Location(this.Combat.GetSelf(), (FString(\"Distance to Target Collision: \") + this.Combat.GetCharacterOfInterest().GetDistanceToHitCollision(this.Combat.GetSelf().GetNavAgentLocation())), local_14_2, 10.0f, FColor::White, local_38);\n",
+        ), "        VLog::Location(this.Combat.GetSelf(), (FString(\"Distance to Target Collision: \") + this.Combat.GetCharacterOfInterest().GetDistanceToHitCollision(this.Combat.GetSelf().GetNavAgentLocation())), (local_6 + (FVector(FVector::UpVector) * 100.0)), 10.0f, FColor::White);\n"),
+        (concat!(
+            "        FName local_38_2 = FName(\"Angelscript\");\n",
+            "        FVector local_14_3 = (FVector(FVector::UpVector) * 130.0);\n",
+            "        VLog::Location(this.Combat.GetSelf(), (FString(\"Distance to Target Location: \") + this.Combat.GetCharacterOfInterest().GetNavAgentLocation().Distance(this.Combat.GetSelf().GetNavAgentLocation())), (local_6 + local_14_3), 10.0f, FColor::White, local_38_2);\n",
+        ), "        VLog::Location(this.Combat.GetSelf(), (FString(\"Distance to Target Location: \") + this.Combat.GetCharacterOfInterest().GetNavAgentLocation().Distance(this.Combat.GetSelf().GetNavAgentLocation())), (local_6 + (FVector(FVector::UpVector) * 130.0)), 10.0f, FColor::White);\n"),
+        ("        VLog::Location(this.Combat.GetSelf(), \"Combat CoM\", this.Combat.GetCombatGroup().GetCombatCenterOfMass(), 15.0f, FColor::Red, FName(\"Angelscript\"));\n",
+         "        VLog::Location(this.Combat.GetSelf(), \"Combat CoM\", this.Combat.GetCombatGroup().GetCombatCenterOfMass(), 15.0f, FColor::Red);\n"),
+        (concat!(
+            "        FName local_38_3 = FName(\"Angelscript\");\n",
+            "        FVector local_24_2 = (local_46.GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector) * 200.0);\n",
+            "        FVector local_14_4 = (local_6 + local_24_2);\n",
+            "        VLog::Arrow(this.Combat.GetSelf(), \"TargetForward\", local_6, local_14_4, FColor::Red, local_38_3);\n",
+        ), "        VLog::Arrow(this.Combat.GetSelf(), \"TargetForward\", local_6, (local_6 + (local_46.GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector) * 200.0)), FColor::Red);\n"),
+        ("        VLog::Circle(this.Combat.GetSelf(), \"HighPriorityRing\", local_6, float32(this.GetCombatRadius(-1.0)), FColor::Blue, FVector::UpVector, 0, FName(\"Angelscript\"));\n",
+         "        VLog::Circle(this.Combat.GetSelf(), \"HighPriorityRing\", local_6, float32(this.GetCombatRadius(-1.0)), FColor::Blue, FVector::UpVector, 0);\n"),
+        ("        VLog::Circle(this.Combat.GetSelf(), \"\", local_62, float32(this.GetCharacterSafeZoneRadius(this.Combat.GetSelf())), FColor::Yellow, FVector::UpVector, 0, FName(\"Angelscript\"));\n",
+         "        VLog::Circle(this.Combat.GetSelf(), \"\", local_62, float32(this.GetCharacterSafeZoneRadius(this.Combat.GetSelf())), FColor::Yellow, FVector::UpVector, 0);\n"),
+        (concat!(
+            "            float local_16_2 = this.GetCharacterSafeZoneRadius(local_82);\n",
+            "            VLog::Location(this.Combat.GetSelf(), \"\", local_82.GetActorLocation(), float32(local_16_2), FColor::Yellow, FName(\"Angelscript\"));\n",
+        ), "            VLog::Location(this.Combat.GetSelf(), \"\", local_82.GetActorLocation(), float32(this.GetCharacterSafeZoneRadius(local_82)), FColor::Yellow);\n"),
+        ("            VLog::Location(this.Combat.GetSelf(), \"\", local_82.GetNavAgentLocation(), 10.0f, FColor::Yellow, FName(\"Angelscript\"));\n",
+         "            VLog::Location(this.Combat.GetSelf(), \"\", local_82.GetNavAgentLocation(), 10.0f, FColor::Yellow);\n"),
+        ("            VLog::Location(this.Combat.GetSelf(), \"\", local_14_5, 10.0f, FColor::Yellow, FName(\"Angelscript\"));\n",
+         "            VLog::Location(this.Combat.GetSelf(), \"\", local_14_5, 10.0f, FColor::Yellow);\n"),
+        ("            VLog::Circle(this.Combat.GetSelf(), \"\", local_14_5, 20.0f, FColor::Yellow, FVector::UpVector, 0, FName(\"Angelscript\"));\n",
+         "            VLog::Circle(this.Combat.GetSelf(), \"\", local_14_5, 20.0f, FColor::Yellow, FVector::UpVector, 0);\n"),
+        ("            VLog::Arrow(this.Combat.GetSelf(), \"\", local_82.GetActorLocation(), local_14_5, FColor::Yellow, FName(\"Angelscript\"));\n",
+         "            VLog::Arrow(this.Combat.GetSelf(), \"\", local_82.GetActorLocation(), local_14_5, FColor::Yellow);\n"),
+        ("            VLog::Arrow(this.Combat.GetSelf(), \"\", local_82.GetActorLocation(), local_82.GetNavAgentLocation(), FColor::Yellow, FName(\"Angelscript\"));\n",
+         "            VLog::Arrow(this.Combat.GetSelf(), \"\", local_82.GetActorLocation(), local_82.GetNavAgentLocation(), FColor::Yellow);\n"),
+    ];
+    if rewrites.iter().any(|(old, _)| body.matches(old).count() != 1) {
+        return body.to_owned();
+    }
+    let mut out = body.to_owned();
+    for (old, new) in rewrites {
+        out = out.replacen(old, new, 1);
+    }
+    if out.contains("FName(\"Angelscript\")")
+        || out.contains("FVector local_14_2")
+        || out.contains("FVector local_14_3")
+        || out.contains("FVector local_14_4")
+        || out.contains("FVector local_24_2")
+        || out.contains("float local_16_2")
     {
         return body.to_owned();
     }
@@ -64898,6 +65102,122 @@ mod literal_value_lifetime_tests {
         assert_eq!(restore(source, &bad, &refs, class, true), source);
         bad = f.clone();
         bad.obj_locals[0].1 = 2;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+    }
+
+    fn visual_logger_argument_lifetimes_fixture() -> Func {
+        let mut ops: Vec<(&str, &[u16])> = vec![("SUSPEND", &[]); 416];
+        for op in ops.iter_mut().take(24) {
+            *op = ("CALLSYS", &[]);
+        }
+        ops[415] = ("RET", &[2]);
+        let mut f = function(&ops);
+        f.name = "LogDebugIntoVisualLogger".into();
+        f.ret.token = 0x52;
+        f.obj_locals = vec![
+            (8, 6), (26, 6), (82, 6), (48, 7),
+            (6, 1), (14, 1), (24, 1), (46, 1), (54, 1), (62, 1), (88, 1),
+            (32, 2), (36, 2), (38, 3), (66, 8), (72, 9), (78, 9), (92, 10),
+        ];
+        let code = disassemble(&f.bytecode).unwrap();
+        let logs = [101, 101, 101, 103, 102, 102, 101, 101, 101, 102, 103, 103];
+        for (index, ptr) in logs.into_iter().enumerate() {
+            f.bytecode[code[index * 2].offset_dw + 1] = 100;
+            f.bytecode[code[index * 2 + 1].offset_dw + 1] = ptr;
+        }
+        f
+    }
+
+    #[test]
+    fn visual_logger_recovers_default_arguments_and_expression_lifetimes() {
+        let source = concat!(
+            "        FName local_38 = FName(\"Angelscript\");\n",
+            "        FVector local_14(FVector::UpVector);\n",
+            "        FVector local_14_2 = (local_6 + (local_14 * 100.0));\n",
+            "        VLog::Location(this.Combat.GetSelf(), (FString(\"Distance to Target Collision: \") + this.Combat.GetCharacterOfInterest().GetDistanceToHitCollision(this.Combat.GetSelf().GetNavAgentLocation())), local_14_2, 10.0f, FColor::White, local_38);\n",
+            "        FName local_38_2 = FName(\"Angelscript\");\n",
+            "        FVector local_14_3 = (FVector(FVector::UpVector) * 130.0);\n",
+            "        VLog::Location(this.Combat.GetSelf(), (FString(\"Distance to Target Location: \") + this.Combat.GetCharacterOfInterest().GetNavAgentLocation().Distance(this.Combat.GetSelf().GetNavAgentLocation())), (local_6 + local_14_3), 10.0f, FColor::White, local_38_2);\n",
+            "        VLog::Location(this.Combat.GetSelf(), \"Combat CoM\", this.Combat.GetCombatGroup().GetCombatCenterOfMass(), 15.0f, FColor::Red, FName(\"Angelscript\"));\n",
+            "        FName local_38_3 = FName(\"Angelscript\");\n",
+            "        FVector local_24_2 = (local_46.GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector) * 200.0);\n",
+            "        FVector local_14_4 = (local_6 + local_24_2);\n",
+            "        VLog::Arrow(this.Combat.GetSelf(), \"TargetForward\", local_6, local_14_4, FColor::Red, local_38_3);\n",
+            "        VLog::Circle(this.Combat.GetSelf(), \"HighPriorityRing\", local_6, float32(this.GetCombatRadius(-1.0)), FColor::Blue, FVector::UpVector, 0, FName(\"Angelscript\"));\n",
+            "        VLog::Circle(this.Combat.GetSelf(), \"\", local_62, float32(this.GetCharacterSafeZoneRadius(this.Combat.GetSelf())), FColor::Yellow, FVector::UpVector, 0, FName(\"Angelscript\"));\n",
+            "            float local_16_2 = this.GetCharacterSafeZoneRadius(local_82);\n",
+            "            VLog::Location(this.Combat.GetSelf(), \"\", local_82.GetActorLocation(), float32(local_16_2), FColor::Yellow, FName(\"Angelscript\"));\n",
+            "            VLog::Location(this.Combat.GetSelf(), \"\", local_82.GetNavAgentLocation(), 10.0f, FColor::Yellow, FName(\"Angelscript\"));\n",
+            "            VLog::Location(this.Combat.GetSelf(), \"\", local_14_5, 10.0f, FColor::Yellow, FName(\"Angelscript\"));\n",
+            "            VLog::Circle(this.Combat.GetSelf(), \"\", local_14_5, 20.0f, FColor::Yellow, FVector::UpVector, 0, FName(\"Angelscript\"));\n",
+            "            VLog::Arrow(this.Combat.GetSelf(), \"\", local_82.GetActorLocation(), local_14_5, FColor::Yellow, FName(\"Angelscript\"));\n",
+            "            VLog::Arrow(this.Combat.GetSelf(), \"\", local_82.GetActorLocation(), local_82.GetNavAgentLocation(), FColor::Yellow, FName(\"Angelscript\"));\n",
+        );
+        let expected = concat!(
+            "        VLog::Location(this.Combat.GetSelf(), (FString(\"Distance to Target Collision: \") + this.Combat.GetCharacterOfInterest().GetDistanceToHitCollision(this.Combat.GetSelf().GetNavAgentLocation())), (local_6 + (FVector(FVector::UpVector) * 100.0)), 10.0f, FColor::White);\n",
+            "        VLog::Location(this.Combat.GetSelf(), (FString(\"Distance to Target Location: \") + this.Combat.GetCharacterOfInterest().GetNavAgentLocation().Distance(this.Combat.GetSelf().GetNavAgentLocation())), (local_6 + (FVector(FVector::UpVector) * 130.0)), 10.0f, FColor::White);\n",
+            "        VLog::Location(this.Combat.GetSelf(), \"Combat CoM\", this.Combat.GetCombatGroup().GetCombatCenterOfMass(), 15.0f, FColor::Red);\n",
+            "        VLog::Arrow(this.Combat.GetSelf(), \"TargetForward\", local_6, (local_6 + (local_46.GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector) * 200.0)), FColor::Red);\n",
+            "        VLog::Circle(this.Combat.GetSelf(), \"HighPriorityRing\", local_6, float32(this.GetCombatRadius(-1.0)), FColor::Blue, FVector::UpVector, 0);\n",
+            "        VLog::Circle(this.Combat.GetSelf(), \"\", local_62, float32(this.GetCharacterSafeZoneRadius(this.Combat.GetSelf())), FColor::Yellow, FVector::UpVector, 0);\n",
+            "            VLog::Location(this.Combat.GetSelf(), \"\", local_82.GetActorLocation(), float32(this.GetCharacterSafeZoneRadius(local_82)), FColor::Yellow);\n",
+            "            VLog::Location(this.Combat.GetSelf(), \"\", local_82.GetNavAgentLocation(), 10.0f, FColor::Yellow);\n",
+            "            VLog::Location(this.Combat.GetSelf(), \"\", local_14_5, 10.0f, FColor::Yellow);\n",
+            "            VLog::Circle(this.Combat.GetSelf(), \"\", local_14_5, 20.0f, FColor::Yellow, FVector::UpVector, 0);\n",
+            "            VLog::Arrow(this.Combat.GetSelf(), \"\", local_82.GetActorLocation(), local_14_5, FColor::Yellow);\n",
+            "            VLog::Arrow(this.Combat.GetSelf(), \"\", local_82.GetActorLocation(), local_82.GetNavAgentLocation(), FColor::Yellow);\n",
+        );
+        let f = visual_logger_argument_lifetimes_fixture();
+        let refs = RefResolver::from_test_visual_logger_argument_lifetimes(0);
+        let restore = |body: &str, function: &Func, resolver: &RefResolver,
+                       class: Option<&str>, method: bool| {
+            super::restore_visual_logger_argument_lifetimes(
+                body, function, resolver, class, method,
+            )
+        };
+        let class = Some("UAICombatPositioning_StaticCircleAroundTarget");
+        assert_eq!(restore(source, &f, &refs, class, true), expected);
+        assert_eq!(restore(expected, &f, &refs, class, true), expected);
+        assert_eq!(restore(source, &f, &refs, class, false), source);
+        assert_eq!(restore(source, &f, &refs, Some("UOtherPositioning"), true), source);
+        for fault in 1..=8 {
+            assert_eq!(
+                restore(
+                    source,
+                    &f,
+                    &RefResolver::from_test_visual_logger_argument_lifetimes(fault),
+                    class,
+                    true,
+                ),
+                source,
+                "metadata {fault}",
+            );
+        }
+        for changed in [
+            source.replace("Combat CoM", "Combat Center"),
+            source.replace("local_14_5, 20.0f", "local_14_5, 25.0f"),
+            source.repeat(2),
+        ] {
+            assert_eq!(restore(&changed, &f, &refs, class, true), changed);
+        }
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut bad = f.clone();
+        bad.name = "Other".into();
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.is_ufunction = true;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.traits = 4;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.bytecode[code[1].offset_dw + 1] = 103;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.bytecode[code[415].offset_dw] ^= 2 << 16;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.obj_locals[0].1 = 1;
         assert_eq!(restore(source, &bad, &refs, class, true), source);
     }
 

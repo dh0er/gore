@@ -10262,6 +10262,59 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_visual_logger_argument_lifetimes(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name, module) in [
+            (1, "FVector", ""), (2, "FString", ""), (3, "FName", ""),
+            (4, "FColor", ""), (5, "UObject", ""), (6, "AGothicCharacter", ""),
+            (7, "UAIGroup_Combat", "AI.Group"), (8, "TArray", ""),
+            (9, "TArrayIterator", ""), (10, "FVector2D", ""),
+        ] {
+            r.type_by_ptr.insert(ptr, name.into());
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity {
+                name: name.into(), module: module.into(), namespace: String::new(),
+            });
+        }
+        let value = |ptr| DataType { token: 5, type_info: ptr, ..Default::default() };
+        let reference = |ptr| DataType {
+            is_reference: true, is_object_const: true, is_read_only: true, ..value(ptr)
+        };
+        let handle = |ptr| DataType { is_object_handle: true, ..value(ptr) };
+        let void = DataType { token: 0x52, ..Default::default() };
+        r.func_by_ptr.insert(100, "$beh0".into());
+        r.func_owner.insert(100, "FName".into());
+        r.func_is_method.insert(100);
+        r.func_ret.insert(100, void.clone());
+        r.func_params.insert(100, vec![reference(2)]);
+        for (ptr, function, params) in [
+            (101, "Location", vec![handle(5), reference(2), reference(1),
+                DataType { token: 0x50, ..Default::default() }, reference(4), value(3)]),
+            (102, "Circle", vec![handle(5), reference(2), reference(1),
+                DataType { token: 0x50, ..Default::default() }, reference(4), reference(1),
+                DataType { token: 0x44, ..Default::default() }, value(3)]),
+            (103, "Arrow", vec![handle(5), reference(2), reference(1), reference(1),
+                reference(4), value(3)]),
+        ] {
+            r.func_by_ptr.insert(ptr, function.into());
+            r.func_ns.insert(ptr, "VLog".into());
+            r.func_ret.insert(ptr, void.clone());
+            r.func_params.insert(ptr, params);
+        }
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&1).unwrap().module = "Other".into(),
+            2 => { r.func_by_ptr.insert(100, "$beh2".into()); }
+            3 => { r.func_ns.insert(101, "Other".into()); }
+            4 => { r.func_params.get_mut(&101).unwrap().last_mut().unwrap().type_info = 4; }
+            5 => { r.func_params.get_mut(&102).unwrap().pop(); }
+            6 => { r.func_is_method.insert(103); }
+            7 => r.type_identity_by_ptr.get_mut(&6).unwrap().name = "AOtherCharacter".into(),
+            8 => r.func_params.get_mut(&100).unwrap()[0].is_read_only = false,
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_transform_spawn_lifetimes(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr, name, module) in [
