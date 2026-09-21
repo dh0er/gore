@@ -1,15 +1,17 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.32% of it is byte-faithful.**
+**Status on the latest 1.0.5 hotfix (Steam BuildID 25168047): all 7,317 modules
+recompile, all 164,724 functions align, and none differ semantically.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
-stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
-every recompiled body is identical to vanilla — the section below says exactly how much is, how it
-was measured, and what is left.
+stub instead of inventing logic. The current corpus needs no such stub. This result comes from a
+strict standalone whole-tree compile and `bytediff --norm-slots` against the pristine hotfix cache;
+it is not a claim of byte-for-byte identity or in-game runtime testing. The detailed historical
+measurements below concern the preceding BuildID 24878692.
 
 ## What is measured, and on what
 
-Measured 2026-08-29 against the shipped build whose script cache has SHA-256
+Measured against the shipped build whose script cache has SHA-256
 `7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511` (GUID
 `7835bcc09c5eee488d72cb5ffb0fb0c3`). That is the audited generation `g1r-steam-24878692`, the
 Steam build shipped 2026-08-27/28. Counts from the earlier `D0AFAF90…` build are not
@@ -24,7 +26,7 @@ Everything except the splice test was measured on this build, over the **whole c
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,723 functions | **99.32%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,723 functions | **99.994%** (`IDENTICAL`+`BENIGN`; 10 semantic differences) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | full corpus, earlier `D0AFAF90…` build | 7,278 of 7,308 (**99.59%**) |
 
@@ -39,18 +41,17 @@ older run without it let native enum fields fall back to the bool heuristic and 
 native scalar target cannot be typed, it suppresses authored defaults for that whole module so a
 later edit can use byte-exact carry instead of compiling a partial or mistyped default set.
 
-## What is left
+## Remaining differences on BuildID 24878692
 
-**832 functions (0.51%) recompile to bytecode that differs semantically** (1,114 on 2026-08-31). A semantic
+**10 functions (0.006%) recompile to bytecode that differs semantically**, across six modules. A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
 
-### Known wrong programs, found and not yet fixed
+### Earlier defects (historical)
 
-A semantic difference is normally *not proven identical*, not *proven wrong*. These three are
-proven wrong, and they are recorded here rather than in a bug tracker because the same measurement
-found them:
+These defects were found in intermediate runs and are retained as debugging history. They are
+not among the 10 differences in the current BuildID-24878692 table:
 
 * **Four loops the game leaves and our source does not.** The `break` is lost and the arm renders
   as `if (…) { } else { }`, so the loop runs forever:

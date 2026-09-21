@@ -547,23 +547,21 @@ difference to the game as well, in code you never touched.
 shipped build:
 
 ```
-warning: AI.States.FightAI.CombatState.CombatMoves carries 36 functions the decompiler does not
+warning: AI.States.FightAI.CombatState.CombatMoves carries 1 function the decompiler does not
 reproduce as the same program. Splicing this module recompiles all of it, so those come out
 changed as well.
 ```
 
-The current measurement finds no semantic difference among aligned functions in
-**7,307 of the 7,317 modules**. The remaining 10 contain unresolved semantic differences;
+The BuildID-24878692 warning table finds no semantic difference among aligned functions in
+**7,311 of the 7,317 modules**. The remaining six contain 10 unresolved semantic differences;
 they are not established to be harmless source-text variations. The oracle normalises
 reference keys, slot numbers and other supported encoding differences before comparing.
 Passing that comparison is useful evidence, but does not by itself prove behavior equivalence.
 
-The recompiled cache also lacks one vanilla function:
-`GAS.Abilities.Spells.Spells.Control.GA_Spell_UnControl.UGA_Spell_UnControl::__InitDefaults`.
-The current per-module warning table counts divergent aligned functions and does not cover
-that missing function. Full round-trip completeness has therefore not been established.
-The table's zero behaviour-risk count refers to its specific detected risk patterns;
-it does not clear unresolved differences or missing functions.
+The later BuildID-25168047 hotfix round trip aligns all 164,724 functions with zero semantic
+differences. The warning table above is keyed to the earlier BuildID-24878692 cache; its zero
+behaviour-risk count refers only to its specific detected risk patterns and does not clear the
+remaining differences on that older build.
 
 The table is keyed by the generation the measurement was taken on. Point the tools at a build it
 does not cover and no warning appears — that means *not measured*, not *byte-faithful*.
