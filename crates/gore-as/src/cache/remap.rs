@@ -2417,6 +2417,17 @@ struct PristinePropertyIdentity {
 const NATIVE_API_SNAPSHOT_BYTES: &[u8] = include_bytes!("../../data/npc-head-native-api-v1.json");
 const NATIVE_API_SNAPSHOT_SHA256: &str =
     "e1c3b72c4641b9e0fa5df8ca8d67b91266f13ab68ebae94a30a40dbf6c1a5c78";
+const NATIVE_API_SNAPSHOT_25168047_BYTES: &[u8] =
+    include_bytes!("../../data/npc-head-native-api-25168047-v1.json");
+const NATIVE_API_SNAPSHOT_25168047_SHA256: &str =
+    "0495bbc238aea629d3c1c611823167e659d4b17df43b017676431804e41fb962";
+const NATIVE_API_SNAPSHOTS: &[(&[u8], &str)] = &[
+    (NATIVE_API_SNAPSHOT_BYTES, NATIVE_API_SNAPSHOT_SHA256),
+    (
+        NATIVE_API_SNAPSHOT_25168047_BYTES,
+        NATIVE_API_SNAPSHOT_25168047_SHA256,
+    ),
+];
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2582,18 +2593,27 @@ impl NativeApiSnapshot {
 }
 
 fn native_api_snapshot_for_base(base: &[u8]) -> Option<Arc<NativeApiSnapshot>> {
-    static SNAPSHOT: std::sync::OnceLock<Option<Arc<NativeApiSnapshot>>> =
-        std::sync::OnceLock::new();
-    SNAPSHOT
-        .get_or_init(|| {
-            NativeApiSnapshot::from_sealed_bytes(
-                NATIVE_API_SNAPSHOT_BYTES,
-                NATIVE_API_SNAPSHOT_SHA256,
-            )
+    static SNAPSHOTS: std::sync::OnceLock<Vec<Arc<NativeApiSnapshot>>> = std::sync::OnceLock::new();
+    let snapshots = SNAPSHOTS.get_or_init(|| {
+        NATIVE_API_SNAPSHOTS
+            .iter()
+            .filter_map(|(bytes, seal)| NativeApiSnapshot::from_sealed_bytes(bytes, seal))
             .map(Arc::new)
+            .collect()
+    });
+    select_native_api_snapshot(base, snapshots)
+}
+
+fn select_native_api_snapshot(
+    base: &[u8],
+    snapshots: &[Arc<NativeApiSnapshot>],
+) -> Option<Arc<NativeApiSnapshot>> {
+    snapshots
+        .iter()
+        .find(|snapshot| {
+            // Reject other generations before hashing the complete pristine cache.
+            snapshot.matches_generation(base) && snapshot.matches_base(base)
         })
-        .as_ref()
-        .filter(|snapshot| snapshot.matches_base(base))
         .cloned()
 }
 
@@ -10535,12 +10555,61 @@ mod native_api_snapshot_tests {
 
     #[test]
     fn embedded_native_api_snapshot_has_an_exact_source_seal() {
-        let snapshot = NativeApiSnapshot::from_sealed_bytes(
-            NATIVE_API_SNAPSHOT_BYTES,
-            NATIVE_API_SNAPSHOT_SHA256,
-        )
-        .expect("embedded native qualification data must match its checked-in seal and schema");
-        assert!(!snapshot.matches_base(&empty_cache()));
+        for (bytes, seal) in NATIVE_API_SNAPSHOTS {
+            let snapshot = NativeApiSnapshot::from_sealed_bytes(bytes, seal).expect(
+                "embedded native qualification data must match its checked-in seal and schema",
+            );
+            assert!(!snapshot.matches_base(&empty_cache()));
+        }
+        let old: serde_json::Value = serde_json::from_slice(NATIVE_API_SNAPSHOT_BYTES).unwrap();
+        let hotfix: serde_json::Value =
+            serde_json::from_slice(NATIVE_API_SNAPSHOT_25168047_BYTES).unwrap();
+        for field in ["types", "functions", "properties"] {
+            assert_eq!(old[field], hotfix[field], "hotfix must not widen {field}");
+        }
+        assert_ne!(
+            old["pristine_cache_sha256"],
+            hotfix["pristine_cache_sha256"]
+        );
+        assert_ne!(
+            old["pristine_cache_guid_hex"],
+            hotfix["pristine_cache_guid_hex"]
+        );
+    }
+
+    #[test]
+    fn native_snapshot_selection_preserves_exact_generation_and_pristine_binding() {
+        let old = empty_cache();
+        let mut hotfix = old.clone();
+        hotfix[..16].fill(2);
+        let old_document = qualified_document(&old);
+        let mut hotfix_document = qualified_document(&hotfix);
+        hotfix_document["pristine_cache_guid_hex"] = serde_json::json!("02".repeat(16));
+        let snapshots = [
+            Arc::new(parse_document(&old_document).unwrap()),
+            Arc::new(parse_document(&hotfix_document).unwrap()),
+        ];
+        for (index, pristine) in [&old, &hotfix].into_iter().enumerate() {
+            let selected = select_native_api_snapshot(pristine, &snapshots).unwrap();
+            assert!(Arc::ptr_eq(&selected, &snapshots[index]));
+        }
+        let mut changed = hotfix.clone();
+        *changed.last_mut().unwrap() = 1;
+        assert!(select_native_api_snapshot(&changed, &snapshots).is_none());
+        let mut unknown = hotfix.clone();
+        unknown[..16].fill(3);
+        assert!(select_native_api_snapshot(&unknown, &snapshots).is_none());
+
+        // Only authority already captured from the pristine cache survives composition;
+        // retaining a GUID must never authenticate a fresh snapshot from changed bytes.
+        let retained = PristineNativeApiAuthority {
+            snapshot: Some(Arc::clone(&snapshots[1])),
+        };
+        assert!(retained.matches_pristine(&hotfix));
+        assert!(!retained.matches_pristine(&changed));
+        assert!(retained.for_running_generation(&changed).is_some());
+        assert!(retained.for_running_generation(&old).is_none());
+        assert!(retained.for_running_generation(&unknown).is_none());
     }
 
     fn cache_with_quest_availability_property(include_property: bool) -> Vec<u8> {

@@ -6476,7 +6476,7 @@ impl RefResolver {
             r.func_by_ptr.insert(ptr,"Speak".into());r.func_module.insert(ptr,module.into());r.funcid_to_ptr.insert(ptr as i32,ptr);r.func_ret.insert(ptr,value(1));r.func_params.insert(ptr,params.clone());
             let mut defaults=vec![String::new();params.len()];defaults[4]=default.into();*defaults.last_mut().unwrap()="FGameplayTag::Empty".into();
             let f=Func{name:"Speak".into(),namespace:String::new(),ret:value(1),traits:0x820,is_ufunction:false,param_defaults:defaults,
-                params:params.into_iter().enumerate().map(|(i,ty)|Param{name:format!("arg{i}"),flags:if ty.is_reference{3}else{0},ty}).collect(),bytecode:vec![],obj_locals:vec![]};
+                params:params.into_iter().enumerate().map(|(i,ty)|Param{name:format!("arg{i}"),flags:if ty.is_reference{3}else{0},ty}).collect(),bytecode:vec![],variable_space:0,obj_locals:vec![]};
             mods.push(Module{name:module.into(),file:String::new(),functions:vec![f],classes:vec![],enums:vec![],globals:vec![]});
         }
         for (ptr,name,owner,ret,args,constant) in [(10,"$beh0","FAbilityTaskExecutor",void.clone(),vec![],false),(11,"$beh2","FAbilityTaskExecutor",void,vec![],false),
@@ -8568,7 +8568,7 @@ impl RefResolver {
         r.func_params.insert(101,vec![plain(0x44)]); r.static_names.push("Different::Check".into());
         r.global_by_ptr.insert(994,"Distance to target too close to required distance to move".into()); r.global_is_string.insert(994);
         let getter=super::model::Func {name:"GetMeasure".into(),param_defaults:vec![],namespace:String::new(),ret:plain(0x51),params:vec![],
-            bytecode:vec![],obj_locals:vec![],is_ufunction:false,traits:0x204};
+            bytecode:vec![],variable_space:0,obj_locals:vec![],is_ufunction:false,traits:0x204};
         let class=super::model::Class {name:"UMeasured".into(),namespace:String::new(),super_class:None,fields:vec![],methods:vec![getter],ctors:vec![],flags:0};
         let mut mods=vec![super::model::Module {name:"Fixture".into(),file:String::new(),functions:vec![],classes:vec![class],enums:vec![],globals:vec![]}];
         match fault {
@@ -12750,7 +12750,7 @@ mod tests {
                 functions.push(Func{name:name.into(),namespace:String::new(),ret:ret.clone(),traits:0x820,is_ufunction:character==2,
                     param_defaults:types.iter().map(|t| if t.is_reference {"FInGameTime ( )".into()}else{String::new()}).collect(),
                     params:types.into_iter().enumerate().map(|(i,ty)| Param{name:format!("arg{i}"),flags:if ty.is_reference {3}else{0},ty}).collect(),
-                    bytecode:vec![],obj_locals:vec![]});
+                    bytecode:vec![],variable_space:0,obj_locals:vec![]});
             }
             (r,Module{name:"History".into(),file:String::new(),functions,classes:vec![],enums:vec![],globals:vec![]})
         };
@@ -12802,7 +12802,7 @@ mod tests {
                 let mut defaults=vec![String::new();types.len()];*defaults.last_mut().unwrap()=default.into();
                 functions.push(Func{name:name.into(),namespace:String::new(),ret:ret.clone(),traits:0x820,is_ufunction:true,param_defaults:defaults,
                     params:types.into_iter().enumerate().map(|(i,ty)| Param{name:format!("arg{i}"),flags:if ty.is_reference {3}else{0},ty}).collect(),
-                    bytecode:vec![],obj_locals:vec![]});
+                    bytecode:vec![],variable_space:0,obj_locals:vec![]});
             }
             (r,Module{name:"Visibility".into(),file:String::new(),functions,classes:vec![],enums:vec![],globals:vec![]})
         };
@@ -12849,7 +12849,7 @@ mod tests {
                 r.func_ret.insert(ptr,value(1));r.func_params.insert(ptr,params.clone());
                 functions.push(Func {name:"Speak".into(),namespace:String::new(),ret:value(1),traits:0x820,is_ufunction:false,
                     param_defaults:vec![String::new();params.len()],params:params.into_iter().enumerate().map(|(i,ty)| Param {
-                        name:format!("arg{i}"),flags:if ty.is_reference {3}else{0},ty}).collect(),bytecode:vec![],obj_locals:vec![]});
+                        name:format!("arg{i}"),flags:if ty.is_reference {3}else{0},ty}).collect(),bytecode:vec![],variable_space:0,obj_locals:vec![]});
             }
             (r,Module {name:"Speech".into(),file:String::new(),functions,classes:vec![],enums:vec![],globals:vec![]})
         };
@@ -12886,7 +12886,7 @@ mod tests {
             let ret = DataType { token: 0x41, ..Default::default() };
             let f = Func { name: "CanObserve".into(), namespace: String::new(), param_defaults: vec![],
                 params: ["Self", "Other"].into_iter().map(|n| Param { name: n.into(), ty: ty.clone(), flags: 0 }).collect(),
-                ret: ret.clone(), bytecode: vec![], obj_locals: vec![], is_ufunction: true, traits: 0x820 };
+                ret: ret.clone(), bytecode: vec![], variable_space: 0, obj_locals: vec![], is_ufunction: true, traits: 0x820 };
             let module = Module { name: "Predicates".into(), file: String::new(), functions: vec![f], classes: vec![], enums: vec![], globals: vec![] };
             for ptr in 1..=4 {
                 refs.funcid_to_ptr.insert(ptr as i32 + 10, ptr);

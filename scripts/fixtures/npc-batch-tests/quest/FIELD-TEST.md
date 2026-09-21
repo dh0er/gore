@@ -1,6 +1,8 @@
 # Paket 5: Proviant fuer die Wache
 
-**Korrigierter Stand: 0.1.1.** In0.1.0 waren die neuen Ereignisse nicht korrekt
+**Aktueller Stand: 0.1.2, fuer Steam-Hotfix 25168047 neu gebaut.**
+Questinhalt und Testfolge entsprechen dem korrigierten Stand 0.1.1.
+In0.1.0 waren die neuen Ereignisse nicht korrekt
 an das Spiel gebunden; dadurch blieb As Menue aus. Der neue Stand korrigiert
 Dialog-, Quest- und Journal-Callbacks gemeinsam. Bitte wieder bei Schritt1 beginnen.
 

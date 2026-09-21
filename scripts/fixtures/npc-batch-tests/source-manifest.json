@@ -111,8 +111,11 @@
           "sha256": "af5a3dbfd775e36643033c2b0d91f182c46836b7808bda67a3cd83115e04fcc0"
         }
       ],
-      "bundle_version": "0.1.1",
-      "qualification": "quest/fix-0.1.1.json"
+      "bundle_version": "0.1.2",
+      "qualification": "quest/hotfix-0.1.2.json",
+      "pristine_sha256": "b913264a50327da30b48c3b35f431e90197f3eafdebe431501a90ffd2d793d54",
+      "cli_sha256": "bf48dc461d0f919180dd7cf3e852f911026382f1d3f4dbd9deb53fd3780038de",
+      "native_api_snapshot_sha256": "0495bbc238aea629d3c1c611823167e659d4b17df43b017676431804e41fb962"
     }
   },
   "palette_cli_sha256": "3e16d37f2c04361e6c80764295a648837a91273c6bef792ac14990c9758c9ada",

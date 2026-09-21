@@ -2,6 +2,14 @@
 
 **Aktuelle deutsche Spielanleitung: [Paket 5 testen](FIELD-TEST.md).**
 
+Version 0.1.2 rebuilds the unchanged corrected quest for Steam hotfix 25168047
+after rebasing onto main `24e072595`. The new pristine cache and current
+decompiler are used; the hotfix's crime-AI change stays intact. Native additions
+retain their exact generation guards with a separately
+[qualified hotfix snapshot](native-api-25168047-qualification.json).
+See [the hotfix deployment](hotfix-0.1.2.json). Slot 071 and the seven test steps
+are unchanged; quest runtime progression still awaits the user's test.
+
 Version0.1.0 did not open A's dialogue menu in the user's game. Live-cache
 inspection found all29 new dialog/quest/document methods registered as ordinary
 callables with `_Implementation` in their Unreal names, not as native overrides.

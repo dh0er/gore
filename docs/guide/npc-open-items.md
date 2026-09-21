@@ -230,8 +230,12 @@ an empty trader configuration; it does not by itself qualify a working shop.
 
 ## 5. Quest completion beyond the basic session fixture — current test
 
-NpcQuestCallbacksTest0.1.1 is the current test package, using Profile4 slot071
+NpcQuestCallbacksTest0.1.2 is the current test package, using Profile4 slot071
 at noon. Follow the [German quest checklist](../../scripts/fixtures/npc-batch-tests/quest/FIELD-TEST.md).
+The package was rebuilt for Steam hotfix 25168047 after rebasing onto the current
+main decompiler. Its quest sources and start save are unchanged; the new game's
+unselected modules are preserved. See the
+[hotfix deployment](../../scripts/fixtures/npc-batch-tests/quest/hotfix-0.1.2.json).
 In0.1.0 A had no dialogue menu. All29 authored events were incorrectly registered
 as ordinary callables;0.1.1 fixes dialog, quest and document event bindings and
 const predicate signatures. Generator v6 and revision3 generator v5 now emit the

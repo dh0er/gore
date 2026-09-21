@@ -1,6 +1,6 @@
 # NPC-Testpakete: restliche Faelle
 
-Stand 2026-09-13: **Alle fuenf Pakete sind gebaut und geprueft.** Der Kopf-/Barttest
+Stand 2026-09-21: **Alle fuenf Pakete sind gebaut und geprueft.** Der Kopf-/Barttest
 ist bestanden. Beim Sprachtest sind Begruessungen, Alltagszeilen von B/C und Bs
 Routine sowie der vollstaendige Neustart ohne erneuten Aufbau bestaetigt.
 Die Lehrerpruefungen einschliesslich Neustart sowie Kaufen/Verkaufen/Abbrechen
@@ -21,9 +21,13 @@ die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
-**Aktiv ist NpcQuestCallbacksTest 0.1.1**; Manager-Status `in_sync`.
+**Aktiv ist NpcQuestCallbacksTest 0.1.2**; Manager-Status `in_sync`.
 Alle anderen Testpakete und Barttexturen sind deaktiviert. Die aktuelle
-[Aktivierung](quest/fix-0.1.1.json) korrigiert die Ereignisbindungen des Quest-Builds.
+[Aktivierung](quest/hotfix-0.1.2.json) verwendet die neue Spielbasis 25168047 und
+den aktuellen Decompiler von main. Questinhalt und Start071 bleiben unveraendert;
+0.1.1 hatte bereits die Ereignisbindungen des Quest-Builds korrigiert.
+Nur das Questpaket wurde fuer diesen Hotfix neu gebaut. Die bisherigen
+Spielbestaetigungen der anderen vier Pakete beziehen sich auf die vorige Spielversion.
 In0.1.0 blieb As Dialogmenue aus; neue Dialog-, Quest- und Journalmethoden waren
 nicht als native Ereignisse registriert. **[Deutsche Testliste fuer Paket5](quest/FIELD-TEST.md)**.
 Der [Fluchtabschluss](roles/field-runtime-0.1.3.json) dokumentiert den erfolgreichen
