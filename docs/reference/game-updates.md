@@ -236,8 +236,8 @@ rebuild and test the sidecar but do not rerun the private game comparison.
 the evidence is the evidence, never that the game agrees with it. Patch one
 default you can see and look before claiming that live behavior. When the
 admitted scope stops at bounded offline authoring, record that boundary instead
-of implying this step happened: neither build `24340829` nor build `24878692`
-gains dialog-runtime qualification from its central generation row.
+of implying this step happened: none of builds `24340829`, `24878692`, or
+`25168047` gains dialog-runtime qualification from its central generation row.
 
 ## What is deliberately not automated
 

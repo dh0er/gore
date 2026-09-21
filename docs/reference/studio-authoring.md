@@ -124,10 +124,11 @@ the vanilla identity; it is not a substitute for this new linked class chain.
 
 ### Mod Studio boundary
 
-The central closed generation registry currently contains exactly four reviewed
+The central closed generation registry currently contains exactly five reviewed
 Steam generation triples: the retained Steam 1.0.3 Hotfix 1 seal set, Steam
 build `24169431`, Steam build `24340829` from the 2026-07-31 update, and Steam
-build `24878692` from the 2026-08-27/28 update.
+build `24878692` from the 2026-08-27/28 update, and Steam build `25168047`
+from the 2026-09-21 1.0.5 hotfix.
 For Story/NPC/Quest, executable, deployment-aware pristine Shipping cache, and
 `Binds.Cache` must all match the same registered row; nearby hashes and cross-
 generation mixtures fail closed. Item authoring has a separate narrower gate:
@@ -148,6 +149,14 @@ profile but is not evidence of compiler-language drift. The 26,399 → 26,389
 scalar-window change is fully accounted for by -14 removed and +4 added
 game-content windows, not parser loss; the complete item-authoring matrix stays
 unchanged.
+
+The `25168047` row uses a fresh 173255 USMAP. It retains the same class graph,
+resolved bridge, native ancestry, tag-map surface, Binds API, and audited Item
+field matrix as `24878692`. All six curated story modules reproduce under the
+V5 catalog; the unchanged Swamp Camp chapter quest has a revised emitted-source
+seal, with its `ParentQuestClass` default verified separately. The full offline
+source-tree comparison has 164,724 aligned functions and no semantic differences.
+It does not add a live-game or dialog-runtime qualification.
 
 Those rows therefore admit the existing bounded project-only Story/NPC/Quest
 routes for their exact triples and the Item route for each exact executable

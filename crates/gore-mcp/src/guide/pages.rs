@@ -234,8 +234,9 @@ mod tests {
 
         for page in [game_updates, studio] {
             for claim in [
-                "exactly four reviewed",
+                "exactly five reviewed",
                 "24878692",
+                "25168047",
                 "fresh 172709 USMAP",
                 "UGameplayAbilityAttackLoop",
                 "UGameplayAbilityMagicBase",
@@ -250,7 +251,7 @@ mod tests {
         for claim in [
             "-14 + 4 = -10",
             "frozen 27-case and full-tree embedded-versus-standalone comparisons",
-            "neither build `24340829` nor build `24878692`",
+            "none of builds `24340829`, `24878692`, or",
         ] {
             assert!(
                 game_updates.contains(claim),
