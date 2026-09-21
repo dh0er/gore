@@ -50657,18 +50657,18 @@ mod default_binds_regression_tests {
 
     const DIEGO: &str = "Story.G1R.Conversation.Conversation_OC_STT_DIEGO";
 
-    fn emitted_diego(cache: &[u8], native: Option<NativeApi>) -> String {
+    fn emitted_module(cache: &[u8], native: Option<NativeApi>, module_name: &str) -> String {
         let modules = parse_modules(cache).expect("parse Shipping cache");
         let index = modules
             .iter()
-            .position(|module| module.name == DIEGO)
-            .expect("Diego module");
+            .position(|module| module.name == module_name)
+            .expect("module in Shipping cache");
         let mut refs = RefResolver::build(cache).expect("parse Shipping references");
         PreparedEmit::new(&modules, &mut refs, native)
             .expect("prepare emitter")
             .with_class_defaults(true)
             .emit_module(index)
-            .expect("emit Diego")
+            .expect("emit module")
     }
 
     #[test]
@@ -50679,13 +50679,14 @@ mod default_binds_regression_tests {
         let binds = std::fs::read(std::env::var_os("GORE_AS_BINDS").expect("set GORE_AS_BINDS"))
             .expect("read Binds.Cache");
 
-        let without = emitted_diego(&cache, None);
+        let without = emitted_module(&cache, None, DIEGO);
         assert_eq!(without.matches("    default ").count(), 0);
         assert!(without.contains("load the matching Binds.Cache"));
 
-        let with = emitted_diego(
+        let with = emitted_module(
             &cache,
             Some(NativeApi::from_bytes(&binds).expect("parse Binds.Cache")),
+            DIEGO,
         );
         assert_eq!(with.matches("    default ").count(), 441);
         assert!(with.contains("default DebugId = -1370378632990835844;"));
@@ -50696,11 +50697,46 @@ mod default_binds_regression_tests {
 
         let mut foreign_generation = cache.clone();
         foreign_generation[0] ^= 1;
-        let foreign = emitted_diego(
+        let foreign = emitted_module(
             &foreign_generation,
             Some(NativeApi::from_bytes(&binds).expect("parse Binds.Cache again")),
+            DIEGO,
         );
         assert_eq!(foreign.matches("    default ").count(), 0);
+        assert!(foreign.contains("load the matching Binds.Cache"));
+    }
+
+    #[test]
+    #[ignore = "requires GORE_AS_CACHE and GORE_AS_BINDS Shipping fixtures"]
+    fn uncontrol_defaults_require_the_matching_sealed_binds_pair() {
+        const UNCONTROL: &str = "GAS.Abilities.Spells.Spells.Control.GA_Spell_UnControl";
+        let cache = std::fs::read(std::env::var_os("GORE_AS_CACHE").expect("set GORE_AS_CACHE"))
+            .expect("read Shipping cache");
+        let binds = std::fs::read(std::env::var_os("GORE_AS_BINDS").expect("set GORE_AS_BINDS"))
+            .expect("read Binds.Cache");
+
+        let without = emitted_module(&cache, None, UNCONTROL);
+        assert!(!without.contains("    default "));
+        assert!(without.contains("load the matching Binds.Cache"));
+
+        let with = emitted_module(
+            &cache,
+            Some(NativeApi::from_bytes(&binds).expect("parse Binds.Cache")),
+            UNCONTROL,
+        );
+        assert_eq!(with.matches("    default ").count(), 2);
+        assert!(with.contains("default m_CameraTravelInitialDelay = 0.2f;"));
+        assert!(with.contains("default m_CameraTravelDuration = 1.0f;"));
+        assert!(!with.contains("class defaults are not authored"));
+
+        let mut foreign_generation = cache.clone();
+        foreign_generation[0] ^= 1;
+        let foreign = emitted_module(
+            &foreign_generation,
+            Some(NativeApi::from_bytes(&binds).expect("parse Binds.Cache again")),
+            UNCONTROL,
+        );
+        assert!(!foreign.contains("    default "));
         assert!(foreign.contains("load the matching Binds.Cache"));
     }
 }
