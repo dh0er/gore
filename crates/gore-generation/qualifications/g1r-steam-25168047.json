@@ -1,0 +1,31 @@
+{
+  "generation_id": "g1r-steam-25168047",
+  "label": "Steam build 25168047 (1.0.5 hotfix)",
+  "native_ancestry_profile_id": "sha256:5f2a19faf4348174249415853d01ee0529b24330f3fcb55835934af266d91229",
+  "gameplay_tag_float32_map_proof_id": "sha256:c25f03aab179f3ca16a4353de579afc64b450f4eff9b09337c28206d703f851d",
+  "scalar_default_operand_count": 26389,
+  "gameplay_tag_float32_operand_count": 1432,
+  "class_count": 6582,
+  "gameplay_tag_float32_map_field_count": 8,
+  "unresolved_fields_with_ancestry": 0,
+  "direct_windows": 26389,
+  "binds_field_row_count": 27435,
+  "binds_class_path_row_count": 11196,
+  "witnesses": {
+    "class_count": "crates/gore-as/tests/default_patch_test.rs::configured_build_25168047_profile_and_item_field_matrix_are_exact",
+    "direct_windows": "crates/gore-as/tests/default_patch_test.rs::configured_build_25168047_profile_and_item_field_matrix_are_exact",
+    "gameplay_tag_float32_map_field_count": "crates/gore-as/tests/default_patch_test.rs::configured_build_25168047_profile_and_item_field_matrix_are_exact",
+    "gameplay_tag_float32_map_proof_id": "crates/gore-as/tests/default_patch_test.rs::configured_build_25168047_profile_and_item_field_matrix_are_exact",
+    "gameplay_tag_float32_operand_count": "crates/gore-as/tests/default_patch_test.rs::configured_build_25168047_profile_and_item_field_matrix_are_exact",
+    "native_ancestry_profile_id": "crates/gore-as/tests/default_patch_test.rs::configured_build_25168047_profile_and_item_field_matrix_are_exact",
+    "scalar_default_operand_count": "crates/gore-as/tests/default_patch_test.rs::configured_build_25168047_profile_and_item_field_matrix_are_exact",
+    "unresolved_fields_with_ancestry": "crates/gore-as/tests/default_patch_test.rs::configured_build_25168047_profile_and_item_field_matrix_are_exact"
+  },
+  "notes": [
+    "Qualified from exact live Steam BuildID 25168047 files and fresh UE4SS 173255 USMAP, with immutable copies under C:\\gt\\hotfix_25168047; the executable, Shipping cache and Binds seals were checked before and after the dump.",
+    "The fresh dump retains the 6602-class graph and 6582-class Binds bridge, resolves all 402 native bases and every default field across 26389 scalar windows, and keeps eight GameplayTag-to-float32 declarations with 1432 cache operands.",
+    "Binds.Cache is byte-identical to BuildID 24878692. Its existing standalone compiler profile compiled the complete 7317-module source tree offline. The 164724-function oracle reports zero semantic differences and zero alignment loss.",
+    "Five curated modules retain their prior source seals. The unchanged Swamp Camp chapter quest has a new 600-byte defaults-free source seal in V5; the 662-byte defaults-bearing emission independently proves ParentQuestClass = G1R::Quest::UQuest_SwampCamp. All six curated modules reproduce.",
+    "The cache update adds AssessCrimeEvent and defers crime assessment in AIState_FoundSomeoneInMyBed to the next tick. No other aligned function changes semantics. This is bounded offline qualification; no live game behavior or installation patch was tested."
+  ]
+}

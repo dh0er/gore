@@ -425,18 +425,89 @@ pub const ROW_G1R_24878692: GenerationRow = GenerationRow {
     audited_item_generation: "g1r-steam-24878692",
 };
 
+/// Steam BuildID 25168047, still labelled 1.0.5. The Binds API, USMAP class graph, native
+/// ancestry, tag-map surface and Item field matrix remain unchanged. The Shipping cache changes
+/// one existing AI state and adds its deferred crime-assessment function. The curated V5 catalog
+/// seals the current emitted source for the unchanged Swamp Camp chapter quest.
+pub const ROW_G1R_25168047: GenerationRow = GenerationRow {
+    id: "g1r-steam-25168047",
+    label: "Steam build 25168047 (1.0.5 hotfix)",
+    edition: "g1r-steam",
+
+    executable: FileSeal {
+        byte_len: 171_796_992,
+        sha256: hex("dafd816b62230087cdb65ad504f4d8d003cd6013dba1b2b5b4f51457d78f729a"),
+    },
+    shipping_cache: FileSeal {
+        byte_len: 124_459_998,
+        sha256: hex("b913264a50327da30b48c3b35f431e90197f3eafdebe431501a90ffd2d793d54"),
+    },
+    binds_cache: FileSeal {
+        byte_len: 5_908_985,
+        sha256: hex("aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2"),
+    },
+    usmap: FileSeal {
+        byte_len: 2_415_539,
+        sha256: hex("08a98e01fb44a7632fdbe69b587ff40f0f14ad3a27f2bcca53a0e0ecf60b5e38"),
+    },
+
+    script_cache_guid: hex("cc072d82367ad34bbf51117546a8c7ce"),
+    script_cache_mutation_stable_sha256: hex(
+        "986d05c2871133ed6b626a1ac041ba54f513316b037ec2c6c72fc45e4226996f",
+    ),
+    scalar_default_operand_count: 26_389,
+    gameplay_tag_float32_operand_count: 1_432,
+
+    binds_field_map_sha256: hex(
+        "d7feb69355e5d66d02c66a9d5ca6ff3d675520bea10093cb8001bde0d47aafda",
+    ),
+    binds_class_path_map_sha256: hex(
+        "628d133fb6c6733c0d3d9e2710ae79d2758235582e9afed13201b84abaa7612b",
+    ),
+    usmap_class_graph_sha256: hex(
+        "642a8e0bc80301935a8a46498c00761b048cbac22bbd74fa914e86b6399fe321",
+    ),
+    resolved_class_profile_sha256: hex(
+        "a09e158df376b1f20b302f6eaa1e7476e660a7244c8d737b5a38f67243b52f5f",
+    ),
+    gameplay_tag_float32_map_profile_sha256: hex(
+        "5fa2e35616cb6b04a3060202e55ff575d8e8aeab5a25602aeddc10b3ad542708",
+    ),
+
+    native_ancestry_profile_id:
+        "sha256:5f2a19faf4348174249415853d01ee0529b24330f3fcb55835934af266d91229",
+    gameplay_tag_float32_map_proof_id:
+        "sha256:c25f03aab179f3ca16a4353de579afc64b450f4eff9b09337c28206d703f851d",
+
+    record_set_id: "g1r-steam-1.0.3-curated-story-v5",
+    record_set_seal: FileSeal {
+        byte_len: 5_499,
+        sha256: hex("92c92e4a150d041857fb592edd3a2206e1378cfdd59bc8c83a0385b51046da41"),
+    },
+    catalog_payload_seal: FileSeal {
+        byte_len: 5_611,
+        sha256: hex("9fc0213cba7457bcaa630f90bbfa1b699ed0984acbe357e13a8662ca04321f27"),
+    },
+    catalog_label: "compiled curated V5",
+    record_seal_kind: "compiled curated V5 record set",
+    catalog_seal_kind: "compiled curated V5 catalog payload",
+
+    audited_item_generation: "g1r-steam-25168047",
+};
+
 /// Every audited generation, oldest first. A fixed-length array so the length appears in the diff
 /// of any commit that adds a row — the one piece of the old array-shaped friction worth keeping.
-pub static GENERATION_ROWS: [GenerationRow; 4] = [
+pub static GENERATION_ROWS: [GenerationRow; 5] = [
     ROW_G1R_1_0_3,
     ROW_G1R_24169431,
     ROW_G1R_24340829,
     ROW_G1R_24878692,
+    ROW_G1R_25168047,
 ];
 
 /// The committed qualification artifact per row, keyed by [`GenerationRow::id`]. A row without one
 /// fails `every_row_has_a_committed_qualification_artifact`.
-pub const QUALIFICATION_ARTIFACTS: [(&str, &str); 4] = [
+pub const QUALIFICATION_ARTIFACTS: [(&str, &str); 5] = [
     (
         ROW_G1R_1_0_3.id,
         include_str!("../qualifications/g1r-steam-1.0.3.json"),
@@ -452,6 +523,10 @@ pub const QUALIFICATION_ARTIFACTS: [(&str, &str); 4] = [
     (
         ROW_G1R_24878692.id,
         include_str!("../qualifications/g1r-steam-24878692.json"),
+    ),
+    (
+        ROW_G1R_25168047.id,
+        include_str!("../qualifications/g1r-steam-25168047.json"),
     ),
 ];
 
