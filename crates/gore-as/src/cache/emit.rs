@@ -3558,6 +3558,8 @@ fn emit_function_ctor(
         pass_trace("split_continue_guard_bool_lifetime", &rendered);
         let rendered = restore_circling_path_argument_lifetimes(&rendered, f, class_name, is_method);
         pass_trace("restore_circling_path_argument_lifetimes", &rendered);
+        let rendered = restore_const_crime_tag_iterator(&rendered, f, class_name);
+        pass_trace("restore_const_crime_tag_iterator", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -7779,6 +7781,27 @@ fn restore_circling_path_argument_lifetimes(
         out = out.replacen(old, new, 1);
     }
     out
+}
+
+/// Keep the outer severity-stack index mutable while iterating its inner tags through the
+/// const array overload used by the original constructor.
+fn restore_const_crime_tag_iterator(body: &str, f: &Func, class_name: Option<&str>) -> String {
+    if class_name != Some("UCrimeProcessingSubsystem")
+        || f.name != "UCrimeProcessingSubsystem"
+        || !f.params.is_empty()
+        || disassemble(&f.bytecode).ok().is_none_or(|code| code.len() != 754)
+    {
+        return body.to_owned();
+    }
+    let old = "            for (auto& local_104 : local_6[local_87].CrimeTags.GameplayTags)";
+    let new = concat!(
+        "            const TArray<FGameplayTag>& local_103 = local_6[local_87].CrimeTags.GameplayTags;\n",
+        "            for (auto& local_104 : local_103)",
+    );
+    if body.matches(old).count() != 1 {
+        return body.to_owned();
+    }
+    body.replacen(old, new, 1)
 }
 
 /// Restore the inferred handle and value lifetimes used by the transform spawn-position source.

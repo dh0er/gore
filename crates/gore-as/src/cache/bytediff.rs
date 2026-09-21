@@ -1800,6 +1800,68 @@ fn fold_closed_position_score_literal_hoists(
     true
 }
 
+/// A const reference to one nested tag array adds an address round-trip before Iterator().
+/// The reference slot is written once and consumed once, with no intervening call or branch.
+/// Restore the direct receiver push only for the witnessed crime-constructor frame; N2 must
+/// still prove all retained value and storage lifetimes afterward.
+fn fold_closed_crime_tag_array_alias(
+    name: &str,
+    vanilla: &[NormInstr],
+    regen: &mut Vec<NormInstr>,
+) -> bool {
+    if name != "AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem.UCrimeProcessingSubsystem::UCrimeProcessingSubsystem"
+        || vanilla.len() != 754
+        || regen.len() != 757
+        || !vanilla[697..705].iter().map(|i| i.op).eq([
+            "PSF", "PshV4", "PSF", "Thiscall1", "PshRPtr", "ADDSi", "ADDSi", "CALLSYS",
+        ])
+        || !regen[697..708].iter().map(|i| i.op).eq([
+            "PshV4", "PSF", "Thiscall1", "PshRPtr", "ADDSi", "ADDSi",
+            "PopRPtr", "CpyRtoV8", "PSF", "PshVPtr", "CALLSYS",
+        ])
+        || callsys_owner_method(&vanilla[700]) != Some(("TArray", "opIndex"))
+        || callsys_owner_method(&vanilla[704]) != Some(("TArray", "Iterator"))
+        || vanilla[700].operands != regen[699].operands
+        || vanilla[702].operands != regen[701].operands
+        || vanilla[703].operands != regen[702].operands
+        || vanilla[704].operands != regen[707].operands
+    {
+        return false;
+    }
+    let [Operand::Slot(alias)] = regen[704].operands.as_slice() else {
+        return false;
+    };
+    if regen[706].operands != [Operand::Slot(*alias)]
+        || regen[705].operands == [Operand::Slot(*alias)]
+        || regen.iter().filter(|ins| ins.operands.contains(&Operand::Slot(*alias))).count() != 2
+        || [vanilla, regen.as_slice()].iter().enumerate().any(|(side, stream)| {
+            let range = if side == 0 { 697..705 } else { 697..708 };
+            stream.iter().any(|ins| ins.operands.iter().any(|op| {
+                matches!(op, Operand::JumpIndex(Some(target)) if range.contains(target))
+            }))
+        })
+    {
+        return false;
+    }
+    let mut folded = Vec::with_capacity(754);
+    folded.extend_from_slice(&regen[..697]);
+    folded.push(regen[705].clone());
+    folded.extend_from_slice(&regen[697..703]);
+    folded.push(regen[707].clone());
+    folded.extend_from_slice(&regen[708..]);
+    for ins in &mut folded {
+        for op in &mut ins.operands {
+            if let Operand::JumpIndex(Some(target)) = op {
+                if *target >= 708 {
+                    *target -= 3;
+                }
+            }
+        }
+    }
+    *regen = folded;
+    true
+}
+
 fn flow_equivalent_slots_with_storage(
     left: &[NormInstr],
     right: &[NormInstr],
@@ -1915,6 +1977,7 @@ pub struct NormFired {
     pub n6_reguard: bool,
     pub n8_bool_test: bool,
     pub n9_literal_hoist: bool,
+    pub n10_const_alias: bool,
 }
 
 impl NormFired {
@@ -1944,6 +2007,9 @@ impl NormFired {
         if self.n9_literal_hoist {
             v.push("N9:literal-hoist");
         }
+        if self.n10_const_alias {
+            v.push("N10:const-alias");
+        }
         v
     }
     fn any(&self) -> bool {
@@ -1955,6 +2021,7 @@ impl NormFired {
             || self.n6_reguard
             || self.n8_bool_test
             || self.n9_literal_hoist
+            || self.n10_const_alias
     }
 }
 
@@ -2445,6 +2512,9 @@ fn classify(
         false
     };
 
+    let const_alias_fired = opts.n2_slots
+        && fold_closed_crime_tag_array_alias(&name, &v_cmp, &mut r_cmp);
+
     // N2 has two progressively stronger, fail-closed proofs. First-use alpha-renaming remains the
     // cheap path and retains its equal-distinct-slot-count guard. If physical register reuse/split
     // changes that shape, the reaching-definition proof may still establish exact value-flow
@@ -2503,6 +2573,7 @@ fn classify(
         fired.n6_reguard = reguard_fired;
         fired.n8_bool_test = bool_test_fired;
         fired.n9_literal_hoist = literal_hoist_fired;
+        fired.n10_const_alias = const_alias_fired;
         // Defensive: if raw differs but NO normalizer is credited and no JitEntry/N5/N6 fired, that
         // is a classifier blind spot — treat as SEMANTIC rather than silently benign.
         if !fired.any() && !jit_fired {
@@ -4448,6 +4519,60 @@ mod tests {
         assert_eq!(regen[52].op, "PshV8");
         assert_eq!(regen[53].op, "PshC8");
         assert_eq!(regen[54].op, "SetV8");
+    }
+
+    #[test]
+    fn closed_crime_tag_alias_requires_one_local_use_and_exact_native_frame() {
+        let name = "AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem.UCrimeProcessingSubsystem::UCrimeProcessingSubsystem";
+        let mut vanilla = vec![ni("SUSPEND"); 754];
+        let mut regen = vec![ni("SUSPEND"); 757];
+        let index = NormInstr {
+            op: "Thiscall1",
+            operands: vec![Operand::Ref(OperandId::named_func_for_test("TArray", "opIndex"))],
+        };
+        let offset = |value| NormInstr {
+            op: "ADDSi",
+            operands: vec![Operand::Slot(0), Operand::IntConst { value, width: 4 }],
+        };
+        vanilla[695] = ni_jump("JMP", 728);
+        vanilla[697] = ni_slot("PSF", 96);
+        vanilla[698] = ni_slot("PshV4", 87);
+        vanilla[699] = ni_slot("PSF", 6);
+        vanilla[700] = index.clone();
+        vanilla[701] = ni("PshRPtr");
+        vanilla[702] = offset(16);
+        vanilla[703] = offset(0);
+        vanilla[704] = ni_callsys("TArray", "Iterator");
+        regen[695] = ni_jump("JMP", 731);
+        regen[697] = ni_slot("PshV4", 87);
+        regen[698] = ni_slot("PSF", 8);
+        regen[699] = index;
+        regen[700] = ni("PshRPtr");
+        regen[701] = offset(16);
+        regen[702] = offset(0);
+        regen[703] = ni("PopRPtr");
+        regen[704] = ni_slot("CpyRtoV8", 92);
+        regen[705] = ni_slot("PSF", 98);
+        regen[706] = ni_slot("PshVPtr", 92);
+        regen[707] = vanilla[704].clone();
+        assert!(!fold_closed_crime_tag_array_alias("Other", &vanilla, &mut regen.clone()));
+        for fault in 0..4 {
+            let mut bad = regen.clone();
+            match fault {
+                0 => bad[0] = ni_slot("PSF", 92),
+                1 => bad[707] = ni_callsys("TArray", "MutableIterator"),
+                2 => bad[701] = offset(24),
+                _ => bad[0] = ni_jump("JMP", 704),
+            }
+            let unchanged = bad.clone();
+            assert!(!fold_closed_crime_tag_array_alias(name, &vanilla, &mut bad), "fault {fault}");
+            assert!(bad.iter().zip(&unchanged).all(|(a, b)| a.norm_eq(b)));
+        }
+        assert!(fold_closed_crime_tag_array_alias(name, &vanilla, &mut regen));
+        assert_eq!(regen.len(), vanilla.len());
+        assert_eq!(regen[695].operands, vanilla[695].operands);
+        assert_eq!(regen[697].op, "PSF");
+        assert!(regen.iter().all(|i| i.op != "PopRPtr"));
     }
 
     /// An S1 re-guard window on object slot `x` loading into temp `y`, terminated by `TNZ`.
