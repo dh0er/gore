@@ -2362,7 +2362,8 @@ fn compile_full_graph_command(
     // is what a byte-faithfulness measurement diffs against the shipped cache. The selective
     // publication would hand back pristine bytes for every module whose text equals the
     // emitter's own output, and say nothing about them.
-    let complete_qualification = std::env::var_os("GORE_AS_COMPLETE_QUALIFICATION").is_some()
+    let complete_qualification = std::env::var("GORE_AS_COMPLETE_QUALIFICATION")
+        .is_ok_and(|value| value == "1")
         && requested_mode == CompilerBackendModeV1::Standalone;
     let planned = if complete_qualification {
         gore_as::full_graph_plan::plan_complete_source_tree_v1(&base_cache, &src)
