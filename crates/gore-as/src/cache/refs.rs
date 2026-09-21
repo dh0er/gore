@@ -10315,6 +10315,29 @@ impl RefResolver {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_test_strafe_argument_lifetimes(fault: u8) -> Self {
+        let mut r = Self::default();
+        for (ptr, name, module) in [
+            (1, "AGothicCharacter", ""),
+            (2, "UAIGroup_Combat", "AI.States.FightAI.CombatState.AIGroup_Combat"),
+            (3, "UPawnMovementComponent", ""),
+            (4, "FVector", ""),
+        ] {
+            r.type_identity_by_ptr.insert(ptr, TypeIdentity {
+                name: name.into(), module: module.into(), namespace: String::new(),
+            });
+        }
+        match fault {
+            1 => r.type_identity_by_ptr.get_mut(&1).unwrap().name = "AOtherCharacter".into(),
+            2 => r.type_identity_by_ptr.get_mut(&2).unwrap().module = "Other".into(),
+            3 => r.type_identity_by_ptr.get_mut(&3).unwrap().namespace = "Other".into(),
+            4 => r.type_identity_by_ptr.get_mut(&4).unwrap().name = "FVector2D".into(),
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_test_transform_spawn_lifetimes(fault: u8) -> Self {
         let mut r = Self::default();
         for (ptr, name, module) in [

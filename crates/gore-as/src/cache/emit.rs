@@ -3536,6 +3536,14 @@ fn emit_function_ctor(
             is_method,
         );
         pass_trace("restore_visual_logger_argument_lifetimes", &rendered);
+        let rendered = restore_strafe_argument_lifetimes(
+            &rendered,
+            f,
+            refs,
+            class_name,
+            is_method,
+        );
+        pass_trace("restore_strafe_argument_lifetimes", &rendered);
         let rendered = restore_transform_spawn_lifetimes(&rendered, f, refs, is_method);
         pass_trace("restore_transform_spawn_lifetimes", &rendered);
         let rendered = restore_attack_vector_endpoint_lifetimes(&rendered, f, refs, is_method);
@@ -7410,6 +7418,96 @@ fn restore_visual_logger_argument_lifetimes(
         || out.contains("float local_16_2")
     {
         return body.to_owned();
+    }
+    out
+}
+
+/// Preserve the call-argument order and per-iteration vector lives of the strafe move.
+/// The archived source form reproduces all 401 original instructions under N1+N2.
+fn restore_strafe_argument_lifetimes(
+    body: &str,
+    f: &Func,
+    refs: &RefResolver,
+    class_name: Option<&str>,
+    is_method: bool,
+) -> String {
+    if !is_method
+        || class_name != Some("UCM_StrafeAroundCharacterOfInterest")
+        || !f.is_ufunction
+        || f.is_const_method()
+        || f.name != "DoTask_Implementation"
+        || f.ret.token != 0x52
+        || f.ret.type_info != 0
+        || f.ret.is_reference
+        || f.ret.is_object_handle
+        || !f.params.is_empty()
+        || !body.contains("float local_22 = Math::Square(this.DistanceToKeepThreshold);")
+    {
+        return body.to_owned();
+    }
+    let Ok(code) = disassemble(&f.bytecode) else {
+        return body.to_owned();
+    };
+    if code.len() != 401
+        || code[0].op.name != "PshVPtr"
+        || code[1].op.name != "CALL"
+        || code[400].op.name != "RET"
+        || code[400].words.first().copied() != Some(2)
+        || f.obj_locals.len() != 13
+    {
+        return body.to_owned();
+    }
+    let slots = |name: &str, module: &str| {
+        let mut found = f.obj_locals.iter().filter_map(|(slot, ty)| {
+            refs.type_identity_by_ptr(*ty)
+                .filter(|identity| identity.name == name
+                    && identity.module == module && identity.namespace.is_empty())
+                .map(|_| *slot)
+        }).collect::<Vec<_>>();
+        found.sort_unstable();
+        found
+    };
+    if slots("AGothicCharacter", "") != [4, 74]
+        || slots("UAIGroup_Combat", "AI.States.FightAI.CombatState.AIGroup_Combat") != [50]
+        || slots("UPawnMovementComponent", "") != [92]
+        || slots("FVector", "") != [12, 32, 38, 44, 58, 64, 72, 80, 86]
+    {
+        return body.to_owned();
+    }
+
+    let rewrites = [
+        (concat!(
+            "            float local_20 = this.MinimumPathLength;\n",
+            "            local_18 = Math::RandRange(Math::Min(local_20, this.MaximumPathLength), this.MaximumPathLength);\n",
+        ), "            local_18 = Math::RandRange(Math::Min(this.MinimumPathLength, this.MaximumPathLength), this.MaximumPathLength);\n"),
+        (concat!(
+            "        float local_22 = Math::Square(this.DistanceToKeepThreshold);\n",
+            "        FVector local_32 = this.Combat.GetDirectionAwayFromTarget();\n",
+            "        float local_20_2 = this.GetDistanceToKeep();\n",
+            "        float local_24 = local_20_2 - this.Combat.GetDistanceToCharacterOfInterest();\n",
+            "        local_32 = (local_32 * local_24).GetSafeNormal2D(local_22, FVector::ZeroVector);\n",
+        ), "        FVector local_32 = (this.Combat.GetDirectionAwayFromTarget() * (this.GetDistanceToKeep() - this.Combat.GetDistanceToCharacterOfInterest())).GetSafeNormal2D(Math::Square(this.DistanceToKeepThreshold), FVector::ZeroVector);\n"),
+        (concat!(
+            "        local_20_2 = this.Combat.GetCombatGroup().GetCombatCenterOfMass().Distance(this.Combat.GetSelf().GetActorLocation());\n",
+            "        if ((Math::RandBool() || !(local_1) || ((this.Combat.GetCombatGroup().GetCombatCenterOfMass().Distance((this.Combat.GetSelf().GetActorLocation() + (local_12 * local_18)))) < local_20_2)) && this.CanMoveStraightIntoSide((local_12 * -1.0), local_32))\n",
+        ), concat!(
+            "        float local_20_2 = this.Combat.GetCombatGroup().GetCombatCenterOfMass().Distance(this.Combat.GetSelf().GetActorLocation());\n",
+            "        float local_48 = this.Combat.GetCombatGroup().GetCombatCenterOfMass().Distance((this.Combat.GetSelf().GetActorLocation() + (local_12 * local_18)));\n",
+            "        if ((Math::RandBool() || !(local_1) || (local_48 < local_20_2)) && this.CanMoveStraightIntoSide((local_12 * -1.0), local_32))\n",
+        )),
+        ("            FVector local_44 = ((this.Combat.GetDirectionAwayFromTarget().CrossProduct(FVector::UpVector) * local_26) + (this.Combat.GetDirectionAwayFromTarget() * (this.GetDistanceToKeep() - this.Combat.GetDistanceToCharacterOfInterest())).GetSafeNormal2D(Math::Square(this.DistanceToKeepThreshold), FVector::ZeroVector)).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);\n",
+         concat!(
+             "            local_12 = (this.Combat.GetDirectionAwayFromTarget().CrossProduct(FVector::UpVector) * local_26);\n",
+             "            local_32 = (this.Combat.GetDirectionAwayFromTarget() * (this.GetDistanceToKeep() - this.Combat.GetDistanceToCharacterOfInterest())).GetSafeNormal2D(Math::Square(this.DistanceToKeepThreshold), FVector::ZeroVector);\n",
+             "            FVector local_44 = (local_12 + local_32).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);\n",
+         )),
+    ];
+    if rewrites.iter().any(|(old, _)| body.matches(old).count() != 1) {
+        return body.to_owned();
+    }
+    let mut out = body.to_owned();
+    for (old, new) in rewrites {
+        out = out.replacen(old, new, 1);
     }
     out
 }
@@ -65218,6 +65316,91 @@ mod literal_value_lifetime_tests {
         assert_eq!(restore(source, &bad, &refs, class, true), source);
         bad = f.clone();
         bad.obj_locals[0].1 = 1;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+    }
+
+    fn strafe_argument_lifetimes_fixture() -> Func {
+        let mut ops: Vec<(&str, &[u16])> = vec![("SUSPEND", &[]); 401];
+        ops[0] = ("PshVPtr", &[0]);
+        ops[1] = ("CALL", &[]);
+        ops[400] = ("RET", &[2]);
+        let mut f = function(&ops);
+        f.name = "DoTask_Implementation".into();
+        f.is_ufunction = true;
+        f.ret.token = 0x52;
+        f.obj_locals = vec![
+            (4, 1), (50, 2), (74, 1), (92, 3),
+            (12, 4), (32, 4), (38, 4), (44, 4), (58, 4),
+            (64, 4), (72, 4), (80, 4), (86, 4),
+        ];
+        f
+    }
+
+    #[test]
+    fn strafe_arguments_keep_original_order_and_loop_values() {
+        let source = concat!(
+            "            float local_20 = this.MinimumPathLength;\n",
+            "            local_18 = Math::RandRange(Math::Min(local_20, this.MaximumPathLength), this.MaximumPathLength);\n",
+            "        float local_22 = Math::Square(this.DistanceToKeepThreshold);\n",
+            "        FVector local_32 = this.Combat.GetDirectionAwayFromTarget();\n",
+            "        float local_20_2 = this.GetDistanceToKeep();\n",
+            "        float local_24 = local_20_2 - this.Combat.GetDistanceToCharacterOfInterest();\n",
+            "        local_32 = (local_32 * local_24).GetSafeNormal2D(local_22, FVector::ZeroVector);\n",
+            "        local_20_2 = this.Combat.GetCombatGroup().GetCombatCenterOfMass().Distance(this.Combat.GetSelf().GetActorLocation());\n",
+            "        if ((Math::RandBool() || !(local_1) || ((this.Combat.GetCombatGroup().GetCombatCenterOfMass().Distance((this.Combat.GetSelf().GetActorLocation() + (local_12 * local_18)))) < local_20_2)) && this.CanMoveStraightIntoSide((local_12 * -1.0), local_32))\n",
+            "            FVector local_44 = ((this.Combat.GetDirectionAwayFromTarget().CrossProduct(FVector::UpVector) * local_26) + (this.Combat.GetDirectionAwayFromTarget() * (this.GetDistanceToKeep() - this.Combat.GetDistanceToCharacterOfInterest())).GetSafeNormal2D(Math::Square(this.DistanceToKeepThreshold), FVector::ZeroVector)).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);\n",
+        );
+        let expected = concat!(
+            "            local_18 = Math::RandRange(Math::Min(this.MinimumPathLength, this.MaximumPathLength), this.MaximumPathLength);\n",
+            "        FVector local_32 = (this.Combat.GetDirectionAwayFromTarget() * (this.GetDistanceToKeep() - this.Combat.GetDistanceToCharacterOfInterest())).GetSafeNormal2D(Math::Square(this.DistanceToKeepThreshold), FVector::ZeroVector);\n",
+            "        float local_20_2 = this.Combat.GetCombatGroup().GetCombatCenterOfMass().Distance(this.Combat.GetSelf().GetActorLocation());\n",
+            "        float local_48 = this.Combat.GetCombatGroup().GetCombatCenterOfMass().Distance((this.Combat.GetSelf().GetActorLocation() + (local_12 * local_18)));\n",
+            "        if ((Math::RandBool() || !(local_1) || (local_48 < local_20_2)) && this.CanMoveStraightIntoSide((local_12 * -1.0), local_32))\n",
+            "            local_12 = (this.Combat.GetDirectionAwayFromTarget().CrossProduct(FVector::UpVector) * local_26);\n",
+            "            local_32 = (this.Combat.GetDirectionAwayFromTarget() * (this.GetDistanceToKeep() - this.Combat.GetDistanceToCharacterOfInterest())).GetSafeNormal2D(Math::Square(this.DistanceToKeepThreshold), FVector::ZeroVector);\n",
+            "            FVector local_44 = (local_12 + local_32).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);\n",
+        );
+        let f = strafe_argument_lifetimes_fixture();
+        let refs = RefResolver::from_test_strafe_argument_lifetimes(0);
+        let restore = |body: &str, function: &Func, resolver: &RefResolver,
+                       class: Option<&str>, method: bool| {
+            super::restore_strafe_argument_lifetimes(
+                body, function, resolver, class, method,
+            )
+        };
+        let class = Some("UCM_StrafeAroundCharacterOfInterest");
+        assert_eq!(restore(source, &f, &refs, class, true), expected);
+        assert_eq!(restore(expected, &f, &refs, class, true), expected);
+        assert_eq!(restore(source, &f, &refs, class, false), source);
+        assert_eq!(restore(source, &f, &refs, Some("UOtherMove"), true), source);
+        for fault in 1..=4 {
+            assert_eq!(restore(source, &f,
+                &RefResolver::from_test_strafe_argument_lifetimes(fault), class, true),
+                source, "metadata {fault}");
+        }
+        for changed in [
+            source.replace("this.MinimumPathLength", "this.MaximumPathLength"),
+            source.replace("Math::RandBool()", "Math::RandBool2()"),
+            source.replace("GetSafeNormal2D(9.99999993922529e-9", "GetSafeNormal2D(1e-8"),
+            source.repeat(2),
+        ] {
+            assert_eq!(restore(&changed, &f, &refs, class, true), changed);
+        }
+        let code = disassemble(&f.bytecode).unwrap();
+        let mut bad = f.clone();
+        bad.name = "Other".into();
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.is_ufunction = false;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.traits = 4;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.bytecode[code[400].offset_dw] ^= 2 << 16;
+        assert_eq!(restore(source, &bad, &refs, class, true), source);
+        bad = f.clone();
+        bad.obj_locals[0].1 = 4;
         assert_eq!(restore(source, &bad, &refs, class, true), source);
     }
 
