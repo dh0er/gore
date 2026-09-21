@@ -3546,6 +3546,8 @@ fn emit_function_ctor(
         pass_trace("restore_strafe_argument_lifetimes", &rendered);
         let rendered = restore_trespassing_context_lifetimes(&rendered, f, refs, is_method);
         pass_trace("restore_trespassing_context_lifetimes", &rendered);
+        let rendered = restore_evaluate_crime_argument_order(&rendered, f, class_name, is_method);
+        pass_trace("restore_evaluate_crime_argument_order", &rendered);
         let rendered = restore_transform_spawn_lifetimes(&rendered, f, refs, is_method);
         pass_trace("restore_transform_spawn_lifetimes", &rendered);
         let rendered = restore_attack_vector_endpoint_lifetimes(&rendered, f, refs, is_method);
@@ -7626,6 +7628,35 @@ fn restore_trespassing_context_lifetimes(
         }
     }
     out
+}
+
+/// The age ratio is evaluated before GetAgeDecayParams in the original program. Naming both
+/// values also preserves their original argument slots across the call.
+fn restore_evaluate_crime_argument_order(
+    body: &str,
+    f: &Func,
+    class_name: Option<&str>,
+    is_method: bool,
+) -> String {
+    if !is_method
+        || class_name != Some("UCrimeProcessingSubsystem")
+        || f.name != "EvaluateCrime"
+        || !f.is_const_method()
+        || f.params.len() != 3
+        || disassemble(&f.bytecode).ok().is_none_or(|code| code.len() != 215)
+    {
+        return body.to_owned();
+    }
+    let old = "            local_16 = local_16 * ::ComputeAgeSeverityMultiplier(AgeTimeSeconds / local_12.TotalSeconds, local_2.GetAgeDecayParams(this));";
+    let new = concat!(
+        "            float local_32_2 = AgeTimeSeconds / local_12.TotalSeconds;\n",
+        "            FCrimeAgeDecayParams local_74 = local_2.GetAgeDecayParams(this);\n",
+        "            local_16 = local_16 * ::ComputeAgeSeverityMultiplier(local_32_2, local_74);",
+    );
+    if body.matches(old).count() != 1 {
+        return body.to_owned();
+    }
+    body.replacen(old, new, 1)
 }
 
 /// Restore the inferred handle and value lifetimes used by the transform spawn-position source.
