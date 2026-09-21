@@ -1515,6 +1515,10 @@ fn run_sidecar_process(
         // Windows KnownDLL dependency KERNEL32). Do not let caller loader variables such as
         // LD_PRELOAD, LD_LIBRARY_PATH or PATH alter the executed code closure.
         .env_clear()
+        // Diagnostics trace: the one variable that may cross the cleared environment. It makes
+        // the sidecar echo compiler errors and warnings to stderr as they arrive, so a crash in
+        // the compiler's error recovery still leaves the failing module and row behind.
+        .envs(std::env::var_os("GORE_AS_SIDECAR_TRACE").map(|value| ("GORE_AS_SIDECAR_TRACE", value)))
         .args(&config.fixed_args)
         .arg(if qualification { "qualify" } else { "compile" })
         .arg("--request")

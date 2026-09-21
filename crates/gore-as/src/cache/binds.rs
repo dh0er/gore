@@ -62,6 +62,11 @@ fn is_verified_default_pairing(
         .is_some_and(|row| row.binds_cache.sha256 == *loaded)
 }
 
+const HOTFIX_25168047_GUID: [u8; 16] = [
+    0xcc, 0x07, 0x2d, 0x82, 0x36, 0x7a, 0xd3, 0x4b, 0xbf, 0x51, 0x11, 0x75, 0x46, 0xa8,
+    0xc7, 0xce,
+];
+
 type VerifiedDefaultClassProfileDigests = ([u8; 32], [u8; 32]);
 
 /// Native AngelScript method/function arities extracted from `Binds.Cache`.
@@ -258,9 +263,48 @@ impl NativeApi {
         {
             return None;
         }
+        let scanned = self
+            .verified_default_field_types
+            .get(&(class.to_string(), field.to_string()))
+            .map(String::as_str);
+        if scanned.is_some() {
+            return scanned;
+        }
+        // The 1.0.5 Binds file contains the agreeing declaration/name pair
+        // `float32 m_CameraTravelInitialDelay`, but the legacy plain-field scan skips it
+        // after a false metadata boundary. Keep the audited map digest unchanged for older
+        // generations; admit this one omitted row only for its exact sealed Binds/GUID pair.
+        (script_cache_guid == &gore_generation::ROW_G1R_24878692.script_cache_guid
+            && class == "UGameplayAbilityUnControl"
+            && field == "m_CameraTravelInitialDelay")
+            .then_some("float32")
+    }
+
+    /// Read-only source evidence for the 25168047 cache, which shipped the identical audited
+    /// Binds file. This does not extend the mutation gate in `verified_default_field_type`.
+    pub(crate) fn emittable_default_field_type(
+        &self,
+        script_cache_guid: &[u8; 16],
+        class: &str,
+        field: &str,
+    ) -> Option<&str> {
+        if let Some(known) = self.verified_default_field_type(script_cache_guid, class, field) {
+            return Some(known);
+        }
+        if script_cache_guid != &HOTFIX_25168047_GUID
+            || self.verified_default_binds_sha256.as_ref()
+                != Some(&gore_generation::ROW_G1R_24878692.binds_cache.sha256)
+        {
+            return None;
+        }
         self.verified_default_field_types
             .get(&(class.to_string(), field.to_string()))
             .map(String::as_str)
+            .or_else(|| {
+                (class == "UGameplayAbilityUnControl"
+                    && field == "m_CameraTravelInitialDelay")
+                    .then_some("float32")
+            })
     }
 
     /// Sealed AngelScript type-to-Unreal path map for native default ancestry. The full map is
@@ -1040,6 +1084,49 @@ mod tests {
     }
 
     #[test]
+    fn hotfix_default_types_are_read_only_and_require_the_exact_binds() {
+        let mut api = NativeApi::from_test_arities(&[], &[]);
+        api.verified_default_binds_sha256 =
+            Some(gore_generation::ROW_G1R_24878692.binds_cache.sha256);
+        api.verified_default_field_types.insert(
+            ("UQuest".to_owned(), "ParentQuestClass".to_owned()),
+            "TSubclassOf<UQuest>".to_owned(),
+        );
+
+        assert_eq!(
+            api.emittable_default_field_type(&HOTFIX_25168047_GUID, "UQuest", "ParentQuestClass"),
+            Some("TSubclassOf<UQuest>")
+        );
+        assert_eq!(
+            api.emittable_default_field_type(
+                &HOTFIX_25168047_GUID,
+                "UGameplayAbilityUnControl",
+                "m_CameraTravelInitialDelay"
+            ),
+            Some("float32")
+        );
+        assert_eq!(
+            api.verified_default_field_type(
+                &HOTFIX_25168047_GUID,
+                "UGameplayAbilityUnControl",
+                "m_CameraTravelInitialDelay"
+            ),
+            None,
+            "read-only emission must not grant mutation evidence"
+        );
+
+        api.verified_default_binds_sha256 = Some([0; 32]);
+        assert_eq!(
+            api.emittable_default_field_type(
+                &HOTFIX_25168047_GUID,
+                "UGameplayAbilityUnControl",
+                "m_CameraTravelInitialDelay"
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn arity_of_handles_templates_and_defaults() {
         assert_eq!(arity_of("void Foo()"), Some(0));
         assert_eq!(arity_of("int Bar(int a)"), Some(1));
@@ -1295,6 +1382,55 @@ mod tests {
         assert_eq!(api.class_name_count(), from_bytes.class_name_count());
         assert_eq!(api.name_count(), from_bytes.name_count());
         assert_eq!(api.field_type_count(), from_bytes.field_type_count());
+        let latest = &gore_generation::ROW_G1R_24878692;
+        let file_sha256: [u8; 32] = Sha256::digest(&bytes).into();
+        if file_sha256 == latest.binds_cache.sha256 {
+            // Prove the supplementary sealed row comes from this class record, not an
+            // identically named field in another native class.
+            let starts = find_record_starts_exhaustive(&bytes);
+            let record = starts
+                .iter()
+                .enumerate()
+                .find_map(|(index, &start)| {
+                    let type_len = read_u32(&bytes, start)? as usize;
+                    let name = bytes.get(start + 4..start + 4 + type_len - 1)?;
+                    (name == b"UGameplayAbilityUnControl")
+                        .then(|| (start, starts.get(index + 1).copied().unwrap_or(bytes.len())))
+                })
+                .expect("native UnControl class record");
+            let decl = b"float32 m_CameraTravelInitialDelay\0";
+            let name = b"m_CameraTravelInitialDelay\0";
+            let mut pair = Vec::new();
+            pair.extend_from_slice(&(decl.len() as u32).to_le_bytes());
+            pair.extend_from_slice(decl);
+            pair.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            pair.extend_from_slice(name);
+            assert_eq!(
+                bytes[record.0..record.1]
+                    .windows(pair.len())
+                    .filter(|window| *window == pair)
+                    .count(),
+                1,
+                "exactly one agreeing float32 field row in the sealed owner record"
+            );
+            assert_eq!(
+                api.verified_default_field_type(
+                    &latest.script_cache_guid,
+                    "UGameplayAbilityUnControl",
+                    "m_CameraTravelInitialDelay",
+                ),
+                Some("float32"),
+            );
+            assert_eq!(
+                api.verified_default_field_type(
+                    &gore_generation::ROW_G1R_24340829.script_cache_guid,
+                    "UGameplayAbilityUnControl",
+                    "m_CameraTravelInitialDelay",
+                ),
+                None,
+                "the supplementary row must not authorize another generation"
+            );
+        }
         // Both construction routes must agree about the sealed state too — including agreeing
         // that there is none, which is what an unsealed generation looks like from here.
         for row in gore_generation::rows() {

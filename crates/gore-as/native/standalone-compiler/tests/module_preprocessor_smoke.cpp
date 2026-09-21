@@ -295,6 +295,47 @@ const string Literal = "import Not.A.Module;";
             standalone::native_super_kind::editor_subsystem, false, false},
         {"UObject", "/Script/CoreUObject.Object", 0U, standalone::native_super_kind::other_uobject, false, false},
     };
+    // Constructor-style member initializers are parsed by AngelScript as snArgList.
+    // Reflection must still name the field, never the initializer or its last argument.
+    const auto member_ctor_result = standalone::preprocess_lexical_module_graph(
+        dialect,
+        {source("Game/DirectMemberCtor.as", R"AS(class ADirectMemberCtor : AActor
+{
+    UPROPERTY()
+    TSoftObjectPtr<UAnimMontage> SleepStanding01(n"Montage");
+    UPROPERTY()
+    FVector Nested(Make(1.0, 2.0), "(quoted, argument)");
+    UPROPERTY()
+    FVector Empty();
+    UPROPERTY()
+    FVector Assigned = Make(1.0, 2.0);
+    UPROPERTY()
+    int32 Bare;
+    UFUNCTION()
+    void Method(int32 Value) {}
+}
+)AS")});
+    if (!member_ctor_result.ok || !member_ctor_result.diagnostics.empty() ||
+        member_ctor_result.modules.size() != 1U ||
+        member_ctor_result.modules[0].classes.size() != 1U) {
+        return fail("direct member constructor reflection failed");
+    }
+    const auto& member_ctor_class = member_ctor_result.modules[0].classes[0];
+    if (member_ctor_class.properties.size() != 5U || member_ctor_class.methods.size() != 1U ||
+        member_ctor_class.methods[0].function_name != "Method") {
+        return fail("direct member constructors changed property/function classification");
+    }
+    const std::vector<std::string> member_ctor_names{
+        "SleepStanding01", "Nested", "Empty", "Assigned", "Bare"};
+    const std::vector<std::string> member_ctor_types{
+        "TSoftObjectPtr<UAnimMontage>", "FVector", "FVector", "FVector", "int32"};
+    for (std::size_t index = 0U; index < member_ctor_names.size(); ++index) {
+        if (member_ctor_class.properties[index].property_name != member_ctor_names[index] ||
+            member_ctor_class.properties[index].literal_type != member_ctor_types[index]) {
+            return fail("UPROPERTY direct constructor swallowed field name or type");
+        }
+    }
+
     const auto dialect_result = standalone::preprocess_lexical_module_graph(
         dialect,
         {source("Game/Dialect.as", R"AS(namespace Demo

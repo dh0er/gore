@@ -1301,6 +1301,20 @@ fn curated_records(
     generation: GameGenerationSeal,
     record_set_id: &str,
 ) -> VerifiedExtractionRecords {
+    // V5 seals the current defaults-free PreparedEmit source for this quest. The class default
+    // remains independently verified against the cache; older catalog revisions retain their
+    // published source seal.
+    let swamp_chapter_source = if record_set_id == "g1r-steam-1.0.3-curated-story-v5" {
+        known_seal(
+            600,
+            "ea45a6346358315601f752172b48bd076ed3f3af0b17e4746a1318cc66e52f5b",
+        )
+    } else {
+        known_seal(
+            856,
+            "5f5060a2740794853fcf0aa38306e183637e81658ab3e9f9b97eee8c5bdd74dd",
+        )
+    };
     VerifiedExtractionRecords {
         record_set_id: record_set_id.to_owned(),
         generation,
@@ -1357,10 +1371,7 @@ fn curated_records(
                 "Story.G1R.Quest.Quest_SwampCamp_SCCHAPTER2",
                 "Story/G1R/Quest/Quest_SwampCamp_SCCHAPTER2.as",
                 "UQuest_SwampCamp_SCCHAPTER2",
-                known_seal(
-                    856,
-                    "5f5060a2740794853fcf0aa38306e183637e81658ab3e9f9b97eee8c5bdd74dd",
-                ),
+                swamp_chapter_source,
             ),
             parent_class_name: "UQuest_SwampCamp".to_owned(),
             role: QuestParentRole::Chapter,
@@ -2574,8 +2585,14 @@ mod tests {
 
         let mut unaudited = generation_seal(gore_generation::rows().last().expect("a table"));
         unaudited.executable.byte_len += 1;
-        let seals = compile_curated_seals(&unaudited, "g1r-steam-1.0.3-curated-story-v4")
-            .expect("an unaudited generation still compiles its proposed seals");
+        let seals = compile_curated_seals(
+            &unaudited,
+            gore_generation::rows()
+                .last()
+                .expect("a table")
+                .record_set_id,
+        )
+        .expect("an unaudited generation still compiles its proposed seals");
         assert_ne!(
             seals.record_set_seal,
             ContentSeal::from(
@@ -2594,16 +2611,21 @@ mod tests {
     }
 
     #[test]
-    fn every_generation_reuses_the_v1_curated_structure_with_its_own_binding() {
-        // This locks the intentional compiled-record wiring: a later generation is the reviewed V1
-        // record content rebound to a new triple and a new id, and nothing else. It is not an
-        // independent re-hash of installed emitted sources — the per-generation record and payload
-        // seals above are the trust boundary, and decompiling the sealed modules out of the new
-        // cache is the check that proves the content behind them did not move.
+    fn every_generation_reuses_the_curated_structure_with_its_reviewed_source_seal() {
+        // Later generations rebind the reviewed V1 record content to their own triple and id.
+        // V5 also updates the quest's emitted-source seal; all other curated fields stay fixed.
+        // This is not an independent re-hash of installed emitted sources: the per-generation
+        // seals above and the separate qualification run provide that check.
         for row in gore_generation::rows() {
             let mut rebound = curated_records_v1();
             rebound.generation = generation_seal(row);
             rebound.record_set_id = row.record_set_id.to_owned();
+            if row.id == gore_generation::ROW_G1R_25168047.id {
+                rebound.quest_parents[0].quest_class.source_seal = known_seal(
+                    600,
+                    "ea45a6346358315601f752172b48bd076ed3f3af0b17e4746a1318cc66e52f5b",
+                );
+            }
             assert_eq!(curated_records_for(row), rebound, "{}", row.id);
         }
     }

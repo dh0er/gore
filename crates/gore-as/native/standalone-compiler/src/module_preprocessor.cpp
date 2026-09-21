@@ -1461,8 +1461,9 @@ std::optional<reflection_macro> parse_reflection_macro(
                 parenthesis_depth == 0U) {
                 break;
             }
-            if (kind == reflection_macro_kind::property &&
-                parenthesis_depth == 0U && (character == ';' || character == '=')) {
+            // The field name ends before either assignment or a direct member constructor list.
+            if (kind == reflection_macro_kind::property && parenthesis_depth == 0U &&
+                (character == ';' || character == '=' || character == '(')) {
                 break;
             }
             if (character == '(') {

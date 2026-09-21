@@ -251,6 +251,15 @@ pub fn prepare_resolver_semantics(
         })
         .collect();
     refs.set_class_fields(fields);
+    refs.set_qualified_fields(mods.iter().flat_map(|module| {
+        module.classes.iter().flat_map(move |class| {
+            class.fields.iter().map(move |field| (
+                super::refs::TypeIdentity { module: module.name.clone(),
+                    namespace: class.namespace.clone(), name: class.name.clone() },
+                field.name.clone(), field.ty.clone(),
+            ))
+        })
+    }));
     let non_const = mods
         .iter()
         .flat_map(|module| &module.classes)
@@ -330,6 +339,8 @@ pub fn prepare_resolver_semantics(
         }
     }
     refs.set_param_defaults(param_defaults);
+    refs.set_restored_mixins(mods);
+    refs.set_script_property_getters(mods);
     refs.set_unusable_const_returns(unusable_const_returns(mods, refs));
     refs.add_method_names(
         mods.iter()
@@ -1602,6 +1613,8 @@ pub struct PreparedEmit<'a> {
     rename_plan: FreeFunctionRenamePlan,
     layout: Vec<ModuleLayout>,
     class_defaults: bool,
+    /// Module names `emit_tree` leaves out (a measurement copies them from an older tree).
+    skipped: std::collections::HashSet<String>,
 }
 
 impl<'a> PreparedEmit<'a> {
@@ -1619,6 +1632,7 @@ impl<'a> PreparedEmit<'a> {
             rename_plan,
             layout,
             class_defaults: false,
+            skipped: std::collections::HashSet::new(),
         })
     }
 
@@ -1628,6 +1642,14 @@ impl<'a> PreparedEmit<'a> {
     /// historical evidence and the byte-exact carry fallback.
     pub fn with_class_defaults(mut self, class_defaults: bool) -> Self {
         self.class_defaults = class_defaults;
+        self
+    }
+
+    /// Leave these modules out of `emit_tree`. The whole tree is still PREPARED (name collisions
+    /// and qualification see every module); only the writes are skipped — for a measurement that
+    /// takes an unchanged, slow module from an earlier tree.
+    pub fn skipping<I: IntoIterator<Item = String>>(mut self, names: I) -> Self {
+        self.skipped.extend(names);
         self
     }
 
@@ -1888,6 +1910,9 @@ impl<'a> PreparedEmit<'a> {
             mut stubbed_functions,
         ) = (0usize, 0usize, 0usize, 0usize, 0usize);
         for (module_index, module) in self.mods.iter().enumerate() {
+            if self.skipped.contains(&module.name) {
+                continue;
+            }
             let source = self.emit_module(module_index)?;
             functions += super::emit::emitted_body_count(module, self.refs);
             cache_function_records += module.functions.len()

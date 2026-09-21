@@ -5,6 +5,11 @@ uses the matching version section as the GitHub release notes.
 
 ## [Unreleased]
 
+- `gore as` now recompiles the Gothic Remake 1.0.5 hotfix source tree with all
+  164,724 functions aligned and no semantic differences or alignment loss.
+- `gore as emit-all --skip <module>` leaves a module out of the tree.
+- `GORE_AS_SIDECAR_TRACE=1` prints compiler errors as they happen, so a crashed
+  compile still names the module and line.
 - `gore as compile` and `compile-module` no longer require undeploying an
   installed script mod first; the compiler target is the deployment's pristine
   backup.

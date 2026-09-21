@@ -174,6 +174,10 @@ pub enum AsCmd {
         /// ordinary `compile-module --op edit` inputs should retain the complete emitted defaults.
         #[arg(long)]
         no_defaults: bool,
+        /// Module names to leave out of the tree (repeatable). The tree is still prepared whole;
+        /// a measurement copies the skipped, slow modules from an earlier emitted tree.
+        #[arg(long = "skip")]
+        skip: Vec<String>,
     },
     /// Emit recompilable .as for modules whose name contains <needle>.
     Emit {
@@ -2353,11 +2357,24 @@ fn compile_full_graph_command(
             };
         (base, binds)
     };
-    let plan = match gore_as::full_graph_plan::plan_complete_source_tree_with_emitted_base_v1(
-        &base_cache,
-        &binds_cache,
-        &src,
-    ) {
+    // Measurement path, deliberately not a public flag: `GORE_AS_COMPLETE_QUALIFICATION=1`
+    // treats EVERY module of the tree as an edit and publishes the complete rebuilt graph, which
+    // is what a byte-faithfulness measurement diffs against the shipped cache. The selective
+    // publication would hand back pristine bytes for every module whose text equals the
+    // emitter's own output, and say nothing about them.
+    let complete_qualification = std::env::var("GORE_AS_COMPLETE_QUALIFICATION")
+        .is_ok_and(|value| value == "1")
+        && requested_mode == CompilerBackendModeV1::Standalone;
+    let planned = if complete_qualification {
+        gore_as::full_graph_plan::plan_complete_source_tree_v1(&base_cache, &src)
+    } else {
+        gore_as::full_graph_plan::plan_complete_source_tree_with_emitted_base_v1(
+            &base_cache,
+            &binds_cache,
+            &src,
+        )
+    };
+    let plan = match planned {
         Ok(plan) => plan,
         Err(error) => {
             let error = anyhow::Error::new(error).context("planning the complete source graph");
@@ -2400,6 +2417,19 @@ fn compile_full_graph_command(
     let audit_binds = opts.binds_cache.clone();
     let closing_audit = move || audit_full_graph_inputs(&audit_game, &audit_base, &audit_binds);
     let report = match effective_mode {
+        CompilerBackendModeV1::Standalone if complete_qualification => {
+            gore_as::compile::compile_full_graph_qualification_standalone_v1_with_target(
+                &opts,
+                standalone_runner
+                    .as_mut()
+                    .expect("strict standalone runner was checked")
+                    as &mut dyn StandaloneCompilerRunnerV1,
+                closing_audit,
+                target
+                    .take()
+                    .expect("product standalone runner has a target proof"),
+            )
+        }
         CompilerBackendModeV1::Standalone => {
             gore_as::compile::compile_full_graph_standalone_v1_with_target(
                 &opts,
@@ -3038,6 +3068,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             file,
             outdir,
             no_defaults,
+            skip,
         } => {
             let bytes = read_module_cache(&file)?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
@@ -3051,6 +3082,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             )
             .context("prepare emitted modules")?
             .with_class_defaults(!no_defaults)
+            .skipping(skip)
             .emit_tree(&outdir)
             .with_context(|| format!("emitting to {}", outdir.display()))?;
             eprintln!(
@@ -4296,7 +4328,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             eprintln!("B1 byte-faithful  : {b1:.2}%  (IDENTICAL+BENIGN / aligned)");
             // Per-normalizer fire counts across BENIGN functions.
             let (mut c1, mut c2, mut c3, mut c4) = (0usize, 0usize, 0usize, 0usize);
-            let (mut c5, mut c6) = (0usize, 0usize);
+            let (mut c5, mut c6, mut c8, mut c9, mut c10) = (0usize, 0usize, 0usize, 0usize, 0usize);
             for d in &report.diffs {
                 if d.verdict == Verdict::Benign {
                     c1 += d.fired.n1_refs as usize;
@@ -4305,10 +4337,13 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     c4 += d.fired.n4_consts as usize;
                     c5 += d.fired.n5_scope as usize;
                     c6 += d.fired.n6_reguard as usize;
+                    c8 += d.fired.n8_bool_test as usize;
+                    c9 += d.fired.n9_literal_hoist as usize;
+                    c10 += d.fired.n10_const_alias as usize;
                 }
             }
             eprintln!(
-                "normalizer fires  : N1:refs={c1} N2:slots={c2} N3:jumps={c3} N4:consts={c4} N5:scope={c5} N6:reguard={c6}"
+                "normalizer fires  : N1:refs={c1} N2:slots={c2} N3:jumps={c3} N4:consts={c4} N5:scope={c5} N6:reguard={c6} N8:bool-test={c8} N9:literal-hoist={c9} N10:const-alias={c10}"
             );
 
             if let Some(jpath) = &json {
@@ -4333,7 +4368,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 }
                 sem_list.push(']');
                 let json_out = format!(
-                    "{{\n  \"aligned\": {aligned},\n  \"identical\": {n_ident},\n  \"benign\": {n_benign},\n  \"semantic\": {n_sem},\n  \"b1_byte_faithful_pct\": {b1:.4},\n  \"only_in_vanilla_modules\": {},\n  \"only_in_regen_modules\": {},\n  \"only_in_vanilla_funcs\": {},\n  \"only_in_regen_funcs\": {},\n  \"normalizer_fires\": {{\"n1_refs\": {c1}, \"n2_slots\": {c2}, \"n3_jumps\": {c3}, \"n4_consts\": {c4}, \"n5_scope\": {c5}, \"n6_reguard\": {c6}}},\n  \"semantic_list\": {sem_list}\n}}\n",
+                    "{{\n  \"aligned\": {aligned},\n  \"identical\": {n_ident},\n  \"benign\": {n_benign},\n  \"semantic\": {n_sem},\n  \"b1_byte_faithful_pct\": {b1:.4},\n  \"only_in_vanilla_modules\": {},\n  \"only_in_regen_modules\": {},\n  \"only_in_vanilla_funcs\": {},\n  \"only_in_regen_funcs\": {},\n  \"normalizer_fires\": {{\"n1_refs\": {c1}, \"n2_slots\": {c2}, \"n3_jumps\": {c3}, \"n4_consts\": {c4}, \"n5_scope\": {c5}, \"n6_reguard\": {c6}, \"n8_bool_test\": {c8}, \"n9_literal_hoist\": {c9}, \"n10_const_alias\": {c10}}},\n  \"semantic_list\": {sem_list}\n}}\n",
                     report.only_in_vanilla_modules.len(),
                     report.only_in_regen_modules.len(),
                     report.only_in_vanilla_funcs.len(),

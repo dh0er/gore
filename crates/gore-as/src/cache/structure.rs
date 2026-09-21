@@ -67,6 +67,10 @@ struct Arg {
     /// arbitrary calls that could mutate the container, so such entries must not pass the
     /// relaxed carry gate. Static-name FName literals stay `false` (pure literals).
     reeval: bool,
+    /// A pending default constructor carried by this exact operand: physical slot,
+    /// concrete constructor type, and absolute argument-push instruction index.
+    /// The raw `s` remains a slot until the actual consumer and cleanup settle it.
+    default_ctor: Option<(i32, String, usize)>,
 }
 impl Arg {
     fn int(s: String) -> Arg {
@@ -121,6 +125,24 @@ impl Arg {
         self.carryable = true;
         self
     }
+}
+
+/// A carried default value stops being a replacement candidate if this block
+/// addresses or writes its slot again. Keep the ordinary operand and its identity.
+fn invalidate_carried_defaults(stack: &mut [Arg], ins: &Instr) -> Vec<String> {
+    if !stack.iter().any(|arg| arg.default_ctor.is_some()) {
+        return Vec::new();
+    }
+    let touched = super::bytediff::addressed_slots(ins);
+    stack.iter_mut().filter_map(|arg| {
+        let (slot, _, _) = arg.default_ctor.as_ref()?;
+        if !touched.contains(slot) {
+            return None;
+        }
+        arg.default_ctor = None;
+        arg.reeval = false; // it is once again only the original plain PSF operand
+        Some(arg.s.clone())
+    }).collect()
 }
 
 const AS_PTR_SIZE: i32 = 2;
@@ -231,7 +253,7 @@ pub fn body_statements_ctor(
         exit_mixed_rvo_ret_rows_ok: false,
         exit_scan_floor: 0,
         carry: None,
-        loop_scope: None,
+        loop_scope: None, pending_loop_exit: None,
         shared_return: None,
     };
     st.emit_range(0, g.blocks.len(), depth, &mut body);
@@ -406,6 +428,128 @@ fn is_lvalue_arg(arg: &Arg) -> bool {
     }
 }
 
+/// A typed native conversion consumes an existing local value even when that
+/// local was initialized in an enclosing block, outside this block's `out` list.
+fn is_proven_typed_psf_conversion(recv: &Arg, args: &[Arg], ptr: i64, refs: &RefResolver) -> bool {
+    let [src] = args else { return false; };
+    let Some([param]) = refs.func_params_by_ptr(ptr) else { return false; };
+    let (Some(dst_ty), Some(src_ty)) = (recv.ty.as_deref(), src.ty.as_deref()) else { return false; };
+    let local_slot = |arg: &Arg| arg.s.strip_prefix("local_").and_then(|n| n.parse::<i32>().ok()).filter(|n| *n > 0);
+    let (Some(dst), Some(source)) = (local_slot(recv), local_slot(src)) else { return false; };
+    let Some(identity) = refs.type_identity_by_ptr(param.type_info) else { return false; };
+    // Native value parameters can consume the same addressed local without const-ref flags.
+    let plain_value = !param.is_reference && !param.is_object_const && !param.is_read_only
+        && !param.is_object_handle && !param.is_auto && !param.if_handle_then_const;
+    recv.is_psf && src.is_psf && dst != source && dst_ty != src_ty
+        && matches!(dst_ty.as_bytes().first(), Some(b'F' | b'T' | b'E'))
+        && param.token == 5 && !param.is_object_handle
+        && (plain_value || (param.is_reference && param.is_object_const && param.is_read_only))
+        && identity.module.is_empty() && identity.namespace.is_empty()
+        && identity.name.starts_with('F') && identity.name == src_ty
+        && refs.func_by_ptr(ptr) == Some("$beh0") && refs.func_owner_by_ptr(ptr) == Some(dst_ty)
+        && refs.is_method_by_ptr(ptr) && !refs.is_const_method_by_ptr(ptr)
+        && refs.func_ret_by_ptr(ptr).is_some_and(|t| t.token == 0x52 && !t.is_reference && !t.is_object_handle)
+}
+
+/// A native value initialized by an entry constructor or an earlier native RVO
+/// remains readable in later blocks. Require its exact const-reference type and lifetime.
+fn has_entry_constructed_psf_value(ctx: &Ctx<'_>, at: usize, arg: &Arg, param: &DataType) -> bool {
+    (|| {
+        let slot = arg.s.strip_prefix("local_")?.parse::<i32>().ok()?;
+        let identity = ctx.refs.type_identity_by_ptr(param.type_info)?;
+        if slot <= 0 || !arg.is_psf || arg.ty.as_deref() != Some(identity.name.as_str())
+            || ctx.slot_type(slot).as_deref() != Some(identity.name.as_str())
+            || !identity.name.starts_with('F') || !identity.module.is_empty() || !identity.namespace.is_empty()
+            || param.token != 5 || !param.is_reference || !param.is_object_const || !param.is_read_only
+            || param.is_object_handle || param.is_auto || param.if_handle_then_const { return None; }
+        let prefix = ctx.instrs.get(..at)?;
+        let first_branch = prefix.iter().position(|i| i.op.name.starts_with('J')).unwrap_or(at);
+        let mut constructed = false;
+        for (index, pair) in prefix.windows(2).enumerate() {
+            if pair[0].op.name != "PSF" || pair[0].words.first().map(|w| *w as i16 as i32) != Some(slot)
+                || pair[1].op.name != "CALLSYS" { continue; }
+            let ptr = *pair[1].qwords.first()? as i64;
+            if ctx.refs.func_by_ptr(ptr) == Some("$beh2") { return None; }
+            if index + 1 >= first_branch || ctx.refs.func_by_ptr(ptr) != Some("$beh0") { continue; }
+            if ctx.refs.func_owner_by_ptr(ptr) == Some(identity.name.as_str())
+                && ctx.refs.is_method_by_ptr(ptr) && !ctx.refs.is_const_method_by_ptr(ptr)
+                && ctx.refs.func_params_by_ptr(ptr)?.is_empty()
+                && ctx.refs.func_ret_by_ptr(ptr).is_some_and(|r| r.token == 0x52
+                    && !r.is_reference && !r.is_object_handle) { constructed = true; }
+        }
+        if constructed { return Some(()); }
+        // A completed native method RVO also initializes a local outside this
+        // block. Its first address use must be the hidden return slot; no edge
+        // may enter after that setup without passing its producing call.
+        let first = prefix.iter().position(|i| super::bytediff::addressed_slots(i).contains(&slot))?;
+        let run = prefix.get(first..first + 3)?;
+        if run.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "CALLSYS"]) { return None; }
+        let receiver = run[1].words.first().map(|w| *w as i16 as i32)?;
+        if receiver <= 0 || receiver == slot || !ctx.slot_type(receiver)
+            .is_some_and(|t| matches!(t.as_bytes().first(), Some(b'U' | b'A'))) { return None; }
+        let ptr = *run[2].qwords.first()? as i64;
+        let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+        if !ctx.refs.is_method_by_ptr(ptr) || !ctx.refs.is_const_method_by_ptr(ptr)
+            || !ctx.refs.func_owner_by_ptr(ptr).is_some_and(|t| matches!(t.as_bytes().first(), Some(b'U' | b'A')))
+            || ctx.refs.func_params_by_ptr(ptr).is_none()
+            || ret.token != 5 || ret.type_info != param.type_info || ret.is_reference || ret.is_object_const
+            || ret.is_object_handle || ret.is_read_only || ret.is_auto || ret.if_handle_then_const { return None; }
+        for (index, ins) in prefix.iter().enumerate().skip(first + 3) {
+            if ins.op.name == "RET" { return None; }
+            if !super::bytediff::addressed_slots(ins).contains(&slot) { continue; }
+            if ins.op.name != "PSF" { return None; }
+            if prefix.get(index + 1).is_some_and(|call| call.op.name == "CALLSYS"
+                && call.qwords.first().is_some_and(|p| matches!(ctx.refs.func_by_ptr(*p as i64), Some("$beh0" | "$beh2")))) { return None; }
+        }
+        for (index, ins) in ctx.instrs.iter().enumerate() {
+            if !ins.op.name.starts_with('J') { continue; }
+            if ins.op.name == "JMPP" { return None; }
+            let target = ins.offset_dw as i64 + 2 + *ins.dwords.first()? as i32 as i64;
+            if target > run[0].offset_dw as i64 && target <= ctx.instrs.get(at)?.offset_dw as i64
+                && !(first + 2..at).contains(&index) { return None; }
+        }
+        Some(())
+    })().is_some()
+}
+
+/// A native local's addressed field is a typed copy source, not a pending RVO.
+/// None rejects the copy; Some(true) proves its field type and permits direct-copy spelling.
+/// Some(false) proves only the direct typed input and keeps T(member): missing native field
+/// metadata cannot rule out an opcode-free base/shadow or covariant reference conversion.
+fn is_proven_native_psf_member_copy(ctx: &Ctx<'_>, at: usize, recv: &Arg, args: &[Arg], ptr: i64) -> Option<bool> {
+    (|| {
+        let [arg] = args else { return None; };
+        let c = ctx.instrs.get(at.checked_sub(3)?..at)?;
+        if c.iter().map(|i| i.op.name).ne(["PSF", "ADDSi", "PSF"]) { return None; }
+        let w = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+        let (source, dest) = (w(&c[0])?, w(&c[2])?);
+        let tid = *c[1].dwords.first()? as i32;
+        let owner = ctx.refs.type_identity_by_id(tid)?;
+        let (field, old_owner) = ctx.refs.member_identity(tid, w(&c[1])?)?;
+        let [param] = ctx.refs.func_params_by_ptr(ptr)? else { return None; };
+        let copied = ctx.refs.type_identity_by_ptr(param.type_info)?;
+        let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+        let field_type = ctx.refs.native_field_value_type(&owner.name, field)
+            .or_else(|| ctx.refs.native_field_type(&owner.name, field));
+        (source > 0 && dest > 0 && source != dest && recv.is_psf && arg.is_psf
+            && recv.s == format!("local_{dest}") && arg.s == format!("local_{source}.{field}")
+            && owner.module.is_empty() && owner.namespace.is_empty()
+            && ctx.refs.type_identity_by_id(old_owner) == Some(owner)
+            && ctx.slot_type(source).as_deref() == Some(owner.name.as_str())
+            && copied.module.is_empty() && copied.namespace.is_empty()
+            && matches!(copied.name.bytes().next(), Some(b'F' | b'T'))
+            && recv.ty.as_deref() == Some(copied.name.as_str())
+            && arg.ty.as_deref().is_none_or(|ty| ty == copied.name)
+            && field_type.is_none_or(|ty| ty == copied.name)
+            && param.token == 5 && param.is_reference && param.is_object_const && param.is_read_only
+            && !param.is_object_handle && !param.is_auto && !param.if_handle_then_const
+            && ctx.refs.func_by_ptr(ptr) == Some("$beh0") && ctx.refs.func_owner_by_ptr(ptr) == Some(copied.name.as_str())
+            && ctx.refs.is_method_by_ptr(ptr) && !ctx.refs.is_const_method_by_ptr(ptr)
+            && ret.token == 0x52 && !ret.is_reference && !ret.is_object_handle)
+            .then_some(field_type.is_some())
+    })()
+}
+
 /// A `$beh0` value copy-constructor whose source is a PSF slot is recoverable only when every
 /// available type witness agrees: one parameter, PSF receiver/source, identical recovered slot
 /// types, and a behavior owner equal to that type. This is the compiler's
@@ -454,6 +598,130 @@ pub fn decompile(f: &FuncCode, refs: &RefResolver) -> String {
         params.join(", "),
         body
     )
+}
+
+/// Keep the explicit copy when the next expression immediately takes its address.
+/// Such a value can be an argument temporary that later inlining moves into a field
+/// assignment (`WeaponUsed = TSubclassOf<T>(member)`). Removing its constructor now
+/// would erase that construction. This only declines an optimization; it does not
+/// claim every immediate use is a temporary.
+fn copy_receiver_is_immediately_pushed(next: Option<&Instr>, receiver: &str) -> bool {
+    let Some(slot) = receiver.strip_prefix("local_").and_then(|s| s.parse::<i32>().ok()) else {
+        return false;
+    };
+    next.is_some_and(|ins| {
+        ins.op.name == "PSF"
+            && ins.words.first().map(|word| *word as i16 as i32) == Some(slot)
+    })
+}
+
+/// Parameter field metadata comes from its resolved owner, never this-class fields.
+/// Require the declared parameter class to match that owner for this narrow path.
+fn enum_parameter_field_type(
+    refs: &RefResolver, parameter_type: &str, owner: &str, field: &str,
+) -> Option<String> {
+    if bare_type_name(parameter_type) != bare_type_name(owner) {
+        return None;
+    }
+    refs.field_type_by_class(owner, field)
+        .filter(|ty| is_enum_name(ty))
+        .map(str::to_owned)
+}
+
+/// Preserve explicit argument widening that selects a native f64 overload.
+/// An implicit initializer can instead select its f32 peer after inlining.
+fn scalar_argument_widening(instrs: &[Instr], at: usize, refs: &RefResolver) -> bool {
+    // A widened upper bound and a zero lower bound feed the f64 random range.
+    if let Some(c) = instrs.get(at..at + 5) {
+        if c.iter().map(|i| i.op.name).eq(["fTOd", "PshV8", "PshC8", "CALLSYS", "CpyRtoV8"])
+            && c[0].words.first().is_some_and(|w| s16(*w) > 0)
+            && c[0].words.get(1).is_some_and(|w| s16(*w) > 0)
+            && c[0].words.first() != c[0].words.get(1)
+            && c[0].words.first() == c[1].words.first()
+            && c[2].qwords.first() == Some(&0)
+        {
+            if let Some(ptr) = c[3].qwords.first().map(|p| *p as i64) {
+                let scalar = |ty: &DataType| matches!(ty.token, 0x51 | 0x5e)
+                    && !ty.is_reference && !ty.is_object_handle;
+                if !refs.is_method_by_ptr(ptr) && refs.func_owner_by_ptr(ptr).is_none()
+                    && refs.func_by_ptr(ptr) == Some("RandRange")
+                    && refs.func_ns_by_ptr(ptr) == Some("Math")
+                    && refs.func_ret_by_ptr(ptr).is_some_and(scalar)
+                    && refs.func_params_by_ptr(ptr).is_some_and(|p| p.len() == 2 && p.iter().all(scalar))
+                { return true; }
+            }
+        }
+    }
+    let Some(c) = at.checked_sub(2).and_then(|lo| instrs.get(lo..lo + 5)) else { return false; };
+    if c.iter().map(|i| i.op.name).ne(["PshC8", "PshC8", "fTOd", "PshV8", "CALLSYS"])
+        || c[2].words.first().is_none() || c[2].words.first() != c[3].words.first()
+        || c[..2].iter().any(|i| !i.qwords.first().is_some_and(|q| f64::from_bits(*q).is_finite()))
+    { return false; }
+    let Some(ptr) = c[4].qwords.first().map(|p| *p as i64) else { return false; };
+    let Some(params) = refs.func_params_by_ptr(ptr) else { return false; };
+    !refs.is_method_by_ptr(ptr) && refs.func_owner_by_ptr(ptr).is_none()
+        && refs.func_ret_by_ptr(ptr).is_some_and(|r| r.token == 0x41 && !r.is_reference && !r.is_object_handle)
+        && params.len() == 3 && params.iter().all(|p| matches!(p.token, 0x51 | 0x5e)
+            && !p.is_reference && !p.is_object_handle)
+}
+
+fn addressed_field_widening(instrs: &[Instr], at: usize) -> bool {
+    let Some(previous) = at.checked_sub(1).and_then(|i| instrs.get(i)) else { return false; };
+    let Some(convert) = instrs.get(at) else { return false; };
+    let Some(next) = instrs.get(at + 1) else { return false; };
+    previous.op.name == "RDR4" && convert.op.name == "fTOd" && next.op.name == "PSF"
+        && convert.words.first().is_some_and(|w| s16(*w) > 0)
+        && previous.words.first().is_some()
+        && previous.words.first() == convert.words.get(1)
+        && next.words.first() == convert.words.first()
+}
+
+/// Provenance for the exact byte-wide enum carrier immediately before CMPIi.
+/// PropertyReferences OldTypeId is an owner, never a field-value type witness.
+fn widened_switch_enum_selector(
+    ctx: &Ctx<'_>, floor: usize, compare: usize, selector: i32,
+) -> Option<(String, String, usize)> {
+    let cast_at = compare.checked_sub(1).filter(|at| *at >= floor)?;
+    let cast = ctx.instrs.get(cast_at)?;
+    if !matches!(cast.op.name, "sbTOi" | "ubTOi")
+        || s16(*cast.words.first()?) != selector
+    {
+        return None;
+    }
+    let source = s16(*cast.words.get(1)?);
+    if ctx.param_off_map.contains_key(&source) {
+        let ty = ctx.slot_type(source).filter(|ty| is_enum_name(ty))?;
+        return Some((ty, ctx.slot_name(source), cast_at));
+    }
+    let read_at = cast_at.checked_sub(1).filter(|at| *at >= floor)?;
+    let read = ctx.instrs.get(read_at)?;
+    if read.op.name != "RDR1" || s16(*read.words.first()?) != source {
+        return None;
+    }
+    let load_at = read_at.checked_sub(1).filter(|at| *at >= floor)?;
+    let load = ctx.instrs.get(load_at)?;
+    let (receiver, offset) = match load.op.name {
+        "LoadThisR" => (0, *load.words.first()? as i32),
+        "LoadRObjR" => (s16(*load.words.first()?), *load.words.get(1)? as i32),
+        _ => return None,
+    };
+    let is_this = load.op.name == "LoadThisR" && ctx.f.is_method;
+    if !is_this && !ctx.param_off_map.contains_key(&receiver) {
+        return None;
+    }
+    let owner_id = *load.dwords.first()? as i32;
+    let field = ctx.refs.member(owner_id, offset)?;
+    let ty = if is_this {
+        ctx.fields.and_then(|fields| fields.get(field).cloned())
+            .or_else(|| ctx.refs.type_by_id(owner_id)
+                .and_then(|owner| ctx.refs.field_type_by_class(owner, field))
+                .map(str::to_owned))
+            .filter(|ty| is_enum_name(ty))?
+    } else {
+        enum_parameter_field_type(ctx.refs, &ctx.slot_type(receiver)?,
+            ctx.refs.type_by_id(owner_id)?, field)?
+    };
+    Some((ty, format!("{}.{field}", ctx.slot_name(receiver)), load_at))
 }
 
 struct Ctx<'a> {
@@ -560,10 +828,14 @@ impl Ctx<'_> {
     /// compiler reuses one scratch slot for two different constant returns, and a single name over
     /// both lives can only carry one of them.
     fn const_return_literal(&self, at: usize) -> Option<String> {
-        if self.ret_ty.map(|ty| ty.base_name(self.refs))? != "int" {
+        // Every primitive return type: an `int`-only fold LOST the float and bool constants
+        // (`case 1: return -55.0;` came out as `return local_4;` with the declaration's zero).
+        let ret = self.ret_ty.map(|ty| ty.base_name(self.refs))?;
+        if !matches!(ret.as_str(), "int" | "float" | "float32" | "bool") {
             return None;
         }
-        let slot = self.instrs.get(at)?.words.first().map(|w| *w as i16 as i32)?;
+        let read = self.instrs.get(at)?;
+        let slot = read.words.first().map(|w| *w as i16 as i32)?;
         let here = self.const_return_at(at, slot)?;
         // ONE constant return through a slot is a name the source may well have written, and the
         // folds behind us already turn `local_N = K; return local_N;` into `return K;` with no
@@ -576,7 +848,7 @@ impl Ctx<'_> {
             .enumerate()
             .filter(|(other, ins)| {
                 *other != at
-                    && ins.op.name == "CpyVtoR4"
+                    && ins.op.name == read.op.name
                     && ins.words.first().map(|w| *w as i16 as i32) == Some(slot)
             })
             .filter_map(|(other, _)| self.const_return_at(other, slot));
@@ -604,8 +876,27 @@ impl Ctx<'_> {
             back -= 2;
         }
         let set = self.instrs.get(back.checked_sub(1)?)?;
-        (set.op.name == "SetV4" && set.words.first().map(|w| *w as i16 as i32) == Some(slot))
-            .then(|| (set.dwords.first().copied().unwrap_or(0) as i32).to_string())
+        if set.words.first().map(|w| *w as i16 as i32) != Some(slot) {
+            return None;
+        }
+        let ret = self.ret_ty.map(|ty| ty.base_name(self.refs))?;
+        match (set.op.name, ret.as_str()) {
+            ("SetV4", "int") => {
+                Some((set.dwords.first().copied().unwrap_or(0) as i32).to_string())
+            }
+            ("SetV4", "float32") => Some(fmt_float(
+                ConstBits::W4(set.dwords.first().copied().unwrap_or(0)),
+                false,
+            )),
+            ("SetV8", "float") => Some(fmt_float(
+                ConstBits::W8(set.qwords.first().copied().unwrap_or(0)),
+                true,
+            )),
+            ("SetV1", "bool") | ("SetV4", "bool") => {
+                Some((set.dwords.first().copied().unwrap_or(0) != 0).to_string())
+            }
+            _ => None,
+        }
     }
 
     fn slot_name(&self, off: i32) -> String {
@@ -892,6 +1183,34 @@ fn scan_back_retval(ctx: &Ctx, before: usize) -> Option<String> {
 /// [`scan_back_retval`] bounded below by `floor` (instruction index): used by the switch
 /// recovery's synthesized `return`s so a case's value never leaks in from a PRECEDING case
 /// region (the linear scan would otherwise cross the region boundary).
+thread_local! {
+    /// Absolute index of the instruction the statement builder is rendering.
+    static CUR_INSTR: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// `(slot, call index)` for every by-value call result the builder popped as the call's
+    /// hidden out-slot. The emitter reads it once the body is built: a value pushed on again
+    /// only after other operands went on the stack was a statement of its own.
+    static RVO_PRODUCERS: std::cell::RefCell<Vec<(i32, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The out-slot producers recorded since the last call, in order.
+pub(crate) fn take_rvo_producers() -> Vec<(i32, usize)> {
+    RVO_PRODUCERS.with(|v| std::mem::take(&mut *v.borrow_mut()))
+}
+
+thread_local! {
+    /// `(slot, call index)` for every local pushed BY ADDRESS into a call's frame — the call
+    /// that consumed the value. Only the builder's own operand stack knows which call took a
+    /// push: the arguments evaluated after it stand between the push and its call.
+    static RVO_CONSUMERS: std::cell::RefCell<Vec<(i32, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The consumers recorded since the last call, in order.
+pub(crate) fn take_rvo_consumers() -> Vec<(i32, usize)> {
+    RVO_CONSUMERS.with(|v| std::mem::take(&mut *v.borrow_mut()))
+}
+
 /// Which loop shape produced a condition, and what its test block carried, behind
 /// `GORE_AS_LOOP_DIAG`.
 fn loop_diag(path: &str, stmts: &[String], cond: &str) {
@@ -964,13 +1283,153 @@ fn bool_literal(value: bool) -> String {
     }
 }
 
+/// `text` with every whole-word `word` replaced by `with`.
+fn replace_word(text: &str, word: &str, with: &str) -> String {
+    let positions = word_positions(text, word);
+    if positions.is_empty() {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len() + with.len());
+    let mut at = 0usize;
+    for p in positions {
+        out.push_str(&text[at..p]);
+        out.push_str(with);
+        at = p + word.len();
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
+/// True when one bracket pair spans the whole of `expr`.
+fn wraps_whole_expr(expr: &str) -> bool {
+    if !expr.starts_with('(') || !expr.ends_with(')') {
+        return false;
+    }
+    let mut depth = 0i32;
+    for (at, b) in expr.bytes().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        if depth == 0 && at + 1 != expr.len() {
+            return false;
+        }
+    }
+    depth == 0
+}
+
+/// A value put in place of the name that held it: bracketed where it carries an operator, so it
+/// binds as the one operand the name was.
+fn as_operand(value: &str) -> String {
+    if value.contains(' ') && !wraps_whole_expr(value) {
+        format!("({value})")
+    } else {
+        value.to_owned()
+    }
+}
+
+/// A loop test that builds SEVERAL values in temporaries before comparing — `local_32 =
+/// local_28.Num();` and then `local_31 < local_32` — is the one expression `local_31 <
+/// local_28.Num()`, which is what the source wrote and what the compiler re-evaluates on every
+/// iteration. Each temporary is read exactly once, in a later header statement or in the test,
+/// and every statement is consumed: a value nothing in the header reads was not a temporary of
+/// the test, and the fold stands down rather than guess. Purely textual; the caller proves the
+/// slots are dead outside the header.
+fn fold_loop_header_temps(stmts: &[String], cond: &str) -> Option<String> {
+    if stmts.is_empty() {
+        return None;
+    }
+    let is_local = |name: &str| {
+        name.strip_prefix("local_")
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+    };
+    // (slot, value) in definition order; a slot leaves the list when its one read consumes it.
+    let mut pending: Vec<(String, String)> = Vec::new();
+    let substitute = |pending: &mut Vec<(String, String)>, text: &str| -> Option<String> {
+        let mut text = text.to_owned();
+        let mut k = 0usize;
+        while k < pending.len() {
+            match count_word(&text, &pending[k].0) {
+                0 => k += 1,
+                1 => {
+                    let (slot, value) = pending.remove(k);
+                    text = replace_word(&text, &slot, &as_operand(&value));
+                }
+                _ => return None,
+            }
+        }
+        Some(text)
+    };
+    for stmt in stmts {
+        let (target, rhs) = stmt.trim().strip_suffix(';')?.split_once(" = ")?;
+        if !is_local(target) || rhs.is_empty() {
+            return None;
+        }
+        let rhs = substitute(&mut pending, rhs)?;
+        // Written again while its earlier value is still unread: that value was dropped, which
+        // a condition never does.
+        if pending.iter().any(|(slot, _)| slot == target) {
+            return None;
+        }
+        pending.push((target.to_owned(), rhs));
+    }
+    let cond = substitute(&mut pending, cond)?;
+    if !pending.is_empty() || cond.contains('?') {
+        return None;
+    }
+    Some(cond)
+}
+
+/// `++local_N;`, `--local_N;` or `local_N = local_N <op> <expr>;` — a local updated in place,
+/// which is the form a `for` increment takes.
+fn in_place_update(stmt: &str) -> bool {
+    let is_local = |name: &str| {
+        name.strip_prefix("local_")
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let s = stmt.trim().trim_end_matches(';');
+    if let Some(name) = s.strip_prefix("++").or_else(|| s.strip_prefix("--")) {
+        return is_local(name);
+    }
+    if let Some((target, rhs)) = s.split_once(" = ") {
+        return is_local(target)
+            && count_word(rhs, target) == 1
+            && (rhs.starts_with(&format!("{target} + ")) || rhs.starts_with(&format!("{target} - ")));
+    }
+    false
+}
+
 fn scan_back_retval_floor(ctx: &Ctx, before: usize, floor: usize) -> Option<String> {
     for i in (floor..before).rev() {
         let ins = &ctx.instrs[i];
         match ins.op.name {
             "CpyVtoR4" | "CpyVtoR8" | "CpyVtoR1" | "LOADOBJ" => {
+                // `FreeNullV8 v4; LOADOBJ v4` returns a handle the compiler just nulled: that
+                // is `return nullptr;` through a scratch slot, not a declared handle returned
+                // (which loads the slot without freeing it first).
+                let slot = ins.words.first().copied().map(s16);
+                // Only when the free FLOWS into the load: a load that is a jump target joins
+                // paths, and the free before it in the listing belongs to another arm
+                // (measured: `ClrVPtr v6` of an else-arm made a cast's result `nullptr`).
+                let joined_from_elsewhere = ctx.instrs.iter().any(|jump| {
+                    jump.op.name.starts_with('J')
+                        && jump
+                            .dwords
+                            .first()
+                            .map(|off| jump.offset_dw as i64 + 2 + *off as i32 as i64)
+                            == Some(ins.offset_dw as i64)
+                });
+                if ins.op.name == "LOADOBJ"
+                    && i > floor
+                    && !joined_from_elsewhere
+                    && matches!(ctx.instrs[i - 1].op.name, "FreeNullV8" | "ClrVPtr")
+                    && ctx.instrs[i - 1].words.first().copied().map(s16) == slot
+                {
+                    return Some("nullptr".to_string());
+                }
                 return Some(ctx.const_return_literal(i).unwrap_or_else(|| {
-                    ctx.slot_name(ins.words.first().copied().map(s16).unwrap_or(0))
+                    ctx.slot_name(slot.unwrap_or(0))
                 }));
             }
             "RET" => return None,
@@ -1016,6 +1475,583 @@ fn materialized_comparison(c: &Cmp) -> Option<String> {
         .then(|| format!("({} {op} {})", c.a, c.b))
 }
 
+/// A typed parameter copy survives its null guard when the same closed life
+/// supplies the sole argument of a later call beyond an early false return.
+fn guarded_parameter_handle_copy(ctx: &Ctx, at: usize, source: &Arg) -> bool {
+    let found = (|| {
+        let w = |i: &Instr, n: usize| i.words.get(n).copied().map(s16).unwrap_or(i32::MIN);
+        let start = at.checked_sub(1)?;
+        let code = ctx.instrs.get(start..start + 9)?;
+        if code.iter().map(|i| i.op.name).ne(["PshVPtr", "RefCpyV", "CmpPtrNull", "JNZ",
+            "SetV1", "CpyVtoR4", "JMP", "PshVPtr", "CALL"])
+            || ctx.f.ret.token != 0x41 || ctx.f.ret.is_reference { return None; }
+        let slot = w(&code[1], 0);
+        let parameter_slot = w(&code[0], 0);
+        let index = *ctx.param_off_map.get(&parameter_slot)?;
+        let parameter = ctx.f.param_types.get(index)?;
+        let parameter_type = parameter.base_name(ctx.refs);
+        if slot <= 0 || parameter_slot >= 0 || parameter.token != 5 || !parameter.is_object_handle
+            || parameter.is_reference || parameter.is_object_const || parameter.is_read_only
+            || parameter.is_auto || parameter.if_handle_then_const
+            || source.s != ctx.param_or_arg(index) || !ctx.param_src_ok(&source.s)
+            || ctx.slot_type(slot)? != parameter_type
+            || source.ty.as_deref() != Some(parameter_type.as_str())
+            || w(&code[2], 0) != slot || w(&code[7], 0) != slot
+            || code[4].dwords.first() != Some(&0) || w(&code[4], 0) != w(&code[5], 0)
+        { return None; }
+        let identity = ctx.refs.type_identity_by_ptr(parameter.type_info)?;
+        let id = *code[8].dwords.first()? as i32;
+        let [argument] = ctx.refs.func_params_by_id(id)? else { return None; };
+        if ctx.refs.func_by_id(id).is_none() || ctx.refs.is_method_by_id(id)
+            || argument.token != 5 || !argument.is_object_handle || argument.is_reference
+            || argument.is_auto || argument.if_handle_then_const
+            || ctx.refs.type_identity_by_ptr(argument.type_info)? != identity { return None; }
+        let target = |i: &Instr| i.dwords.first().map(|v| i.offset_dw as i64 + 2 + *v as i32 as i64);
+        let last = ctx.instrs.last()?;
+        if last.op.name != "RET" || target(&code[3]) != Some(code[7].offset_dw as i64)
+            || target(&code[6]) != Some(last.offset_dw as i64)
+            || ctx.instrs.iter().enumerate().filter(|(_, i)|
+                super::bytediff::addressed_slots(i).contains(&slot)).map(|(i, _)| i)
+                .ne([at, at + 1, start + 7])
+            || ctx.instrs.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+                && i.offset_dw != code[3].offset_dw && target(i).is_some_and(|to|
+                    to > code[0].offset_dw as i64 && to <= code[8].offset_dw as i64)))
+        { return None; }
+        Some(())
+    })();
+    found.is_some()
+}
+
+/// A REFCPY through a declared mutable handle-reference parameter is a real output store.
+/// Match its frame address and typed source, including a dereferenced input parameter.
+fn is_ref_handle_parameter_store(ctx: &Ctx, code: &[Instr], at: usize, src: &Arg, dst: &Arg) -> bool {
+    let Some(tail) = at.checked_sub(1).and_then(|start| code.get(start..at + 2)) else { return false; };
+    if !tail.iter().map(|i| i.op.name).eq(["PshVPtr", "REFCPY", "PopPtr"]) { return false; }
+    let word = |i: &Instr| i.words.first().map(|w| s16(*w));
+    let Some(target) = word(&tail[0]) else { return false; };
+    let parameter = |slot| ctx.param_off_map.get(&slot).and_then(|i| ctx.f.param_types.get(*i));
+    let Some(param) = parameter(target) else { return false; };
+    if target > 0 || dst.s != ctx.slot_name(target) || param.token != 5
+        || !param.is_reference || !param.is_object_handle || param.is_read_only || param.is_object_const
+    { return false; }
+    let Some(target_type) = ctx.refs.type_by_ptr(param.type_info) else { return false; };
+    let Some(mut from) = at.checked_sub(2) else { return false; };
+    if code[from].op.name == "PshNull" { return src.s == "nullptr"; }
+    let dereferenced = code[from].op.name == "RDSPtr";
+    if dereferenced {
+        let Some(previous) = from.checked_sub(1) else { return false; };
+        from = previous;
+    }
+    if code[from].op.name != "PshVPtr" { return false; }
+    let Some(source) = word(&code[from]) else { return false; };
+    if src.s != ctx.slot_name(source) { return false; }
+    let source_type = if source <= 0 {
+        let Some(input) = parameter(source) else { return false; };
+        if input.token != 5 || !input.is_object_handle || input.is_object_const || input.is_read_only
+            || input.is_reference != dereferenced { return false; }
+        ctx.refs.type_by_ptr(input.type_info)
+    } else if !dereferenced { src.ty.as_deref() } else { None };
+    source_type.is_some_and(|source| source == target_type || provably_derived(source, target_type, ctx.refs))
+}
+
+/// Const parameters remain excluded unless this exact bytecode store targets a
+/// field with the same fully qualified DataType in the serialized owner metadata.
+fn is_exact_const_param_field_store(
+    ctx: &Ctx, insns: &[Instr], at: usize, src: &str, dst: &str,
+) -> bool {
+    let Some(code) = at.checked_sub(3).and_then(|start| insns.get(start..=at)) else { return false; };
+    let word = |ins: &Instr, index: usize| ins.words.get(index).map(|v| *v as i16 as i32);
+    let dereferenced = code[0].op.name == "RDSPtr";
+    let source_push = if dereferenced {
+        let Some(push) = at.checked_sub(4).and_then(|index| insns.get(index)) else { return false; };
+        push
+    } else { &code[0] };
+    if !ctx.f.is_method || source_push.op.name != "PshVPtr" || code[1].op.name != "PshVPtr"
+        || word(&code[1], 0) != Some(0) || code[2].op.name != "ADDSi" || code[3].op.name != "REFCPY"
+    { return false; }
+    let Some(source_slot) = word(source_push, 0) else { return false; };
+    if source_slot == 0 || src != ctx.slot_name(source_slot) { return false; }
+    let Some(index) = ctx.param_off_map.get(&source_slot) else { return false; };
+    let Some(param) = ctx.f.param_types.get(*index) else { return false; };
+    let Some(owner_id) = code[2].dwords.first().map(|v| *v as i32) else { return false; };
+    let Some(offset) = word(&code[2], 0) else { return false; };
+    let Some(field) = ctx.refs.member(owner_id, offset) else { return false; };
+    // RDSPtr consumes only the parameter's reference indirection; every other
+    // qualifier and the fully qualified object identity must still match the field.
+    let mut value = param.clone();
+    if dereferenced {
+        if !value.is_reference || !value.is_object_handle { return false; }
+        value.is_reference = false;
+    }
+    dst == format!("this.{field}") && ctx.refs.const_object_field_accepts(owner_id, offset, &value)
+}
+
+/// A script default temporary is destroyed before the assignment releases its
+/// pointer. A named local reverses those two operations. Require the complete
+/// construction/copy/destruction sequence and no other uses of its frame slot.
+fn script_default_member_copy(
+    ins: &[Instr], at: usize, refs: &RefResolver, source: &str, target: &str,
+) -> Option<String> {
+    let start = at.checked_sub(5)?;
+    let code = ins.get(start..at + 4)?;
+    let expected = ["PSF", "CALL", "PSF", "PshVPtr", "ADDSi", "CopyScript", "PSF", "CALL", "PopPtr"];
+    if !code.iter().zip(expected).all(|(op, name)| op.op.name == name) { return None; }
+    let w = |op: &Instr| op.words.first().map(|v| *v as i16 as i32);
+    let slot = w(&code[0])?;
+    if slot <= 0 || w(&code[2]) != Some(slot) || w(&code[6]) != Some(slot)
+        || w(&code[3]) != Some(0) || source != format!("local_{slot}")
+        || !target.starts_with("this.") || target.contains(['(', '[', '\u{1}', '\u{2}'])
+        || ins.iter().filter(|op| super::bytediff::addressed_slots(op).contains(&slot)).count() != 3
+    { return None; }
+    let ctor = *code[1].dwords.first()? as i32;
+    let owner = refs.script_constructor_type_by_id(ctor)?;
+    let copied = refs.type_identity_by_ptr(*code[5].qwords.first()? as i64)?;
+    if (owner.module.as_str(), owner.namespace.as_str(), owner.name.as_str())
+        != (copied.module.as_str(), copied.namespace.as_str(), copied.name.as_str())
+        || !refs.is_method_by_id(ctor)
+        || !refs.func_params_by_id(ctor).is_some_and(|p| p.is_empty())
+        || !refs.func_ret_by_id(ctor).is_some_and(|r| r.token == 0x52)
+    { return None; }
+    let destructor = *code[7].dwords.first()? as i32;
+    if refs.func_by_id(destructor) != Some(format!("~{}", owner.name).as_str())
+        || refs.func_owner_by_id(destructor) != Some(owner.name.as_str())
+        || !refs.is_method_by_id(destructor)
+        || !refs.func_params_by_id(destructor).is_some_and(|p| p.is_empty())
+        || !refs.func_ret_by_id(destructor).is_some_and(|r| r.token == 0x52)
+    { return None; }
+    let ty = if owner.namespace.is_empty() { owner.name.clone() }
+        else { format!("{}::{}", owner.namespace, owner.name) };
+    Some(format!("{ty}()"))
+}
+
+
+/// An exact address-selection diamond consumed by a native value copy constructor.
+/// Share the witness with the argument-repair heuristic: its two source pushes
+/// are consumed here, not by a later call with a distinct default argument.
+pub(super) fn native_value_selection(
+    instrs: &[Instr], join: usize, refs: &RefResolver,
+) -> Option<(usize, [i32; 3], i64)> {
+    let head = join.checked_sub(5)?;
+    let c = instrs.get(head..join + 2)?;
+    if c.iter().map(|i| i.op.name).ne(["CMPd", "JNS", "PSF", "JMP", "PSF", "PSF", "CALLSYS"])
+    { return None; }
+    let word = |i: &Instr, at: usize| i.words.get(at).map(|v| *v as i16 as i32);
+    let target = |i: &Instr| i.dwords.first().map(|v| i.offset_dw as i64 + 2 + *v as i32 as i64);
+    let slots = [word(&c[2], 0)?, word(&c[4], 0)?, word(&c[5], 0)?];
+    if slots.iter().any(|s| *s <= 0) || slots[0] == slots[1] || slots[..2].contains(&slots[2])
+        || word(&c[0], 0)? <= 0 || word(&c[0], 1)? <= 0
+        || target(&c[1]) != Some(c[4].offset_dw as i64)
+        || target(&c[3]) != Some(c[5].offset_dw as i64)
+        || instrs.iter().enumerate().any(|(at, i)| i.op.name == "JMPP"
+            || ((is_cond_op(i.op.name) || i.op.name == "JMP") && at != head + 1 && at != head + 3
+                && target(i).is_some_and(|to| to > c[0].offset_dw as i64 && to <= c[6].offset_dw as i64)))
+    { return None; }
+    let ptr = *c[6].qwords.first()? as i64;
+    let [param] = refs.func_params_by_ptr(ptr)? else { return None; };
+    let owner = refs.type_identity_by_ptr(param.type_info)?;
+    let ret = refs.func_ret_by_ptr(ptr)?;
+    if param.token != 5 || !param.is_reference || !param.is_object_const || !param.is_read_only
+        || param.is_object_handle || param.is_auto || param.if_handle_then_const
+        || !owner.module.is_empty() || !owner.namespace.is_empty()
+        || !matches!(owner.name.bytes().next(), Some(b'F' | b'T'))
+        || refs.func_by_ptr(ptr) != Some("$beh0") || refs.func_owner_by_ptr(ptr) != Some(owner.name.as_str())
+        || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr)
+        || ret.token != 0x52 || ret.is_reference || ret.is_object_handle
+    { return None; }
+    Some((head, slots, param.type_info))
+}
+
+struct LocalLvalueSelection {
+    head: usize,
+    consumed: usize,
+    statement: String,
+    copy_ctor_slot: Option<i32>,
+}
+
+/// The compiler selects an existing lvalue's address, then reads/copies it at
+/// the join. The arms have no side effects. Require the exact two-arm layout,
+/// a same-typed pair, immediate consumption, and no other entry into the region.
+fn local_lvalue_selection(ctx: &Ctx<'_>, join: usize) -> Option<LocalLvalueSelection> {
+    if let Some((head, slots, ptr)) = native_value_selection(ctx.instrs, join, ctx.refs) {
+        let ty = &ctx.refs.type_identity_by_ptr(ptr)?.name;
+        if slots.iter().any(|slot| ctx.slot_type(*slot).as_deref() != Some(ty.as_str())) { return None; }
+        let [yes, no, dst] = slots;
+        let test = &ctx.instrs[head];
+        return Some(LocalLvalueSelection { head, consumed: 2, copy_ctor_slot: Some(dst),
+            statement: format!("{} = ({} < {} ? {} : {});", ctx.slot_name(dst),
+                ctx.slot_name(s16(test.words[0])), ctx.slot_name(s16(test.words[1])),
+                ctx.slot_name(yes), ctx.slot_name(no)) });
+    }
+    // A bool selects a member address through a handle or directly on this.
+    // Neither arm executes a call; the join immediately copy-constructs one value.
+    if let Some(c) = join.checked_sub(9).and_then(|head| ctx.instrs.get(head..join + 2))
+        .filter(|c| c.iter().map(|i| i.op.name).eq([
+            "CpyVtoR1", "JLowZ", "PshVPtr", "ADDSi", "RDSPtr", "ADDSi",
+            "JMP", "PshVPtr", "ADDSi", "PSF", "CALLSYS"]))
+    {
+        let head = join - 9;
+        let word = |i: &Instr| i.words.first().map(|w| *w as i16 as i32);
+        let target = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+        let (test, dst) = (word(&c[0])?, word(&c[9])?);
+        if !ctx.f.is_method || test <= 0 || dst <= 0 || test == dst
+            || ctx.slot_type(test).as_deref() != Some("bool") || ctx.float_slots.contains(&test)
+            || word(&c[2]) != Some(0) || word(&c[7]) != Some(0)
+            || target(&c[1]) != Some(c[7].offset_dw as i64)
+            || target(&c[6]) != Some(c[9].offset_dw as i64)
+        { return None; }
+        for (at, i) in ctx.instrs.iter().enumerate() {
+            if i.op.name == "JMPP" { return None; }
+            if (is_cond_op(i.op.name) || i.op.name == "JMP") && at != head + 1 && at != head + 6 {
+                let to = target(i)?;
+                if to > c[0].offset_dw as i64 && to <= c[10].offset_dw as i64 { return None; }
+            }
+        }
+        let ptr = *c[10].qwords.first()? as i64;
+        let [param] = ctx.refs.func_params_by_ptr(ptr)? else { return None; };
+        let value = ctx.refs.type_identity_by_ptr(param.type_info)?;
+        let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+        if param.token != 5 || !param.is_reference || !param.is_object_const || !param.is_read_only
+            || param.is_object_handle || param.is_auto || param.if_handle_then_const
+            || !value.module.is_empty() || !value.namespace.is_empty()
+            || !matches!(value.name.as_bytes().first(), Some(b'F' | b'T'))
+            || ctx.slot_type(dst).as_deref() != Some(value.name.as_str())
+            || ctx.refs.func_by_ptr(ptr) != Some("$beh0")
+            || ctx.refs.func_owner_by_ptr(ptr) != Some(value.name.as_str())
+            || !ctx.refs.is_method_by_ptr(ptr) || ctx.refs.is_const_method_by_ptr(ptr)
+            || ret.token != 0x52 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle
+            || ret.is_object_const || ret.is_read_only || ret.is_auto || ret.if_handle_then_const
+        { return None; }
+        let field = |i: &Instr| {
+            let id = *i.dwords.first()? as i32;
+            let owner = ctx.refs.type_identity_by_id(id)?;
+            let (name, old) = ctx.refs.member_identity(id, word(i)?)?;
+            if ctx.refs.type_identity_by_id(old)? != owner || owner.module.is_empty()
+                || !owner.namespace.is_empty() || !matches!(owner.name.as_bytes().first(), Some(b'A' | b'U'))
+            { return None; }
+            Some((owner, name, ctx.refs.own_field_type_by_class(&owner.name, name)?))
+        };
+        let (this_owner, handle, handle_ty) = field(&c[3])?;
+        let (other_owner, yes, yes_ty) = field(&c[5])?;
+        let (fallback_owner, no, no_ty) = field(&c[8])?;
+        if ctx.class_name != Some(this_owner.name.as_str()) || this_owner != fallback_owner
+            || handle_ty != other_owner.name || yes_ty != value.name || no_ty != value.name
+            || ctx.fields.and_then(|f| f.get(handle)).map(String::as_str) != Some(handle_ty)
+            || ctx.fields.and_then(|f| f.get(no)).map(String::as_str) != Some(no_ty)
+        { return None; }
+        // A physical destination may have an earlier, already destroyed life.
+        // The existing join hook records this constructor's own RVO producer.
+        return Some(LocalLvalueSelection { head, consumed: 2, copy_ctor_slot: Some(dst),
+            statement: format!("{} = ({} ? this.{handle}.{yes} : this.{no});",
+                ctx.slot_name(dst), ctx.slot_name(test)) });
+    }
+
+    let head = join.checked_sub(5)?;
+    // A guarded member address can likewise feed one immediate f64 field store.
+    if let Some(c) = ctx.instrs.get(head..join + 3).filter(|c| c.iter().map(|i| i.op.name)
+        .eq(["CALLSYS", "JLowZ", "LoadRObjR", "JMP", "LoadThisR", "RDR8", "LoadThisR", "WRTV8"]))
+    {
+        let word = |op: &Instr, n: usize| op.words.get(n).map(|v| *v as i16 as i32);
+        let target = |op: &Instr| op.dwords.first().map(|v| op.offset_dw as i64 + 2 + *v as i32 as i64);
+        let push = ctx.instrs.get(head.checked_sub(1)?)?;
+        let handle = word(&c[2], 0)?;
+        let scalar = word(&c[5], 0)?;
+        if !ctx.f.is_method || push.op.name != "PshVPtr" || word(push, 0) != Some(handle)
+            || handle <= 0 || scalar <= 0 || handle == scalar || word(&c[7], 0) != Some(scalar)
+            || target(&c[1]) != Some(c[4].offset_dw as i64)
+            || target(&c[3]) != Some(c[5].offset_dw as i64)
+        { return None; }
+        let ptr = *c[0].qwords.first()? as i64;
+        let callee = ctx.refs.func_by_ptr(ptr)?;
+        let [param] = ctx.refs.func_params_by_ptr(ptr)? else { return None; };
+        let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+        if ctx.refs.is_method_by_ptr(ptr) || ctx.refs.func_owner_by_ptr(ptr).is_some()
+            || ctx.refs.func_ns_by_ptr(ptr).is_some_and(|ns| !ns.is_empty())
+            || ret.token != 0x41 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle
+            || ret.is_object_const || ret.is_read_only || ret.is_auto || ret.if_handle_then_const
+            || param.token != 5 || !param.is_object_handle || !param.is_object_const
+            || param.is_reference || param.is_read_only || param.is_auto || param.if_handle_then_const
+            || ctx.refs.type_identity_by_ptr(param.type_info).is_none()
+        { return None; }
+        let field = |op: &Instr, offset_word: usize| {
+            let id = *op.dwords.first()? as i32;
+            let owner = ctx.refs.type_identity_by_id(id)?;
+            let (name, old) = ctx.refs.member_identity(id, word(op, offset_word)?)?;
+            (ctx.refs.type_identity_by_id(old) == Some(owner) && !owner.module.is_empty()
+                && owner.namespace.is_empty() && matches!(owner.name.as_bytes().first(), Some(b'A' | b'U'))
+                && ctx.refs.own_field_type_by_class(&owner.name, name) == Some("float"))
+                .then_some((owner, name))
+        };
+        let (yes_owner, yes) = field(&c[2], 1)?;
+        let (no_owner, no) = field(&c[4], 0)?;
+        let (dst_owner, dst) = field(&c[6], 0)?;
+        if ctx.slot_type(handle).as_deref() != Some(yes_owner.name.as_str()) || no_owner != dst_owner
+            || ctx.class_name != Some(dst_owner.name.as_str())
+            || [no, dst].iter().any(|name| ctx.fields.and_then(|f| f.get(*name)).map(String::as_str) != Some("float"))
+        { return None; }
+        // The scalar may be reused, but every use must be one closed load/store pair.
+        // In particular, replacing this pair must not discard a later read or address escape.
+        for (at, op) in ctx.instrs.iter().enumerate() {
+            let used = super::bytediff::addressed_slots(op).contains(&scalar);
+            if used && !(op.op.name == "RDR8"
+                && ctx.instrs.get(at + 1).is_some_and(|i| i.op.name == "LoadThisR")
+                && ctx.instrs.get(at + 2).is_some_and(|i| i.op.name == "WRTV8" && word(i, 0) == Some(scalar)))
+                && !(op.op.name == "WRTV8" && at >= 2
+                    && ctx.instrs[at - 1].op.name == "LoadThisR"
+                    && ctx.instrs[at - 2].op.name == "RDR8" && word(&ctx.instrs[at - 2], 0) == Some(scalar))
+            { return None; }
+            if op.op.name == "JMPP" || ((is_cond_op(op.op.name) || op.op.name == "JMP")
+                && at != head + 1 && at != head + 3
+                && target(op).is_some_and(|to| to > push.offset_dw as i64 && to <= c[7].offset_dw as i64))
+            { return None; }
+        }
+        return Some(LocalLvalueSelection { head, consumed: 3, copy_ctor_slot: None,
+            statement: format!("this.{dst} = ({callee}({}) ? {}.{yes} : this.{no});",
+                ctx.slot_name(handle), ctx.slot_name(handle)) });
+    }
+    let code = ctx.instrs.get(head..join + 2)?;
+    let word = |op: &Instr, at: usize| op.words.get(at).map(|v| *v as i16 as i32);
+    let target = |op: &Instr| op.dwords.first().map(|v| op.offset_dw as i64 + 2 + *v as i32 as i64);
+    let null_test = code[0].op.name == "CmpPtrNull";
+    if !matches!(code[0].op.name, "CMPIi" | "CmpPtrNull") || !matches!(code[1].op.name, "JZ" | "JNZ")
+        || !matches!(code[2].op.name, "LDV" | "PSF") || code[3].op.name != "JMP"
+        || code[4].op.name != code[2].op.name
+        || target(&code[1]) != Some(code[4].offset_dw as i64)
+        || target(&code[3]) != Some(code[5].offset_dw as i64)
+    { return None; }
+    // No alternative predecessor may supply a different register/stack value.
+    // JMPP entries are not explicit ordinary jumps, so leave those functions out.
+    for (at, op) in ctx.instrs.iter().enumerate() {
+        if op.op.name == "JMPP" { return None; }
+        if (is_cond_op(op.op.name) || op.op.name == "JMP")
+            && at != head + 1 && at != head + 3
+            && target(op).is_some_and(|to| to > code[0].offset_dw as i64
+                && to <= code[6].offset_dw as i64)
+        { return None; }
+    }
+    let test = word(&code[0], 0)?;
+    let yes = word(&code[2], 0)?;
+    let no = word(&code[4], 0)?;
+    // CMPIi tests signed integer bits in both selection forms. A known bool,
+    // enum, float or object test must not become an ordinary source comparison.
+    if test <= 0 || (null_test && code[2].op.name != "PSF")
+        || (!null_test && (ctx.float_slots.contains(&test)
+            || ctx.slot_type(test).is_some_and(|ty| ty != "int" && ty != "int32")))
+    { return None; }
+    let dst;
+    if code[2].op.name == "LDV" {
+        if code[5].op.name != "RDR4" || code[6].op.name != "CpyVtoV4"
+            || word(&code[5], 0) != word(&code[6], 1)
+        { return None; }
+        dst = word(&code[6], 0)?;
+        let temporary = word(&code[5], 0)?;
+        if temporary <= 0 || temporary == dst
+            || ctx.instrs.iter().filter(|op| super::bytediff::addressed_slots(op).contains(&temporary)).count() != 2
+        { return None; }
+        if [yes, no, dst].iter().any(|slot| *slot <= 0
+            || ctx.float_slots.contains(slot)
+            || ctx.slot_type(*slot).is_some_and(|ty| ty != "int" && ty != "int32"))
+        { return None; }
+    } else {
+        if code[5].op.name != "RDSPtr" || code[6].op.name != "RefCpyV" { return None; }
+        dst = word(&code[6], 0)?;
+        if null_test {
+            let ty = ctx.slot_type(dst)?;
+            if dst != test || no != dst || yes <= 0 || yes == dst
+                || !ctx.refs.is_type_name(&ty) || !matches!(ty.as_bytes().first(), Some(b'A' | b'U'))
+                || [yes, no].iter().any(|slot| ctx.float_slots.contains(slot)
+                    || ctx.slot_type(*slot).as_deref() != Some(ty.as_str())) { return None; }
+        } else {
+            let param = |slot| ctx.param_off_map.get(&slot).and_then(|i| ctx.f.param_types.get(*i));
+            let left = param(yes)?;
+            let right = param(no)?;
+            if dst <= 0 || yes >= 0 || no >= 0
+                || [left, right].iter().any(|ty| ty.token != 5 || !ty.is_object_handle
+                    || ty.is_reference || ty.is_object_const || ty.is_read_only)
+                || left.type_info != right.type_info
+                || ctx.slot_type(dst).as_deref() != Some(left.base_name(ctx.refs).as_str())
+            { return None; }
+        }
+    }
+    let sense = if code[1].op.name == "JZ" { "!=" } else { "==" };
+    let immediate = if null_test { "nullptr".to_owned() }
+        else { (*code[0].dwords.first()? as i32).to_string() };
+    Some(LocalLvalueSelection {
+        head,
+        consumed: 2,
+        copy_ctor_slot: None,
+        statement: format!("{} = ({} {sense} {immediate} ? {} : {});",
+            ctx.slot_name(dst), ctx.slot_name(test), ctx.slot_name(yes), ctx.slot_name(no)),
+    })
+}
+
+/// A copied map handle can next be passed by address to another container.
+/// Keep the copy before intervening calls (including removal of its source entry).
+fn is_handle_getter_reference_argument(ctx: &Ctx<'_>, code: &[Instr], copy: usize, use_at: usize) -> bool {
+    let witness = (|| {
+        let producer = code.get(copy.checked_sub(3)?..copy)?;
+        let consumer = code.get(use_at..use_at + 4)?;
+        let word = |ins: &Instr| ins.words.first().map(|v| *v as i16 as i32);
+        let dst = word(code.get(copy)?)?;
+        if dst <= 0 || producer[0].op.name != "CALLSYS" || producer[1].op.name != "PshRPtr"
+            || producer[2].op.name != "RDSPtr" || consumer[0].op.name != "PSF"
+            || word(&consumer[0]) != Some(dst) || consumer[1].op.name != "PshVPtr"
+            || word(&consumer[1]) != Some(0) || consumer[2].op.name != "ADDSi"
+            || consumer[3].op.name != "CALLSYS"
+            || code[copy + 1..use_at].iter().any(|ins| ins.op.name.starts_with('J')
+                || super::bytediff::addressed_slots(ins).contains(&dst)) { return None; }
+        let getter = *producer[0].qwords.first()? as i64;
+        let callee = *consumer[3].qwords.first()? as i64;
+        let ret = ctx.refs.func_ret_by_ptr(getter)?;
+        let params = ctx.refs.func_params_by_ptr(callee)?;
+        if ctx.refs.func_by_ptr(getter) != Some("opIndex") || !ctx.refs.is_method_by_ptr(getter)
+            || !ctx.refs.is_method_by_ptr(callee) || params.len() != 1
+            || ret.token != 5 || !ret.is_reference || !ret.is_object_handle
+            || ret.is_object_const || ret.is_read_only
+            || ctx.slot_type(dst).as_deref() != Some(ret.base_name(ctx.refs).as_str()) { return None; }
+        let param = &params[0];
+        (param.token == 5 && param.is_reference && param.is_object_handle
+            && param.is_object_const && param.is_read_only && param.type_info == ret.type_info).then_some(())
+    })();
+    witness.is_some()
+}
+
+/// Recover a typed array getter's handle copy at this instruction, never by slot alone.
+/// A native map lookup with an enum key still initializes its captured handle.
+fn is_typed_enum_map_handle_copy(ctx: &Ctx<'_>, code: &[Instr], copy: usize, source: &Arg) -> bool {
+    (|| {
+        let c = code.get(copy.checked_sub(9)?..=copy)?;
+        if c.iter().map(|i| i.op.name).ne(["SetV1", "PSF", "PshVPtr", "ADDSi", "RDSPtr", "ADDSi", "CALLSYS", "PshRPtr", "RDSPtr", "RefCpyV"])
+            || !ctx.f.is_method || source.s.chars().any(char::is_control) || source.s == UNRESOLVED { return None; }
+        let word = |i: &Instr, n: usize| i.words.get(n).map(|w| *w as i16 as i32);
+        let (key_slot, dst) = (word(&c[0], 0)?, word(&c[9], 0)?);
+        if key_slot <= 0 || dst <= 0 || key_slot == dst || word(&c[1], 0) != Some(key_slot) || word(&c[2], 0) != Some(0)
+            || source.ty.is_none() || source.ty.as_deref() != ctx.slot_type(dst).as_deref() { return None; }
+        let ptr = *c[6].qwords.first()? as i64; let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+        let [key] = ctx.refs.func_params_by_ptr(ptr)? else { return None; };
+        if ctx.refs.func_by_ptr(ptr) != Some("opIndex") || ctx.refs.func_owner_by_ptr(ptr) != Some("TMap")
+            || !ctx.refs.is_method_by_ptr(ptr) || ctx.refs.is_const_method_by_ptr(ptr)
+            || ret.token != 5 || !ret.is_reference || !ret.is_object_handle || ret.is_object_const || ret.is_read_only
+            || key.token != 5 || !key.is_reference || key.is_object_handle || !key.is_object_const || !key.is_read_only
+            || ret.base_name(ctx.refs) != *source.ty.as_ref()? { return None; }
+        let key_name = key.base_name(ctx.refs); let literal = *c[0].dwords.first()? as i32;
+        if !is_enum_name(&key_name) || ctx.refs.enumerator_name(&key_name, literal).is_none() { return None; }
+        let member = |i: &Instr, n: usize| {
+            let id = *i.dwords.first()? as i32; let (name, old) = ctx.refs.member_identity(id, word(i, n)?)?;
+            let owner = ctx.refs.type_identity_by_id(id)?;
+            if ctx.refs.type_identity_by_id(old)? != owner || owner.module.is_empty() || !owner.namespace.is_empty() { return None; }
+            Some((owner, name, ctx.refs.own_field_type_by_class(&owner.name, name)?))
+        };
+        let (owner, _, container_owner) = member(&c[3], 0)?;
+        let (container, _, map) = member(&c[5], 0)?;
+        if ctx.class_name != Some(owner.name.as_str()) || container_owner != container.name
+            || map != format!("TMap<{key_name}, {}>", ret.base_name(ctx.refs)) { return None; }
+        let object = ctx.refs.type_identity_by_ptr(ret.type_info)?;
+        let end = if code.get(copy + 1)?.op.name == "SetV4" {
+            let tail = code.get(copy + 1..copy + 4)?;
+            if tail.iter().map(|i| i.op.name).ne(["SetV4", "LoadRObjR", "CpyRtoV8"])
+                || tail[0].dwords.first() != Some(&0) || word(&tail[0], 0)? <= 0 || word(&tail[1], 0) != Some(dst)
+                || word(&tail[2], 0)? <= 0 || word(&tail[2], 0) == Some(dst) { return None; }
+            let (owner, _, ty) = member(&tail[1], 1)?;
+            if owner != object || !ty.starts_with("TArray<") || ctx.slot_type(word(&tail[2], 0)?).as_deref() != Some(ty) { return None; }
+            copy + 3
+        } else {
+            let tail = code.get(copy + 1..copy + 5)?;
+            if tail.iter().map(|i| i.op.name).ne(["PSF", "PshVPtr", "ADDSi", "CALLSYS"])
+                || word(&tail[0], 0)? <= 0 || word(&tail[1], 0) != Some(dst) { return None; }
+            let (owner, _, ty) = member(&tail[2], 0)?; let p = *tail[3].qwords.first()? as i64;
+            let iterator = ctx.refs.func_ret_by_ptr(p)?;
+            if owner != object || !ty.starts_with("TArray<") || ctx.refs.func_by_ptr(p) != Some("Iterator")
+                || ctx.refs.func_owner_by_ptr(p) != Some("TArray") || !ctx.refs.is_method_by_ptr(p)
+                || !ctx.refs.func_params_by_ptr(p)?.is_empty() || iterator.token != 5 || iterator.is_reference || iterator.is_object_handle
+                || ctx.refs.type_identity_by_ptr(iterator.type_info)?.name != "TArrayIterator" { return None; }
+            copy + 4
+        };
+        if ctx.instrs.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+            let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+            target > c[0].offset_dw as i64 && target <= code[end].offset_dw as i64
+        }))) { return None; }
+        Some(())
+    })().is_some()
+}
+
+fn is_typed_array_getter_handle_copy(ctx: &Ctx<'_>, code: &[Instr], copy: usize, src: &Arg) -> bool {
+    let witness = (|| {
+        let word = |ins: &Instr| ins.words.first().map(|v| *v as i16 as i32);
+        let dst = word(code.get(copy)?)?;
+        if dst <= 0 || src.s.chars().any(char::is_control) || src.s == UNRESOLVED
+            || src.ty.as_deref() != ctx.slot_type(dst).as_deref() || src.ty.is_none()
+            || code.get(copy.checked_sub(1)?)?.op.name != "RDSPtr" { return None; }
+        let field = code.get(copy.checked_sub(2)?)?.op.name == "ADDSi";
+        let start = copy.checked_sub(if field { 4 } else { 3 })?;
+        let lead = &code[start..copy];
+        if !matches!(lead[0].op.name, "Thiscall1" | "CALLSYS")
+            || lead[1].op.name != "PshRPtr" { return None; }
+        let ptr = *lead[0].qwords.first()? as i64;
+        let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+        let params = ctx.refs.func_params_by_ptr(ptr)?;
+        if !ctx.refs.is_method_by_ptr(ptr) || ret.token != 5 || !ret.is_reference
+            || ret.is_object_const || ret.is_read_only || params.len() != 1 { return None; }
+        let key = &params[0];
+        let indexed_container = match (lead[0].op.name, ctx.refs.func_owner_by_ptr(ptr)?) {
+            ("Thiscall1", "TArray") => key.token == 0x44 && !key.is_reference && !key.is_object_handle,
+            ("CALLSYS", "TMap") => field && key.token == 5 && key.is_reference
+                && key.is_object_handle && key.is_object_const && key.is_read_only
+                && ctx.refs.type_identity_by_ptr(key.type_info).is_some(),
+            _ => false,
+        };
+        if !indexed_container { return None; }
+        let end = if field {
+            if ctx.refs.func_by_ptr(ptr)? != "opIndex" || ret.is_object_handle { return None; }
+            let tid = *lead[2].dwords.first()? as i32;
+            let (name, old_owner) = ctx.refs.member_identity(tid, word(&lead[2])?)?;
+            let owner = ctx.refs.type_identity_by_id(tid)?;
+            if ctx.refs.type_identity_by_id(old_owner)? != owner
+                || ctx.refs.type_identity_by_ptr(ret.type_info)? != owner
+                || ctx.refs.own_field_type_by_class(&owner.name, name) != src.ty.as_deref()
+                || !src.s.ends_with(&format!(".{name}")) { return None; }
+            copy
+        } else if ctx.refs.func_by_ptr(ptr)? == "opIndex" && ret.is_object_handle {
+            // The indexed handle immediately becomes the owner of another handle read.
+            // Preserve this copy at its own site before resolving the following field.
+            let tail = code.get(copy + 1..copy + 5)?;
+            if tail.iter().map(|ins| ins.op.name).ne(["PshVPtr", "ADDSi", "RDSPtr", "RefCpyV"])
+                || word(&tail[0]) != Some(dst) || word(&tail[3])? <= 0
+                || word(&tail[3])? == dst || ret.base_name(ctx.refs) != *src.ty.as_ref()?
+                { return None; }
+            let tid = *tail[1].dwords.first()? as i32;
+            let (name, old_owner) = ctx.refs.member_identity(tid, word(&tail[1])?)?;
+            let owner = ctx.refs.type_identity_by_id(tid)?;
+            if ctx.refs.type_identity_by_id(old_owner)? != owner
+                || ctx.refs.type_identity_by_ptr(ret.type_info)? != owner
+                || ctx.refs.own_field_type_by_class(&owner.name, name)?
+                    != ctx.slot_type(word(&tail[3])?)? { return None; }
+            copy + 4
+        } else {
+            if ctx.refs.func_by_ptr(ptr)? != "Last" || !ret.is_object_handle
+                || ret.base_name(ctx.refs) != *src.ty.as_ref()? { return None; }
+            let tail = code.get(copy + 1..copy + 7)?;
+            if tail.iter().map(|ins| ins.op.name).ne(
+                ["SetV1", "PshV4", "PshC4", "CALLSYS", "PshRPtr", "CmpPtrNull"])
+                || word(&tail[0])? <= 0 || word(&tail[0])? == dst
+                || word(&tail[0]) != word(&tail[1]) || word(&tail[5]) != Some(dst)
+                || !matches!(*tail[0].dwords.first()?, 0 | 1)
+                || ctx.refs.func_by_ptr(*tail[3].qwords.first()? as i64)? != "__STATIC_NAME"
+                || ctx.refs.static_name(*tail[2].dwords.first()? as i32 as i64).is_none()
+                { return None; }
+            copy + 6
+        };
+        // Reject an entry into the producer/copy/argument run; a repeated loop entry
+        // at its first instruction is fine and does not borrow an earlier slot life.
+        if ctx.instrs.iter().any(|ins| ins.op.name == "JMPP" || (ins.op.name.starts_with('J')
+            && ins.dwords.first().is_some_and(|delta| {
+                let target = ins.offset_dw as i64 + 2 + *delta as i32 as i64;
+                target > code[start].offset_dw as i64 && target <= code[end].offset_dw as i64
+            }))) { return None; }
+        Some(())
+    })();
+    witness.is_some()
+}
+
 /// Conditional-jump opcode (mirrors `cfg::is_cond_jump`, which is private to that module).
 fn is_cond_op(n: &str) -> bool {
     matches!(
@@ -1044,7 +2080,7 @@ pub(crate) fn resolve_cast_typeid(refs: &RefResolver, tid: i32) -> Option<String
 
 /// A primitive numeric-conversion opcode (`dst = (cast) src`); the cast is implicit in
 /// type-erased AngelScript source, so we render the plain copy `dst = src`.
-fn is_numeric_cast(n: &str) -> bool {
+pub(crate) fn is_numeric_cast(n: &str) -> bool {
     matches!(
         n,
         "iTOf"
@@ -1198,6 +2234,7 @@ fn build_call(
     ret_ty: Option<&str>,
     ret_is_ref: bool,
     global_shadowed: bool,
+    script_mixin: bool,
     refs: &RefResolver,
 ) -> Option<String> {
     // The callee's declared default arguments, so a call can be rendered the way it was
@@ -1301,8 +2338,38 @@ fn build_call(
                 slot.is_psf && slot.ty.as_deref().map(tyhead) == ret_ty.map(tyhead)
             }
         };
+    if rvo_slot {
+        let idx = if is_method { 2 } else { 1 };
+        let out_slot = stack[stack.len() - idx]
+            .s
+            .strip_prefix("local_")
+            .and_then(|rest| rest.split('_').next())
+            .and_then(|rest| rest.parse::<i32>().ok());
+        if let Some(slot) = out_slot {
+            RVO_PRODUCERS.with(|v| v.borrow_mut().push((slot, CUR_INSTR.with(|c| c.get()))));
+        }
+    }
     let need = trusted_arity.map(|n| n + is_method as usize + rvo_slot as usize);
     let collected: Vec<Arg> = take_call_frame(stack, need);
+    // Every local handed to this call by address (a value argument, a value receiver) has this
+    // call as its consumer; the hidden out-slot is the call's destination, not its operand.
+    {
+        let out_index = rvo_slot.then(|| collected.len().checked_sub(if is_method { 2 } else { 1 })).flatten();
+        let here = CUR_INSTR.with(|c| c.get());
+        for (i, arg) in collected.iter().enumerate() {
+            if Some(i) == out_index || !arg.is_psf {
+                continue;
+            }
+            if let Some(slot) = arg
+                .s
+                .strip_prefix("local_")
+                .and_then(|rest| rest.split('_').next())
+                .and_then(|rest| rest.parse::<i32>().ok())
+            {
+                RVO_CONSUMERS.with(|v| v.borrow_mut().push((slot, here)));
+            }
+        }
+    }
     // Implicit `__WorldContext` markers occupied a stack slot so the split arithmetic matched the
     // native's real frame (whose declared arity counts the hidden WorldContextObject param). They
     // are NOT source args — the UE-AngelScript compiler auto-injects the world context — so strip
@@ -1667,6 +2734,19 @@ fn build_call(
         } else {
             f.into()
         };
+        // Split off the mixin receiver only after the ordinary call frame and RVO
+        // destination have been recovered. Defaults retain their parameter positions.
+        let render_free_call = |args: &[Arg]| {
+            if script_mixin {
+                if let (Some((receiver,rest)),Some((first,tail))) = (args.split_first(),params.and_then(|p| p.split_first())) {
+                    if rest.len() == tail.len() {
+                        return format!("({}).{}({})",cast_arg(receiver,first,refs),f.trim_start_matches("::"),
+                            render_args(rest,Some(tail),refs,arg_defaults.and_then(|d| d.get(1..))));
+                    }
+                }
+            }
+            format!("{f}({})",render_args(args,params,refs,arg_defaults))
+        };
         // Free-call RVO struct-return (mirror of the method Fix-b3 arm): a free/static function
         // returning a struct BY VALUE pushes a hidden PSF out-slot. Recover `out = f(args)`
         // instead of leaking the out-slot as a leading arg (GotoPosition/Say/GiveItemTo/
@@ -1699,10 +2779,7 @@ fn build_call(
                         }
                     }
                     maybe_reverse_args(&mut a, params, refs);
-                    return Some(format!(
-                        "{out} = {f}({})",
-                        render_args(&a, params, refs, arg_defaults)
-                    ));
+                    return Some(format!("{out} = {}", render_free_call(&a)));
                 }
             }
         }
@@ -1713,10 +2790,7 @@ fn build_call(
             }
         }
         maybe_reverse_args(&mut a, params, refs);
-        Some(format!(
-            "{f}({})",
-            render_args(&a, params, refs, arg_defaults)
-        ))
+        Some(render_free_call(&a))
     }
 }
 
@@ -2239,6 +3313,239 @@ pub(crate) fn bare_type_name(tyname: &str) -> &str {
 /// emitter turns the pair into a `while` once the condition is one expression, and drops the
 /// mark when it cannot -- leaving exactly the `if` that stood here before.
 pub(crate) const LOOP_BACK_EDGE: &str = "//__gore_back_edge";
+pub(crate) const LOOP_BREAK_EDGE: &str = "//__gore_loop_break";
+
+pub(crate) fn loop_back_edge_exit(line: &str) -> Option<usize> {
+    line.trim().strip_prefix(LOOP_BACK_EDGE)?.trim().split_once(' ')?.1.parse().ok()
+}
+
+pub(crate) fn loop_break_edge(line: &str) -> Option<(usize, usize)> {
+    let (target, exit) = line.trim().strip_prefix(LOOP_BREAK_EDGE)?.strip_prefix(' ')?.split_once(' ')?;
+    Some((target.parse().ok()?, exit.parse().ok()?))
+}
+
+pub(crate) fn loop_back_edge_target(line: &str) -> Option<usize> {
+    line.trim().strip_prefix(LOOP_BACK_EDGE)?.strip_prefix(' ')?.split_whitespace().next()?.parse().ok()
+}
+
+pub(crate) fn is_loop_back_edge(line: &str) -> bool {
+    line.trim() == LOOP_BACK_EDGE || loop_back_edge_target(line).is_some()
+}
+/// `//__gore_ctor <slot>`: a default construction of a local the structurer met at this point.
+pub(crate) const CTOR_SITE: &str = "//__gore_ctor";
+
+/// A local default construction before the return object's construction is a
+/// declaration. Substituting T() would move that construction behind the RVO one.
+fn default_local_precedes_rvo(ctx: &Ctx, name: &str) -> bool {
+    (|| {
+        let slot: i32 = name.strip_prefix("local_")?.parse().ok()?;
+        let ret = ctx.ret_ty?;
+        let code = ctx.instrs;
+        if slot <= 0 || ret.token != 5 || ret.is_reference || ret.is_object_handle
+            || code.iter().map(|i| i.op.name).ne(["PSF", "CALLSYS", "PshVPtr", "CALLSYS",
+                "PSF", "PshVPtr", "CALLSYS", "PSF", "CALLSYS", "RET"])
+            || ctx.slot_type(slot).as_deref() != Some(ret.base_name(ctx.refs).as_str()) { return None; }
+        let w = |i: &Instr| i.words.first().copied().unwrap_or(0) as i16 as i32;
+        let ptr = |i: &Instr| i.qwords.first().copied().unwrap_or(0) as i64;
+        if [0, 4, 7].iter().any(|at| w(&code[*at]) != slot)
+            || ctx.rvo_off != Some(w(&code[2])) || w(&code[2]) != w(&code[5])
+            || ptr(&code[1]) != ptr(&code[3]) { return None; }
+        let owner = ctx.refs.type_by_ptr(ret.type_info)?;
+        for (at, name) in [(1, "$beh0"), (3, "$beh0"), (8, "$beh2")] {
+            let p = ptr(&code[at]);
+            if ctx.refs.func_by_ptr(p) != Some(name) || !ctx.refs.is_method_by_ptr(p)
+                || ctx.refs.func_owner_by_ptr(p) != Some(owner)
+                || ctx.refs.func_params_by_ptr(p).is_none_or(|args| !args.is_empty())
+                || ctx.refs.func_ret_by_ptr(p).is_none_or(|r| r.token != 0x52 || r.is_reference)
+            { return None; }
+        }
+        let assign = ptr(&code[6]);
+        let [arg] = ctx.refs.func_params_by_ptr(assign)? else { return None; };
+        let result = ctx.refs.func_ret_by_ptr(assign)?;
+        if ctx.refs.func_by_ptr(assign) != Some("opAssign") || !ctx.refs.is_method_by_ptr(assign)
+            || ctx.refs.func_owner_by_ptr(assign) != Some(owner)
+            || arg.token != 5 || arg.type_info != ret.type_info || arg.is_object_handle
+            || !arg.is_reference || !(arg.is_read_only || arg.is_object_const)
+            || result.token != 5 || result.type_info != ret.type_info || !result.is_reference
+            || result.is_object_handle || result.is_read_only || result.is_object_const { return None; }
+        Some(())
+    })().is_some()
+}
+
+/// Preserve a single default construction shared by exit paths or evaluated early.
+/// Counting constructors as well as destructors excludes separate temporary lives
+/// that reuse a slot, including a fresh `return T()` in each return arm.
+fn retained_default_constructions(instrs: &[Instr], refs: &RefResolver) -> std::collections::HashSet<i32> {
+    let mut sites: HashMap<i32, (usize, usize)> = HashMap::new();
+    for pair in instrs.windows(2) {
+        if pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS" {
+            continue;
+        }
+        let Some(slot) = pair[0].words.first().map(|word| *word as i16 as i32).filter(|slot| *slot > 0) else {
+            continue;
+        };
+        let Some(ptr) = pair[1].qwords.first() else {
+            continue;
+        };
+        match refs.func_by_ptr(*ptr as i64) {
+            Some("$beh0") => sites.entry(slot).or_default().0 += 1,
+            Some("$beh2") => sites.entry(slot).or_default().1 += 1,
+            _ => {}
+        }
+    }
+    // A default argument built before a different value's constructor, but
+    // pushed only AFTER that constructor, had its own declaration. Inlining it
+    // would move its construction across the other value's initialization.
+    let w = |i: &Instr| i.words.first().map(|v| *v as i16 as i32);
+    let constructor = |i: &Instr, empty: bool| -> bool {
+        let Some(ptr) = i.qwords.first().map(|p| *p as i64).filter(|_| i.op.name == "CALLSYS") else { return false; };
+        refs.func_by_ptr(ptr) == Some("$beh0") && refs.is_method_by_ptr(ptr)
+            && refs.func_owner_by_ptr(ptr).is_some_and(|n| matches!(n.as_bytes().first(), Some(b'F' | b'T' | b'E')))
+            && refs.func_ret_by_ptr(ptr).is_some_and(|t| t.token == 0x52 && !t.is_reference && !t.is_object_handle)
+            && refs.func_params_by_ptr(ptr).is_some_and(|p| p.is_empty() == empty)
+    };
+    let defaults: HashMap<i32, usize> = instrs.windows(2).enumerate().filter_map(|(at, c)|
+        (c[0].op.name == "PSF" && constructor(&c[1], true)).then(|| w(&c[0]).map(|s| (s, at + 1))).flatten()).collect();
+    let mut eager = std::collections::HashSet::new();
+    for (at, c) in instrs.windows(4).enumerate() {
+        if c[0].op.name != "PSF" || !constructor(&c[1], false)
+            || c[2].op.name != "PSF" || c[3].op.name != "PSF" || w(&c[0]) != w(&c[3]) { continue; }
+        let Some(slot) = w(&c[2]).filter(|s| *s > 0 && Some(*s) != w(&c[0])) else { continue; };
+        let Some(&created) = defaults.get(&slot).filter(|at_created| **at_created < at) else { continue; };
+        if instrs[created + 1..at].iter().any(|i| i.op.name.starts_with('J')) { continue; }
+        let uses: Vec<_> = instrs.iter().enumerate().filter(|(_, i)| super::bytediff::addressed_slots(i).contains(&slot)).collect();
+        if uses.len() == 3 && uses.iter().all(|(_, i)| i.op.name == "PSF")
+            && uses[0].0 + 1 == created && uses[1].0 == at + 2
+            && instrs.get(uses[2].0 + 1).is_some_and(|i| i.op.name == "CALLSYS"
+                && i.qwords.first().is_some_and(|p| refs.func_by_ptr(*p as i64) == Some("$beh2"))) {
+            eager.insert(slot);
+        }
+    }
+    // A writable native argument can fill a default-constructed value without
+    // emitting a source assignment. Subsequent reads must use that filled value.
+    for (at, call) in instrs.iter().enumerate() {
+        let Some(ptr) = call.qwords.first().map(|p| *p as i64).filter(|_| call.op.name == "CALLSYS") else { continue; };
+        if refs.is_method_by_ptr(ptr) || !refs.func_ret_by_ptr(ptr).is_some_and(|t|
+            t.token == 0x52 && !t.is_reference && !t.is_object_handle) { continue; }
+        let Some(params) = refs.func_params_by_ptr(ptr) else { continue; };
+        let Some(start) = at.checked_sub(params.len()) else { continue; };
+        if params.is_empty() || instrs[start..at].iter().any(|i| i.op.name != "PSF") { continue; }
+        for (param, push) in params.iter().zip(instrs[start..at].iter().rev()) {
+            if param.token != 5 || !param.is_reference || param.is_object_const || param.is_read_only || param.is_object_handle { continue; }
+            let Some(slot) = w(push).filter(|s| *s > 0) else { continue; };
+            let Some(&created) = defaults.get(&slot).filter(|c| **c < start) else { continue; };
+            if sites.get(&slot).is_none_or(|s| s.0 != 1) { continue; }
+            let ctor = instrs[created].qwords[0] as i64;
+            let Some(identity) = refs.type_identity_by_ptr(param.type_info) else { continue; };
+            if !identity.module.is_empty() || Some(identity.name.as_str()) != refs.func_owner_by_ptr(ctor)
+                || identity.namespace != refs.func_ns_by_ptr(ctor).unwrap_or("") { continue; }
+            eager.insert(slot);
+        }
+    }
+
+    // A non-const native receiver can change a value without a source assignment.
+    // Keep its single construction when a later call reads that populated value.
+    for (at, pair) in instrs.windows(2).enumerate() {
+        if pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS" { continue; }
+        let Some(slot) = w(&pair[0]).filter(|s| *s > 0) else { continue; };
+        let Some(&created) = defaults.get(&slot).filter(|created| **created < at) else { continue; };
+        if sites.get(&slot).is_none_or(|site| site.0 != 1) { continue; }
+        let Some(call) = pair[1].qwords.first().map(|p| *p as i64) else { continue; };
+        let ctor = instrs[created].qwords[0] as i64;
+        let plain_void = |ptr| refs.func_ret_by_ptr(ptr).is_some_and(|t|
+            t.token == 0x52 && t.type_info == 0 && !t.is_reference && !t.is_object_handle
+                && !t.is_object_const && !t.is_read_only && !t.is_auto && !t.if_handle_then_const);
+        if !refs.is_method_by_ptr(call) || refs.is_const_method_by_ptr(call)
+            || refs.is_const_method_by_ptr(ctor) || !plain_void(call) || !plain_void(ctor)
+            || !refs.func_by_ptr(call).is_some_and(|name| !name.starts_with(['$', '~']))
+            || refs.func_owner_by_ptr(call) != refs.func_owner_by_ptr(ctor)
+            || refs.func_ns_by_ptr(call).unwrap_or("") != refs.func_ns_by_ptr(ctor).unwrap_or("")
+            || refs.func_params_by_ptr(call).is_none()
+        { continue; }
+        eager.insert(slot);
+    }
+
+    // Two separately default-constructed values, then configuration and a
+    // shared call, with reverse destruction at scope exit. The first const
+    // argument must retain its construction before the configured sibling.
+    let graph = cfg::build(instrs);
+    for (at, c) in instrs.windows(4).enumerate() {
+        let witness = (|| {
+            if c[0].op.name != "PSF" || c[2].op.name != "PSF"
+                || !constructor(&c[1], true) || !constructor(&c[3], true)
+                || at.checked_sub(1).is_some_and(|p| instrs[p].op.name.starts_with("Psh") || instrs[p].op.name == "PSF")
+            { return None; }
+            let slot = w(&c[0]).filter(|s| *s > 0)?;
+            let sibling = w(&c[2]).filter(|s| *s > 0 && *s != slot)?;
+            if sites.get(&slot) != Some(&(1, 1)) || sites.get(&sibling) != Some(&(1, 1)) { return None; }
+            let uses: Vec<usize> = instrs.iter().enumerate().filter_map(|(i, op)|
+                super::bytediff::addressed_slots(op).contains(&slot).then_some(i)).collect();
+            let [created, handed, destroyed] = uses.as_slice() else { return None; };
+            if *created != at || *handed <= at + 4 || *destroyed + 3 != instrs.len()
+                || instrs[*handed].op.name != "PSF" || instrs[*destroyed].op.name != "PSF"
+                || instrs.last()?.op.name != "RET" { return None; }
+            let cleanup = destroyed.checked_sub(2)?;
+            if instrs[cleanup].op.name != "PSF" || w(&instrs[cleanup]) != Some(sibling) { return None; }
+            for (ctor, dtor) in [(&c[1], &instrs[*destroyed + 1]), (&c[3], &instrs[cleanup + 1])] {
+                let cp = *ctor.qwords.first()? as i64;
+                let dp = *dtor.qwords.first()? as i64;
+                if dtor.op.name != "CALLSYS" || refs.func_by_ptr(dp) != Some("$beh2")
+                    || !refs.is_method_by_ptr(dp) || refs.is_const_method_by_ptr(dp) || refs.is_const_method_by_ptr(cp)
+                    || refs.func_owner_by_ptr(dp) != refs.func_owner_by_ptr(cp)
+                    || refs.func_ns_by_ptr(dp).unwrap_or("") != refs.func_ns_by_ptr(cp).unwrap_or("")
+                    || !refs.func_params_by_ptr(dp)?.is_empty()
+                    || !refs.func_ret_by_ptr(dp).is_some_and(|t| t.token == 0x52
+                        && !t.is_reference && !t.is_object_handle && !t.is_object_const && !t.is_read_only)
+                { return None; }
+            }
+            // The first argument is followed by its sibling in the reverse
+            // argument run; the last PSF is the native value return address.
+            if instrs.get(handed + 1)?.op.name != "PSF" || w(&instrs[handed + 1]) != Some(sibling) { return None; }
+            let call = (*handed + 2..(*handed + 12).min(cleanup)).find(|i| instrs[*i].op.is_call())?;
+            if instrs[*handed..call].iter().any(|i| !matches!(i.op.name, "PSF" | "PshVPtr" | "PshNull"))
+                || instrs[call - 1].op.name != "PSF" { return None; }
+            w(&instrs[call - 1]).filter(|s| *s > 0 && *s != slot && *s != sibling)?;
+            let target = &instrs[call];
+            let cp = *target.qwords.first()? as i64;
+            if target.op.name != "CALLSYS" || refs.is_method_by_ptr(cp) { return None; }
+            let ret = refs.func_ret_by_ptr(cp)?;
+            let ri = refs.type_identity_by_ptr(ret.type_info)?;
+            if ret.token != 5 || ret.is_reference || ret.is_object_handle || !ri.module.is_empty()
+                || !ri.name.starts_with('F') { return None; }
+            let params = refs.func_params_by_ptr(cp)?;
+            let position = call.checked_sub(*handed + 2)?;
+            let param = params.get(position)?;
+            let identity = refs.type_identity_by_ptr(param.type_info)?;
+            let ctor = *c[1].qwords.first()? as i64;
+            if param.token != 5 || !param.is_reference || !param.is_object_const || !param.is_read_only
+                || param.is_object_handle || !identity.module.is_empty()
+                || Some(identity.name.as_str()) != refs.func_owner_by_ptr(ctor)
+                || identity.namespace != refs.func_ns_by_ptr(ctor).unwrap_or("") { return None; }
+            let other = params.get(position.checked_sub(1)?)?;
+            let oi = refs.type_identity_by_ptr(other.type_info)?;
+            let oc = *c[3].qwords.first()? as i64;
+            if other.token != 5 || other.is_reference || other.is_object_handle || !oi.module.is_empty()
+                || Some(oi.name.as_str()) != refs.func_owner_by_ptr(oc)
+                || oi.namespace != refs.func_ns_by_ptr(oc).unwrap_or("") { return None; }
+            if instrs.iter().any(|i| i.op.name == "JMPP")
+                || instrs[at..instrs.len() - 1].iter().any(|i| i.op.name == "RET")
+                || instrs[at..call].iter().any(|i| i.op.name.starts_with('J'))
+                || instrs[at..].iter().any(|i| i.op.name.starts_with('J')
+                    && i.dwords.first().is_some_and(|d| i.offset_dw as i64 + 2 + *d as i32 as i64
+                        == instrs[instrs.len() - 1].offset_dw as i64))
+                || graph.blocks.iter().any(|b| (b.start_dw > c[0].offset_dw && b.start_dw <= target.offset_dw)
+                    || (b.start_dw > instrs[cleanup].offset_dw && b.start_dw <= instrs[*destroyed + 1].offset_dw))
+            { return None; }
+            Some(slot)
+        })();
+        if let Some(slot) = witness { eager.insert(slot); }
+    }
+    sites.into_iter().filter_map(|(slot, (constructs, destroys))| {
+        (constructs == 1 && (destroys > 1 || eager.contains(&slot))).then_some(slot)
+    }).collect()
+}
+/// A `JMP` to the next instruction: `if (false) { } else { }`, spelled out by the emitter.
+pub(crate) const IF_FALSE_MARKER: &str = "//__gore_if_false";
 
 /// NAMESPACE access, which fails with "Namespace 'UStoryG1R' doesn't exist".
 pub(crate) fn qualify_class_name(name: &str, refs: &RefResolver) -> String {
@@ -2285,10 +3592,48 @@ fn float_field_type(refs: &RefResolver, tid: i32, field: &str) -> Option<String>
         // instead of `= 0.1f;` — the compiler then coerces the int and the value is off by ten
         // orders of magnitude.
         .or_else(|| refs.native_field_value_type(cls, field))
-        .filter(|t| matches!(*t, "float" | "float32" | "double"))
-        .map(|s| s.to_string())
+        // FLinearColor is registered as an intrinsic, outside Binds.Cache's
+        // reflected class records. The registration trace declares all four
+        // components as float32 (offsets 0/4/8/12), including alpha.
+        .or_else(|| (cls == "FLinearColor" && matches!(field, "R" | "G" | "B" | "A"))
+            .then_some("float32"))
+        // Binds also spells the 64-bit float as `float64`. Canonicalize it
+        // here so the existing field load/store paths decode its IEEE bits.
+        .and_then(|t| match t {
+            "float64" => Some("float".to_owned()),
+            "float" | "float32" | "double" => Some(t.to_owned()),
+            _ => None,
+        })
 }
 
+/// A known script int field is copied into a separate return local. An identity
+/// int(...) cast can elide that copy. Keep other uses on their existing path:
+/// seeded assignments and comparison chains need their own copy/lifetime handling.
+fn copied_int_field_read(code: &[Instr], at: usize, refs: &RefResolver) -> bool {
+    let witness = (|| {
+        let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32).unwrap_or(0);
+        let c = code.get(at.checked_sub(1)?..at + 2)?;
+        if !matches!(c[0].op.name, "LoadRObjR" | "LoadVObjR") || c[1].op.name != "RDR4"
+            || c[2].op.name != "CpyVtoV4" || c[2].words.get(1) != c[1].words.first()
+            || w(&c[1], 0) <= 0 || w(&c[2], 0) <= 0 || w(&c[1], 0) == w(&c[2], 0)
+        { return None; }
+        let dst = w(&c[2], 0);
+        let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)|
+            super::bytediff::addressed_slots(i).contains(&dst)).collect();
+        let [(copy_at, _), (return_at, ret)] = uses.as_slice() else { return None; };
+        if *copy_at != at + 1 || ret.op.name != "CpyVtoR4"
+            || code.get(return_at + 1)?.op.name != "RET"
+        { return None; }
+        let type_id = *c[0].dwords.first()? as i32;
+        let owner = refs.type_identity_by_id(type_id)?;
+        let offset = *c[0].words.get(1)? as i32;
+        let (_, declared) = refs.member_identity(type_id, offset)?;
+        if owner.module.is_empty() || refs.type_identity_by_id(declared)? != owner
+            || !refs.is_script_int_field(type_id, offset) { return None; }
+        Some(())
+    })();
+    witness.is_some()
+}
 fn enum_to_int(rhs: String, src_ty: Option<&str>, dst_is_int: bool) -> String {
     match src_ty {
         Some(t) if dst_is_int && is_enum_name(t) => format!("int({rhs})"),
@@ -2446,6 +3791,22 @@ pub(crate) fn word_positions(text: &str, word: &str) -> Vec<usize> {
     found
 }
 
+/// Script mixins render their first parameter as the receiver. Native method
+/// signatures already exclude it; the temporary check needs the rendered positions.
+fn record_rendered_parameters(
+    resolved: &mut HashMap<(String, usize), Vec<bool>>, name: &str,
+    params: &[DataType], script_mixin: bool,
+) {
+    let accepts: Vec<bool> = params.iter().skip(usize::from(script_mixin))
+        .map(|p| !p.is_reference || p.is_object_const || p.is_read_only).collect();
+    match resolved.get_mut(&(name.to_owned(), accepts.len())) {
+        Some(seen) => {
+            for (slot, accepted) in seen.iter_mut().zip(&accepts) { *slot &= *accepted; }
+        }
+        None => { resolved.insert((name.to_owned(), accepts.len()), accepts); }
+    }
+}
+
 /// `<receiver>.<Method>(<slot>);` — a one-argument call that takes the slot's type by value or by
 /// const reference, which is where a TEMPORARY is legal (`PursuedCrimes.Add(FCrimeSetup());`).
 /// The verdict comes from the cache's own parameter table, over every one-parameter row of that
@@ -2542,7 +3903,7 @@ fn temporary_argument_call(
 
 /// UHT reserves the `b<Uppercase>` prefix for bool UPROPERTYs, so the last path segment of a
 /// member reference tells whether the field is one even when no type channel resolved it.
-fn is_ue_bool_field(reference: &str) -> bool {
+pub(crate) fn is_ue_bool_field(reference: &str) -> bool {
     let field = reference.rsplit(['.', ':']).next().unwrap_or("");
     let bytes = field.as_bytes();
     bytes.len() >= 2 && bytes[0] == b'b' && bytes[1].is_ascii_uppercase()
@@ -2563,6 +3924,143 @@ fn esc(s: &str) -> String {
         .replace('\r', "\\r")
 }
 
+/// A bool switch arm returns either a literal or a typed inline config field.
+/// No call, address escape, or intermediate copy can hide inside this arm.
+fn returning_switch_bool_value(ctx: &Ctx, code: &[Instr]) -> Option<String> {
+    let word = |i: &Instr| i.words.first().copied().map(s16);
+    if code.iter().map(|i| i.op.name).eq(["SetV1","CpyVtoR4"]) {
+        if word(&code[0]).is_none_or(|s| s <= 0) || word(&code[0]) != word(&code[1]) { return None; }
+        return match code[0].dwords.first() { Some(0) => Some("false".into()), Some(1) => Some("true".into()), _ => None };
+    }
+    if !ctx.f.is_method || code.iter().map(|i| i.op.name)
+        .ne(["PshVPtr","ADDSi","ADDSi","PopRPtr","RDR1","CpyVtoR4"])
+        || word(&code[0]) != Some(0) || word(&code[4]).is_none_or(|s| s <= 0)
+        || word(&code[4]) != word(&code[5]) { return None; }
+    let field = |ins: &Instr| {
+        let id = *ins.dwords.first()? as i32;
+        let owner = ctx.refs.type_identity_by_id(id)?;
+        let (name, old) = ctx.refs.member_identity(id,word(ins)?)?;
+        if owner.module.is_empty() || !owner.namespace.is_empty()
+            || ctx.refs.type_identity_by_id(old)? != owner { return None; }
+        let ty = ctx.refs.field_type_by_class(&owner.name,name)?;
+        Some((owner,name,ty))
+    };
+    let (owner, config, config_type) = field(&code[1])?;
+    let (config_owner, flag, flag_type) = field(&code[2])?;
+    if ctx.class_name != Some(owner.name.as_str()) || config_type != config_owner.name
+        || owner.module != config_owner.module || flag_type != "bool" { return None; }
+    Some(format!("this.{config}.{flag}"))
+}
+
+/// A closed native field assignment lost solely because its RHS crossed a cast.
+/// The caller has already proved the classic diamond's topology and both arms'
+/// unchanged emission/stack. This exception restores exactly one opAssign.
+fn restored_cast_member_assignment(
+    ctx: &Ctx, cast: &[Instr], join: &[Instr], carry: &[Arg], empty: &[String], full: &[String],
+) -> bool {
+    let witness = (|| {
+        let [rhs] = carry else { return None; };
+        let [actual] = full else { return None; };
+        if !empty.is_empty() || rhs.reeval || rhs.default_ctor.is_some()
+            || cast.iter().map(|i| i.op.name).ne(["TYPEID", "PSF", "PshVPtr", "CALLSYS", "JMP"])
+            || join.iter().map(|i| i.op.name).ne(["PshVPtr", "ADDSi", "RDSPtr", "ADDSi", "CALLSYS"]) { return None; }
+        let word = |i: &Instr| i.words.first().map(|w| *w as i16 as i32);
+        let slot = word(&join[0])?;
+        if slot <= 0 || word(&cast[1]) != Some(slot) { return None; }
+        let cast_ty = resolve_cast_typeid(ctx.refs, *cast[0].dwords.first()? as i32)?;
+        if ctx.slot_type(slot).as_deref() != Some(cast_ty.as_str()) { return None; }
+        let cp = *cast[3].qwords.first()? as i64;
+        let [out] = ctx.refs.func_params_by_ptr(cp)? else { return None; };
+        if ctx.refs.func_by_ptr(cp) != Some("opCast") || ctx.refs.func_owner_by_ptr(cp) != Some("UObject")
+            || !ctx.refs.is_method_by_ptr(cp) || !ctx.refs.is_const_method_by_ptr(cp)
+            || out.token != 0x3b || !out.is_reference || out.is_object_const || out.is_read_only
+            || !ctx.refs.func_ret_by_ptr(cp).is_some_and(|t| t.token == 0x52 && !t.is_reference) { return None; }
+        let field = |ins: &Instr| {
+            let tid = *ins.dwords.first()? as i32;
+            let owner = ctx.refs.type_identity_by_id(tid)?;
+            let (name, old) = ctx.refs.member_identity(tid, word(ins)?)?;
+            if !owner.module.is_empty() || !owner.namespace.is_empty()
+                || ctx.refs.type_identity_by_id(old)? != owner { return None; }
+            let ty = ctx.refs.native_field_value_type(&owner.name, name)
+                .or_else(|| ctx.refs.native_field_type(&owner.name, name))?;
+            Some((owner, name, ty))
+        };
+        let (owner, first, middle) = field(&join[1])?;
+        let (next_owner, last, field_ty) = field(&join[3])?;
+        if !ctx.refs.is_subclass(&cast_ty, &owner.name) || middle != next_owner.name { return None; }
+        let ptr = *join[4].qwords.first()? as i64;
+        let [param] = ctx.refs.func_params_by_ptr(ptr)? else { return None; };
+        let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+        let native_type = ctx.refs.type_identity_by_ptr(ret.type_info)?;
+        if ctx.refs.func_by_ptr(ptr) != Some("opAssign") || !ctx.refs.is_method_by_ptr(ptr)
+            || ctx.refs.is_const_method_by_ptr(ptr) || !native_type.module.is_empty() || !native_type.namespace.is_empty()
+            || ctx.refs.func_owner_by_ptr(ptr) != Some(native_type.name.as_str())
+            || ret.token != 5 || !ret.is_reference || ret.is_object_handle || ret.is_object_const || ret.is_read_only
+            || param.token != 5 || !param.is_reference || param.is_object_handle || !param.is_object_const || !param.is_read_only
+            || param.type_info != ret.type_info || field_ty != ret.base_name(ctx.refs)
+            || rhs.ty.as_deref()?.split('<').next()? != native_type.name { return None; }
+        // cast_arg renders the existing conversion rules; it is not a complete
+        // covariance proof. The native assignment and destination are typed above.
+        let expected = format!("{}.{first}.{last} = {};", ctx.slot_name(slot), cast_arg(rhs, param, ctx.refs));
+        (!expected.contains(['\u{1}', '\u{2}']) && actual == &expected).then_some(())
+    })();
+    witness.is_some()
+}
+
+
+/// Preserve a native equality method whose handle argument was evaluated before
+/// taking a const value-parameter field's address. Infix == would copy that field
+/// before the argument call; the explicit method preserves the recorded order.
+fn ordered_parameter_field_equality(ctx: &Ctx, at: usize, stack: &[Arg]) -> Option<String> {
+    let code = ctx.instrs.get(at.checked_sub(5)?..=at)?;
+    if code.iter().map(|i| i.op.name).ne(["CALLSYS", "STOREOBJ", "PshVPtr", "PshVPtr", "ADDSi", "CALLSYS"])
+        || !ctx.instrs.get(at+1).is_some_and(|i| matches!(i.op.name, "JLowZ" | "JLowNZ")) { return None; }
+    let [rhs, recv] = stack else { return None; };
+    let w = |i: &Instr| i.words.first().copied().map(s16);
+    let slot = w(&code[1])?; let parameter = w(&code[3])?;
+    if slot <= 0 || parameter >= 0 || w(&code[2]) != Some(slot)
+        || rhs.s != ctx.slot_name(slot) || rhs.is_psf || recv.is_psf { return None; }
+    let owner_id = *code[4].dwords.first()? as i32;
+    let owner = ctx.refs.type_identity_by_id(owner_id)?;
+    let (field, old) = ctx.refs.member_identity(owner_id, w(&code[4])?)?;
+    let input = ctx.f.param_types.get(*ctx.param_off_map.get(&parameter)?)?;
+    if !owner.module.is_empty() || !owner.namespace.is_empty() || ctx.refs.type_identity_by_id(old)? != owner
+        || input.token != 5 || !input.is_reference || input.is_object_handle || !input.is_object_const
+        || ctx.refs.type_identity_by_ptr(input.type_info)? != owner { return None; }
+    let field_ty = ctx.refs.native_field_value_type(&owner.name, field)?;
+    let ptr = *code[5].qwords.first()? as i64;
+    let [arg] = ctx.refs.func_params_by_ptr(ptr)? else { return None; };
+    let ret = ctx.refs.func_ret_by_ptr(ptr)?;
+    if ctx.refs.func_by_ptr(ptr) != Some("opEquals") || !ctx.refs.is_method_by_ptr(ptr)
+        || !ctx.refs.is_const_method_by_ptr(ptr) || ret.token != 0x41 || ret.is_reference || ret.is_object_handle
+        || arg.token != 5 || !arg.is_object_handle || arg.is_reference
+        || !matches!(field_ty.as_bytes().first(), Some(b'F' | b'T'))
+        || ctx.refs.func_owner_by_ptr(ptr) != field_ty.split('<').next()
+        || recv.s != format!("{}.{field}", ctx.slot_name(parameter)) || recv.ty.as_deref().is_some_and(|ty| ty != field_ty)
+        { return None; }
+    let producer = *code[0].qwords.first()? as i64;
+    let value = ctx.refs.func_ret_by_ptr(producer)?;
+    if value.token != 5 || !value.is_object_handle || value.is_reference
+        || (value.is_object_const && !arg.is_object_const)
+        || ctx.slot_type(slot).as_deref() != Some(value.base_name(ctx.refs).as_str())
+        || !(ctx.refs.is_subclass(&value.base_name(ctx.refs), &arg.base_name(ctx.refs))
+            || (arg.base_name(ctx.refs) == "AActor"
+                && provably_derived(&value.base_name(ctx.refs), "AActor", ctx.refs))) { return None; }
+    if ctx.instrs.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J')
+        && i.dwords.first().is_some_and(|d| {
+            let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+            target > code[0].offset_dw as i64 && target <= code[5].offset_dw as i64
+        }))) { return None; }
+    // The native hierarchy convention is used only for these fully resolved,
+    // unqualified native identities, never for similarly named script types.
+    for data in [value, arg] {
+        let identity = ctx.refs.type_identity_by_ptr(data.type_info)?;
+        if !identity.module.is_empty() || !identity.namespace.is_empty() { return None; }
+    }
+    let call = format!("{}.opEquals({})", recv.s, cast_arg(rhs, arg, ctx.refs));
+    (!call.contains(['\u{1}', '\u{2}'])).then_some(call)
+}
+
 /// Type carried by a member-address register when `PshRPtr` turns it back into a call
 /// argument. Prefer the field's precise script value type; native structs have no field-value
 /// metadata in the script cache, so an independently resolved native ENUM type is the next
@@ -2577,6 +4075,101 @@ fn member_ref_push_type(
         .or(native_enum)
         .or(owner_fallback)
         .map(str::to_string)
+}
+
+/// A mutable native handle reference yields a member address which is captured
+/// once and used only by one later field store. Preserve that reference binding.
+pub(super) fn captured_handle_member_reference(code: &[Instr], at: usize, refs: &RefResolver) -> Option<(i32, String)> {
+    let c = code.get(at.checked_sub(5)?..=at)?;
+    if c.iter().map(|i| i.op.name).ne(["CALLSYS", "PshRPtr", "RDSPtr", "ADDSi", "PopRPtr", "CpyRtoV8"]) { return None; }
+    let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+    let slot = w(&c[5], 0).filter(|s| *s > 0)?;
+    let ptr = *c[0].qwords.first()? as i64;
+    let ret = refs.func_ret_by_ptr(ptr)?;
+    if ret.token != 5 || !ret.is_reference || !ret.is_object_handle || ret.is_object_const || ret.is_read_only
+        || !refs.is_method_by_ptr(ptr) || refs.is_const_method_by_ptr(ptr)
+        || !refs.func_params_by_ptr(ptr)?.is_empty() { return None; }
+    let owner_id = *c[3].dwords.first()? as i32;
+    let owner = refs.type_identity_by_id(owner_id)?;
+    let (field, old) = refs.member_identity(owner_id, w(&c[3], 0)?)?;
+    if !owner.module.is_empty() || !owner.namespace.is_empty()
+        || refs.type_identity_by_id(old)? != owner || refs.type_identity_by_ptr(ret.type_info)? != owner { return None; }
+    let ty = refs.native_field_value_type(&owner.name, field)?;
+    if !ty.starts_with('F') || ty.contains(['<', '&', ' ']) { return None; }
+    let uses: Vec<_> = code.iter().enumerate().filter(|(_, i)|
+        super::bytediff::addressed_slots(i).contains(&slot)).map(|(i, _)| i).collect();
+    let [capture, load] = uses.as_slice() else { return None; };
+    if *capture != at || *load <= at || code[*load].op.name != "LoadRObjR"
+        || w(&code[*load], 0) != Some(slot) || !code.get(load + 1).is_some_and(|i|
+            matches!(i.op.name, "WRTV1" | "WRTV2" | "WRTV4" | "WRTV8")) { return None; }
+    let value_id = *code[*load].dwords.first()? as i32;
+    let value = refs.type_identity_by_id(value_id)?;
+    let (_, value_old) = refs.member_identity(value_id, w(&code[*load], 1)?)?;
+    if value.name != ty || !value.module.is_empty() || !value.namespace.is_empty()
+        || refs.type_identity_by_id(value_old)? != value { return None; }
+    if code.iter().any(|i| i.op.name == "JMPP" || (i.op.name.starts_with('J') && i.dwords.first().is_some_and(|d| {
+        let target = i.offset_dw as i64 + 2 + *d as i32 as i64;
+        target > c[0].offset_dw as i64 && target <= code[load + 1].offset_dw as i64
+    }))) { return None; }
+    Some((slot, ty.to_owned()))
+}
+
+/// The emitted double seed also names a later Copy/Set branch merge. Reuse
+/// that seed for its immediate field write instead of materializing it twice.
+pub(super) fn shared_double_field_seed_value(code: &[Instr], refs: &RefResolver, at: usize) -> Option<(i32, String, i32, String)> {
+    (|| {
+        let first = at.checked_sub(2)?;
+        let c = code.get(first..=at)?;
+        let w = |i: &Instr, n: usize| i.words.get(n).map(|v| *v as i16 as i32);
+        if c.iter().map(|i| i.op.name).ne(["SetV8", "LoadThisR", "WRTV8"])
+            || code.iter().any(|i| i.op.name == "JMPP") { return None; }
+        let slot = w(&c[0], 0).filter(|s| *s > 0)?;
+        let bits = *c[0].qwords.first()?;
+        if w(&c[2], 0) != Some(slot) || !f64::from_bits(bits).is_finite() { return None; }
+        let tid = *c[1].dwords.first()? as i32;
+        let owner = refs.type_identity_by_id(tid)?;
+        let (field, old_owner) = refs.member_identity(tid, w(&c[1], 0)?)?;
+        if refs.type_identity_by_id(old_owner)? != owner
+            || !matches!(float_field_type(refs, tid, field).as_deref(), Some("float" | "double"))
+        { return None; }
+        let later: Vec<_> = code.iter().enumerate().skip(at + 1).filter_map(|(n, i)|
+            super::bytediff::addressed_slots(i).contains(&slot).then_some(n)).collect();
+        let [copy, fallback, narrow] = later.as_slice() else { return None; };
+        let tail = code.get(copy.checked_sub(1)?..*narrow + 2)?;
+        if *copy <= at + 1 || *fallback != *copy + 2 || *narrow != *copy + 3
+            || tail.iter().map(|i| i.op.name).ne(["RDR8", "CpyVtoV8", "JMP", "SetV8", "dTOf", "PshV4"])
+            || w(&tail[0], 0).is_none_or(|s| s <= 0 || s == slot)
+            || w(&tail[1], 1) != w(&tail[0], 0) || w(&tail[1], 0) != Some(slot)
+            || w(&tail[3], 0) != Some(slot) || w(&tail[4], 1) != Some(slot)
+            || w(&tail[4], 0).is_none_or(|s| s <= 0 || s == slot)
+            || w(&tail[5], 0) != w(&tail[4], 0)
+            || !f64::from_bits(*tail[3].qwords.first()?).is_finite() { return None; }
+        let jump_target = |i: &Instr| i.dwords.first().map(|d| i.offset_dw as i64 + 2 + *d as i32 as i64);
+        if jump_target(&tail[2]) != Some(tail[4].offset_dw as i64) { return None; }
+        let guards: Vec<_> = (at + 1..*copy - 1).filter(|n|
+            matches!(code[*n].op.name, "JLowZ" | "JLowNZ")
+                && jump_target(&code[*n]) == Some(tail[3].offset_dw as i64)).collect();
+        let [guard] = guards.as_slice() else { return None; };
+        if code.iter().enumerate().any(|(n, i)| n != *guard && n != *copy + 1 && i.op.name.starts_with('J')
+            && jump_target(i).is_some_and(|t| t > c[0].offset_dw as i64 && t <= tail[4].offset_dw as i64))
+        { return None; }
+        Some((slot, fmt_float(ConstBits::W8(bits), true), tid, field.to_owned()))
+    })()
+}
+
+fn shared_double_field_seed(ctx: &Ctx, at: usize, out: &[String], target: &str, target_type: Option<&str>) -> bool {
+    (|| {
+        if !ctx.f.is_method || !matches!(target_type, Some("float" | "double")) { return None; }
+        let (slot, literal, tid, field) = shared_double_field_seed_value(ctx.instrs, ctx.refs, at)?;
+        let owner = ctx.refs.type_identity_by_id(tid)?;
+        let class = ctx.class_name?;
+        if !ctx.float_slots.contains(&slot)
+            || ctx.slot_type(slot).is_some_and(|ty| !matches!(ty.as_str(), "float" | "double"))
+            || (class != owner.name && !ctx.refs.is_subclass(class, &owner.name))
+            || target != format!("this.{field}")
+            || out.last()? != &format!("{} = {literal};", ctx.slot_name(slot)) { return None; }
+        Some(())
+    })().is_some()
 }
 
 /// Decompile one block's instruction range into statements; also return the
@@ -2611,6 +4204,13 @@ fn block_stmts_in(
                                                  // order gate for the stale-cmp-vs-live-bool-pending decision at conditional jumps.
     let mut test_after_call = true;
     let mut stack: Vec<Arg> = init; // pushed pointer/value expressions
+    // Pending default arguments: (slot, name, absolute push index, from_reference).
+    // Incoming operands restore only their own construction witness; settlement still
+    // waits for the actual consuming call and its immediate cleanup.
+    let mut pending_temp_markers: Vec<(i32, String, usize, bool)> = stack.iter()
+        .filter_map(|arg| arg.default_ctor.as_ref().map(|(slot, _, pushed)| {
+            (*slot, arg.s.clone(), *pushed, false)
+        })).collect();
     let mut value_reg: Option<String> = None;
     let mut obj_reg: Option<String> = None;
     let mut ref_reg: Option<String> = None; // Idiom-B member address
@@ -2663,7 +4263,9 @@ fn block_stmts_in(
     // triad to an empty ctor body. Keyed on the CONSTRUCT owner type so the copy-assign only fires
     // when the source temp was default-built of the SAME value type. Cleared when the slot is
     // overwritten by any non-construct producer.
-    let mut default_ctor_temp: HashMap<String, String> = HashMap::new();
+    let mut default_ctor_temp: HashMap<String, String> = stack.iter()
+        .filter_map(|arg| arg.default_ctor.as_ref().map(|(_, ty, _)| (arg.s.clone(), ty.clone())))
+        .collect();
     // Per-call parameter flags read from the pointer the call ACTUALLY uses, keyed by name and
     // arity. The global by-name table merges every overload in the cache and answers the
     // constness question wrongly for a name the engine reuses; the pointer names one row.
@@ -2745,9 +4347,122 @@ fn block_stmts_in(
     // can take the statement back and carry the chain on.
     let mut behaviour_flushed: Option<usize> = None;
     let insns = &ctx.instrs[lo..hi];
-    for k in 0..insns.len() {
+    let selection = stack.is_empty().then(|| local_lvalue_selection(ctx, lo)).flatten()
+        .filter(|selection| insns.len() >= selection.consumed);
+    let skip = if let Some(selection) = selection {
+        if let Some(slot) = selection.copy_ctor_slot {
+            RVO_PRODUCERS.with(|v| v.borrow_mut().push((slot, lo + 1)));
+        }
+        out.push(selection.statement); selection.consumed
+    } else { 0 };
+    let mut skip_until = skip;
+    for k in skip..insns.len() {
+        if k < skip_until { continue; }
         let ins = &insns[k];
+        CUR_INSTR.with(|c| c.set(lo + k));
         let n = ins.op.name;
+        if !pending_temp_markers.is_empty() {
+            let is_destructor_of = |at: usize| -> Option<i32> {
+                let n = ctx.instrs.get(at)?;
+                let d = ctx.instrs.get(at + 1)?;
+                (n.op.name == "PSF"
+                    && d.op.name == "CALLSYS"
+                    && ctx
+                        .refs
+                        .func_by_ptr(d.qwords.first().copied().unwrap_or(0) as i64)
+                        .is_some_and(|name| name.starts_with("$beh2")))
+                .then(|| n.words.first().map(|w| *w as i16 as i32))
+                .flatten()
+            };
+            let mut settled: Vec<usize> = Vec::new();
+            for (index, (slot, name, pushed_at, from_reference)) in pending_temp_markers.iter().enumerate() {
+                // The construction pops its receiver before the argument push is processed:
+                // only once the push has gone by can an absent operand mean "consumed".
+                if lo + k <= *pushed_at || stack.iter().any(|arg| &arg.s == name) {
+                    continue; // still waiting for its call
+                }
+                // The consuming call: the nearest call processed since the push.
+                let consumer = (pushed_at + 1..lo + k).rev().find(|j| ctx.instrs[*j].op.is_call());
+                // `T x; return x;` for a type without a copy constructor: x is constructed,
+                // THEN the return slot is default-constructed (`PshVPtr v-2; $beh0` with no
+                // operand pushed before it), then x is assigned into it. A temporary returned
+                // (`return T();`) constructs the return slot FIRST, and a copy-constructible
+                // type copies straight from the temporary — one temp slot reused per return
+                // site, which is what naming it would lose.
+                let return_slot_built_between = consumer.is_some_and(|j| {
+                    (pushed_at + 1..j).any(|at| {
+                        at + 1 < ctx.instrs.len()
+                            && ctx.instrs[at].op.name == "PshVPtr"
+                            && ctx.instrs[at].words.first().map(|w| *w as i16 as i32) == Some(-2)
+                            && ctx.instrs[at + 1].op.name == "CALLSYS"
+                            && ctx
+                                .refs
+                                .func_by_ptr(ctx.instrs[at + 1].qwords.first().copied().unwrap_or(0) as i64)
+                                .is_some_and(|name| name.starts_with("$beh0"))
+                            && !(at > 0
+                                && (ctx.instrs[at - 1].op.name.starts_with("Psh")
+                                    || ctx.instrs[at - 1].op.name == "PSF"))
+                    })
+                });
+                let temporary = !return_slot_built_between && consumer.is_some_and(|j| {
+                    if *pushed_at < lo && j + 1 != lo + k {
+                        return false;
+                    }
+                    // A temporary is released right after the call — behind the result's copy
+                    // out of the register and other temporaries' releases; anything else first
+                    // (another statement's instruction, the slot addressed again) is the life
+                    // of a declared local.
+                    let mut at = j + 1;
+                    loop {
+                        if let Some(destroyed) = is_destructor_of(at) {
+                            if destroyed == *slot {
+                                break true;
+                            }
+                            at += 2;
+                            continue;
+                        }
+                        match ctx.instrs.get(at) {
+                            Some(next)
+                                if matches!(
+                                    next.op.name,
+                                    "CpyRtoV4" | "CpyRtoV8" | "STOREOBJ" | "PopPtr" | "PopRPtr"
+                                ) =>
+                            {
+                                at += 1;
+                            }
+                            _ => break false,
+                        }
+                    }
+                });
+                let marker = format!("{CTOR_SITE} {slot}");
+                if std::env::var_os("GORE_AS_MARKER_DIAG").is_some() {
+                    let names: Vec<&str> = stack.iter().map(|arg| arg.s.as_str()).collect();
+                    eprintln!(
+                        "[marker] slot={slot} name={name} pushed_at={pushed_at} k={k} consumer={consumer:?} temporary={temporary} from_reference={from_reference} stack={names:?}"
+                    );
+                }
+                if temporary {
+                    if let Some(pos) = out.iter().rposition(|line| *line == marker) {
+                        out.remove(pos);
+                    }
+                } else {
+                    default_ctor_temp.remove(name);
+                    if *from_reference {
+                        if let Some(pos) = out.iter().rposition(|line| *line == marker) {
+                            out[pos] = format!("{marker} init");
+                        }
+                    }
+                }
+                settled.push(index);
+            }
+            for index in settled.into_iter().rev() {
+                pending_temp_markers.remove(index);
+            }
+        }
+        for name in invalidate_carried_defaults(&mut stack, ins) {
+            default_ctor_temp.remove(&name);
+            pending_temp_markers.retain(|(_, pending_name, _, _)| pending_name != &name);
+        }
         let flushed_by_behaviour = behaviour_flushed.take();
         // Invalidate a cached SetV* constant when this op overwrites that slot with a
         // NON-constant value (copy, call-result deref, arithmetic, conversion). Otherwise a
@@ -2897,7 +4612,19 @@ fn block_stmts_in(
                     if let Some(lhs) = assign_lhs(&p) {
                         let lhs = lhs.to_string();
                         out.push(format!("{p};"));
-                        stack.push(Arg::typed(lhs, pending_ty.take()));
+                        let lhs_ty = pending_ty.take();
+                        // LoadThisR immediately overwrote the reference register after the
+                        // RVO call. Preserve the call statement, but push that field address.
+                        if k > 0 && insns[k - 1].op.name == "LoadThisR" {
+                            value_reg = None;
+                            stack.push(Arg::typed(
+                                ref_reg.clone().unwrap_or_else(|| UNRESOLVED.into()),
+                                member_ref_push_type(ref_reg_vty.as_deref(),
+                                    ref_reg_nfty.as_deref(), ref_reg_ty.as_deref()),
+                            ));
+                        } else {
+                            stack.push(Arg::typed(lhs, lhs_ty));
+                        }
                     } else if pending_is_static_name || pending_is_pure_elem {
                         // batch-31b (N2b): the pending is the PURE `n"..."`/`FName(...)`
                         // literal of the __STATIC_NAME idiom — no side effect can be
@@ -3147,6 +4874,38 @@ fn block_stmts_in(
                 // call's ret DataType.is_reference (data-driven from the cache).
                 if ref_reg.is_none() && pending.is_some() && pending_is_ref {
                     let p = pending.take().unwrap();
+                    // A closed mutable-int reference update must evaluate its lvalue once.
+                    // Ordinary RDR consumption below forgets that address before WRTV.
+                    let immediate_update = (|| {
+                        if n != "RDR4" || k == 0 || !p.ends_with(')') || !p.contains('(')
+                            || p.contains(['\u{1}', '\u{2}']) || p == UNRESOLVED { return None; }
+                        let call = &insns[k - 1];
+                        if call.op.name != "CALLSYS" { return None; }
+                        let ret = ctx.refs.func_ret_by_ptr(*call.qwords.first()? as i64)?;
+                        if ret.token != 0x44 || !ret.is_reference || ret.is_object_handle
+                            || ret.is_object_const || ret.is_read_only { return None; }
+                        let (add, store) = (insns.get(k + 1)?, insns.get(k + 2)?);
+                        let slot = w(ins, 0);
+                        if slot <= 0 || add.op.name != "ADDIi" || store.op.name != "WRTV4"
+                            || w(add, 0) != slot || w(add, 1) != slot || w(store, 0) != slot {
+                            return None;
+                        }
+                        // No later value read or unrelated physical-slot life may lose its store.
+                        if ctx.instrs.iter().enumerate().any(|(at, other)|
+                            !(lo + k..=lo + k + 2).contains(&at)
+                                && super::bytediff::addressed_slots(other).contains(&slot)) {
+                            return None;
+                        }
+                        Some(*add.dwords.first()? as i32)
+                    })();
+                    if let Some(amount) = immediate_update {
+                        out.push(format!("{p} += {amount};"));
+                        skip_until = k + 3;
+                        pending_ty = None;
+                        pending_const = false;
+                        pending_is_ref = false;
+                        continue;
+                    }
                     let dst_slot = w(ins, 0);
                     let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
                     // Mirror the member-RDR wraps below: an UNKNOWN/object-typed or float-family
@@ -3274,7 +5033,9 @@ fn block_stmts_in(
                     // float64 member -> int slot precision-warning residue: foreign script
                     // config floats, FVector.Z/FRotator.Yaw); int64 member reads stay bare.
                     let rhs =
-                        if dst_is_int && (unknowable || float_src) && (n != "RDR8" || float_src) {
+                        if dst_is_int && copied_int_field_read(ctx.instrs, lo + k, ctx.refs) {
+                            r.clone()
+                        } else if dst_is_int && (unknowable || float_src) && (n != "RDR8" || float_src) {
                             format!("int({r})")
                         } else {
                             enum_to_int(r.clone(), ref_reg_ty.as_deref(), dst_is_int)
@@ -3352,6 +5113,7 @@ fn block_stmts_in(
                     let target_is_bool = ref_reg_ty.as_deref() == Some("bool")
                         || ref_reg_vty.as_deref() == Some("bool");
                     let mut rhs = match ref_reg_ty.as_deref() {
+                        _ if shared_double_field_seed(ctx, lo + k, &out, r, ref_reg_ty.as_deref()) => raw.clone(),
                         _ if source_is_bool && target_is_bool => raw.clone(),
                         Some("float32") => {
                             float_lit(&set_consts, slot, false).unwrap_or(raw.clone())
@@ -3764,6 +5526,20 @@ fn block_stmts_in(
                 if let Some(c) = &mut cmp {
                     c.op = Some("==");
                 }
+                // A terminal bool field store leaves the test unused: the separate
+                // return carrier replaces its register value. Keep its expression.
+                if k > 0 && insns[k - 1].op.name == "CmpPtrNull"
+                    && ctx.f.ret.token == 0x41 && !ctx.f.ret.is_reference
+                    && insns[k + 1..].iter().map(|i| i.op.name)
+                        .eq(["SetV1", "LoadThisR", "WRTV1", "CpyVtoR4", "RET"])
+                    && w(&insns[k + 1], 0) == w(&insns[k + 3], 0)
+                    && insns[k + 1].dwords.first().is_some_and(|v| *v <= 1)
+                {
+                    if let Some(condition) = cmp.as_ref().and_then(materialized_comparison) {
+                        out.push(format!("{condition};"));
+                        cmp = None;
+                    }
+                }
             }
             "TNZ" => {
                 if let Some(c) = &mut cmp {
@@ -3797,6 +5573,21 @@ fn block_stmts_in(
                 // so a chained statement call (e.g. MakeRequirement then Add) isn't silently
                 // overwritten. Drops sentinel/unresolved pendings (see flush_b2 doc).
                 flush_b2!();
+                // A null equality followed only by pointer argument pushes has no
+                // register consumer before CALL replaces its result. Preserve the
+                // ignored expression (RandomSelector::OnChildNodeCancelled).
+                // Other tests, pushes, calls, branches and register uses stay excluded.
+                let pointer_args = insns[..k].iter().rev()
+                    .take_while(|prev| prev.op.name == "PshVPtr").count();
+                if n == "CALL" && pointer_args > 0 && k >= pointer_args + 2
+                    && insns[k - pointer_args - 2].op.name == "CmpPtrNull"
+                    && insns[k - pointer_args - 1].op.name == "TZ"
+                {
+                    if let Some(condition) = cmp.as_ref().and_then(materialized_comparison) {
+                        out.push(format!("{condition};"));
+                        cmp = None;
+                    }
+                }
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let orig = ctx.refs.func_by_id(id).unwrap_or("func?").to_string();
                 // batch-25f: a free fn whose declaration was collision-renamed (`Name_g<mi>`)
@@ -3853,7 +5644,15 @@ fn block_stmts_in(
                         break 'idiom_c false;
                     };
                     let np = params.len();
-                    // out-slot = stack TOP: a PSF'd slot whose type head == the struct name and
+                    let Some(owner) = ctx.refs.script_constructor_type_by_id(id) else {
+                        break 'idiom_c false;
+                    };
+                    let ctor_name = if owner.namespace.is_empty() {
+                        owner.name.clone()
+                    } else {
+                        format!("{}::{}", owner.namespace, owner.name)
+                    };
+                    // out-slot = stack TOP: a PSF'd slot whose full type head == this owner and
                     // whose name is a plain local/member lvalue (never a sentinel). is_lvalue_arg
                     // rejects PSF outright (it targets the non-PSF member-store receiver), so the
                     // out-slot's plain-name check is inlined here.
@@ -3873,7 +5672,7 @@ fn block_stmts_in(
                         .last()
                         .map(|r| {
                             r.is_psf
-                                && r.ty.as_deref().map(head) == Some(f.as_str())
+                                && r.ty.as_deref().map(head) == Some(ctor_name.as_str())
                                 && plain_lvalue(&r.s)
                         })
                         .unwrap_or(false);
@@ -3916,7 +5715,7 @@ fn block_stmts_in(
                     let out_s = stack[stack.len() - 1].s.clone();
                     stack.truncate(base);
                     flush!();
-                    out.push(format!("{out_s} = {f}({rendered});"));
+                    out.push(format!("{out_s} = {ctor_name}({rendered});"));
                     true
                 };
                 if idiom_c_done {
@@ -3924,6 +5723,60 @@ fn block_stmts_in(
                     pending_is_pure_elem = false;
                     continue;
                 }
+                // A SCRIPT struct's default construction of a local (`PSF s; CALL FPayload;
+                // TYPEID`) is the declaration standing at that point, exactly like a `$beh0`
+                // of a native value: leave the construction-site marker the emitter resolves
+                // into `T local_N;` where the mentions are (`RegisterJoinWarning`: vanilla
+                // built the handle behind the guard, the hoisted declaration built it at
+                // entry). A slot pushed again at once is a temporary and gets no marker.
+                let script_ctor_site: Option<i32> = if ctx.refs.is_type_name(&f)
+                    && ctx.refs.func_params_by_id(id).is_some_and(|p| p.is_empty())
+                {
+                    stack
+                        .last()
+                        .filter(|top| top.is_psf)
+                        .and_then(|top| top.s.strip_prefix("local_"))
+                        .and_then(|rest| rest.split('_').next())
+                        .and_then(|rest| rest.parse::<i32>().ok())
+                        .filter(|slot| *slot > 0)
+                        .filter(|slot| {
+                            let mut next = k + 1;
+                            while insns.get(next).is_some_and(|n| n.op.name == "TYPEID") {
+                                next += 1;
+                            }
+                            let pushed_at_once = insns.get(next).is_some_and(|n| {
+                                matches!(n.op.name, "PSF" | "PshVPtr")
+                                    && n.words.first().map(|w| *w as i16 as i32) == Some(*slot)
+                            });
+                            if !pushed_at_once {
+                                return true;
+                            }
+                            // Pushed at once into a call that WRITES through a reference
+                            // parameter: an out-argument has to be a named local
+                            // (`FStoryEventPayload Payload; Event.Payload.Get(Payload);` —
+                            // five `HasStoryEventInMemory*` built it per iteration). A call
+                            // taking only values or const references took a temporary.
+                            let call = (next + 1..insns.len().min(next + 12))
+                                .find(|j| insns[*j].op.is_call());
+                            let Some(call) = call else {
+                                return false;
+                            };
+                            let callee = &insns[call];
+                            let params = match callee.op.name {
+                                "CALLSYS" | "Thiscall1" => ctx
+                                    .refs
+                                    .func_params_by_ptr(callee.qwords.first().copied().unwrap_or(0) as i64),
+                                _ => ctx
+                                    .refs
+                                    .func_params_by_id(callee.dwords.first().copied().unwrap_or(0) as i32),
+                            };
+                            params.is_some_and(|p| {
+                                p.iter().any(|param| param.is_reference && !param.is_object_const && !param.is_read_only)
+                            })
+                        })
+                } else {
+                    None
+                };
                 pending = if f == "StaticClass" {
                     // Fix b1 — StaticClass takes 0 operands; the stack holds the ENCLOSING call's
                     // already-pushed args. Do NOT clear it (clearing destroys those args).
@@ -3968,6 +5821,19 @@ fn block_stmts_in(
                     // argument arity remains confined to CALLSYS/Thiscall1 below.
                     let na = None;
                     let trusted = ctx.refs.func_params_by_id(id).map(|p| p.len());
+                    // The same per-position row the CALLSYS arm records: a script callee's
+                    // `const T &inout` takes a temporary as well, and without the row the
+                    // default-constructed argument stayed a named local (`FInGameTime local_12;`).
+                    if let Some(params) = ctx.refs.func_params_by_id(id) {
+                        let name = ctx
+                            .refs
+                            .func_by_id(id)
+                            .and_then(|name| name.rsplit("::").next())
+                            .unwrap_or("call?")
+                            .to_string();
+                        record_rendered_parameters(&mut resolved_params,&name,params,
+                            ctx.refs.is_restored_mixin_by_id(id));
+                    }
                     let owner = ctx.refs.func_owner_by_id(id);
                     let ret_is_ref = ctx
                         .refs
@@ -4029,11 +5895,17 @@ fn block_stmts_in(
                         pending_ty.as_deref(),
                         ret_is_ref,
                         free_global_in_class,
+                        ctx.refs.is_restored_mixin_by_id(id),
                         ctx.refs,
                     )
                 };
                 pending_is_static_name = false;
                 pending_is_pure_elem = false;
+                if let Some(slot) = script_ctor_site {
+                    if pending.is_none() {
+                        out.push(format!("{CTOR_SITE} {slot}"));
+                    }
+                }
             }
             "CALLSYS" | "Thiscall1" => {
                 test_after_call = false;
@@ -4044,20 +5916,7 @@ fn block_stmts_in(
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
                 if let Some(params) = ctx.refs.func_params_by_ptr(ptr) {
-                    let accepts: Vec<bool> = params
-                        .iter()
-                        .map(|p| !p.is_reference || p.is_object_const || p.is_read_only)
-                        .collect();
-                    match resolved_params.get_mut(&(f.clone(), accepts.len())) {
-                        Some(seen) => {
-                            for (slot, accepted) in seen.iter_mut().zip(&accepts) {
-                                *slot &= *accepted;
-                            }
-                        }
-                        None => {
-                            resolved_params.insert((f.clone(), accepts.len()), accepts);
-                        }
-                    }
+                    record_rendered_parameters(&mut resolved_params,&f,params,false);
                 }
                 // A behaviour emits no statement of its own and consumes only its own operands,
                 // so a statement flushed for it may still belong to a chain the very next
@@ -4121,7 +5980,109 @@ fn block_stmts_in(
                                         owner.bytes().next(),
                                         Some(b'F') | Some(b'T') | Some(b'E')
                                     ) {
-                                        default_ctor_temp.insert(top.s.clone(), owner.to_string());
+                                        // The behaviour's owner is the bare template head
+                                        // (`TArray`); the slot's own type carries the instance
+                                        // (`TArray<AGothicCharacter>`), the only spelling that
+                                        // constructs. Without it the substitution refused and
+                                        // `return TArray<T>();` became a local declared at the top.
+                                        // Only a ONE-argument instance: the expression parser
+                                        // does not take `TMap<A, B>()` (measured: "Expected ','
+                                        // or ';' — Instead found '>'"), so a two-argument
+                                        // template keeps the bare head and stays unsubstituted.
+                                        let spelled = top
+                                            .ty
+                                            .as_deref()
+                                            .filter(|ty| {
+                                                ty.contains('<') && !ty.contains(',') && ty.starts_with(owner)
+                                            })
+                                            .unwrap_or(owner)
+                                            .to_string();
+                                        default_ctor_temp.insert(top.s.clone(), spelled);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // A 0-param construction of a PSF'd LOCAL that the next instruction does not
+                    // push on again is a DECLARATION in the source — `FInGameTime local_16;` stood
+                    // right here, between the statements around it. Leave a marker naming the slot
+                    // (as a number, so it is not a mention of the local); the emitter turns it into
+                    // the declaration at this position where the local has no other declaration,
+                    // and drops it otherwise.
+                    if ctx.refs.func_params_by_ptr(ptr).map(|p| p.len()) == Some(0) {
+                        if let Some(top) = stack.last() {
+                            if top.is_psf && top.s.starts_with("local_") {
+                                let slot_num = top.s.strip_prefix("local_").unwrap_or("");
+                                let consumed_next = insns.get(k + 1).is_some_and(|n| {
+                                    matches!(n.op.name, "PSF" | "PshVPtr")
+                                        && n.words.first().map(|w| *w as i16 as i32)
+                                            == slot_num.parse::<i32>().ok()
+                                });
+                                // `PSF src; PSF dst; $beh0; PSF dst; CALLSYS opAssign` is a
+                                // declaration WITH initialiser the compiler builds as
+                                // construct-then-assign (`TArray<T> x = <value>;`): the push
+                                // that follows is the assignment's receiver, not an operand
+                                // of an expression around it.
+                                let assigned_next = consumed_next
+                                    && insns.get(k + 2).is_some_and(|c| {
+                                        c.op.name == "CALLSYS"
+                                            && ctx
+                                                .refs
+                                                .func_by_ptr(c.qwords.first().copied().unwrap_or(0) as i64)
+                                                == Some("opAssign")
+                                    });
+                                if (!consumed_next || assigned_next)
+                                    && slot_num.parse::<i32>().is_ok()
+                                {
+                                    // `init`: constructed AFTER its value was evaluated (the
+                                    // `PSF src; PSF dst; $beh0; opAssign` shape) — the one
+                                    // declaration the emitter may merge with the assignment
+                                    // that follows it. A bare marker stood BEFORE the value:
+                                    // `T x; x = f();` constructs first, and merging it moves
+                                    // the construction behind the call.
+                                    if assigned_next {
+                                        out.push(format!("{CTOR_SITE} {slot_num} init"));
+                                    } else {
+                                        out.push(format!("{CTOR_SITE} {slot_num}"));
+                                    }
+                                } else if consumed_next
+                                    && stack.len() >= 2
+                                    && top
+                                        .ty
+                                        .as_deref()
+                                        .and_then(|t| t.bytes().next())
+                                        .is_some_and(|b| matches!(b, b'F' | b'T'))
+                                {
+                                    // Operands of the consuming expression already stand below
+                                    // the receiver: the source wrote the construction IN the
+                                    // expression (`FString().Append(…)` after the arguments were
+                                    // evaluated). A declaration would construct before them.
+                                    let name = top.s.clone();
+                                    let ty = top.ty.clone().unwrap_or_default();
+                                    stack.pop();
+                                    flush!();
+                                    out.push(format!("{name} = {ty}();"));
+                                    continue;
+                                } else if consumed_next {
+                                    // Pushed at once as an argument. Whether the source wrote a
+                                    // temporary (`Foo(T())`) or a declared local (`T x; Foo(x);`)
+                                    // is decided by where the DESTRUCTOR stands — right after
+                                    // the consuming call, or later — and the consuming call is
+                                    // known only once the structurer's own stack hands the
+                                    // operand to it. Leave a provisional marker; the loop head
+                                    // settles it (see `pending_temp_markers`).
+                                    if let Ok(slot) = slot_num.parse::<i32>() {
+                                        out.push(format!("{CTOR_SITE} {slot_num}"));
+                                        // The argument push stands at `k + 1`; the operand it
+                                        // puts on the stack is what the consuming call takes.
+                                        // A copy out of the reference register (`PshRPtr; PSF
+                                        // dst; $beh0`) is a declaration WITH that value —
+                                        // `TArray<T> x = Ref();` — should the marker settle
+                                        // as a declaration.
+                                        let from_reference = k >= 2
+                                            && insns[k - 1].op.name == "PSF"
+                                            && insns[k - 2].op.name == "PshRPtr";
+                                        pending_temp_markers.push((slot, top.s.clone(), lo + k + 1, from_reference));
                                     }
                                 }
                             }
@@ -4221,6 +6182,8 @@ fn block_stmts_in(
                                 ctx.refs.func_owner_by_ptr(ptr),
                                 params.map(|p| p.len()),
                             );
+                            let proven_psf_conversion = is_proven_typed_psf_conversion(&recv, &args, ptr, ctx.refs);
+                            let proven_member_copy = is_proven_native_psf_member_copy(ctx, lo + k, &recv, &args, ptr);
                             // Gate (c): arg count matches the ctor's declared param count (no
                             // spurious leftover operands on the stack).
                             let count_ok = params.map(|p| p.len() == args.len()).unwrap_or(false);
@@ -4241,16 +6204,17 @@ fn block_stmts_in(
                                 .unwrap_or(false);
                             let psf_args_written_here = (params.map(|p| p.len()).unwrap_or(0) >= 2
                                 || converts)
-                                && args.iter().filter(|a| a.is_psf).all(|a| {
+                                && args.iter().enumerate().filter(|(_, a)| a.is_psf).all(|(index, a)| {
                                     out.iter().any(|statement| {
                                         statement
                                             .trim_start()
                                             .strip_prefix(a.s.as_str())
                                             .is_some_and(|rest| rest.starts_with(" = "))
-                                    })
+                                    }) || params.and_then(|p| p.get(index)).is_some_and(|param|
+                                        a.s != recv.s && has_entry_constructed_psf_value(ctx, lo + k, a, param))
                                 });
                             if !args.is_empty()
-                                && (!any_psf_arg || proven_psf_copy || psf_args_written_here)
+                                && (!any_psf_arg || proven_psf_copy || proven_psf_conversion || proven_member_copy.is_some() || psf_args_written_here)
                                 && count_ok
                             {
                                 let rendered = render_args(&args, params, ctx.refs, None);
@@ -4258,8 +6222,58 @@ fn block_stmts_in(
                                 // behaviour: slot unwritten) rather than emit the `\u{2}` sentinel
                                 // that would force-stub the whole function.
                                 if !rendered.contains('\u{2}') {
+                                    if let Some(slot) = recv
+                                        .s
+                                        .strip_prefix("local_")
+                                        .and_then(|rest| rest.parse::<i32>().ok())
+                                    {
+                                        RVO_PRODUCERS.with(|v| {
+                                            v.borrow_mut().push((slot, CUR_INSTR.with(|c| c.get())))
+                                        });
+                                    }
                                     flush!();
-                                    out.push(format!("{} = {ty}({rendered});", recv.s));
+                                    // A copy from a plain local/member can initialize the slot
+                                    // directly. Keep explicit constructors for literals, indexing,
+                                    // conversions and call results (including RVO temporaries).
+                                    let same_type_copy = (proven_member_copy == Some(true) && args.first().is_some_and(|arg| rendered == arg.s)) || match args.as_slice() {
+                                        [arg] if rendered == arg.s && is_lvalue_arg(arg) => {
+                                            let arg_type = arg.ty.clone().or_else(|| {
+                                                let (head, field) = rendered.rsplit_once('.')?;
+                                                if head.contains('.') {
+                                                    return None;
+                                                }
+                                                let class = if head == "this" {
+                                                    ctx.class_name?.to_owned()
+                                                } else {
+                                                    ctx.slot_type(
+                                                        head.strip_prefix("local_")?
+                                                            .parse::<i32>()
+                                                            .ok()?,
+                                                    )?
+                                                };
+                                                let class = bare_type_name(&class);
+                                                ctx.refs
+                                                    .field_type_by_class(class, field)
+                                                    .or_else(|| ctx.refs.native_field_type(class, field))
+                                                    .or_else(|| ctx.refs.native_field_value_type(class, field))
+                                                    .map(str::to_owned)
+                                            });
+                                            params.is_some_and(|p| {
+                                                matches!(p, [param] if param.base_name(ctx.refs) == ty)
+                                            }) && arg_type.as_deref() == Some(ty.as_str())
+                                        }
+                                        _ => false,
+                                    };
+                                    if same_type_copy
+                                        && !copy_receiver_is_immediately_pushed(
+                                            ctx.instrs.get(lo + k + 1),
+                                            &recv.s,
+                                        )
+                                    {
+                                        out.push(format!("{} = {rendered};", recv.s));
+                                    } else {
+                                        out.push(format!("{} = {ty}({rendered});", recv.s));
+                                    }
                                 }
                             }
                             continue;
@@ -4444,22 +6458,28 @@ fn block_stmts_in(
                         ref_reg_nfty = None;
                         ref_reg_vty = None;
                     }
-                    build_call(
-                        &mut stack,
-                        &qualified,
-                        ctx.refs.is_method_by_ptr(ptr),
-                        ctx.super_ctor,
-                        ctx.refs.func_params_by_ptr(ptr),
-                        na,
-                        trusted,
-                        ctx.refs.func_owner_by_ptr(ptr),
-                        ctx.class_name,
-                        false,
-                        pending_ty.as_deref(),
-                        ret_is_ref,
-                        false,
-                        ctx.refs,
-                    )
+                    if let Some(call) = ordered_parameter_field_equality(ctx, lo + k, &stack) {
+                        stack.clear();
+                        Some(call)
+                    } else {
+                        build_call(
+                            &mut stack,
+                            &qualified,
+                            ctx.refs.is_method_by_ptr(ptr),
+                            ctx.super_ctor,
+                            ctx.refs.func_params_by_ptr(ptr),
+                            na,
+                            trusted,
+                            ctx.refs.func_owner_by_ptr(ptr),
+                            ctx.class_name,
+                            false,
+                            pending_ty.as_deref(),
+                            ret_is_ref,
+                            false,
+                            false,
+                            ctx.refs,
+                        )
+                    }
                 };
                 // batch-31b: tag a resolved static-name FName literal (see the flag's doc).
                 // build_call returns the literal only for the accessor name; a failed gate
@@ -4496,6 +6516,7 @@ fn block_stmts_in(
                     ctx.class_name,
                     false,
                     None,
+                    false,
                     false,
                     false,
                     ctx.refs,
@@ -4542,6 +6563,21 @@ fn block_stmts_in(
                 flush_store(&mut out, name(slot), rhs);
             }
             "CpyRtoV4" | "CpyRtoV8" => {
+                // A fresh typed bool comparison supersedes a preceding void call's
+                // pending statement. Flush that statement, then capture the test below.
+                if n == "CpyRtoV4" && pending_ty.as_deref() == Some("void")
+                    && ctx.slot_type(w(ins, 0)).as_deref() == Some("bool")
+                    && k.checked_sub(1).is_some_and(|j|
+                        matches!(insns[j].op.name, "TZ" | "TNZ" | "TS" | "TNS" | "TP" | "TNP"))
+                    && k.checked_sub(2).is_some_and(|j| matches!(insns[j].op.name,
+                        "CMPi" | "CMPu" | "CMPf" | "CMPd" | "CMPi64" | "CMPu64"
+                            | "CMPIi" | "CMPIu" | "CMPIf" | "CmpPtrNull"))
+                    && cmp.as_ref().and_then(materialized_comparison).is_some()
+                {
+                    if let Some(statement) = pending.take().filter(|s|
+                        !s.contains('\u{2}') && !s.contains(UNRESOLVED))
+                    { out.push(format!("{statement};")); }
+                }
                 // batch-21 Class C shape 3: a VOID call has no register value to copy —
                 // `local_N = VoidCall();` fails "No conversion from 'void' to 'int'". Emit the
                 // call as its own statement; the copied register value (stale, unmodeled) is
@@ -4600,7 +6636,11 @@ fn block_stmts_in(
                         .checked_sub(1)
                         .map(|j| &insns[j])
                         .filter(|p| matches!(p.op.name, "LoadRObjR" | "LoadVObjR"));
-                    if let Some(pl) = prev_load {
+                    if let Some((dst, _)) = captured_handle_member_reference(ctx.instrs, lo + k, ctx.refs)
+                        .filter(|(slot, ty)| ctx.slot_type(*slot).as_deref() == Some(ty.as_str())) {
+                        out.push(format!("{} = {};", name(dst), ref_reg.as_ref().unwrap()));
+                        member_read_slots.insert(dst);
+                    } else if let Some(pl) = prev_load {
                         let off = pl.words.get(1).copied().unwrap_or(0) as i32;
                         let tid = pl.dwords.first().copied().unwrap_or(0) as i32;
                         let vty = ctx.refs.member(tid, off).and_then(|fname| {
@@ -4693,7 +6733,10 @@ fn block_stmts_in(
                 // render `if (x = call() == 0)` is unparseable (18 parse [E]s, 4 module
                 // killers) AND tests the wrong value. A non-bool pending can't be the 1-byte
                 // test value either. Flush both as their own statement and test the slot.
+                // Reloading an actual parameter replaces the result register;
+                // an earlier bool call is a separate statement even if its type matches.
                 let foldable = pending_ty.as_deref() == Some("bool")
+                    && !ctx.param_off_map.contains_key(&w(ins, 0))
                     && pending
                         .as_deref()
                         .map(|p| assign_lhs(p).is_none())
@@ -4849,30 +6892,30 @@ fn block_stmts_in(
                         && !top.s.contains('(')
                         && !top.s.contains('\u{2}')
                         && top.s != UNRESOLVED;
-                    // batch-41e (CASE B): BAIL when this const native-field member read would
-                    // become the function's RETURNED value, forcing an object-const RETURN type.
-                    // A const-member getter body (`return this.<constMember>;`) makes emit.rs render
-                    // `const T GetX()`; every caller then needs a `const T` slot, and the script
-                    // CALL arm cannot const-propagate (the return DataType flag is unreliable —
-                    // GetG1R carries is_object_const=true identically yet is legitimately non-const,
-                    // so flagging on it cascades const to ~900 unrelated call sites). Rather than a
-                    // fragile, wide const-cascade, keep the ONE getter stubbed (its pre-batch-41
-                    // state): dropping this store leaves the returned slot undeclared, so the
-                    // LOADOBJ..RET stubs the whole function (1 stub, ZERO caller cascade).
-                    // Precise gate: source is a const native-field read (`top.nf_const`) AND the
-                    // enclosing function returns an object-const handle of the SAME type. This
-                    // matches ONLY GetSelectedItem (`const UItemDefinition` return). It does NOT
-                    // touch GetSelectedItemAction (return is non-const UActionKeywords) nor the
-                    // CharacterAI_Gothic const-member READS that feed null-checks / GetClass()
-                    // receivers (their functions return FItemActionHandler / bool / void, never an
-                    // object-const handle of the member's type) — those keep their batch-32d/41
-                    // `const T` local recovery.
+                    // Keep the historical const-member getter gate for ordinary local
+                    // stores. Only the exact terminal handle-return shape below can avoid
+                    // the mutable intermediate while preserving the declared const return.
                     let const_ret_getter = top.nf_const.is_some()
                         && ctx.ret_ty.is_some_and(|d| {
                             d.is_object_handle
                                 && d.is_object_const
                                 && d.base_name(ctx.refs) == *top.nf_const.as_deref().unwrap_or("")
                         });
+                    // RefCpyV s; LOADOBJ s; RET returns this exact const handle.
+                    // Capture it in the existing return-value channel; LOADOBJ's slot
+                    // fallback then cannot replace it. No const local or caller policy changes.
+                    if const_ret_getter && member_src && !ctx.ret_is_ref()
+                        && !top.s.chars().any(char::is_control)
+                        && lo + k + 3 == ctx.instrs.len()
+                        && insns.get(k + 1).is_some_and(|next| {
+                            next.op.name == "LOADOBJ" && w(next, 0) == w(ins, 0)
+                        })
+                        && insns.get(k + 2).is_some_and(|next| next.op.name == "RET")
+                    {
+                        flush!();
+                        ret_val = Some(top.s);
+                        continue;
+                    }
                     // batch-43 (Fix 1, switch-rvo-return.md §4.1): accept a CALL-EXPRESSION
                     // source ONLY when the destination is the function's return out-slot — the
                     // object/struct being popped INTO the return value (`<out> = arr.opIndex(0)`
@@ -4902,7 +6945,9 @@ fn block_stmts_in(
                         && insns
                             .get(k + 1)
                             .is_some_and(|nx| nx.op.name == "CmpPtrNull" && w(nx, 0) == dst_slot0);
-                    if param_guard_fold {
+                    let keep_guarded_parameter = param_guard_fold
+                        && guarded_parameter_handle_copy(ctx, lo + k, &top);
+                    if param_guard_fold && !keep_guarded_parameter {
                         flush!();
                         guard_param_alias.insert(dst_slot0, top.s.clone());
                         continue;
@@ -5132,6 +7177,9 @@ fn block_stmts_in(
                                 consumed = true;
                                 break;
                             }
+                            if nx.op.name == "PSF" && w(nx, 0) == dst_slot0
+                                && is_handle_getter_reference_argument(ctx, insns, k, j)
+                            { consumed = true; break; }
                             // re-defined before any consumer -> alias-shadow, not this copy; bail.
                             if matches!(
                                 nx.op.name,
@@ -5163,9 +7211,12 @@ fn block_stmts_in(
                             || getter_into_cmp
                             || getter_into_null_cmp
                             || param_into_cmp
+                            || keep_guarded_parameter
                             || param_into_later_use
                             || const_src_into_cmp
-                            || getter_into_store_rhs);
+                            || getter_into_store_rhs
+                            || is_typed_enum_map_handle_copy(ctx, insns, k, &top)
+                            || is_typed_array_getter_handle_copy(ctx, insns, k, &top));
                     if ok {
                         flush!();
                         // batch-25b (G4 assign shape): a slot-to-slot handle copy whose DEST
@@ -5248,7 +7299,8 @@ fn block_stmts_in(
                     //  prove (mirrors the RefCpyV arm's original caution — copying a const
                     //  param/member handle into a non-const dest fails "Can't implicitly convert";
                     //  `this` back-links stay bailed, `param_src_ok` never matches `this`).
-                    let dst_ok = dst.s.contains('.')
+                    let dst_ok = (dst.s.contains('.')
+                        || is_ref_handle_parameter_store(ctx, insns, k, src, dst))
                         && !dst.s.is_empty()
                         && dst.s != UNRESOLVED
                         && !dst.s.contains('\u{2}');
@@ -5302,7 +7354,8 @@ fn block_stmts_in(
                             || member_src
                             || src_is_opindex_elem
                             || this_backlink
-                            || ctx.param_src_ok(&src.s));
+                            || ctx.param_src_ok(&src.s)
+                            || is_exact_const_param_field_store(ctx, insns, k, &src.s, &dst.s));
                     // batch-41d (CLASS 1b): the source slot holds a CONST object handle (a
                     // const-returning call result / const member read). Storing it into a
                     // (non-const) member is a "Can't implicitly convert from 'const T' to 'T'"
@@ -5314,7 +7367,17 @@ fn block_stmts_in(
                         .strip_prefix("local_")
                         .and_then(|d| d.parse::<i32>().ok());
                     let src_is_const = src_slot.is_some_and(|n| const_obj_slots.contains(&n));
-                    if dst_ok && src_ok && !src_is_const {
+                    // A const-typed local assigned to a field of `this` keeps the statement:
+                    // vanilla compiled that assignment, so the field takes what the local
+                    // holds, and the const reading of the slot was ours. Dropping it lost the
+                    // field's value (`this.SearchTerritory = this.AI.GetCurrentTerritory();`).
+                    let const_into_own_field = src_is_const && dst.s.starts_with("this.");
+                    // The native field already records a const handle target. A
+                    // compatible const source loses no qualifier in this store.
+                    let const_into_native_field = src_is_const && dst.nf_const.as_deref()
+                        .zip(src.ty.as_deref()).is_some_and(|(target, source)|
+                            target == source || provably_derived(source, target, ctx.refs));
+                    if dst_ok && src_ok && (!src_is_const || const_into_own_field || const_into_native_field) {
                         flush!();
                         // batch-41d (CLASS 2): the member field type PROVABLY derives from the
                         // source's type (`this.ActiveActionTask (UAITask_CombatMove) =
@@ -5364,7 +7427,13 @@ fn block_stmts_in(
                 } else {
                     src
                 };
-                match narrowing_cast_target(n2) {
+                // A widened field value addressed immediately is the call's
+                // materialized conversion temporary. An implicit initializer adds
+                // a copy before the PSF; an explicit cast writes that slot directly.
+                let cast = narrowing_cast_target(n2).or_else(||
+                    (addressed_field_widening(ctx.instrs, lo + k)
+                        || scalar_argument_widening(ctx.instrs, lo + k, ctx.refs)).then_some("float"));
+                match cast {
                     Some(t) => out.push(format!("{dst} = {t}({src});")),
                     None => out.push(format!("{dst} = {src};")),
                 }
@@ -5426,7 +7495,9 @@ fn block_stmts_in(
                             }
                         } else if !dst.s.is_empty() && dst.s != UNRESOLVED && dst.s != src.s {
                             flush!();
-                            out.push(format!("{} = {};", dst.s, src.s));
+                            let value = script_default_member_copy(ctx.instrs, lo + k, ctx.refs, &src.s, &dst.s)
+                                .unwrap_or(src.s);
+                            out.push(format!("{} = {};", dst.s, value));
                         }
                     }
                 }
@@ -5497,10 +7568,41 @@ fn block_stmts_in(
             // — they're unmodeled control transfers, and `cfg.rs` leaves JMPP successors unknown.
             // They fall through to the `// opcode` marker below so `stub_reason` stubs the body
             // rather than emitting recompilable source with the throw/switch silently dropped.
+            // A `JMP` to the very next instruction is what `if (false) { } else { }` leaves:
+            // the compiler drops the then-arm of a constant-false condition and keeps the jump
+            // over the (empty) else. Generated dialog code carries 21 of them (probed: that
+            // spelling reproduces the bytes, an empty `else` behind a real `if` does not).
+            "JMP" => {
+                // …but not the jump a `return` takes to a `RET` standing right behind it,
+                // and not a then-arm's jump over an empty else, whose landing row is the
+                // condition's own target: those the if/else and return renderers write
+                // (measured: 157 regressions when they were marked as well).
+                if ins.dwords.first().copied() == Some(0) {
+                    let landing = ins.offset_dw + 2;
+                    let lands_on_ret = ctx
+                        .instrs
+                        .iter()
+                        .find(|other| other.offset_dw == landing)
+                        .is_some_and(|other| other.op.name == "RET");
+                    let landing_is_a_target = ctx.instrs.iter().any(|other| {
+                        other.op.name.starts_with('J')
+                            && other.offset_dw != ins.offset_dw
+                            && other
+                                .dwords
+                                .first()
+                                .map(|off| other.offset_dw as i64 + 2 + *off as i32 as i64)
+                                == Some(landing as i64)
+                    });
+                    if !lands_on_ret && !landing_is_a_target {
+                        flush!();
+                        out.push(IF_FALSE_MARKER.to_string());
+                    }
+                }
+            }
             "SUSPEND" | "JitEntry" | "PopPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr" | "FREE"
             | "FinConstruct" | "CHKREF" | "ChkRefS" | "ChkNullV" | "ChkNullS"
             | "DestructScript" | "SaveReturnValue" | "ResolveObjectPtr" | "GETOBJ"
-            | "GETOBJREF" | "GETREF" | "JMP" => {}
+            | "GETOBJREF" | "GETREF" => {}
             // (CopyScript/COPY are handled above as `dest = src;`. FinConstruct/DestructScript
             // stay ignored: implicit AS construct/destruct that appear in nearly every function —
             // emitting/stubbing them would be wrong.) Any genuinely unmodeled opcode falls through
@@ -5572,7 +7674,21 @@ fn block_stmts_in(
     if std::env::var_os("GORE_AS_DEFAULTS_DEBUG").is_some() && !default_ctor_temp.is_empty() {
         eprintln!("[ctor-temp] {default_ctor_temp:?}");
     }
+    // An incoming operand consumed by the block's final call has not reached
+    // another loop-head settlement. Without its destructor proof, retain the
+    // original argument; never infer a temporary from this block's sole mention.
+    for (_, name, pushed_at, _) in &pending_temp_markers {
+        if *pushed_at < lo && !stack.iter().any(|arg| &arg.s == name) {
+            default_ctor_temp.remove(name);
+        }
+    }
+    let shared_constructions = retained_default_constructions(ctx.instrs, ctx.refs);
     for (slot, ty) in &default_ctor_temp {
+        if slot.strip_prefix("local_").and_then(|slot| slot.parse::<i32>().ok())
+            .is_some_and(|slot| shared_constructions.contains(&slot))
+        {
+            continue;
+        }
         // Any write to the slot — the whole value, or a member or element of it — is a write the
         // substituted `T()` would throw away. Reading only whole-value assignments let a
         // configured query be passed as a freshly default-constructed one (measured: the
@@ -5605,6 +7721,7 @@ fn block_stmts_in(
                 .strip_suffix(&format!(" = {slot};"))
                 .filter(|lhs| count_word(lhs, slot) == 0)
             {
+                if lhs == "__return" && default_local_precedes_rvo(ctx, slot) { continue; }
                 *statement = format!("{lhs} = {value};");
                 continue;
             }
@@ -5635,6 +7752,32 @@ fn block_stmts_in(
                     ..Default::default()
                 });
             }
+        }
+    }
+    // Keep only the constructor witness on an operand still waiting across this
+    // block boundary. The ordinary name/stack identity and marker drain stay unchanged.
+    for (slot, name, pushed_at, from_reference) in pending_temp_markers.drain(..) {
+        if !from_reference && !shared_constructions.contains(&slot) {
+            if let Some(ty) = default_ctor_temp.get(&name)
+                .filter(|ty| !ty.starts_with('T') || ty.contains('<'))
+            {
+                // This also checks the constructor's own block, where metadata was not
+                // attached yet: another use/address/write makes it a named or changed value.
+                let untouched = ctx.instrs[(pushed_at + 1).max(lo)..hi].iter()
+                    .all(|ins| !super::bytediff::addressed_slots(ins).contains(&slot));
+                if untouched && stack.iter().filter(|arg| arg.s == name).count() == 1 {
+                    if let Some(arg) = stack.iter_mut().find(|arg| arg.s == name && arg.is_psf) {
+                        arg.default_ctor = Some((slot, ty.clone(), pushed_at));
+                        // Default construction must not move across a relaxed diamond's
+                        // arbitrary calls. The existing classic Cast proof still applies.
+                        arg.reeval = true;
+                    }
+                }
+            }
+        }
+        let marker = format!("{CTOR_SITE} {slot}");
+        if let Some(pos) = out.iter().rposition(|line| *line == marker) {
+            out.remove(pos);
         }
     }
     (out, cmp, stack)
@@ -5773,6 +7916,9 @@ struct Structurer<'a> {
     /// `break;` lands: the latch's non-back-edge successor). Saved/restored around the recursive
     /// body emission; nested loops push/pop so break/continue always bind to the innermost loop.
     loop_scope: Option<LoopScope>,
+    /// Provenance only: (back-edge header, exact exit) of a pending late loop.
+    /// This never authorizes a keyword before the emitter recovers that while.
+    pending_loop_exit: Option<(usize, usize)>,
     /// While a then-arm is being emitted: the offset the enclosing conditional jumps to when its
     /// test fails. A constant-return block there is the tail BOTH guards share, and writing it
     /// again inside the arm duplicates a `return` vanilla wrote once.
@@ -6225,6 +8371,12 @@ fn header_is_integral_type(ty: Option<&str>) -> bool {
 }
 
 fn header_set_value(op: &str, raw: u64, ty: Option<String>) -> Option<HeaderValue> {
+    // A typed boolean stored as a full VM word is still canonical only for 0/1.
+    if op == "SetV4" && ty.as_deref() == Some("bool") && raw <= 1 {
+        return Some(HeaderValue {
+            expr: HeaderExpr::Int(raw as i64), boolish: true, full_bool: true, ty,
+        });
+    }
     let (expr, boolish) = match op {
         "SetV1" => {
             let raw = raw as u8;
@@ -6316,6 +8468,9 @@ impl Structurer<'_> {
             let b = &self.g.blocks[i];
             let mut next;
 
+            // This suffix accepts no incoming operand carry; inspect it before take().
+            let returning_switch = self.try_emit_returning_two_case_switch(i, stop, depth, out);
+
             // batch-27: operand stack carried across a recognized Cast diamond — consumed by
             // the join block (always the immediately-next emitted block; see carry creation
             // below). take() unconditionally: if this block is emitted by an arm that cannot
@@ -6326,12 +8481,15 @@ impl Structurer<'_> {
                 _ => Vec::new(),
             };
 
-            if let Some(after) = self.try_emit_switch(i, stop, depth, out) {
+            if let Some(after) = returning_switch.or_else(|| self.try_emit_switch(i, stop, depth, out)) {
                 // recovered compiler switch idiom (guards + JMPP dispatch); the whole
                 // construct was emitted, continue after its JOIN.
                 next = after;
-            } else if let Some((body_end, cond)) = self.top_test_while(i, stop) {
+            } else if let Some((body_end, cond, prefix)) = self.top_test_while(i, stop) {
                 // top-test loop: `header: <cmp> Jcc exit; body; JMP header`
+                for s in &prefix {
+                    let _ = writeln!(out, "{ind}{s}");
+                }
                 let _ = writeln!(out, "{ind}while ({cond})");
                 let _ = writeln!(out, "{ind}{{");
                 // A body jump back to this header is a `continue;`. Without a scope it was read
@@ -6446,7 +8604,11 @@ impl Structurer<'_> {
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
-                let _ = writeln!(out, "{ind}while ({cond})");
+                // The test stands at the BOTTOM, entered by the jump in block `i`, with the
+                // `SUSPEND` at the head of the body: that is the `for` layout, not `while`'s
+                // (test on top, `SUSPEND` after it, jump back). A `for` with an empty initialiser
+                // and increment is the spelling that compiles back to it.
+                let _ = writeln!(out, "{ind}for (; {cond};)");
                 let _ = writeln!(out, "{ind}{{");
                 let test_off = self.g.blocks[test_idx].start_dw;
                 let ls = LoopScope {
@@ -6458,6 +8620,42 @@ impl Structurer<'_> {
                 let saved = self.loop_scope;
                 self.loop_scope = Some(ls);
                 self.emit_range(body_head, test_idx, depth + 1, out);
+                self.loop_scope = saved;
+                let _ = writeln!(out, "{ind}}}");
+                next = test_idx + 1;
+            } else if let Some((test_idx, cond, body_end, increment, continue_off, break_off)) =
+                self.for_loop(i, stop).or_else(|| self.compound_test_first_for_loop(i, stop))
+            {
+                // A counted `for`: block `i` is the entry `JMP` to the bottom test, whose
+                // statements come before the loop exactly as the source wrote them (the loop
+                // variable's initialiser among them — `int i = 0; for (; i < n; ++i)` compiles to
+                // the bytes `for (int i = 0; …)` does). The test block IS the condition, folded to
+                // the one expression the compiler re-evaluates each time round, and the block the
+                // body's `continue`s target is the increment clause. See `for_loop`.
+                let (stmts, _, _) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
+                for s in &stmts {
+                    let _ = writeln!(out, "{ind}{s}");
+                }
+                let _ = writeln!(out, "{ind}for (; {cond}; {increment})");
+                let _ = writeln!(out, "{ind}{{");
+                let ls = LoopScope {
+                    continue_off,
+                    break_off,
+                    continue_only: false,
+                    latch_block: None,
+                };
+                let saved = self.loop_scope;
+                self.loop_scope = Some(ls);
+                // A nested test-first iterator is structured work even without
+                // an inner forward branch. Its own recognizer and Gate 2 still prove the edges.
+                if (self.body_has_inner_branch(i + 1, body_end, ls)
+                    || (i + 1..body_end).any(|entry| self.test_first_foreach(entry, body_end).is_some()))
+                    && self.loop_body_recoverable(i + 1, body_end, ls)
+                {
+                    self.emit_range(i + 1, body_end, depth + 1, out);
+                } else {
+                    self.emit_linear(i + 1, body_end, depth + 1, out, false);
+                }
                 self.loop_scope = saved;
                 let _ = writeln!(out, "{ind}}}");
                 next = test_idx + 1;
@@ -6541,6 +8739,16 @@ impl Structurer<'_> {
                 let then_idx = fall.and_then(|o| self.idx_of.get(&o).copied());
                 let else_idx = taken.and_then(|o| self.idx_of.get(&o).copied());
                 let cond = self.fall_condition(&cmp, jop);
+                let selection_join = i + 3;
+                if leftover.is_empty() && selection_join < stop
+                    && then_idx == Some(i + 1) && else_idx == Some(i + 2)
+                    && local_lvalue_selection(self.ctx, self.g.blocks[selection_join].instr_lo)
+                        .is_some_and(|selection| selection.head + 2 == b.instr_hi)
+                {
+                    // The join emits the assignment once from the selected lvalue.
+                    i = selection_join;
+                    continue;
+                }
                 if let Some((straight, ret_idx)) = self.bool_return_diamond(then_idx, else_idx) {
                     // A guarded return and a bare one after it — NOT an `else` branch, which would
                     // make the second return jump to the shared exit instead of falling into it
@@ -6577,18 +8785,32 @@ impl Structurer<'_> {
                 // The latch block is NOT excluded: its jump is only its terminator, and the
                 // statements before it are the body's last ones.
                 let then_end_body = then_end;
+                // Only the complete suspended body identifies this candidate's exit;
+                // an earlier guarded jump to the same header has no such authority.
+                let marked_loop_exit = latch_back.filter(|_| {
+                    then_idx == Some(i + 1) && else_idx == Some(then_end)
+                        && self.ctx.instrs[self.g.blocks[i + 1].instr_lo].op.name == "SUSPEND"
+                }).map(|latch| (self.g.blocks[latch].succs[0], taken.unwrap()));
                 let _ = writeln!(out, "{ind}if ({cond})");
                 let _ = writeln!(out, "{ind}{{");
                 let then_body_at = out.len();
                 if let Some(t) = then_idx {
                     if t > i && t <= then_end_body {
                         let outer = std::mem::replace(&mut self.shared_return, taken);
+                        let pending = self.pending_loop_exit;
+                        if marked_loop_exit.is_some() { self.pending_loop_exit = marked_loop_exit; }
                         self.emit_range(t, then_end_body, depth + 1, out);
+                        self.pending_loop_exit = pending;
                         self.shared_return = outer;
                     }
                 }
-                if latch_back.is_some() {
-                    let _ = writeln!(out, "{ind}    {LOOP_BACK_EDGE}");
+                if let Some(latch) = latch_back {
+                    let target = self.g.blocks[latch].succs[0];
+                    if let Some((_, exit)) = marked_loop_exit {
+                        let _ = writeln!(out, "{ind}    {LOOP_BACK_EDGE} {target} {exit}");
+                    } else {
+                        let _ = writeln!(out, "{ind}    {LOOP_BACK_EDGE} {target}");
+                    }
                 }
                 // Whether the arm we just WROTE ends in a return. The bytecode saying the branch
                 // returns is not enough: a return this renderer cannot express — a void one, a
@@ -6599,6 +8821,50 @@ impl Structurer<'_> {
                     .rev()
                     .find(|line| !line.trim().is_empty())
                     .is_some_and(|line| line.trim_start().starts_with("return"));
+                // The arm's terminator jumps to the function's bare `RET` and the arm's last
+                // statement fills the hidden return slot: that is `return <value>;`, and it has
+                // to be written, or the function falls through to the default return behind
+                // the `if` (measured: `GetMontageName` assigned `__return = n"Magic"` and then
+                // returned `n"None"` on every path — a wrong program, not a byte difference).
+                // The flag itself stays as it was: the else emission and the shared exit
+                // below are tuned to an arm that is NOT read as returning, and an arm whose
+                // return is still spelled `__return = …` + jump keeps that shape's handling
+                // (measured: flipping it dropped the shared `return __return;` behind seven
+                // if/else pairs whose else-arm also stores — "Not all paths return a value").
+                let _rewrote = (then_end > i + 1
+                        && self.jump_op(then_end - 1) == "JMP"
+                        && self.g.blocks[then_end - 1]
+                            .succs
+                            .first()
+                            .is_some_and(|&t| self.is_bare_ret_off(t))
+                        && {
+                            let tail_at = out[then_body_at..]
+                                .rfind(|c: char| !c.is_whitespace())
+                                .map(|end| then_body_at + end + 1);
+                            let last_line_start = tail_at
+                                .and_then(|end| out[..end].rfind('\n').map(|nl| nl + 1))
+                                .unwrap_or(then_body_at);
+                            let last = out[last_line_start..].trim().to_owned();
+                            match last.strip_prefix("__return = ").and_then(|v| v.strip_suffix(';')) {
+                                Some(value)
+                                    if !value.is_empty()
+                                        && !value.contains("__return")
+                                        && !value.contains(RVODEF)
+                                        && !value.contains('\u{1}')
+                                        && !value.contains('\u{2}') =>
+                                {
+                                    let indent: String = out[last_line_start..]
+                                        .chars()
+                                        .take_while(|c| c.is_whitespace() && *c != '\n')
+                                        .collect();
+                                    let value = value.to_owned();
+                                    out.truncate(last_line_start);
+                                    let _ = writeln!(out, "{indent}return {value};");
+                                    true
+                                }
+                                _ => false,
+                            }
+                        });
                 let _ = writeln!(out, "{ind}}}");
                 next = then_end;
                 if let Some(ei) = else_idx {
@@ -6632,11 +8898,20 @@ impl Structurer<'_> {
                     // outer test true, the inner false — runs nothing at all, and rendered as
                     // `A && B` it costs the carrier the compiler builds for a real `&&` (which
                     // vanilla always has where the source wrote one). Let it fall through.
+                    // The same holds for an UNCONDITIONAL jump out of the then-arm to that
+                    // place: `if (A) { if (B) X(); else return R; }` — the `X()` path jumps to
+                    // what follows the outer `if`, so what follows is not its else.
                     let shares_the_tail = taken.is_some_and(|t| {
                         (then_idx.unwrap_or(i + 1)..then_end).any(|b| {
                             b < self.g.blocks.len()
-                                && is_cond_op(self.jump_op(b))
+                                && (is_cond_op(self.jump_op(b)) || self.jump_op(b) == "JMP")
                                 && self.g.blocks[b].succs.first().copied() == Some(t)
+                                // The then-arm's OWN terminator jumping there is not a shared
+                                // tail but an `else` with nothing in it: the compiler emits
+                                // that jump only for an `else` it was told about (`if (c) { X;
+                                // } else { }`, 23 functions carry the `Jcc ->X; …; JMP ->X`
+                                // pair). A jump out of a test NESTED in the arm is the tail.
+                                && !(self.jump_op(b) == "JMP" && b + 1 == ei)
                         })
                     });
                     let after_idx = self.g.blocks[ei - 1]
@@ -6657,6 +8932,13 @@ impl Structurer<'_> {
                             .succs
                             .first()
                             .is_some_and(|&t| self.is_bare_ret_off(t));
+                    if std::env::var_os("GORE_AS_IF_DIAG").is_some() {
+                        eprintln!(
+                            "[if] block={i} ei={ei} then_end={then_end} after_idx={after_idx} jump={} exits_loop={then_exits_loop} shares_tail={shares_the_tail} then_returns={then_returns} arm_returns={then_arm_returns} else_tail_returns={else_tail_returns_from_a_block} start_dw={}",
+                            self.jump_op(ei.saturating_sub(1)),
+                            self.g.blocks[i].start_dw
+                        );
+                    }
                     if ei >= then_end
                         && ei > 0
                         && self.jump_op(ei - 1) == "JMP"
@@ -6681,6 +8963,15 @@ impl Structurer<'_> {
                             {
                                 next = stop;
                             }
+                        } else if after_idx == ei {
+                            // The then-arm's `JMP` lands on the very next row: an `else` with
+                            // nothing in it. The source wrote `if (c) { } else { }` (a debug
+                            // body compiled out, in generated dialog code) and the compiler
+                            // keeps the jump for the else it was told about — 23 functions
+                            // carry exactly this `Jcc ->X; JMP ->X` pair.
+                            let _ = writeln!(out, "{ind}else");
+                            let _ = writeln!(out, "{ind}{{");
+                            let _ = writeln!(out, "{ind}}}");
                         }
                     }
                 }
@@ -6704,10 +8995,18 @@ impl Structurer<'_> {
                 let ret_ref_tail = self.ctx.ret_is_ref() && self.flows_to_bare_ret(i);
                 let (mut stmts, _, _) =
                     block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, ret_ref_tail);
-                let plain_return = self.plain_return_exit_stmt(i).map(|exit| {
-                    let exit = fold_return_into_store(&mut stmts, exit);
-                    self.constant_return_exit(i, exit, &stmts)
-                });
+                // Choose the exit before folding: a loop/switch return can win over the
+                // plain return. Consuming the store for a discarded exit loses its value.
+                let plain_return = self.plain_return_exit_stmt(i);
+                let selected_exit = self.region_exit_stmt(i)
+                    .or_else(|| self.loop_exit_stmt(i))
+                    .or_else(|| plain_return.clone())
+                    .map(|exit| {
+                        let exit = if plain_return.as_deref() == Some(exit.as_str()) {
+                            fold_return_into_store(&mut stmts, exit)
+                        } else { exit };
+                        self.constant_return_exit(i, exit, &stmts)
+                    });
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
@@ -6716,12 +9015,12 @@ impl Structurer<'_> {
                 // first; only fall to the loop-exit hook when no switch exit applies. batch-36:
                 // `loop_exit_stmt` renders a bare `JMP` to the loop break/continue offset (or to a
                 // bare-RET row inside the body) as `break;`/`continue;`/`return ...;`.
-                if let Some(x) = self.region_exit_stmt(i) {
-                    let _ = writeln!(out, "{ind}{}", self.constant_return_exit(i, x, &stmts));
-                } else if let Some(x) = self.loop_exit_stmt(i) {
-                    let _ = writeln!(out, "{ind}{}", self.constant_return_exit(i, x, &stmts));
-                } else if let Some(x) = plain_return {
+                if let Some(x) = selected_exit {
                     let _ = writeln!(out, "{ind}{x}");
+                } else if let Some((target, exit)) = self.pending_loop_exit {
+                    if self.jump_op(i) == "JMP" && b.succs.first() == Some(&exit) {
+                        let _ = writeln!(out, "{ind}{LOOP_BREAK_EDGE} {target} {exit}");
+                    }
                 }
                 next = i + 1;
             }
@@ -6755,16 +9054,21 @@ impl Structurer<'_> {
             };
             let (mut stmts, cmp, leftover) =
                 block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
-            let plain_return = self.plain_return_exit_stmt(bi).map(|exit| {
-                let exit = fold_return_into_store(&mut stmts, exit);
-                self.constant_return_exit(bi, exit, &stmts)
-            });
+            // Choose the exit before folding: a loop/switch return can win over the
+            // plain return. Consuming the store for a discarded exit loses its value.
+            let plain_return = self.plain_return_exit_stmt(bi);
+            let selected_exit = self.region_exit_stmt(bi)
+                .or_else(|| plain_return.clone())
+                .map(|exit| {
+                    let exit = if plain_return.as_deref() == Some(exit.as_str()) {
+                        fold_return_into_store(&mut stmts, exit)
+                    } else { exit };
+                    self.constant_return_exit(bi, exit, &stmts)
+                });
             for s in &stmts {
                 let _ = writeln!(out, "{ind}{s}");
             }
-            if let Some(x) = self.region_exit_stmt(bi) {
-                let _ = writeln!(out, "{ind}{}", self.constant_return_exit(bi, x, &stmts));
-            } else if let Some(x) = plain_return {
+            if let Some(x) = selected_exit {
                 let _ = writeln!(out, "{ind}{x}");
             }
             match carry_until {
@@ -7076,6 +9380,29 @@ impl Structurer<'_> {
         // Restricting this to a one-instruction block dropped the jump from `DoWork(); break;` —
         // the work was still written, and control then fell through into another iteration.
         if t == ls.break_off {
+            // A handle method followed by a direct shared return bypasses the
+            // iteration cleanup. Emitting break would add that missing clear.
+            if self.ctx.f.ret.token == 0x52 && self.is_bare_ret_off(t) && b.instr_hi >= b.instr_lo + 3 {
+                let w = |i: &Instr, n: usize| i.words.get(n).copied().map(s16).unwrap_or(0);
+                let tail = &self.ctx.instrs[b.instr_hi - 3..b.instr_hi];
+                let call = &tail[1];
+                let method = match call.op.name {
+                    "CALLSYS" => {
+                        let ptr = call.qwords.first().copied().unwrap_or(0) as i64;
+                        (self.ctx.refs.is_method_by_ptr(ptr), self.ctx.refs.func_params_by_ptr(ptr), self.ctx.refs.func_ret_by_ptr(ptr))
+                    }
+                    "CALL" | "CALLINTF" => {
+                        let id = call.dwords.first().copied().unwrap_or(0) as i32;
+                        (self.ctx.refs.is_method_by_id(id), self.ctx.refs.func_params_by_id(id), self.ctx.refs.func_ret_by_id(id))
+                    }
+                    _ => (false, None, None),
+                };
+                if tail[0].op.name == "PshVPtr" && w(&tail[0], 0) > 0
+                    && method.0 && method.1.is_some_and(|p| p.is_empty())
+                    && method.2.is_some_and(|r| r.token == 0x52 && !r.is_reference && !r.is_object_handle)
+                    && self.ctx.instrs.get(b.instr_hi).is_some_and(|i| i.op.name == "FreeNullV8" && w(i, 0) == w(&tail[0], 0))
+                { return Some("return;".into()); }
+            }
             return Some("break;".into());
         }
         if ls.continue_only {
@@ -7414,6 +9741,200 @@ impl Structurer<'_> {
         preds > 0
     }
 
+    /// A closed two-case suffix whose value or void arms share one RET.
+    /// Keep physical case order and reconstruct each value only inside its arm.
+    fn try_emit_returning_two_case_switch(
+        &mut self, i: usize, stop: usize, depth: usize, out: &mut String,
+    ) -> Option<usize> {
+        let ctx = self.ctx;
+        let b = &self.g.blocks;
+        let void = ctx.ret_ty.is_some_and(|t| t.token == 0x52 && t.type_info == 0
+            && !t.is_reference && !t.is_object_handle && !t.is_object_const
+            && !t.is_read_only && !t.is_auto && !t.if_handle_then_const);
+        // Nested early-return prefixes end their else region immediately before
+        // the shared RET. Only the closed void suffix may borrow that last row.
+        if i.checked_add(8)? != b.len() || (stop != b.len() && !(void && stop.checked_add(1)? == b.len()))
+            || self.loop_scope.is_some() || self.exit_join.is_some() || self.carry.is_some() || ctx.rvo_off.is_some()
+            || (!void && !ctx.ret_ty.is_some_and(|t| matches!(t.token,0x44|0x41) && !t.is_reference && !t.is_object_handle))
+        { return None; }
+        let len = |n: usize| b[i+n].instr_hi - b[i+n].instr_lo;
+        if len(0) < 2 || len(1) != 2 || len(2) != 2 || len(3) != 1
+            || len(4) < 2 || len(5) < 2 || len(6) < 1 || len(7) != 1
+            || self.jump_op(i) != "JP" || self.jump_op(i+1) != "JZ"
+            || self.jump_op(i+2) != "JZ" || self.jump_op(i+3) != "JMP"
+            || self.jump_op(i+4) != "JMP" || self.jump_op(i+5) != "JMP"
+            || self.jump_op(i+7) != "RET" { return None; }
+        if void && (len(6) != 1 || self.jump_op(i+6) != "JMP"
+            || ctx.instrs[b[i+6].instr_lo].dwords.first() != Some(&0)) { return None; }
+        let compare = |n: usize| {
+            let ins = &ctx.instrs[b[i+n].instr_hi-2];
+            (ins.op.name == "CMPIi").then_some(())?;
+            Some((s16(*ins.words.first()?), *ins.dwords.first()? as i32))
+        };
+        let (selector, upper) = compare(0)?;
+        let (s1, first) = compare(1)?;
+        let (s2, second) = compare(2)?;
+        // Plain integer scratch slots are absent from the structurer's type
+        // map. An immediate sbTOi is a site-local int proof, never a slot override.
+        let widened = ctx.slot_type(selector).is_none() && len(0) >= 3
+            && ctx.instrs[b[i].instr_hi-3].op.name == "sbTOi"
+            && ctx.instrs[b[i].instr_hi-3].words.first().copied().map(s16) == Some(selector);
+        if selector != s1 || selector != s2 || first >= second || upper != second
+            || (ctx.slot_type(selector).as_deref() != Some("int") && !widened) { return None; }
+        let first_arm = *self.idx_of.get(b[i+1].succs.first()?)?;
+        let second_arm = *self.idx_of.get(b[i+2].succs.first()?)?;
+        if ![i+4, i+5].contains(&first_arm) || ![i+4, i+5].contains(&second_arm)
+            || first_arm == second_arm { return None; }
+        let edges: [&[usize]; 8] = [&[i+6, i+1], &[first_arm, i+2], &[second_arm, i+3],
+            &[i+6], &[i+7], &[i+7], &[i+7], &[]];
+        for (n, targets) in edges.iter().enumerate() {
+            if b[i+n].succs.len() != targets.len() || b[i+n].succs.iter().zip(targets.iter())
+                .any(|(off, target)| *off != b[*target].start_dw) { return None; }
+        }
+        // Earlier code may enter only the header or return independently. No
+        // outside jump may bypass a compare or enter a case/default body.
+        for (pi, prior) in b[..i].iter().enumerate() {
+            for target in &prior.succs {
+                if *target > b[i].start_dw && *target < b[i+7].start_dw { return None; }
+                if *target == b[i+7].start_dw {
+                    if self.jump_op(pi) != "JMP" { return None; }
+                    if void {
+                        let body = &ctx.instrs[prior.instr_lo..prior.instr_hi-1];
+                        if body.iter().any(|ins| ins.op.name.starts_with('J')
+                            || matches!(ins.op.name, "RET" | "CpyVtoR4" | "CpyVtoR8")) { return None; }
+                        let (lines, cmp, stack) = block_stmts_in(ctx, prior.instr_lo, prior.instr_hi-1, Vec::new(), false);
+                        if cmp.is_some() || !stack.is_empty() || lines.iter().any(|s| s.contains(['\u{1}', '\u{2}'])) { return None; }
+                    } else if prior.instr_hi-prior.instr_lo < 2
+                        || ctx.instrs[prior.instr_hi-2].op.name != "CpyVtoR4" { return None; }
+                }
+                if *target == b[i].start_dw && !block_stmts_in(ctx, prior.instr_lo,
+                    prior.instr_hi, Vec::new(), false).2.is_empty() { return None; }
+            }
+        }
+        let mut rendered = Vec::new();
+        for n in [0, 4, 5, 6] {
+            let lo = b[i+n].instr_lo;
+            let hi = b[i+n].instr_hi - if n == 0 { 2 } else if n == 6 && !void { 0 } else { 1 };
+            if ctx.instrs[lo..hi].iter().any(|ins| ins.op.name.starts_with('J') || ins.op.name == "RET"
+                || (void && matches!(ins.op.name, "CpyVtoR4" | "CpyVtoR8")))
+                || (!void && n != 0 && ctx.instrs[hi-1].op.name != "CpyVtoR4") { return None; }
+            if n != 0 && ctx.ret_ty.is_some_and(|t| t.token == 0x41) {
+                if n == 6 && ctx.instrs[lo].op.name != "SetV1" { return None; }
+                let value = returning_switch_bool_value(ctx,&ctx.instrs[lo..hi])?;
+                rendered.push(vec![format!("return {value};")]);
+                continue;
+            }
+            let (mut lines, cmp, stack) = block_stmts_in(ctx, lo, hi, Vec::new(), false);
+            if cmp.is_some() || !stack.is_empty() || lines.iter().any(|s| s.contains(['\u{1}', '\u{2}']))
+            { return None; }
+            if void {
+                if n == 4 || n == 5 { lines.push("return;".into()); }
+            } else if n != 0 {
+                let slot = s16(*ctx.instrs[hi-1].words.first()?);
+                if ctx.const_return_at(hi-1, slot).is_none() || !ctx.instrs[lo..hi-1].iter().any(|ins|
+                    ins.op.name == "SetV4" && ins.words.first().copied().map(s16) == Some(slot))
+                { return None; }
+                let value = scan_back_retval_floor(ctx, hi, lo)?;
+                let exit = fold_return_into_store(&mut lines, ctx.return_stmt(Some(value)));
+                lines.push(exit);
+            }
+            rendered.push(lines);
+        }
+        let ind = "    ".repeat(depth);
+        for line in &rendered[0] { let _ = writeln!(out, "{ind}{line}"); }
+        let _ = writeln!(out, "{ind}switch ({})\n{ind}{{", ctx.slot_name(selector));
+        for (n, lines) in rendered[1..].iter().enumerate() {
+            if void && n == 2 { continue; } // the empty default is the return after the switch
+            let label = if n == 2 { "default".to_string() }
+                else { format!("case {}", if i+4+n == first_arm { first } else { second }) };
+            // Dead constant stores disappear in the later emitter pass. They
+            // introduce no declarations and do not require a case-local scope.
+            let constant_store = lines.len() == 2 && lines[1].strip_prefix("return ")
+                .and_then(|s| s.strip_suffix(';')).is_some_and(|value|
+                    value.parse::<i32>().is_ok() && lines[0].strip_prefix("local_")
+                        .and_then(|s| s.split_once(" = ")).is_some_and(|(slot, rhs)|
+                            !slot.is_empty() && slot.bytes().all(|b| b.is_ascii_digit())
+                                && rhs == format!("{value};")));
+            let scoped = !void && !constant_store && (lines.len() != 1 || !lines[0].starts_with("return "));
+            let _ = writeln!(out, "{ind}    {label}:");
+            // A redundant scope around a terminal constant return forces an
+            // otherwise absent jump to the common native-cleanup return.
+            if scoped { let _ = writeln!(out, "{ind}    {{"); }
+            for line in lines { let _ = writeln!(out, "{ind}        {line}"); }
+            if scoped { let _ = writeln!(out, "{ind}    }}"); }
+        }
+        let _ = writeln!(out, "{ind}}}");
+        if void { let _ = writeln!(out, "{ind}return;"); }
+        Some(stop)
+    }
+
+    /// The two-case lowering uses equality guards instead of a jump table.
+    /// Recover only the complete seven-block void function: its exact forward
+    /// edges prove both straight-line arms and leave the common RET to the caller.
+    fn try_emit_two_case_switch(
+        &mut self, i: usize, stop: usize, depth: usize, out: &mut String,
+    ) -> Option<usize> {
+        let ctx = self.ctx;
+        let b = &self.g.blocks;
+        if i != 0 || stop != 7 || b.len() != 7 || self.loop_scope.is_some()
+            || ctx.rvo_off.is_some() || !ctx.ret_ty.is_some_and(|ret| ret.token == 0x52)
+            || self.jump_op(0) != "JP" || self.jump_op(1) != "JZ"
+            || self.jump_op(2) != "JZ" || self.jump_op(3) != "JMP"
+            || self.jump_op(4) != "JMP" || self.jump_op(6) != "RET"
+        { return None; }
+        let len = |at: usize| b[at].instr_hi - b[at].instr_lo;
+        if len(0) < 2 || len(1) != 2 || len(2) != 2 || len(3) != 1
+            || len(4) < 2 || len(5) == 0 || len(6) != 1
+        { return None; }
+        let compare = |at: usize| {
+            let ins = &ctx.instrs[b[at].instr_hi - 2];
+            (ins.op.name == "CMPIi").then_some(())?;
+            Some((s16(*ins.words.first()?), *ins.dwords.first()? as i32))
+        };
+        let (selector, upper) = compare(0)?;
+        let (first_slot, first) = compare(1)?;
+        let (second_slot, second) = compare(2)?;
+        if selector != first_slot || selector != second_slot || first >= second || upper != second
+            || ctx.slot_type(selector).as_deref() != Some("int")
+        { return None; }
+        // This is the entire CFG, so exact successor lists also exclude every
+        // external entry, backward edge, fallthrough between cases, and other exit.
+        let expected: [&[usize]; 7] = [&[6, 1], &[4, 2], &[5, 3], &[6], &[6], &[6], &[]];
+        for (at, successors) in expected.iter().enumerate() {
+            if b[at].succs.len() != successors.len()
+                || b[at].succs.iter().zip(successors.iter()).any(|(off, target)| *off != b[*target].start_dw)
+            { return None; }
+        }
+        let ranges = [(b[0].instr_lo, b[0].instr_hi - 2),
+            (b[4].instr_lo, b[4].instr_hi - 1), (b[5].instr_lo, b[5].instr_hi)];
+        let mut rendered = Vec::new();
+        for (lo, hi) in ranges {
+            if ctx.instrs[lo..hi].iter().any(|ins| ins.op.name.starts_with('J') || ins.op.name == "RET") {
+                return None;
+            }
+            // No operand may cross the recovered switch boundaries. Reuse the
+            // normal block emitter, including its call flush and constructor rules.
+            let (stmts, cmp, stack) = block_stmts_in(ctx, lo, hi, Vec::new(), false);
+            if !stack.is_empty() || cmp.is_some() { return None; }
+            rendered.push(stmts);
+        }
+        let ind = "    ".repeat(depth);
+        for line in &rendered[0] { let _ = writeln!(out, "{ind}{line}"); }
+        let _ = writeln!(out, "{ind}switch ({})", ctx.slot_name(selector));
+        let _ = writeln!(out, "{ind}{{");
+        for (case, stmts) in [first, second].iter().zip(&rendered[1..]) {
+            let _ = writeln!(out, "{ind}    case {case}:");
+            let _ = writeln!(out, "{ind}    {{");
+            for line in stmts { let _ = writeln!(out, "{ind}        {line}"); }
+            // Only the first case jumps past the other arm. The final arm
+            // falls through to the common RET without an extra jump.
+            if *case == first { let _ = writeln!(out, "{ind}        break;"); }
+            let _ = writeln!(out, "{ind}    }}");
+        }
+        let _ = writeln!(out, "{ind}}}");
+        Some(6)
+    }
+
     /// Detect and emit the Hazelight compiler's `switch` lowering rooted at block `i`
     /// (see `work/reversing/gore-as/specs/illegal-op-round2.md` Part B). The 5-part idiom:
     ///
@@ -7441,6 +9962,9 @@ impl Structurer<'_> {
         depth: usize,
         out: &mut String,
     ) -> Option<usize> {
+        if let Some(after) = self.try_emit_two_case_switch(i, stop, depth, out) {
+            return Some(after);
+        }
         let ctx = self.ctx;
         let g = self.g;
         let blocks = &g.blocks;
@@ -7814,11 +10338,13 @@ impl Structurer<'_> {
             } else if is_cond_op(lt) {
                 return None;
             } else {
-                // plain fallthrough: only into a physically adjacent JOIN
+                // plain fallthrough: only into a physically adjacent JOIN. The source's last
+                // case ended without a `break` — writing one costs a `JMP` to the very next
+                // instruction that vanilla does not have.
                 if end != join_idx {
                     return None;
                 }
-                append_break = true;
+                append_break = false;
             }
             let is_def = b == def_off;
             let trap = trap_ops && end - start == 1;
@@ -7923,23 +10449,46 @@ impl Structurer<'_> {
         }
         // ---- emission (validated: no bail past this point) ----
         let ind = "    ".repeat(depth);
-        let (stmts, _) = block_stmts(ctx, b0.instr_lo, b0.instr_hi);
-        for s in &stmts {
-            let _ = writeln!(out, "{ind}{s}");
-        }
+        let (mut stmts, _) = block_stmts(ctx, b0.instr_lo, b0.instr_hi);
         let sel_raw = ctx.slot_name(wv);
-        // an enum selector needs the explicit int() (mirrors the CMPIi arm: AS has no
-        // implicit enum<->int, and the case labels are int literals)
-        let sel = if ctx
-            .slot_type(wv)
-            .as_deref()
-            .map(is_enum_name)
-            .unwrap_or(false)
-        {
+        let slot_type = ctx.slot_type(wv);
+        let widened = widened_switch_enum_selector(ctx, b0.instr_lo, b0.instr_hi - 2, wv)
+            .and_then(|(ty, expression, start)| {
+                let (carriers, _) = block_stmts(ctx, start, b0.instr_hi - 2);
+                // Only this exact final pure instruction sequence can disappear.
+                // Earlier definitions of the same physical slots remain untouched.
+                (!carriers.is_empty() && stmts.ends_with(&carriers))
+                    .then_some((ty, expression, carriers.len()))
+            });
+        let selector_type = widened.as_ref().map(|(ty, _, _)| ty.clone())
+            .or_else(|| slot_type.clone());
+        // A compiler trap default can represent a typed enum switch. Require every
+        // numeric case to resolve uniquely before changing either selector or labels.
+        let enum_cases: Option<Vec<String>> = selector_type.as_deref()
+            .filter(|ty| is_enum_name(ty) && regions.iter().any(|r| r.is_def && r.trap))
+            .and_then(|ty| {
+                let bare = bare_type_name(ty);
+                (0..targets.len()).map(|k| {
+                    ctx.refs.enumerator_name(bare, lo_c + k as i32)
+                        .map(|name| format!("{bare}::{name}"))
+                }).collect()
+            });
+        let typed_trap = enum_cases.is_some();
+        let sel = if typed_trap {
+            if let Some((_, expression, count)) = widened {
+                stmts.truncate(stmts.len() - count);
+                expression
+            } else {
+                sel_raw
+            }
+        } else if slot_type.as_deref().is_some_and(is_enum_name) {
             format!("int({sel_raw})")
         } else {
             sel_raw
         };
+        for s in &stmts {
+            let _ = writeln!(out, "{ind}{s}");
+        }
         let _ = writeln!(out, "{ind}switch ({sel})");
         let _ = writeln!(out, "{ind}{{");
         let saved = (
@@ -7956,7 +10505,9 @@ impl Structurer<'_> {
             }
             for (k, &tg) in targets.iter().enumerate() {
                 if tg == r.off {
-                    let _ = writeln!(out, "{ind}case {}:", lo_c + k as i32);
+                    let label = enum_cases.as_ref().map(|labels| labels[k].clone())
+                        .unwrap_or_else(|| (lo_c + k as i32).to_string());
+                    let _ = writeln!(out, "{ind}case {label}:");
                 }
             }
             if r.is_def {
@@ -8009,18 +10560,17 @@ impl Structurer<'_> {
         }
         let _ = writeln!(out, "{ind}}}");
         // batch-30b (C9 'Unreachable code', specs/batch29-errortail.md §9): when the JOIN is
-        // the shared bare RET row, a REAL `default:` region was emitted, and every region
-        // leaves by RETURNING (terminator RET, or JMP rendered as `return ...;` by the exit
+        // the shared bare RET row, a real default or typed enum trap covers unmatched values,
+        // and every emitted region RETURNS (RET, or JMP rendered as `return ...;` by the exit
         // hook — never an appended `break;`), control cannot fall out of the switch. Emitting
         // the RET row after it is dead code the compiler flags ("Unreachable code" [W],
         // a module-killer under warnings-as-errors) — skip the row. Conservative gates:
-        // a trap DEF (no `default:` emitted) keeps the row (a non-matching selector falls
-        // through in the recompiled source), as does any external jump to the row (another
-        // path may rely on its emission).
+        // a trap DEF keeps the row unless the fully resolved typed enum switch restores
+        // the compiler's trap. An external jump keeps the row except for a typed void
+        // switch: those early exits already render return;, and void ends implicitly in RET.
         if join_is_ret && switch_end == join_idx && join_idx < stop {
-            let every_region_returns = regions.iter().all(|r| {
-                !r.trap
-                    && !r.append_break
+            let every_region_returns = regions.iter().filter(|r| !r.trap).all(|r| {
+                !r.append_break
                     && matches!(
                         ctx.instrs[blocks[r.end - 1].instr_hi - 1].op.name,
                         "JMP" | "RET"
@@ -8031,7 +10581,9 @@ impl Structurer<'_> {
                 .iter()
                 .enumerate()
                 .any(|(bi2, bb)| (bi2 < i || bi2 >= switch_end) && bb.succs.contains(&join_off));
-            if every_region_returns && has_real_default && !externally_referenced {
+            if every_region_returns && (has_real_default || typed_trap)
+                && (!externally_referenced || (typed_trap && !non_void))
+            {
                 return Some(join_idx + 1);
             }
         }
@@ -8322,14 +10874,18 @@ impl Structurer<'_> {
         //   (b) changes the join's statement COUNT (the carry must only let existing
         //       statements gain args, never create/destroy statements — a spurious
         //       consumption by a non-call opcode, or a statement dropped as unresolved).
-        // False negatives cost nothing: status-quo drop-at-boundary.
+        // A false negative may lose a mutation: an unresolved opAssign has no
+        // output without its carried RHS. The closed typed exception below can
+        // restore exactly that statement; all other count changes still fail.
         // batch-31a note: with stage-2 CALL/CALLINTF consumers the WITH-init run may now
         // RESOLVE a sentinel the empty-init run HAS (a previously-missing arg recovered by
         // the carry) — that direction stays legal; only a NEW sentinel bails.
         let has_amm = |v: &[String]| v.iter().any(|s| s.contains('\u{2}'));
         let (j0, _, _) = block_stmts_in(ctx, jb.instr_lo, jb.instr_hi, Vec::new(), false);
         let (j1, _, _) = block_stmts_in(ctx, jb.instr_lo, jb.instr_hi, l.to_vec(), false);
-        if j1.len() != j0.len() || (has_amm(&j1) && !has_amm(&j0)) {
+        let restored_assignment = classic && restored_cast_member_assignment(ctx,
+            &ctx.instrs[t.instr_lo..t.instr_hi], &ctx.instrs[jb.instr_lo..jb.instr_hi], l, &j0, &j1);
+        if (j1.len() != j0.len() && !restored_assignment) || (has_amm(&j1) && !has_amm(&j0)) {
             return None;
         }
         Some(j)
@@ -8659,6 +11215,43 @@ impl Structurer<'_> {
         true
     }
 
+    /// Whether everything the single header block `head` writes is a temporary of its own test:
+    /// no parameter is written, every read of a written slot inside the block follows its write,
+    /// and nothing reachable from the loop body head `body` or the loop exit `exit` reads a
+    /// written slot before overwriting it. This is what lets the header's statements be folded
+    /// into the condition as the temporaries they are.
+    /// The slots the single header block `head` writes that are its own temporaries — no
+    /// parameter written, read only after being written inside the block, and dead on every path
+    /// from the body head and the exit — as a set, or None where a parameter is written.
+    fn header_dead_temps(
+        &self,
+        head: usize,
+        body: usize,
+        exit: usize,
+    ) -> Option<std::collections::BTreeSet<i32>> {
+        let written = self.compound_header_written_slots(head, head + 1)?;
+        if !self.compound_header_writes_are_path_local(head, head + 1, &written) {
+            return None;
+        }
+        Some(
+            written
+                .into_iter()
+                .filter(|slot| {
+                    let one = std::collections::BTreeSet::from([*slot]);
+                    self.compound_header_writes_are_dead(head, body, exit, &one)
+                })
+                .collect(),
+        )
+    }
+
+    fn header_temps_dead(&self, head: usize, body: usize, exit: usize) -> bool {
+        let Some(written) = self.compound_header_written_slots(head, head + 1) else {
+            return false;
+        };
+        self.compound_header_writes_are_path_local(head, head + 1, &written)
+            && self.compound_header_writes_are_dead(head, body, exit, &written)
+    }
+
     /// Recover the condition of a bounded, acyclic materialized header `[head, body)`. Every
     /// path must terminate at exactly `body_off` or `exit_off`; path-local values are retained so
     /// a compiler temporary assigned on both arms can feed the final low-register test.
@@ -8901,9 +11494,246 @@ impl Structurer<'_> {
         None
     }
 
+    /// Two guarded tick waits retry the outer deadline; a final inner wait exits it.
+    fn has_two_timed_retries_and_final_wait(&self, head: usize, exit: usize) -> bool {
+        let witness = (|| {
+            if self.ctx.f.ret.token != 0x52 || exit < head + 7 || exit >= self.g.blocks.len() { return None; }
+            let block = |n: usize| &self.g.blocks[n];
+            let code = |n: usize| &self.ctx.instrs[block(n).instr_lo..block(n).instr_hi];
+            let h = code(head); let header = block(head).start_dw; let after = block(exit).start_dw;
+            if h.get(h.len().checked_sub(2)?)?.op.name != "CMPd" || h.last()?.op.name != "JNS"
+                || block(head).succs.as_slice() != [after,block(head+1).start_dw] || code(head+1).first()?.op.name != "SUSPEND"
+                || code(exit-1).iter().map(|i| i.op.name).ne(["JMP"]) || block(exit-1).succs.as_slice() != [after] { return None; }
+            let waits: Vec<_> = (head+1..exit).filter(|n| block(*n).succs.contains(&header)).collect();
+            let [first,second] = waits.as_slice() else { return None; };
+            let tick = |n, suspended| {
+                let c = code(n); let c = if suspended {
+                    if c.first()?.op.name != "SUSPEND" { return None; } &c[1..]
+                } else { c };
+                if c.iter().map(|i| i.op.name).ne(["PshVPtr","CALLSYS","JMP"]) || c[0].words.first() != Some(&0) { return None; }
+                let p = *c[1].qwords.first()? as i64; let ret = self.ctx.refs.func_ret_by_ptr(p)?;
+                (self.ctx.refs.is_method_by_ptr(p) && self.ctx.refs.func_params_by_ptr(p)?.is_empty()
+                    && ret.token == 0x52 && ret.type_info == 0 && !ret.is_reference && !ret.is_object_handle).then_some(p)
+            };
+            let wait = tick(*first,false)?;
+            if tick(*second,false)? != wait || tick(exit-2,true)? != wait { return None; }
+            for &n in waits.iter() {
+                if n <= head+1 || n >= exit-3 || self.jump_op(n-1) != "JLowZ"
+                    || block(n-1).succs.as_slice() != [block(n+1).start_dw,block(n).start_dw]
+                    || block(n).succs.as_slice() != [header]
+                    || self.g.blocks.iter().enumerate().any(|(at,b)| at != n-1 && b.succs.contains(&block(n).start_dw)) { return None; }
+            }
+            let inner = code(exit-3);
+            if inner.iter().map(|i| i.op.name).ne(["PshVPtr","CALLINTF","CpyRtoV4","NOT","CpyVtoR1","JLowZ"])
+                || inner[0].words.first() != Some(&0) || inner[2].words != inner[3].words || inner[2].words != inner[4].words
+                || block(exit-3).succs.as_slice() != [block(exit-1).start_dw,block(exit-2).start_dw]
+                || block(exit-2).succs.as_slice() != [block(exit-3).start_dw] { return None; }
+            let check = *inner[1].dwords.first()? as i32; let ret = self.ctx.refs.func_ret_by_id(check)?;
+            let scratch = *inner[2].words.first()? as i16 as i32;
+            if scratch <= 0 || self.ctx.local_types.and_then(|m| m.get(&scratch)).is_some_and(|ty| ty != "bool")
+                || !self.ctx.refs.is_method_by_id(check) || !self.ctx.refs.func_params_by_id(check)?.is_empty()
+                || ret.token != 0x41 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle { return None; }
+            for n in head+1..exit {
+                if code(n).iter().any(|i| i.op.name == "JMPP") { return None; }
+                for &target in &block(n).succs {
+                    if target <= block(n).start_dw && !((waits.contains(&n) && target == header)
+                        || (n == exit-2 && target == block(exit-3).start_dw)) { return None; }
+                    if target < header || target > after {
+                        let dest = *self.idx_of.get(&target)?;
+                        if code(dest).iter().map(|i| i.op.name).ne(["RET"]) { return None; }
+                    }
+                }
+            }
+            if self.g.blocks.iter().enumerate().any(|(n,b)| (n<head || n>=exit)
+                && b.succs.iter().any(|t| *t > header && *t < after)) { return None; }
+            Some(())
+        })();
+        witness.is_some()
+    }
+
+    /// A native bool-field test owns a guarded retry before the final cleanup-and-break.
+    fn has_bool_field_retry_and_final_break(&self, head: usize, exit: usize) -> bool {
+        let witness = (|| {
+            let plain = |t: &super::types::DataType, token| t.token == token && t.type_info == 0
+                && !t.is_reference && !t.is_object_const && !t.is_object_handle
+                && !t.is_read_only && !t.is_auto && !t.if_handle_then_const;
+            if !self.ctx.f.is_method || !plain(&self.ctx.f.ret, 0x52)
+                || exit <= head + 5 || exit >= self.g.blocks.len() { return None; }
+            let block = |n: usize| &self.g.blocks[n];
+            let code = |n: usize| &self.ctx.instrs[block(n).instr_lo..block(n).instr_hi];
+            let w = |i: &Instr, n: usize| i.words.get(n).map(|v| s16(*v));
+            let h = code(head); let header = block(head).start_dw; let after = block(exit).start_dw;
+            if h.iter().map(|i| i.op.name).ne(["LoadThisR", "RDR1", "NOT", "CpyVtoR1", "JLowZ"])
+                || w(&h[1], 0)? <= 0 || h[1].words != h[2].words || h[1].words != h[3].words
+                || code(head + 1).first()?.op.name != "SUSPEND"
+                || block(head).succs.as_slice() != [after, block(head + 1).start_dw] { return None; }
+            let id = *h[0].dwords.first()? as i32;
+            let (field, old) = self.ctx.refs.member_identity(id, w(&h[0], 0)?)?;
+            let owner = self.ctx.refs.type_identity_by_id(id)?;
+            if !owner.module.is_empty() || !owner.namespace.is_empty()
+                || self.ctx.refs.type_identity_by_id(old)? != owner
+                || self.ctx.refs.native_field_value_type(&owner.name, field) != Some("bool")
+                || !self.ctx.refs.is_subclass(self.ctx.class_name?, &owner.name) { return None; }
+
+            let retries: Vec<_> = (head + 1..exit).filter(|n| block(*n).succs.contains(&header)).collect();
+            let [retry] = retries.as_slice() else { return None; };
+            let retry = *retry;
+            if code(retry).iter().map(|i| i.op.name).ne(["JMP"]) || retry + 1 >= exit { return None; }
+            let end = block(retry).instr_hi;
+            let c = self.ctx.instrs.get(end.checked_sub(12)?..end)?;
+            if c[0].offset_dw <= header || c.iter().map(|i| i.op.name).ne([
+                "PshVPtr", "CALL", "JLowZ", "SetV1", "JMP", "PshVPtr", "CALL",
+                "CpyRtoV4", "CpyVtoV4", "CpyVtoR1", "JLowZ", "JMP",
+            ]) { return None; }
+            let (handle, result, scratch) = (w(&c[0], 0)?, w(&c[3], 0)?, w(&c[7], 0)?);
+            if [handle, result, scratch].iter().any(|s| *s <= 0)
+                || std::collections::HashSet::from([handle, result, scratch]).len() != 3
+                || w(&c[5], 0) != Some(handle) || c[3].dwords.first() != Some(&1)
+                || w(&c[8], 0) != Some(result) || w(&c[8], 1) != Some(scratch)
+                || w(&c[9], 0) != Some(result) || w(&h[1], 0) != Some(scratch) { return None; }
+            let mut argument_type = None;
+            for at in [1, 6] {
+                let id = *c[at].dwords.first()? as i32;
+                let [arg] = self.ctx.refs.func_params_by_id(id)? else { return None; };
+                if self.ctx.refs.is_method_by_id(id) || !plain(self.ctx.refs.func_ret_by_id(id)?, 0x41)
+                    || arg.token != 5 || !arg.is_object_handle || !arg.is_object_const || arg.is_reference
+                    || arg.is_read_only || arg.is_auto || arg.if_handle_then_const
+                    || self.ctx.refs.type_identity_by_ptr(arg.type_info)?.module != "" { return None; }
+                if argument_type.replace(arg.type_info).is_some_and(|p| p != arg.type_info) { return None; }
+            }
+            if c[1].dwords == c[6].dwords { return None; }
+            let target = |i: &Instr| Some(i.offset_dw as i64 + 2 + *i.dwords.first()? as i32 as i64);
+            for (at, dest) in [(2, c[5].offset_dw), (4, c[9].offset_dw),
+                (10, block(retry + 1).start_dw), (11, header)] {
+                if target(&c[at])? != dest as i64 { return None; }
+            }
+
+            let tail = code(exit - 1);
+            let tail = tail.get(tail.len().checked_sub(7)?..)?;
+            if tail.iter().map(|i| i.op.name).ne(["PshC4", "PshVPtr", "CALLSYS", "PSF", "CALLSYS", "FreeNullV8", "JMP"])
+                || w(&tail[1], 0) != Some(0) || w(&tail[3], 0)? <= 0 || w(&tail[5], 0)? <= 0
+                || w(&tail[3], 0) == w(&tail[5], 0) || block(exit - 1).succs.as_slice() != [after] { return None; }
+            let wait = *tail[2].qwords.first()? as i64; let dtor = *tail[4].qwords.first()? as i64;
+            let [seconds] = self.ctx.refs.func_params_by_ptr(wait)? else { return None; };
+            let dtor_owner = self.ctx.refs.func_owner_by_ptr(dtor)?;
+            if !plain(seconds, 0x50) || self.ctx.refs.func_by_ptr(dtor) != Some("$beh2")
+                || !self.ctx.refs.func_params_by_ptr(dtor)?.is_empty()
+                || self.ctx.slot_type(w(&tail[3], 0)?).as_deref() != Some(dtor_owner) { return None; }
+            for ptr in [wait, dtor] {
+                self.ctx.refs.func_owner_by_ptr(ptr)?;
+                if !self.ctx.refs.is_method_by_ptr(ptr) || self.ctx.refs.is_const_method_by_ptr(ptr)
+                    || !plain(self.ctx.refs.func_ret_by_ptr(ptr)?, 0x52) { return None; }
+            }
+
+            // Keep the nested foreach latch, but admit no second outer retry or entry into
+            // the short-circuit materialization. Other exits must be shared bare returns.
+            for (n, b) in self.g.blocks.iter().enumerate() {
+                if n >= head && n < exit && code(n).iter().any(|i| i.op.name == "JMPP") { return None; }
+                for &dest in &b.succs {
+                    if (n < head || n >= exit) && dest >= header && dest < after
+                        && !(n < head && dest == header) { return None; }
+                    if n <= head || n >= exit { continue; }
+                    if dest == after && n != exit - 1 { return None; }
+                    if (dest < header || dest > after) && !self.is_bare_ret_off(dest) { return None; }
+                    if dest <= b.start_dw && !(n == retry && dest == header) {
+                        let inner = *self.idx_of.get(&dest)?;
+                        if n >= retry || inner <= head || code(inner).first()?.op.name != "SUSPEND"
+                            || !self.is_backward_cond(n) || self.loop_latch(inner, n + 1) != Some(n) { return None; }
+                    }
+                    if dest > c[0].offset_dw && dest <= c[11].offset_dw {
+                        let last = &self.ctx.instrs[b.instr_hi - 1];
+                        if ![(2, 3), (2, 5), (4, 9), (8, 9), (10, 11)].iter()
+                            .any(|&(src, dst)| last.offset_dw == c[src].offset_dw && dest == c[dst].offset_dw) { return None; }
+                    }
+                }
+            }
+            let mut seen = std::collections::HashSet::new(); let mut work = vec![head];
+            while let Some(n) = work.pop() {
+                if !seen.insert(n) { continue; }
+                for dest in &block(n).succs {
+                    let next = *self.idx_of.get(dest)?;
+                    if next >= head && next < exit { work.push(next); }
+                }
+            }
+            (head..exit).all(|n| seen.contains(&n)).then_some(())
+        })();
+        witness.is_some()
+    }
+
+    /// One guarded retry returns to the time test; the final body block exits.
+    fn has_guarded_retry_and_final_break(&self, head: usize, exit: usize) -> bool {
+        let witness = (|| {
+            if self.ctx.f.ret.token != 0x52 || exit != head + 9 || exit >= self.g.blocks.len() { return None; }
+            let block = |n: usize| &self.g.blocks[head + n];
+            let code = |n: usize| &self.ctx.instrs[block(n).instr_lo..block(n).instr_hi];
+            let h = code(0); let body = code(1); let retry = code(7); let end = code(8);
+            let header = block(0).start_dw; let after = block(9).start_dw;
+            if h.get(h.len().checked_sub(2)?)?.op.name != "CMPd" || h.last()?.op.name != "JNS"
+                || body.first()?.op.name != "SUSPEND" || body.last()?.op.name != "JLowZ"
+                || retry.iter().map(|i| i.op.name).ne(["PshVPtr", "CALLSYS", "JMP"])
+                || retry[0].words.first() != Some(&0) || end.len() < 2 || end.last()?.op.name != "JMP" { return None; }
+            let p = *retry[1].qwords.first()? as i64; let ret = self.ctx.refs.func_ret_by_ptr(p)?;
+            if !self.ctx.refs.is_method_by_ptr(p) || !self.ctx.refs.func_params_by_ptr(p)?.is_empty()
+                || ret.token != 0x52 || ret.type_info != 0 || ret.is_reference || ret.is_object_handle { return None; }
+            for (n, targets) in [(0, vec![after, block(1).start_dw]), (1, vec![block(3).start_dw, block(2).start_dw]),
+                (3, vec![block(5).start_dw, block(4).start_dw]), (4, vec![block(6).start_dw]), (5, vec![block(6).start_dw]),
+                (6, vec![block(8).start_dw, block(7).start_dw]), (7, vec![header]), (8, vec![after])] {
+                if block(n).succs != targets { return None; }
+            }
+            let [early_exit] = block(2).succs.as_slice() else { return None; };
+            let ret_block = &self.g.blocks[*self.idx_of.get(early_exit)?];
+            if self.jump_op(head + 2) != "JMP" || *early_exit <= after
+                || self.ctx.instrs[ret_block.instr_lo..ret_block.instr_hi].iter().map(|i| i.op.name).ne(["RET"])
+                || self.g.blocks.iter().enumerate().any(|(n, b)| (n < head || n >= exit)
+                    && b.succs.iter().any(|t| *t > header && *t < after)) { return None; }
+            Some(())
+        })();
+        witness.is_some()
+    }
+
+    /// A constant top-test has two cleanup-and-retry leaves and a final
+    /// cleanup-and-break leaf. The last block is an exit, not the loop latch.
+    fn has_two_released_retry_edges(&self, head: usize, exit: usize) -> bool {
+        let witness = (|| {
+            if self.ctx.f.ret.token != 0x52 || exit != head + 6 || exit >= self.g.blocks.len() { return None; }
+            let block = |n: usize| &self.g.blocks[head+n];
+            let code = |n: usize| &self.ctx.instrs[block(n).instr_lo..block(n).instr_hi];
+            let w = |i: &Instr,n: usize| i.words.get(n).map(|v|s16(*v));
+            let h=code(0);let body=code(1);let check=code(3);
+            if h.iter().map(|i|i.op.name).ne(["SetV1","CpyVtoR1","JLowZ"])
+                || h[0].dwords.first()!=Some(&1) || w(&h[0],0)?<=0 || w(&h[1],0)!=w(&h[0],0)
+                || body.first()?.op.name!="SUSPEND" || body.len()<10
+                || check.iter().map(|i|i.op.name).ne(["sbTOi","CMPIi","JZ"]) || check[1].dwords.first()!=Some(&0) { return None; }
+            let tail=&body[body.len()-8..];
+            if tail.iter().map(|i|i.op.name).ne(["RDR1","CpyVtoV4","PSF","CALLSYS","LoadRObjR","RDR1","CpyVtoR1","JLowZ"]) { return None; }
+            let (handle, result, scratch)=(w(&tail[4],0)?,w(&tail[1],0)?,w(&check[0],0)?);
+            if [handle,result,scratch].iter().any(|s|*s<=0) || std::collections::HashSet::from([handle,result,scratch,w(&h[0],0)?]).len()!=4
+                || w(&tail[1],1)!=w(&tail[0],0) || w(&tail[5],0)!=w(&h[0],0) || w(&tail[6],0)!=w(&h[0],0)
+                || w(&check[0],1)!=Some(result) || w(&check[1],0)!=Some(scratch)
+                || body.iter().filter(|i|i.op.name=="STOREOBJ" && w(i,0)==Some(handle)).count()!=1 { return None; }
+            let header=block(0).start_dw;let after=block(6).start_dw;
+            if block(0).succs.as_slice()!=[after,block(1).start_dw]
+                || block(1).succs.as_slice()!=[block(3).start_dw,block(2).start_dw]
+                || block(3).succs.as_slice()!=[block(5).start_dw,block(4).start_dw] { return None; }
+            for (n,target) in [(2,header),(4,header),(5,after)] {
+                let leaf=code(n);
+                if leaf.iter().map(|i|i.op.name).ne(["FreeNullV8","JMP"]) || w(&leaf[0],0)!=Some(handle)
+                    || block(n).succs.as_slice()!=[target] { return None; }
+            }
+            // No external edge may enter a predicate, cleanup, or retry leaf.
+            if self.g.blocks.iter().enumerate().any(|(n,b)| (n<head || n>=exit) && b.succs.iter().any(|t|*t>header && *t<after)) { return None; }
+            Some(())
+        })();
+        witness.is_some()
+    }
+
     /// Detect a top-test loop headed at block `i`:
-    /// `header: <cmp> Jcc exit; body...; JMP header`. Returns (body_end_idx, condition).
-    fn top_test_while(&self, i: usize, stop: usize) -> Option<(usize, String)> {
+    /// `header: <cmp> Jcc exit; body...; JMP header`. Returns (body_end_idx, condition, prefix):
+    /// the prefix holds statements of the header block that are NOT the test's own temporaries
+    /// and run once, in front of the loop — non-empty only for a body the compiler marked with
+    /// `SUSPEND` but never jumps back into, whose "header" block reaches back to the function's
+    /// prologue.
+    fn top_test_while(&self, i: usize, stop: usize) -> Option<(usize, String, Vec<String>)> {
         if !self.is_cond(i) {
             return None;
         }
@@ -8916,15 +11746,75 @@ impl Structurer<'_> {
             return None;
         }
         let prev = taken_idx.checked_sub(1)?;
-        if prev <= i || self.jump_op(prev) != "JMP" {
+        if prev <= i {
             return None;
         }
-        // last body block must JMP back to the header's start offset
-        if self.g.blocks[prev].succs.first().copied() != Some(b.start_dw) {
+        // A guarded retry can precede a final break instead of ending the body.
+        let jumps_back = (self.jump_op(prev) == "JMP"
+            && self.g.blocks[prev].succs.first().copied() == Some(b.start_dw))
+            || self.has_two_released_retry_edges(i, taken_idx)
+            || self.has_guarded_retry_and_final_break(i, taken_idx)
+            || self.has_bool_field_retry_and_final_break(i, taken_idx)
+            || self.has_two_timed_retries_and_final_wait(i, taken_idx);
+        // … unless the body is one the compiler marked as a loop body anyway. A `SUSPEND` stands
+        // at the head of every loop body and nowhere else behind a test. Where every path through
+        // the body leaves the function, the back edge was dead and the compiler dropped it: the
+        // body's last block then returns or jumps out, never falling into the exit. Rendered as
+        // an `if` the `SUSPEND` is lost (`UCBT_Sequence::Tick`).
+        // A jump BACK to a block before `i` is a latch of an enclosing loop, or the real head of
+        // a compound test (`while (A && B)`) whose merge block this is — never an exit.
+        let suspended_body = !jumps_back
+            && self.ctx.instrs[self.g.blocks[i + 1].instr_lo].op.name == "SUSPEND"
+            && {
+                let last = &self.g.blocks[prev];
+                match self.jump_op(prev) {
+                    "RET" => true,
+                    "JMP" => last.succs.first().is_some_and(|&t| {
+                        t != taken && self.idx_of.get(&t).copied().is_none_or(|ti| ti > taken_idx)
+                    }),
+                    _ => false,
+                }
+            };
+        if !jumps_back && !suspended_body {
             return None;
         }
-        let (stmts, cmp) = block_stmts(self.ctx, b.instr_lo, b.instr_hi);
+        let (mut stmts, cmp) = block_stmts(self.ctx, b.instr_lo, b.instr_hi);
         let cond = negate(&branch_cond(&cmp, self.jump_op(i)));
+        // Where nothing jumps back to this block, it reaches back to whatever came before the
+        // test — the function's prologue, for a loop that opens the body. Those statements run
+        // once, in front of the loop. Only a TRAILING run of stores into slots that die with the
+        // test is the test's own; the rest is the prefix.
+        let mut prefix: Vec<String> = Vec::new();
+        if suspended_body {
+            // A slot the BODY writes is a variable of the loop, whatever the walk from the body
+            // head says: the write kills the header's value on that path, but the test reads it
+            // again on the next pass that the missing back edge hides. Folding it made
+            // `while (Result == Success)` into `while (int(Success) == 0)`, a constant the
+            // compiler then went down on.
+            let written_in_body = self
+                .compound_header_written_slots(i + 1, taken_idx)
+                .unwrap_or_default();
+            let mut dead = self.header_dead_temps(i, i + 1, taken_idx).unwrap_or_default();
+            dead.retain(|slot| !written_in_body.contains(slot));
+            let is_local = |name: &str| {
+                name.strip_prefix("local_")
+                    .and_then(|rest| rest.parse::<i32>().ok())
+            };
+            let mut keep = stmts.len();
+            while keep > 0 {
+                let target = stmts[keep - 1]
+                    .trim()
+                    .strip_suffix(';')
+                    .and_then(|s| s.split_once(" = "))
+                    .and_then(|(t, _)| is_local(t));
+                if target.is_some_and(|slot| dead.contains(&slot)) {
+                    keep -= 1;
+                } else {
+                    break;
+                }
+            }
+            prefix = stmts.drain(..keep).collect();
+        }
         // Whatever the header computes IS part of the condition — it is re-evaluated on every
         // iteration, so it can be neither hoisted in front of the loop nor dropped. Dropped is
         // what used to happen, and it leaves the test reading a slot nothing ever fills: a
@@ -8932,8 +11822,19 @@ impl Structurer<'_> {
         // never runs. Fold the header's single store into the test where its shape allows it;
         // anything else keeps the old rendering rather than risking a worse one.
         loop_diag("top-test", stmts.as_slice(), &cond);
-        let cond = fold_loop_header_store(stmts.as_slice(), &cond).unwrap_or(cond);
-        Some((taken_idx, cond))
+        // Several temporaries in the header are the one expression they build — provided they
+        // are the test's own, dead once the loop is entered or left, and the block is the test
+        // rather than the head of a `while (true)` body, which starts with the `SUSPEND`.
+        let starts_with_suspend = self.ctx.instrs[b.instr_lo].op.name == "SUSPEND";
+        let cond = fold_loop_header_store(stmts.as_slice(), &cond)
+            .or_else(|| {
+                (!starts_with_suspend
+                    && (suspended_body || self.header_temps_dead(i, i + 1, taken_idx)))
+                    .then(|| fold_loop_header_temps(stmts.as_slice(), &cond))
+                    .flatten()
+            })
+            .unwrap_or(cond);
+        Some((taken_idx, cond, prefix))
     }
 
     /// batch-44b (E2, specs/loop-body-cfg-ext.md §2.2): the `it.CanProceed` top-test condition of
@@ -9059,6 +11960,216 @@ impl Structurer<'_> {
             return None;
         }
         Some((test_idx, cond, body_head, break_off))
+    }
+
+    /// A counted `for` loop, entered at block `e`.
+    ///
+    /// This compiler lays a `for` out as `init; JMP test; body: SUSPEND …; incr; test: <cond>;
+    /// Jcc body` — the test at the BOTTOM, entered by a jump, with the `SUSPEND` at the head of
+    /// the body. A `while` is the other way round (`test: <cond>; Jcc exit; SUSPEND …; JMP
+    /// test`), so the two spellings are not interchangeable: rendered as `while`, every one of
+    /// these came back with the test in front, one `SUSPEND` moved and the bound the test
+    /// computes thrown away. Signature (all required, any deviation ⇒ None ⇒ status quo):
+    ///   1. block `e` ends in a bare single-successor `JMP` to a block `c` later in the range;
+    ///   2. block `e + 1` starts with `SUSPEND` — the body head;
+    ///   3. `c` is the test: a backward conditional whose back edge lands exactly on `e + 1`, with
+    ///      its other edge the exit, past `c` and inside the range;
+    ///   4. nothing else jumps back to at-or-before the body head, and nothing outside
+    ///      `[e, c]` jumps into `(e, c]`;
+    ///   5. the test's own statements fold into its condition as temporaries proven dead
+    ///      outside the block, or it has none;
+    ///   6. the block before `c` is either not a jump target — then whatever it holds stays in
+    ///      the body, which compiles the same — or it is the target of the body's `continue`s
+    ///      and holds nothing but in-place updates of locals, which become the increment clause.
+    /// Returns `(test_idx, cond, body_end, increment, continue_off, break_off)`.
+    fn for_loop(
+        &self,
+        e: usize,
+        stop: usize,
+    ) -> Option<(usize, String, usize, String, usize, usize)> {
+        if self.jump_op(e) != "JMP" {
+            return None;
+        }
+        let eb = &self.g.blocks[e];
+        if eb.succs.len() != 1 {
+            return None;
+        }
+        let c = *self.idx_of.get(&eb.succs[0])?;
+        if c <= e + 1 || c >= stop {
+            return None;
+        }
+        let head = e + 1;
+        let head_off = self.g.blocks[head].start_dw;
+        if self.ctx.instrs[self.g.blocks[head].instr_lo].op.name != "SUSPEND" {
+            return None;
+        }
+        let cb = &self.g.blocks[c];
+        if !self.is_backward_cond(c) || cb.succs.len() != 2 {
+            return None;
+        }
+        let back = *cb.succs.iter().find(|&&s| s <= cb.start_dw)?;
+        if back != head_off {
+            return None;
+        }
+        let break_off = *cb.succs.iter().find(|&&s| s > cb.start_dw)?;
+        let exit_idx = *self.idx_of.get(&break_off)?;
+        if exit_idx <= c || exit_idx > stop {
+            return None;
+        }
+        // 4. reducible, single entry: the only edge to the head is the test's back edge.
+        for bi in head..c {
+            if self.g.blocks[bi].succs.iter().any(|&s| s <= head_off) {
+                return None;
+            }
+        }
+        let lo_off = head_off;
+        let hi_off = cb.start_dw;
+        for (src, block) in self.g.blocks.iter().enumerate() {
+            if src >= e && src <= c {
+                continue;
+            }
+            if block.succs.iter().any(|&s| s >= lo_off && s <= hi_off) {
+                return None;
+            }
+        }
+        // 5. the condition, re-evaluated every time round, with its temporaries folded back in.
+        let (stmts, cmp) = block_stmts(self.ctx, cb.instr_lo, cb.instr_hi);
+        let raw = branch_cond(&cmp, self.jump_op(c));
+        loop_diag("for", stmts.as_slice(), &raw);
+        let refused = |why: &str| {
+            loop_diag(&format!("for-refused:{why}"), stmts.as_slice(), &raw);
+        };
+        let cond = if stmts.is_empty() {
+            raw.clone()
+        } else {
+            let Some(folded) = fold_loop_header_store(stmts.as_slice(), &raw)
+                .or_else(|| fold_loop_header_temps(stmts.as_slice(), &raw))
+            else {
+                refused("fold");
+                return None;
+            };
+            if !self.header_temps_dead(c, head, exit_idx) {
+                refused("temps-not-dead");
+                return None;
+            }
+            folded
+        };
+        if cond.contains('?') {
+            refused("unrendered");
+            return None;
+        }
+        // 6. the increment.
+        let inc = c - 1;
+        let inc_off = self.g.blocks[inc].start_dw;
+        let inc_is_target = (head..inc).any(|bi| self.g.blocks[bi].succs.contains(&inc_off));
+        let falls_into_test = |bi: usize| {
+            let b = &self.g.blocks[bi];
+            let term = self.ctx.instrs[b.instr_hi - 1].op.name;
+            term != "JMP" && term != "RET" && term != "JMPP" && !is_cond_op(term)
+        };
+        // A block the body jumps INTO that holds nothing but in-place updates is the increment
+        // clause: a `continue` lands on the increment, and this is where it lands. A block that
+        // holds other statements in front of them was jumped into as a join — the end of an
+        // `if` — not as a `continue` (a `continue` lands on the increment's first instruction,
+        // which would then start a block of its own), so the increment may stay in the body:
+        // `for (; c;) { s; ++i; }` and `for (; c; ++i) { s; }` compile to the same bytes.
+        let increment_only = inc_is_target && inc > head && falls_into_test(inc) && {
+            let (istmts, icmp) =
+                block_stmts(self.ctx, self.g.blocks[inc].instr_lo, self.g.blocks[inc].instr_hi);
+            icmp.is_none() && !istmts.is_empty() && istmts.iter().all(|s| in_place_update(s))
+        };
+        if increment_only {
+            let (istmts, _) =
+                block_stmts(self.ctx, self.g.blocks[inc].instr_lo, self.g.blocks[inc].instr_hi);
+            let increment = istmts
+                .iter()
+                .map(|s| s.trim().trim_end_matches(';').to_owned())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some((c, cond, inc, increment, inc_off, break_off))
+        } else {
+            Some((c, cond, c, String::new(), cb.start_dw, break_off))
+        }
+    }
+
+    /// A test-first counted loop whose materialized predicate occupies a small forward DAG.
+    /// The terminal test branches back to the body; the entry jumps over it to the first test.
+    fn compound_test_first_for_loop(
+        &mut self, e: usize, stop: usize,
+    ) -> Option<(usize, String, usize, String, usize, usize)> {
+        if e >= stop || self.jump_op(e) != "JMP" || self.g.blocks[e].succs.len() != 1 { return None; }
+        let c = *self.idx_of.get(&self.g.blocks[e].succs[0])?;
+        let head = e + 1;
+        if c <= head || c >= stop || self.is_backward_cond(c)
+            || self.ctx.instrs[self.g.blocks[head].instr_lo].op.name != "SUSPEND" { return None; }
+        let body_off = self.g.blocks[head].start_dw;
+        let test_off = self.g.blocks[c].start_dw;
+        for end in (c + 2)..=(c + COMPOUND_HEADER_MAX_BLOCKS).min(stop) {
+            if end >= self.g.blocks.len() { continue; }
+            let terminal = end - 1;
+            let exit_off = self.g.blocks[end].start_dw;
+            if !self.is_backward_cond(terminal)
+                || self.g.blocks[terminal].succs.as_slice() != [body_off, exit_off] { continue; }
+            // Only the terminal test may leave the forward-only predicate DAG.
+            if (c..end).any(|bi| {
+                let b = &self.g.blocks[bi];
+                b.succs.is_empty() || b.succs.iter().any(|s| {
+                    if bi == terminal { return *s != body_off && *s != exit_off; }
+                    !self.idx_of.get(s).is_some_and(|next| *next > bi && *next < end)
+                })
+            }) { continue; }
+            // The setup owns the sole outside entry. Body paths can re-test at its start,
+            // but cannot enter a materialized arm or the final scratch-register test.
+            let mut shape_ok = true;
+            for (src, block) in self.g.blocks.iter().enumerate() {
+                for s in &block.succs {
+                    let Some(&target) = self.idx_of.get(s) else {
+                        if src >= e && src < end { shape_ok = false; }
+                        continue;
+                    };
+                    if target >= head && target < end && !(src >= e && src < end) { shape_ok = false; }
+                    if src >= head && src < c && (target <= head || target > c && target < end) { shape_ok = false; }
+                    if src == e && target != c { shape_ok = false; }
+                }
+            }
+            if !shape_ok { continue; }
+            // Reject dead/unowned blocks in either physical region.
+            let reachable = |start: usize, finish: usize| {
+                let mut seen = std::collections::HashSet::new(); let mut work = vec![start];
+                while let Some(bi) = work.pop() {
+                    if !seen.insert(bi) { continue; }
+                    for s in &self.g.blocks[bi].succs {
+                        if let Some(&next) = self.idx_of.get(s) {
+                            if next >= start && next < finish { work.push(next); }
+                        }
+                    }
+                }
+                (start..finish).all(|bi| seen.contains(&bi))
+            };
+            if !reachable(head, c) || !reachable(c, end) { continue; }
+            let Some(written) = self.compound_header_written_slots(c, end) else { continue; };
+            if !self.compound_header_writes_are_path_local(c, end, &written)
+                || !self.compound_header_writes_are_dead(c, head, end, &written) { continue; }
+            let Some(cond) = self.symbolic_header_condition(c, end, body_off, exit_off) else { continue; };
+            // Same increment rule as the ordinary for-loop: a body jump targets a block
+            // containing only in-place updates, and that block falls into the first test.
+            let inc = c - 1; let inc_off = self.g.blocks[inc].start_dw;
+            let inc_block = &self.g.blocks[inc]; let term = self.jump_op(inc);
+            let (updates, cmp) = block_stmts(self.ctx, inc_block.instr_lo, inc_block.instr_hi);
+            let increment_only = inc > head && (head..inc).any(|bi| self.g.blocks[bi].succs.contains(&inc_off))
+                && inc_block.succs.as_slice() == [test_off] && !matches!(term, "JMP" | "RET" | "JMPP") && !is_cond_op(term)
+                && cmp.is_none() && !updates.is_empty() && updates.iter().all(|s| in_place_update(s));
+            let (body_end, increment, continue_off) = if increment_only {
+                (inc, updates.iter().map(|s| s.trim().trim_end_matches(';').to_owned()).collect::<Vec<_>>().join(", "), inc_off)
+            } else { (c, String::new(), test_off) };
+            let scope = LoopScope { continue_off, break_off: exit_off, continue_only: false, latch_block: None };
+            let saved = self.loop_scope; self.loop_scope = Some(scope);
+            let recoverable = self.body_has_inner_branch(head, body_end, scope)
+                && self.loop_body_recoverable(head, body_end, scope);
+            self.loop_scope = saved;
+            if recoverable { return Some((terminal, cond, body_end, increment, continue_off, exit_off)); }
+        }
+        None
     }
 
     fn is_backward_cond(&self, bi: usize) -> bool {
@@ -9309,6 +12420,2418 @@ mod tests {
         }
     }
 
+    #[test]
+    fn captured_native_handle_members_preserve_the_mutable_reference_store() {
+        let mut a = TestAssembler::default();
+        a.op("PshVPtr", &[0], &[]); a.op("CALLSYS", &[], &[]);
+        a.op("PshRPtr", &[], &[]); a.op("RDSPtr", &[], &[]); a.op("ADDSi", &[0], &[1]);
+        a.op("PopRPtr", &[], &[]); a.op("CpyRtoV8", &[32], &[]);
+        a.op("SetV4", &[43], &[0]); a.op("LoadRObjR", &[32, 0], &[2]); a.op("WRTV4", &[43], &[]);
+        a.op("RET", &[0], &[]);
+        let mut fixture = a.finish(); fixture.instrs[1].qwords = vec![1];
+        let refs = RefResolver::from_test_captured_handle_member_reference(0);
+        assert_eq!(super::captured_handle_member_reference(&fixture.instrs, 6, &refs), Some((32, "FSettings".into())));
+        let f = FuncCode { func: "UGetter::SetWidth".into(), is_method: true, param_names: Vec::new(),
+            param_types: Vec::new(), ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+        let locals = HashMap::from([(32, "FSettings".into()), (43, "float32".into())]);
+        let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: Some("UGetter"), local_types: Some(&locals),
+            float_slots: Default::default(), param_off_map: HashMap::new(), rvo_off: None,
+            keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+        let source = block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n");
+        assert!(source.contains("local_32 = this.GetValue().Settings;"), "{source}");
+        assert!(source.contains("local_32.Width ="), "{source}");
+        for fault in 1..=12 {
+            assert!(super::captured_handle_member_reference(&fixture.instrs, 6,
+                &RefResolver::from_test_captured_handle_member_reference(fault)).is_none(), "{fault}");
+        }
+        for (at, op) in [(3, "PshRPtr"), (5, "PshRPtr"), (8, "LoadVObjR"), (9, "RDR4")] {
+            let mut code = fixture.instrs.clone();
+            code[at].op = crate::cache::isa::OPCODES.iter().find(|i| i.name == op).unwrap();
+            assert!(super::captured_handle_member_reference(&code, 6, &refs).is_none());
+        }
+        let mut code = fixture.instrs.clone();
+        let mut extra = code[6].clone(); extra.offset_dw = code.last().unwrap().offset_dw + 2;
+        code.push(extra); assert!(super::captured_handle_member_reference(&code, 6, &refs).is_none());
+        for target in [2, 6, 8, 9] {
+            let mut code = fixture.instrs.clone();
+            let mut edge = code.last().unwrap().clone();
+            edge.op = crate::cache::isa::OPCODES.iter().find(|i| i.name == "JMP").unwrap();
+            edge.dwords = vec![(code[target].offset_dw as i32 - edge.offset_dw as i32 - 2) as u32];
+            code.push(edge); assert!(super::captured_handle_member_reference(&code, 6, &refs).is_none());
+        }
+    }
+
+    fn cast_member_assignment_fixture(extra_carry: bool, extra_join: bool) -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        // The outer branch makes the five-op inner join a closed block, just
+        // as the weapon-config guard does before the final Super call.
+        a.op("SetV1", &[9], &[1]); a.op("CpyVtoR1", &[9], &[]); a.jump("JLowZ", "end");
+        if extra_carry { a.op("PshNull", &[], &[]); }
+        a.op("PshVPtr", &[6], &[]); a.op("ADDSi", &[0], &[1]);
+        a.op("CmpPtrNull", &[(-2i16) as u16], &[]); a.jump("JZ", "null");
+        a.op("TYPEID", &[], &[0x4800_0007]); a.op("PSF", &[12], &[]);
+        a.op("PshVPtr", &[(-2i16) as u16], &[]); a.op("CALLSYS", &[], &[]);
+        a.jump("JMP", "join"); a.label("null"); a.op("ClrVPtr", &[12], &[]);
+        a.label("join"); a.op("PshVPtr", &[12], &[]); a.op("ADDSi", &[0], &[2]);
+        a.op("RDSPtr", &[], &[]); a.op("ADDSi", &[0], &[3]); a.op("CALLSYS", &[], &[]);
+        if extra_join { a.op("SUSPEND", &[], &[]); }
+        a.label("end"); a.op("RET", &[4], &[]);
+        let mut f = a.finish();
+        let mut ptr = 1;
+        for i in &mut f.instrs { if i.op.name == "CALLSYS" { i.qwords = vec![ptr]; ptr += 1; } }
+        f
+    }
+
+    fn render_cast_member_assignment(fixture: &CompoundFixture, refs: &RefResolver) -> String {
+        let f = FuncCode { func: "UHost::Apply".into(), is_method: true,
+            param_names: vec!["actor".into()],
+            param_types: vec![DataType { token: 5, type_info: 8, is_object_handle: true, ..Default::default() }],
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+        let locals = HashMap::from([(6, "UConfig".into()), (9, "bool".into()), (12, "AScriptProjectile".into())]);
+        let ctx = Ctx { f: &f, refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: Some("UHost"), local_types: Some(&locals),
+            float_slots: Default::default(), param_off_map: HashMap::from([(-2, 0)]), rvo_off: None,
+            keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+        let g = cfg::build(&fixture.instrs);
+        let idx_of = g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
+        let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None,
+            exit_join_is_ret: false, exit_ret_rows_ok: false, exit_rvo_return: false,
+            exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0, carry: None,
+            loop_scope: None, pending_loop_exit: None, shared_return: None };
+        let mut source = String::new(); st.emit_range(0, g.blocks.len(), 0, &mut source); source
+    }
+
+    #[test]
+    fn a_cast_diamond_restores_its_lost_native_member_assignment() {
+        let refs = RefResolver::from_test_cast_member_assignment(0);
+        let source = render_cast_member_assignment(&cast_member_assignment_fixture(false, false), &refs);
+        assert!(source.contains("local_12 = Cast<AScriptProjectile>(actor);"), "{source}");
+        assert_eq!(source.matches("local_12.Collision.Weapon = local_6.Override;").count(), 1, "{source}");
+        // The source template subtype differs from the destination's; preserve
+        // the actual native opAssign and its existing covariant argument typing.
+        assert!(!source.contains("opAssign("), "{source}");
+    }
+
+    #[test]
+    fn restored_assignment_requires_the_complete_typed_closed_join() {
+        let fixture = cast_member_assignment_fixture(false, false);
+        for fault in 1..=8 {
+            let source = render_cast_member_assignment(&fixture, &RefResolver::from_test_cast_member_assignment(fault));
+            assert!(!source.contains(".Weapon ="), "metadata {fault}: {source}");
+        }
+        let refs = RefResolver::from_test_cast_member_assignment(0);
+        for f in [cast_member_assignment_fixture(true, false), cast_member_assignment_fixture(false, true)] {
+            let source = render_cast_member_assignment(&f, &refs);
+            assert!(!source.contains(".Weapon ="), "{source}");
+        }
+        let mut other_slot = fixture.clone();
+        let at = other_slot.instrs.iter().position(|i| i.offset_dw == other_slot.labels["join"]).unwrap();
+        other_slot.instrs[at].words[0] = 14;
+        assert!(!render_cast_member_assignment(&other_slot, &refs).contains(".Weapon ="));
+        let mut outside = fixture.clone();
+        // An extra incoming edge is tested by redirecting the outer conditional
+        // into the join, bypassing the carried field push and cast entirely.
+        let outer = outside.instrs.iter_mut().find(|i| i.op.name == "JLowZ").unwrap();
+        outer.dwords[0] = (outside.labels["join"] as i64 - outer.offset_dw as i64 - 2) as i32 as u32;
+        assert!(!render_cast_member_assignment(&outside, &refs).contains(".Weapon ="));
+    }
+
+    fn ordered_parameter_equality_fixture() -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        // A handle call is complete before the native value field is addressed.
+        a.op("PshVPtr", &[(-2i16) as u16], &[]); a.op("CALLSYS", &[], &[]);
+        a.op("STOREOBJ", &[6], &[]); a.op("PshVPtr", &[6], &[]);
+        a.op("PshVPtr", &[(-2i16) as u16], &[]); a.op("ADDSi", &[0], &[1]);
+        a.op("CALLSYS", &[], &[]); a.jump("JLowZ", "end");
+        a.op("SetV4", &[9], &[1]); a.label("end"); a.op("RET", &[4], &[]);
+        let mut f = a.finish(); f.instrs[1].qwords = vec![1]; f.instrs[6].qwords = vec![2]; f
+    }
+
+    fn render_ordered_parameter_equality(fixture: &CompoundFixture, refs: &RefResolver, const_input: bool) -> String {
+        let f = FuncCode { func: "UHost::Check".into(), is_method: true,
+            param_names: vec!["input".into()], param_types: vec![DataType { token: 5, type_info: 1,
+                is_reference: true, is_object_const: const_input, ..Default::default() }],
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+        let locals = HashMap::from([(6, "AGothicCharacter".into()), (9, "int".into())]);
+        let ctx = Ctx { f: &f, refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: Some("UHost"), local_types: Some(&locals),
+            float_slots: Default::default(), param_off_map: HashMap::from([(-2, 0)]), rvo_off: None,
+            keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+        let g = cfg::build(&fixture.instrs);
+        let idx_of = g.blocks.iter().enumerate().map(|(i,b)| (b.start_dw,i)).collect();
+        let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None,
+            exit_join_is_ret: false, exit_ret_rows_ok: false, exit_rvo_return: false,
+            exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0, carry: None,
+            loop_scope: None, pending_loop_exit: None, shared_return: None };
+        let mut out = String::new(); st.emit_range(0, g.blocks.len(), 0, &mut out); out
+    }
+
+    #[test]
+    fn native_parameter_field_equality_preserves_its_argument_first_method_form() {
+        let f = ordered_parameter_equality_fixture();
+        let refs = RefResolver::from_test_ordered_parameter_equality(0);
+        // RefResolver's known-native chain ends at ACharacter. The production
+        // field call needs the already established, narrower AActor convention.
+        assert!(!refs.is_subclass("AGothicCharacter", "AActor"));
+        let out = render_ordered_parameter_equality(&f, &refs, true);
+        assert!(out.contains("local_6 = input.Acquire();"), "{out}");
+        assert!(out.contains("input.Field.opEquals(local_6)"), "{out}");
+        // ADDSi deliberately has no broad native-value Arg.ty fallback. Its exact
+        // property identity is sufficient here, without widening that shared path.
+        assert!(!out.contains("input.Field =="), "{out}");
+    }
+
+    #[test]
+    fn native_parameter_field_equality_rejects_other_types_and_frames() {
+        let f = ordered_parameter_equality_fixture();
+        for fault in 1..=6 {
+            assert!(!render_ordered_parameter_equality(&f,
+                &RefResolver::from_test_ordered_parameter_equality(fault), true).contains(".opEquals("), "{fault}");
+        }
+        let refs = RefResolver::from_test_ordered_parameter_equality(0);
+        assert!(!render_ordered_parameter_equality(&f, &refs, false).contains(".opEquals("));
+        let mut other = f.clone(); other.instrs[3].words[0] = 8;
+        assert!(!render_ordered_parameter_equality(&other, &refs, true).contains(".opEquals("));
+        let mut incoming = f.clone();
+        incoming.instrs[7].dwords[0] = (incoming.instrs[3].offset_dw as i64
+            - incoming.instrs[7].offset_dw as i64 - 2) as i32 as u32;
+        assert!(!render_ordered_parameter_equality(&incoming, &refs, true).contains(".opEquals("));
+    }
+
+    #[test]
+    fn member_address_after_rvo_pushes_the_loaded_field() {
+        // GetDisplayName's real prefix: a hidden value destination, a script
+        // receiver/call, then a scalar member address used by FString::Append.
+        for load_member in [true, false] {
+            let mut a = TestAssembler::default();
+            a.op("PSF", &[4], &[]);
+            a.op("PshVPtr", &[0], &[]);
+            a.op("CALL", &[], &[10]);
+            if load_member { a.op("LoadThisR", &[0], &[1]); }
+            a.op("PshRPtr", &[], &[]);
+            let fixture = a.finish();
+            let refs = RefResolver::from_test_rvo_then_member_address();
+            let f = FuncCode { func: "UHost::Example".into(), is_method: true,
+                param_names: Vec::new(), param_types: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let fields = HashMap::from([("Distance".into(), "float".into())]);
+            let locals = HashMap::from([(4, "FString".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: Some(&fields), param_types: None,
+                class_name: Some("UHost"), local_types: Some(&locals),
+                float_slots: Default::default(), param_off_map: HashMap::new(),
+                rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            let (stmts, _, stack) = block_stmts_in(&ctx, 0, fixture.instrs.len(), Vec::new(), false);
+            assert_eq!(stmts, vec!["local_4 = this.MakeValue();"]);
+            assert_eq!(stack.len(), 1);
+            if load_member {
+                assert_eq!(stack[0].s, "this.Distance");
+                assert_eq!(stack[0].ty.as_deref(), Some("float"));
+            } else {
+                // Without a new address load, the old RVO result remains correct.
+                assert_eq!(stack[0].s, "local_4");
+                assert_eq!(stack[0].ty.as_deref(), Some("FString"));
+            }
+        }
+    }
+
+    fn ignored_null_comparison_fixture(
+        test_op: &'static str, intervening: Option<&'static str>, call_op: &'static str,
+    ) -> (Vec<String>, Option<Cmp>) {
+        let mut a = TestAssembler::default();
+        // The actual ten-instruction RandomSelector shape. Callee resolution is
+        // intentionally irrelevant to whether CALL discards the comparison value.
+        a.op("PshVPtr", &[0], &[]);
+        a.op("ADDSi", &[0], &[1]);
+        a.op("RDSPtr", &[], &[]);
+        a.op("RefCpyV", &[2], &[]);
+        a.op("CmpPtrNull", &[2], &[]);
+        a.op(test_op, &[], &[]);
+        if let Some(op) = intervening { a.op(op, &[3], &[0]); }
+        a.op("PshVPtr", &[(-2i16) as u16], &[]);
+        a.op("PshVPtr", &[0], &[]);
+        a.op(call_op, &[], &[1]);
+        a.op("RET", &[4], &[]);
+        let fixture = a.finish();
+        let refs = RefResolver::from_test_member_chain(&[("UCBT_RandomSelector", "CurrentNode")]);
+        let f = FuncCode {
+            func: "UCBT_RandomSelector::OnChildNodeCancelled".into(), is_method: true,
+            param_names: vec!["CancelledNode".into()],
+            param_types: vec![DataType { token: 5, type_info: 1,
+                is_object_handle: true, ..Default::default() }],
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new(),
+        };
+        let locals = HashMap::from([(2, "UCBT_Node".into()), (3, "bool".into())]);
+        let ctx = Ctx {
+            f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: Some("UCBT_RandomSelector"),
+            local_types: Some(&locals), float_slots: Default::default(),
+            param_off_map: HashMap::from([(-2, 0)]), rvo_off: None, keep_ints: None,
+            rvo_switch_region: std::cell::Cell::new(false),
+        };
+        block_stmts(&ctx, 0, fixture.instrs.len())
+    }
+
+    #[test]
+    fn terminal_null_test_precedes_the_independent_bool_field_store() {
+        for fault in 0..6 {
+            let mut a = TestAssembler::default();
+            a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]);
+            a.op("RDSPtr", &[], &[]);
+            a.op("RefCpyV", &[4], &[]);
+            a.op("CmpPtrNull", &[4], &[]);
+            a.op(if fault == 1 { "TNZ" } else { "TZ" }, &[], &[]);
+            a.op("SetV1", &[2], &[if fault == 2 { 2 } else { 0 }]);
+            a.op("LoadThisR", &[0], &[2]);
+            a.op("WRTV1", &[if fault == 3 { 3 } else { 2 }], &[]);
+            a.op(if fault == 4 { "CpyVtoR1" } else { "CpyVtoR4" }, &[1], &[]);
+            a.op("RET", &[2], &[]);
+            let fixture = a.finish();
+            let refs = RefResolver::from_test_member_chain(&[
+                ("UController", "CurrentCell"), ("UController", "Waiting")]);
+            let f = FuncCode { func: "UController::Activate".into(), is_method: true,
+                param_names: Vec::new(), param_types: Vec::new(),
+                ret: DataType { token: if fault == 5 { 0x44 } else { 0x41 }, ..Default::default() },
+                bytecode: Vec::new() };
+            let locals = HashMap::from([(1, "bool".into()), (2, "bool".into()),
+                (3, "bool".into()), (4, "UCell".into())]);
+            let fields = HashMap::from([("Waiting".into(), "bool".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: Some(&fields), param_types: None,
+                class_name: Some("UController"), local_types: Some(&locals),
+                float_slots: Default::default(), param_off_map: HashMap::new(), rvo_off: None,
+                keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            let (stmts, cmp) = block_stmts(&ctx, 0, fixture.instrs.len());
+            let ignored = stmts.iter().position(|s| s == "(local_4 == nullptr);");
+            if fault == 0 {
+                let captured = stmts.iter().position(|s| s == "local_4 = this.CurrentCell;").unwrap();
+                let stored = stmts.iter().position(|s| s.starts_with("this.Waiting = ")).unwrap();
+                assert!(captured < ignored.unwrap() && ignored.unwrap() < stored, "{stmts:?}");
+                assert_eq!(stmts.iter().filter(|s| *s == "(local_4 == nullptr);").count(), 1);
+                assert!(cmp.is_none());
+            } else {
+                assert!(ignored.is_none(), "fault={fault}: {stmts:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn ignored_null_equality_survives_before_the_pointer_only_script_call() {
+        let (stmts, cmp) = ignored_null_comparison_fixture("TZ", None, "CALL");
+        let member = stmts.iter().position(|s| s == "local_2 = this.CurrentNode;").unwrap();
+        let comparison = stmts.iter().position(|s| s == "(local_2 == nullptr);").unwrap();
+        let call = stmts.iter().position(|s| s.contains("func?(" )).unwrap();
+        assert!(member < comparison && comparison < call, "{stmts:?}");
+        assert_eq!(stmts.iter().filter(|s| *s == "(local_2 == nullptr);").count(), 1);
+        assert!(cmp.is_none(), "the discarded comparison must not become a later condition");
+    }
+
+    #[test]
+    fn used_or_nonadjacent_null_tests_are_not_emitted_as_ignored_expressions() {
+        let (copied, cmp) = ignored_null_comparison_fixture("TZ", Some("CpyRtoV4"), "CALL");
+        assert!(copied.iter().any(|s| s == "local_3 = (local_2 == nullptr);"), "{copied:?}");
+        assert!(!copied.iter().any(|s| s == "(local_2 == nullptr);"));
+        assert!(cmp.is_none());
+        for (test_op, between, call_op) in [
+            ("TZ", Some("JZ"), "CALL"),
+            ("TZ", Some("CpyVtoR4"), "CALL"),
+            ("TZ", Some("SUSPEND"), "CALL"),
+            ("TZ", Some("PshV4"), "CALL"),
+            ("TNZ", None, "CALL"),
+            ("TZ", None, "CALLINTF"),
+        ] {
+            let (stmts, _) = ignored_null_comparison_fixture(test_op, between, call_op);
+            assert!(!stmts.iter().any(|s| s == "(local_2 == nullptr);" || s == "(local_2 != nullptr);"),
+                "{test_op}/{between:?}/{call_op}: {stmts:?}");
+        }
+    }
+
+    #[test]
+    fn null_guard_parameter_copy_survives_only_its_closed_typed_call_argument_life() {
+        for fault in 0..8 {
+            let mut a = TestAssembler::default();
+            if fault == 6 { a.jump("JMP", "copied"); }
+            a.op("PshVPtr", &[if fault == 5 { (-4i16) as u16 } else { (-2i16) as u16 }], &[]);
+            a.label("copied"); a.op("RefCpyV", &[2], &[]);
+            a.op("CmpPtrNull", &[2], &[]); a.jump("JNZ", "use");
+            a.op("SetV1", &[3], &[0]); a.op("CpyVtoR4", &[3], &[]); a.jump("JMP", "ret");
+            a.label("use"); a.op("PshVPtr", &[if fault == 7 { 4 } else { 2 }], &[]);
+            a.op("CALL", &[], &[1]); a.op("CpyRtoV4", &[3], &[]);
+            if fault == 3 { a.op("ClrVPtr", &[2], &[]); }
+            a.op("CpyVtoR4", &[3], &[]); a.label("ret"); a.op("RET", &[4], &[]);
+            let fixture = a.finish();
+            let parameter = DataType { token: 5, type_info: 3, is_object_handle: true,
+                is_object_const: fault == 1, ..Default::default() };
+            let argument = DataType { token: 5, type_info: if fault == 4 { 2 } else { 3 },
+                is_object_handle: true, is_object_const: true, ..Default::default() };
+            let refs = RefResolver::from_test_guarded_handle_parameter_read(argument);
+            let f = FuncCode { func: "UOwner::Check".into(), is_method: true,
+                param_names: vec!["Actor".into()], param_types: vec![parameter],
+                ret: DataType { token: 0x41, ..Default::default() }, bytecode: Vec::new() };
+            let locals = HashMap::from([(2, if fault == 2 { "UOther" } else { "UNode" }.into()),
+                (3, "bool".into())]);
+            let parameter_types = vec!["UNode".to_owned()];
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: Some(&parameter_types), class_name: Some("UOwner"),
+                local_types: Some(&locals), float_slots: Default::default(),
+                param_off_map: HashMap::from([(-2, 0)]), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            let copy = usize::from(fault == 6) + 1;
+            let source = Arg { s: "Actor".into(), ty: Some("UNode".into()), ..Default::default() };
+            assert_eq!(guarded_parameter_handle_copy(&ctx, copy, &source), fault == 0, "{fault}");
+            let (statements, comparison) = block_stmts(&ctx, copy - 1, copy + 2);
+            if fault == 0 {
+                assert_eq!(statements, ["local_2 = Actor;"]);
+                assert_eq!(comparison.unwrap().a, "local_2");
+                let (later, _) = block_stmts(&ctx, copy + 6, fixture.instrs.len());
+                assert!(later.iter().any(|s| s.contains("IsValid(local_2)")), "{later:?}");
+            } else if fault != 5 {
+                assert!(statements.is_empty(), "{fault}: {statements:?}");
+                assert_eq!(comparison.unwrap().a, "Actor");
+            }
+        }
+    }
+
+    fn const_parameter_field_store_fixture(
+        refs: &RefResolver, param: DataType, owner: u32, receiver: u16,
+        between: Option<&'static str>, parameter_slot: i32,
+    ) -> String {
+        let mut a = TestAssembler::default();
+        // Exact pr69 store, shared by FWarningCharacterHandle and the four
+        // voice-reaction constructor signatures (after their default field setup).
+        a.op("PshVPtr", &[parameter_slot as i16 as u16], &[]);
+        a.op("PshVPtr", &[receiver], &[]);
+        a.op("ADDSi", &[0], &[owner]);
+        if let Some(op) = between { a.op(op, &[], &[]); }
+        a.op("REFCPY", &[], &[]);
+        a.op("PopPtr", &[], &[]);
+        a.op("RET", &[4], &[]);
+        let fixture = a.finish();
+        let f = FuncCode {
+            func: "FHolder::FHolder".into(), is_method: true,
+            param_names: vec!["Response".into()], param_types: vec![param],
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new(),
+        };
+        let ctx = Ctx {
+            f: &f, refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: Some("FHolder"), local_types: None,
+            float_slots: Default::default(), param_off_map: HashMap::from([(-2, 0)]),
+            rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false),
+        };
+        block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+    }
+
+    #[test]
+    fn direct_const_parameter_store_requires_the_exact_const_field_type() {
+        let refs = RefResolver::from_test_const_object_fields();
+        let param = DataType { token: 5, type_info: 4,
+            is_object_const: true, is_object_handle: true, ..Default::default() };
+        assert_eq!(const_parameter_field_store_fixture(&refs, param.clone(), 1, 0, None, -2),
+            "this.Value = Response;\nreturn;");
+        for field in 0..6 {
+            let mut other = param.clone();
+            match field {
+                0 => other.type_info = 5, // same bare type name, different identity
+                1 => other.is_reference = true,
+                2 => other.is_read_only = true,
+                3 => other.is_object_handle = false,
+                4 => other.is_auto = true,
+                _ => other.if_handle_then_const = true,
+            }
+            assert!(!const_parameter_field_store_fixture(&refs, other, 1, 0, None, -2)
+                .contains(" = Response;"));
+        }
+        for (owner, receiver, between) in [(2, 0, None), (3, 0, None),
+            (1, 8, None), (1, 0, Some("SUSPEND"))]
+        {
+            assert!(!const_parameter_field_store_fixture(&refs, param.clone(), owner, receiver, between, -2)
+                .contains(" = Response;"));
+        }
+        // An unrelated negative offset is not a declared parameter.
+        assert!(!const_parameter_field_store_fixture(&refs, param, 1, 0, None, -4)
+            .contains("this.Value ="));
+    }
+
+
+    #[test]
+    fn dereferenced_const_handle_parameter_requires_matching_field_identity() {
+        let param = DataType { token: 5, type_info: 4, is_reference: true,
+            is_object_const: true, is_object_handle: true, ..Default::default() };
+        let render = |input: DataType, owner: u32, dereference: bool| {
+            let refs = RefResolver::from_test_const_object_fields();
+            let mut a = TestAssembler::default();
+            a.op("PshVPtr", &[(-2i16) as u16], &[]);
+            if dereference { a.op("RDSPtr", &[], &[]); }
+            a.op("PshVPtr", &[0], &[]); a.op("ADDSi", &[0], &[owner]);
+            a.op("REFCPY", &[], &[]); a.op("PopPtr", &[], &[]); a.op("RET", &[4], &[]);
+            let fixture = a.finish();
+            let f = FuncCode { func: "FHolder::FHolder".into(), is_method: true,
+                param_names: vec!["Input".into()], param_types: vec![input],
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: Some("FHolder"),
+                local_types: None, float_slots: Default::default(), param_off_map: HashMap::from([(-2, 0)]),
+                rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+        };
+        assert_eq!(render(param.clone(), 1, true), "this.Value = Input;\nreturn;");
+        assert!(!render(param.clone(), 1, false).contains(" = Input;"));
+        for owner in [2, 3, 99] { assert!(!render(param.clone(), owner, true).contains(" = Input;")); }
+        for bad in [DataType { type_info: 5, ..param.clone() },
+            DataType { is_reference: false, ..param.clone() },
+            DataType { is_object_handle: false, ..param.clone() },
+            DataType { is_read_only: true, ..param.clone() }]
+        { assert!(!render(bad, 1, true).contains(" = Input;")); }
+    }
+
+    #[test]
+    fn copied_map_handle_survives_before_a_native_reference_argument() {
+        let render = |ret: DataType, param: DataType, extra_use: bool, getter: u64| {
+            let refs = RefResolver::from_test_handle_getter_argument(ret, param);
+            let mut a = TestAssembler::default();
+            a.op("PSF", &[(-2i16) as u16], &[]); a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]); a.op("CALLSYS", &[], &[]);
+            a.op("PshRPtr", &[], &[]); a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[8], &[]);
+            if extra_use { a.op("CpyRtoV8", &[8], &[]); }
+            a.op("PSF", &[(-2i16) as u16], &[]); a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]); a.op("CALLSYS", &[], &[]);
+            a.op("PSF", &[8], &[]); a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]); a.op("CALLSYS", &[], &[]); a.op("RET", &[4], &[]);
+            let mut fixture = a.finish();
+            let mut calls = 0;
+            for ins in &mut fixture.instrs {
+                if ins.op.name == "CALLSYS" {
+                    ins.qwords = vec![match calls { 0 => getter, 1 => 2, _ => 3 }]; calls += 1;
+                }
+            }
+            let f = FuncCode { func: "UHolder::Finished".into(), is_method: true,
+                param_names: vec!["Key".into()], param_types: vec![DataType { token: 5,
+                    type_info: 101, is_object_handle: true, ..Default::default() }],
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let locals = HashMap::from([(8, "UNode".into())]);
+            let fields = HashMap::from([("Nodes".into(), "TMap<UNode,UNode>".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: Some(&fields), param_types: None, class_name: Some("UHolder"),
+                local_types: Some(&locals), float_slots: Default::default(),
+                param_off_map: HashMap::from([(-2, 0)]), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+        };
+        let ret = DataType { token: 5, type_info: 101, is_reference: true,
+            is_object_handle: true, ..Default::default() };
+        let param = DataType { is_object_const: true, is_read_only: true, ..ret.clone() };
+        let source = render(ret.clone(), param.clone(), false, 1);
+        let copy = source.find("local_8 = this.Nodes.opIndex(Key);").expect(&source);
+        let remove = source.find("this.Nodes.Remove(Key);").expect(&source);
+        let consume = source.find("this.Nodes.Contains(local_8)").expect(&source);
+        assert!(copy < remove && remove < consume, "{source}");
+        for bad in [DataType { is_object_const: true, ..ret.clone() },
+            DataType { is_reference: false, ..ret.clone() }, DataType { is_object_handle: false, ..ret.clone() }]
+        { assert!(!render(bad, param.clone(), false, 1).contains("local_8 = this.Nodes.opIndex")); }
+        for bad in [DataType { type_info: 102, ..param.clone() },
+            DataType { is_reference: false, ..param.clone() }, DataType { is_read_only: false, ..param.clone() }]
+        { assert!(!render(ret.clone(), bad, false, 1).contains("local_8 = this.Nodes.opIndex")); }
+        assert!(!render(ret.clone(), param.clone(), true, 1).contains("local_8 = this.Nodes.opIndex"));
+        assert!(!render(ret, param, false, 99).contains("local_8 = this.Nodes.opIndex"));
+    }
+
+    #[test]
+    fn enum_map_results_initialize_the_handle_before_member_array_reads() {
+        for array_reference in [false, true] {
+            let mut a = TestAssembler::default();
+            a.op("SetV1", &[2], &[1]); a.op("PSF", &[2], &[]); a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]); a.op("RDSPtr", &[], &[]); a.op("ADDSi", &[0], &[2]);
+            a.op("CALLSYS", &[], &[]); a.op("PshRPtr", &[], &[]); a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[4], &[]);
+            if array_reference {
+                a.op("SetV4", &[6], &[0]); a.op("LoadRObjR", &[4, 0], &[3]); a.op("CpyRtoV8", &[8], &[]);
+            } else {
+                a.op("PSF", &[12], &[]); a.op("PshVPtr", &[4], &[]); a.op("ADDSi", &[0], &[3]); a.op("CALLSYS", &[], &[]);
+            }
+            a.op("RET", &[0], &[]); let mut fixture = a.finish(); fixture.instrs[6].qwords = vec![10];
+            if !array_reference { fixture.instrs[13].qwords = vec![11]; }
+            for fault in 0..=9 {
+                let refs = RefResolver::from_test_enum_map_handle_capture(fault);
+                let f = FuncCode { func: "Fixture::Read".into(), is_method: true, param_names: vec![], param_types: vec![],
+                    ret: DataType { token: 0x52, ..Default::default() }, bytecode: vec![] };
+                let locals = HashMap::from([(4, "UHolder".into()), (8, "TArray<FItem>".into())]);
+                let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret), fields: None,
+                    param_types: None, class_name: Some("UOwner"), local_types: Some(&locals), float_slots: Default::default(),
+                    param_off_map: HashMap::new(), rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+                let src = Arg { s: "this.Router.Containers.opIndex(ECategory(local_2))".into(), ty: Some("UHolder".into()), ..Default::default() };
+                assert_eq!(is_typed_enum_map_handle_copy(&ctx, &fixture.instrs, 9, &src), fault == 0, "reference={array_reference} fault={fault}");
+            }
+            if !array_reference {
+                let text = render_fixture_range_with_return_class(&fixture, None, &RefResolver::from_test_enum_map_handle_capture(0), "UHolder", None, 0x52, Some("UOwner"));
+                assert!(text.contains("local_4 = this.Router.Containers.opIndex(ECategory(local_2));"), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn map_value_member_copy_requires_a_typed_mutable_index_result() {
+        for fault in 0..7 {
+            let refs = RefResolver::from_test_typed_getter_copies(
+                if fault == 1 { "UOther" } else { "UNode" }, fault == 2, fault == 3);
+            let mut a = TestAssembler::default();
+            a.op("CALLSYS", &[], &[]); a.op("PshRPtr", &[], &[]);
+            a.op("ADDSi", &[0], &[if fault == 4 { 1 } else { 2 }]);
+            a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[8], &[]);
+            a.op("RET", &[0], &[]);
+            let mut fixture = a.finish(); fixture.instrs[0].qwords = vec![if fault == 5 { 2 } else { 7 }];
+            if fault == 6 {
+                let target = fixture.instrs[2].offset_dw;
+                let jump = &mut fixture.instrs[5];
+                jump.op = crate::cache::isa::OPCODES.iter().find(|op| op.name == "JMP").unwrap();
+                jump.dwords = vec![(target as i32 - jump.offset_dw as i32 - 2) as u32];
+            }
+            let f = FuncCode { func: "Fixture::Read".into(), is_method: false,
+                param_names: vec![], param_types: vec![], ret: DataType { token: 0x52,
+                    ..Default::default() }, bytecode: vec![] };
+            let locals = HashMap::from([(8, "UNode".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(),
+                param_off_map: HashMap::new(), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            let src = Arg { s: "this.Nodes.opIndex(Key).CharacterState".into(),
+                ty: Some("UNode".into()), ..Default::default() };
+            assert_eq!(is_typed_array_getter_handle_copy(&ctx, &fixture.instrs, 4, &src), fault == 0,
+                "fault={fault}");
+        }
+    }
+
+    fn render_typed_getter_copy_fixture(field: bool, fault: u8) -> String {
+        let refs = RefResolver::from_test_typed_getter_copies(
+            if fault == 1 { "UOther" } else { "UNode" }, fault == 2, fault == 7);
+        let mut a = TestAssembler::default();
+        // An earlier assignment to the same physical slot must not receive this witness.
+        a.op("PshVPtr", &[(-4i16) as u16], &[]); a.op("RefCpyV", &[8], &[]);
+        if field { a.op("PshC4", &[], &[0]); }
+        a.op("PshC4", &[], &[0]); a.op("PshVPtr", &[(-2i16) as u16], &[]);
+        a.op("Thiscall1", &[], &[]); a.op("PshRPtr", &[], &[]);
+        if field {
+            a.op("ADDSi", &[0], &[1]); a.op("Thiscall1", &[], &[]);
+            a.op("PshRPtr", &[], &[]); a.op("ADDSi", &[0], &[if fault == 3 { 1 } else { 2 }]);
+        }
+        a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[8], &[]);
+        if field {
+            a.op("PshVPtr", &[8], &[]); a.op("CALLSYS", &[], &[]);
+            a.op("CpyRtoV4", &[9], &[]);
+        } else {
+            a.op("SetV1", &[if fault == 3 { 8 } else { 9 }], &[0]);
+            a.op("PshV4", &[9], &[]); a.op("PshC4", &[], &[if fault == 6 { 99 } else { 0 }]);
+            a.op("CALLSYS", &[], &[]); a.op("PshRPtr", &[], &[]);
+            a.op("CmpPtrNull", &[8], &[]);
+        }
+        a.op("RET", &[6], &[]);
+        let mut fixture = a.finish();
+        let mut getter = 0;
+        for ins in &mut fixture.instrs {
+            if ins.op.name == "Thiscall1" { getter += 1;
+                ins.qwords = vec![if field { getter } else { 3 }]; }
+            if ins.op.name == "CALLSYS" { ins.qwords = vec![if fault == 4 { 99 }
+                else if field { 4 } else { 5 }]; }
+        }
+        if fault == 5 {
+            let target = fixture.instrs.iter().rfind(|ins| ins.op.name == "RefCpyV").unwrap().offset_dw;
+            let mut jump = fixture.instrs[0].clone();
+            jump.op = crate::cache::isa::OPCODES.iter().find(|op| op.name == "JMP").unwrap();
+            jump.dwords = vec![(target as i32 - jump.offset_dw as i32 - 2) as u32];
+            fixture.instrs[0] = jump;
+        }
+        let f = FuncCode { func: "Fixture::Read".into(), is_method: false,
+            param_names: vec!["Groups".into(), "Earlier".into()],
+            param_types: vec![DataType { token: 5, type_info: 4, is_reference: true,
+                ..Default::default() }, DataType { token: 5, type_info: 3,
+                is_object_handle: true, ..Default::default() }],
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+        let locals = HashMap::from([(8, "UNode".into()), (9, "bool".into())]);
+        let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+            ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+            local_types: Some(&locals), float_slots: Default::default(),
+            param_off_map: HashMap::from([(-2, 0), (-4, 1)]), rvo_off: None, keep_ints: None,
+            rvo_switch_region: std::cell::Cell::new(false) };
+        block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+    }
+
+    #[test]
+    fn terminal_field_of_indexed_value_keeps_its_handle_copy() {
+        let source = render_typed_getter_copy_fixture(true, 0);
+        let copy = "local_8 = Groups.opIndex(0).MemberHandles.opIndex(0).CharacterState;";
+        assert!(source.contains(copy), "{source}");
+        assert!(source.find(copy) < source.find("IsValid(local_8)"), "{source}");
+        for fault in [1, 2, 3, 5, 7] {
+            assert!(!render_typed_getter_copy_fixture(true, fault).contains(copy), "fault={fault}");
+        }
+    }
+
+    #[test]
+    fn last_handle_copy_precedes_literal_preparation_and_null_guard() {
+        let source = render_typed_getter_copy_fixture(false, 0);
+        let copy = "local_8 = Groups.Last(0);";
+        assert!(source.contains(copy), "{source}");
+        assert!(source.find(copy) < source.find("local_9 = false;"), "{source}");
+        assert_eq!(source.matches(copy).count(), 1, "{source}");
+        for fault in [2, 3, 4, 5, 6] {
+            assert!(!render_typed_getter_copy_fixture(false, fault).contains(copy), "fault={fault}");
+        }
+    }
+
+    #[test]
+    fn indexed_handle_copy_precedes_its_typed_member_read() {
+        for fault in 0..7 {
+            let refs = RefResolver::from_test_typed_getter_copies("UNode", fault == 1, fault == 5);
+            let mut a = TestAssembler::default();
+            a.op("PshC4", &[], &[0]); a.op("PshVPtr", &[(-2i16) as u16], &[]);
+            a.op("Thiscall1", &[], &[]); a.op("PshRPtr", &[], &[]);
+            a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[8], &[]);
+            a.op("PshVPtr", &[if fault == 2 { 10 } else { 8 }], &[]);
+            a.op("ADDSi", &[0], &[if fault == 3 { 2 } else { 3 }]);
+            a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[10], &[]);
+            a.op("CmpPtrNull", &[10], &[]); a.op("RET", &[2], &[]);
+            let mut fixture = a.finish();
+            fixture.instrs[2].qwords = vec![if fault == 4 { 3 } else { 6 }];
+            if fault == 6 {
+                let target = fixture.instrs[7].offset_dw;
+                let jump = &mut fixture.instrs[0];
+                jump.op = crate::cache::isa::OPCODES.iter().find(|op| op.name == "JMP").unwrap();
+                jump.dwords = vec![(target as i32 - jump.offset_dw as i32 - 2) as u32];
+            }
+            let f = FuncCode { func: "Fixture::Read".into(), is_method: false,
+                param_names: vec!["Nodes".into()], param_types: vec![DataType {
+                    token: 5, type_info: 4, is_reference: true, ..Default::default() }],
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let locals = HashMap::from([(8, "UNode".into()), (10, "UNode".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(),
+                param_off_map: HashMap::from([(-2, 0)]), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            let source = block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n");
+            let copy = "local_8 = Nodes.opIndex(0);";
+            assert_eq!(source.contains(copy), fault == 0, "fault={fault}: {source}");
+            if fault == 0 {
+                assert!(source.find(copy) < source.find("local_10 = local_8.Target;"), "{source}");
+            }
+        }
+    }
+
+    fn nested_const_iterator_fixture(mode: u8, shift: u16) -> CompoundFixture {
+        let mut a=TestAssembler::default(); let slot=|s|s+shift;
+        a.label("outer_entry");a.op("SetV4",&[slot(1)],&[0]);a.jump("JMP","outer_test");
+        a.label("outer_body");a.op("SUSPEND",&[],&[]);
+        a.op("PSF",&[slot(8)],&[]);a.op("PshVPtr",&[0],&[]);a.op("CALLSYS",&[],&[10,0]);
+        a.jump("JMP",if mode==3 {"after_inner"} else {"inner_test"});
+        a.label("inner_body");a.op("SUSPEND",&[],&[]);a.op("PSF",&[slot(8)],&[]);
+        a.op("CALLSYS",&[],&[11,0]);a.op("CpyRtoV8",&[slot(16)],&[]);
+        if let Some(target)=match mode {1=>Some("inner_test"),2=>Some("after_inner"),6=>Some("outer_test"),7=>Some("done"),_=>None} {
+            a.op("CALLSYS",&[],&[15,0]);a.jump("JLowNZ",target);
+        }
+        a.op("PSF",&[slot(1)],&[]);a.op("PshVPtr",&[slot(16)],&[]);a.op("CALLSYS",&[],&[12,0]);
+        a.label("inner_test");a.op("LoadVObjR",&[slot(8),16],&[2]);
+        a.op("RDR1",&[slot(12)],&[]);a.op("CpyVtoR1",&[slot(12)],&[]);
+        a.jump("JLowNZ",if mode==4 {"outer_body"} else {"inner_body"});
+        a.label("after_inner");a.op("PshV4",&[slot(1)],&[]);a.op("CALLSYS",&[],&[13,0]);a.op("IncVi",&[slot(1)],&[]);
+        a.label("outer_test");a.op("PshVPtr",&[0],&[]);a.op("CALLSYS",&[],&[14,0]);
+        a.op("CpyRtoV4",&[slot(2)],&[]);a.op("CMPi",&[slot(1),slot(2)],&[]);a.jump("JS","outer_body");
+        a.label("done");if mode==5 {a.jump("JMP","inner_body");}
+        // Keep this outer exit distinct from a bare return, which is also a legal inner return.
+        a.op("SetV4",&[slot(2)],&[0]);a.op("RET",&[2],&[]);
+        let mut fixture=a.finish();
+        for i in &mut fixture.instrs {if i.op.name=="CALLSYS" {i.qwords=vec![i.dwords[0] as u64];}}
+        fixture
+    }
+
+    #[test]
+    fn counted_loop_recurses_into_nested_const_iterator_without_a_forward_branch() {
+        let check=|mode:u8,wrong_field:bool,shift:u16,render:bool| {
+            let fixture=nested_const_iterator_fixture(mode,shift);
+            let refs=RefResolver::from_test_nested_const_iterator(wrong_field);
+            let f=FuncCode {func:"Fixture::Visit".into(),is_method:false,param_names:vec!["Items".into()],
+                param_types:vec![DataType {token:5,type_info:1,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()}],
+                ret:DataType {token:0x52,..Default::default()},bytecode:Vec::new()};
+            let slot=|s|s+shift as i32;
+            let locals=HashMap::from([(slot(1),"int".into()),(slot(2),"int".into()),
+                (slot(8),"TArrayConstIterator".into()),(slot(12),"bool".into()),(slot(16),"FGameplayTag".into())]);
+            let parameter_types=vec!["TArray<FGameplayTag>".to_owned()];
+            let ctx=Ctx {f:&f,refs:&refs,instrs:&fixture.instrs,super_ctor:None,ret_ty:Some(&f.ret),
+                fields:None,param_types:Some(&parameter_types),class_name:None,local_types:Some(&locals),
+                float_slots:std::collections::HashSet::new(),param_off_map:HashMap::from([(0,0)]),rvo_off:None,keep_ints:None,
+                rvo_switch_region:std::cell::Cell::new(false)};
+            let g=cfg::build(&fixture.instrs);let idx_of:HashMap<_,_>=g.blocks.iter().enumerate().map(|(i,b)|(b.start_dw,i)).collect();
+            let mut st=Structurer {ctx:&ctx,g:&g,idx_of:&idx_of,exit_join:None,exit_join_is_ret:false,exit_ret_rows_ok:false,
+                exit_rvo_return:false,exit_mixed_rvo_ret_rows_ok:false,exit_scan_floor:0,carry:None,loop_scope:None,
+                pending_loop_exit:None,shared_return:None};
+            let entry=idx_of[&fixture.labels["outer_entry"]];let lo=idx_of[&fixture.labels["outer_body"]];
+            let hi=idx_of[&fixture.labels["outer_test"]];let inner_test=idx_of.get(&fixture.labels["inner_test"]).copied();
+            let ls=LoopScope {continue_off:fixture.labels["outer_test"],break_off:fixture.labels["done"],continue_only:false,latch_block:None};
+            st.loop_scope=Some(ls);
+            let forward=st.body_has_inner_branch(lo,hi,ls);
+            let iterator=st.test_first_foreach(lo,hi).is_some();
+            let truncated=inner_test.is_some_and(|test|st.test_first_foreach(lo,test).is_some());
+            let recoverable=st.loop_body_recoverable(lo,hi,ls);
+            let outer=st.for_loop(entry,g.blocks.len()).is_some();
+            st.loop_scope=None;let mut body=String::new();
+            if render {st.emit_range(0,g.blocks.len(),0,&mut body);}
+            (forward,iterator,truncated,recoverable,outer,body)
+        };
+        for shift in [0,200] {
+            let (forward,iterator,truncated,recoverable,outer,body)=check(0,false,shift,true);
+            assert!(!forward && iterator && !truncated && recoverable && outer,"{body}");
+            assert_eq!(body.matches("for (").count(),2,"{body}");
+            assert!(body.contains(&format!("for (; local_{}.CanProceed;)",8+shift)),"{body}");
+            assert_eq!(body.matches("Record(").count(),1,"{body}");
+            assert_eq!(body.matches("After(").count(),1,"{body}");
+            // Record remains two scopes deep; After and the increment are outside the inner loop.
+            assert!(body.lines().any(|l|l.starts_with("        Record(")),"{body}");
+            assert!(body.lines().any(|l|l.starts_with("    After(")),"{body}");
+            assert!(body.find("Record(").unwrap()<body.find("After(").unwrap(),"{body}");
+        }
+        for mode in [1,2] {
+            let (_,iterator,_,recoverable,outer,body)=check(mode,false,0,true);
+            assert!(iterator && recoverable && outer,"{body}");
+            assert_eq!(body.matches("for (").count(),2,"{body}");
+            if mode == 1 {
+                // Skipping the rest of the inner iteration can be emitted as an inverted guard.
+                assert!(body.contains("        if (!(Skip()))\n        {\n            Record(local_16, local_1);\n        }"),"{body}");
+                assert!(body.contains("    After(local_1);\n    ++local_1;"),"{body}");
+            } else {
+                assert!(body.lines().any(|l|l.starts_with("            ") && l.trim()=="break;"),"{body}");
+            }
+        }
+        for mode in [3,4,6,7] {
+            let (_,iterator,_,_,_,_)=check(mode,false,0,false);
+            assert!(!iterator,"invalid nested entry/backedge/continue/break mode={mode}");
+        }
+        assert!(!check(5,false,0,false).4,"outside edge enters outer body");
+        assert!(!check(0,true,0,false).1,"other field is not an iterator termination test");
+    }
+
+    fn guard_field_selection_fixture(fault: u8) -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        if fault == 7 { a.jump("JZ", "join_a"); }
+        for (fallback, join, offset) in [("fallback_a", "join_a", 0),
+            ("fallback_b", "join_b", 8), ("fallback_c", "join_c", 16)]
+        {
+            a.op("PshVPtr", &[if fault == 10 { 4 } else { 2 }], &[]);
+            a.op("CALLSYS", &[], &[10, 0]);
+            a.jump("JLowZ", fallback);
+            a.op("LoadRObjR", &[2, offset], &[1]);
+            a.jump("JMP", join);
+            a.label(fallback); a.op("LoadThisR", &[offset], &[2]);
+            a.label(join); a.op("RDR8", &[28], &[]);
+            a.op("LoadThisR", &[offset + 24], &[2]);
+            a.op("WRTV8", &[if fault == 11 { 30 } else { 28 }], &[]);
+        }
+        if fault == 8 { a.op("PSF", &[28], &[]); a.op("PopPtr", &[], &[]); }
+        if fault == 9 { a.op("CpyVtoV8", &[30, 28], &[]); }
+        if fault == 12 { a.op("LDV", &[28], &[]); }
+        a.op("RET", &[2], &[]);
+        let mut fixture = a.finish();
+        for ins in &mut fixture.instrs { if ins.op.name == "CALLSYS" { ins.qwords = vec![10]; } }
+        fixture
+    }
+
+    fn check_guard_field_selection(fault: u8, render: bool) -> (Vec<bool>, String) {
+        let fixture = guard_field_selection_fixture(fault);
+        let refs = RefResolver::from_test_guard_field_selection(fault);
+        let f = FuncCode { func: "Fixture::Select".into(), is_method: true,
+            param_names: Vec::new(), param_types: Vec::new(),
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+        let fields = refs.class_field_types("UState").unwrap();
+        let locals = HashMap::from([(2, "UConfig".into()), (4, "UConfig".into())]);
+        let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+            ret_ty: Some(&f.ret), fields: Some(fields), param_types: None, class_name: Some("UState"),
+            local_types: Some(&locals), float_slots: [28, 30].into_iter().collect(),
+            param_off_map: HashMap::new(), rvo_off: None, keep_ints: None,
+            rvo_switch_region: std::cell::Cell::new(false) };
+        let recognized = fixture.instrs.iter().enumerate().filter(|(_, i)| i.op.name == "RDR8")
+            .map(|(at, _)| local_lvalue_selection(&ctx, at).is_some()).collect();
+        let mut out = String::new();
+        if render {
+            let g = cfg::build(&fixture.instrs);
+            let idx_of = g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
+            let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of,
+                exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false,
+                exit_rvo_return: false, exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0,
+                carry: None, loop_scope: None, pending_loop_exit: None, shared_return: None };
+            st.emit_range(0, g.blocks.len(), 0, &mut out);
+        }
+        (recognized, out)
+    }
+
+    #[test]
+    fn guarded_member_selections_restore_three_field_stores_with_one_reused_scalar() {
+        let (recognized, body) = check_guard_field_selection(0, true);
+        assert_eq!(recognized, vec![true; 3]);
+        for suffix in ["A", "B", "C"] {
+            let statement = format!("this.Resolved{suffix} = (AcceptConfig(local_2) ? local_2.{suffix} : this.Fallback{suffix});");
+            assert_eq!(body.matches(&statement).count(), 1, "{body}");
+        }
+        assert_eq!(body.matches("AcceptConfig(").count(), 3, "{body}");
+        assert!(!body.contains("if (") && !body.contains("local_28"), "{body}");
+    }
+
+    #[test]
+    fn guarded_member_selection_rejects_wrong_types_namespace_entries_and_scalar_escapes() {
+        // Native/script types, full OldTypeId identity, native signature/namespace,
+        // extra predecessor, PSF/LDV address escapes, later reads, and mismatched slots.
+        for fault in 1..=12 {
+            let (recognized, _) = check_guard_field_selection(fault, false);
+            assert!(!recognized[0], "fault={fault}: {recognized:?}");
+        }
+    }
+
+    fn render_lvalue_selection(handle: bool, extra_entry: bool, wrong_type: bool, jump: &'static str, test_type: Option<&str>, null_locals: bool) -> String {
+        let mut a = TestAssembler::default();
+        if extra_entry { a.jump("JZ", "join"); }
+        if null_locals {
+            a.op("PshVPtr", &[9], &[]); a.op("RefCpyV", &[8], &[]);
+            a.op("CmpPtrNull", &[7], &[]);
+        } else { a.op("CMPIi", &[7], &[u32::MAX]); }
+        a.jump(jump, "else");
+        let op = if handle { "PSF" } else { "LDV" };
+        a.op(op, &[if null_locals { 8 } else if handle { (-2i16) as u16 } else { 7 }], &[]);
+        a.jump("JMP", "join");
+        a.label("else");
+        a.op(op, &[if null_locals { 7 } else if handle { (-4i16) as u16 } else { 8 }], &[]);
+        a.label("join");
+        if handle {
+            a.op("RDSPtr", &[], &[]); a.op("RefCpyV", &[if null_locals { 7 } else { 22 }], &[]);
+        } else {
+            a.op("RDR4", &[19], &[]); a.op("CpyVtoV4", &[11, 19], &[]);
+        }
+        if null_locals { a.op("FreeNullV8", &[8], &[]); }
+        a.op("RET", &[0], &[]);
+        let fixture = a.finish();
+        let refs = RefResolver::from_test_collision_names(&["AActor", "APawn"]);
+        let f = FuncCode {
+            func: "Synthetic::Select".into(), is_method: true,
+            param_names: vec!["Left".into(), "Right".into()],
+            param_types: vec![1, if wrong_type { 2 } else { 1 }].into_iter().map(|type_info|
+                DataType { token: 5, type_info, is_object_handle: true, ..Default::default() }).collect(),
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new(),
+        };
+        let mut locals = HashMap::from([(22, "AActor".into())]);
+        if null_locals {
+            locals.extend([(7, "AActor".into()), (8, if wrong_type { "APawn" } else { "AActor" }.into()), (9, "AActor".into())]);
+        }
+        if let Some(ty) = test_type { locals.insert(7, ty.into()); }
+        let ctx = Ctx {
+            f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: None, local_types: Some(&locals),
+            float_slots: if wrong_type && !handle { [8].into_iter().collect() } else { Default::default() },
+            param_off_map: HashMap::from([(-2, 0), (-4, 1)]), rvo_off: None, keep_ints: None,
+            rvo_switch_region: std::cell::Cell::new(false),
+        };
+        let g = cfg::build(&fixture.instrs);
+        let idx_of = g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
+        let mut st = Structurer {
+            ctx: &ctx, g: &g, idx_of: &idx_of,
+            exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false,
+            exit_rvo_return: false, exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0,
+            carry: None, loop_scope: None, pending_loop_exit: None, shared_return: None,
+        };
+        let mut out = String::new();
+        st.emit_range(0, g.blocks.len(), 0, &mut out);
+        out
+    }
+
+    #[test]
+    fn local_lvalue_diamonds_recover_integer_and_handle_selections() {
+        for (handle, statement) in [(false, "local_11 = (local_7 != -1 ? local_7 : local_8);"),
+            (true, "local_22 = (local_7 != -1 ? Left : Right);")]
+        {
+            let body = render_lvalue_selection(handle, false, false, "JZ", None, false);
+            assert!(body.contains(statement), "{body}");
+            assert!(!body.contains("if (") && !body.contains("// LDV"), "{body}");
+            assert!(render_lvalue_selection(handle, false, false, "JNZ", None, false).contains("local_7 == -1 ?"));
+        }
+    }
+
+    #[test]
+    fn local_lvalue_diamonds_reject_other_predecessors_types_and_branch_tests() {
+        for handle in [false, true] {
+            for (extra_entry, wrong_type, jump) in [(true, false, "JZ"), (false, true, "JZ"), (false, false, "JLowZ")] {
+                let body = render_lvalue_selection(handle, extra_entry, wrong_type, jump, None, false);
+                assert!(!body.contains(" ? "), "{body}");
+            }
+        }
+    }
+
+    #[test]
+    fn handle_lvalue_selection_rejects_noninteger_test_independently_of_handle_types() {
+        // Both handle parameters and the destination still have the same type;
+        // only the CMPIi test's known type changes.
+        for ty in ["bool", "EState", "float32", "AActor", "uint"] {
+            let body = render_lvalue_selection(true, false, false, "JZ", Some(ty), false);
+            assert!(!body.contains(" ? "), "{ty}: {body}");
+        }
+        assert!(render_lvalue_selection(true, false, false, "JZ", Some("int"), false)
+            .contains("local_22 = (local_7 != -1 ? Left : Right);"));
+    }
+
+    #[test]
+    fn local_handle_null_selection_keeps_the_initial_copy_and_release() {
+        let body = render_lvalue_selection(true, false, false, "JNZ", None, true);
+        assert!(body.contains("local_8 = local_9;"), "{body}");
+        assert!(body.contains("local_7 = (local_7 == nullptr ? local_8 : local_7);"), "{body}");
+        assert!(body.contains("local_8 = nullptr;"), "{body}");
+        assert!(!body.contains("if ("), "{body}");
+        for (entry, wrong, jump, ty) in [(true, false, "JNZ", None),
+            (false, true, "JNZ", None), (false, false, "JLowZ", None),
+            (false, false, "JNZ", Some("const AActor")), (false, false, "JNZ", Some("AActor&"))] {
+            let other = render_lvalue_selection(true, entry, wrong, jump, ty, true);
+            assert!(!other.contains(" ? "), "{other}");
+        }
+    }
+
+    #[test]
+    fn native_mutators_keep_populated_default_values_for_later_arguments() {
+        let make=|fault:u8,shift:u16| {
+            let mut a=TestAssembler::default();
+            if fault==3 {a.op("PSF",&[14+shift],&[]);a.op("PSF",&[8+shift],&[]);a.op("CALLSYS",&[],&[20,0]);}
+            for slot in [20,8,14] {a.op("PSF",&[slot+shift],&[]);a.op("CALLSYS",&[],&[10,0]);}
+            if fault==1 {a.op("PSF",&[8+shift],&[]);a.op("CALLSYS",&[],&[10,0]);}
+            if fault!=3 {
+                a.op("PSF",&[14+shift],&[]);
+                a.op(if fault==2 {"PshVPtr"}else{"PSF"},&[8+shift],&[]);
+                a.op("CALLSYS",&[],&[20,0]);
+            }
+            a.op("PSF",&[8+shift],&[]);a.op("PSF",&[20+shift],&[]);a.op("CALLSYS",&[],&[21,0]);
+            a.op("CpyRtoV8",&[22+shift],&[]);a.op("RET",&[0],&[]);
+            let mut f=a.finish();for i in &mut f.instrs {if i.op.name=="CALLSYS" {i.qwords=vec![i.dwords[0] as u64];}}f
+        };
+        let refs=RefResolver::from_test_native_mutated_defaults(0);
+        for shift in [0,100] {
+            let f=make(0,shift);
+            let kept=retained_default_constructions(&f.instrs,&refs);
+            assert!(kept.contains(&(8+shift as i32)));
+            assert!(!kept.contains(&(14+shift as i32)) && !kept.contains(&(20+shift as i32)));
+            let body=render_fixture_range_with_return(&f,None,&refs,"FVector",None,0x52);
+            assert!(body.contains(&format!("Distance(local_{})",8+shift)),"{body}");
+            assert!(!body.contains("Distance(FVector())"),"{body}");
+        }
+        let f=make(0,0);
+        for fault in 1..=10 {
+            assert!(!retained_default_constructions(&f.instrs,&RefResolver::from_test_native_mutated_defaults(fault)).contains(&8),"metadata {fault}");
+        }
+        for fault in 1..=3 {
+            assert!(!retained_default_constructions(&make(fault,0).instrs,&refs).contains(&8),"raw {fault}");
+        }
+    }
+
+    #[test]
+    fn writable_native_outputs_keep_their_filled_value_for_later_reads() {
+        let make=|fault:u8| {
+            let mut a=TestAssembler::default();
+            for slot in [20,8,14] {a.op("PSF",&[slot],&[]);a.op("CALLSYS",&[],&[10,0]);}
+            if fault==1 {a.op("PSF",&[8],&[]);a.op("CALLSYS",&[],&[10,0]);}
+            for slot in [14,8,20] {a.op(if fault==2 {"PshVPtr"}else{"PSF"},&[slot],&[]);}
+            a.op("CALLSYS",&[],&[20,0]);
+            a.op("PSF",&[8],&[]);a.op("PSF",&[20],&[]);a.op("CALLSYS",&[],&[21,0]);a.op("CpyRtoV8",&[22],&[]);a.op("RET",&[0],&[]);
+            let mut f=a.finish();for i in &mut f.instrs {if i.op.name=="CALLSYS" {i.qwords=vec![i.dwords[0] as u64];}}f
+        };
+        let f=make(0);let refs=RefResolver::from_test_mutable_native_value_outputs(0);
+        let retained=retained_default_constructions(&f.instrs,&refs);
+        assert!(retained.contains(&8) && retained.contains(&14));assert!(!retained.contains(&20));
+        let body=render_fixture_range_with_return(&f,None,&refs,"FVector",None,0x52);
+        assert!(body.contains("Distance(local_8)"),"{body}");assert!(!body.contains("Distance(FVector())"),"{body}");
+        for fault in 1..=6 {assert!(!retained_default_constructions(&f.instrs,&RefResolver::from_test_mutable_native_value_outputs(fault)).contains(&8),"metadata {fault}");}
+        for fault in 1..=2 {assert!(!retained_default_constructions(&make(fault).instrs,&refs).contains(&8),"raw {fault}");}
+    }
+
+    #[test]
+    fn adjacent_default_arguments_keep_the_first_value_until_scope_exit() {
+        let make = |fault: u8| {
+            let mut a=TestAssembler::default();
+            // The real method returns through the shared RET before either
+            // constructor on its first guard. That path owes no cleanup.
+            a.op("CpyVtoR1",&[7],&[]); a.jump("JLowNZ","body"); a.jump("JMP","finish");
+            a.label("body");
+            if fault == 9 { a.op("PshNull",&[],&[]); }
+            if fault == 4 { a.jump("JMP","sibling"); }
+            a.op("PSF",&[80],&[]); a.op("CALLSYS",&[],&[1,0]);
+            a.label("sibling");
+            a.op("PSF",&[154],&[]); a.op("CALLSYS",&[],&[2,0]);
+            a.op("PSF",&[154],&[]); a.op("CALLSYS",&[],&[5,0]);
+            if fault == 1 { a.op("PSF",&[80],&[]); }
+            if fault == 3 { a.op("PSF",&[80],&[]); a.op("CALLSYS",&[],&[1,0]); }
+            if fault == 5 { a.jump("JMP","arguments"); }
+            a.label("arguments");
+            a.op("PSF",&[80],&[]); a.op("PSF",&[if fault == 6 { 10 } else { 154 }],&[]);
+            a.op("PSF",&[4],&[]); a.op("CALLSYS",&[],&[6,0]);
+            a.op("PSF",&[4],&[]); a.op("CALLSYS",&[],&[7,0]);
+            a.op("CALLSYS",&[],&[8,0]);
+            if fault == 8 { a.op("CpyVtoR1",&[7],&[]); a.jump("JLowZ","finish"); }
+            if fault == 7 { a.op("RET",&[0],&[]); }
+            for (slot,ptr) in if fault == 2 { [(80,3),(154,4)] } else { [(154,4),(80,3)] } {
+                a.op("PSF",&[slot],&[]); a.op("CALLSYS",&[],&[ptr,0]);
+            }
+            a.label("finish"); a.op("RET",&[0],&[]);
+            let mut f=a.finish();
+            for i in &mut f.instrs { if i.op.name == "CALLSYS" { i.qwords=vec![i.dwords[0] as u64]; } }
+            f
+        };
+        let refs=RefResolver::from_test_adjacent_default_arguments(0);
+        let f=make(0);
+        assert!(retained_default_constructions(&f.instrs,&refs).contains(&80));
+        let body=render_fixture_range_with_return(&f,None,&refs,"FProbeResult",None,0x52);
+        assert!(body.contains("//__gore_ctor 80"),"{body}");
+        assert!(body.contains("Consume(local_154, local_80)"),"{body}");
+        assert!(!body.contains("FProbeHit()"),"{body}");
+        for fault in 1..=15 {
+            assert!(!retained_default_constructions(&f.instrs,&RefResolver::from_test_adjacent_default_arguments(fault)).contains(&80),"metadata fault {fault}");
+        }
+        for fault in 1..=9 {
+            assert!(!retained_default_constructions(&make(fault).instrs,&refs).contains(&80),"raw fault {fault}");
+        }
+    }
+    #[test]
+    fn native_actor_factory_keeps_the_name_and_default_tail_in_its_own_frame() {
+        let mut refs = RefResolver::from_test_native_actor_factory(0);
+        let render = |refs: &RefResolver, force_short: bool| {
+            let mut stack = vec![Arg::obj("Outside".into()), Arg::obj("nullptr".into()),
+                Arg::typed("false".into(),Some("bool".into())),
+                Arg::psf("FName(\"NamedActor\")".into(),Some("FName".into())),
+                Arg::typed("FRotator::ZeroRotator".into(),Some("FRotator".into())),
+                Arg::psf("Position".into(),Some("FVector".into())),
+                Arg::psf("Class".into(),Some("TSubclassOf<AActor>".into()))];
+            let arity = if force_short { Some(3) } else { refs.native_arity_by_ptr(10,"MakeActor") };
+            let params = refs.func_params_by_ptr(10);
+            let call = build_call(&mut stack,"MakeActor",false,None,params,arity,
+                arity.or_else(|| params.map(|p|p.len())),None,None,false,Some("AActor"),false,false,false,refs).unwrap();
+            (call,stack)
+        };
+        assert_eq!(refs.native_arity_by_ptr(10,"MakeActor"),None);
+        let (full,remaining) = render(&refs,false);
+        assert_eq!(full,"MakeActor(Class, Position, FRotator::ZeroRotator, FName(\"NamedActor\"), false, nullptr)");
+        assert_eq!(remaining.len(),1); assert_eq!(remaining[0].s,"Outside");
+        let (short,orphaned) = render(&refs,true);
+        assert_eq!(short,"MakeActor(Class, Position, FRotator::ZeroRotator)");
+        assert_eq!(orphaned.len(),4); // Name, bool and level were incorrectly left outside.
+        // Defaults may disappear only when declared: the explicit nondefault name stays.
+        refs.set_param_defaults(HashMap::from([((String::new(),"MakeActor".into()),
+            vec![String::new(),String::new(),String::new(),"NAME_None".into(),"false".into(),"nullptr".into()])]));
+        assert_eq!(render(&refs,false).0,"MakeActor(Class, Position, FRotator::ZeroRotator, FName(\"NamedActor\"))");
+        for fault in 1..=20 {
+            let bad=RefResolver::from_test_native_actor_factory(fault);
+            assert_eq!(bad.native_arity_by_ptr(10,"MakeActor"),Some(3),"metadata fault {fault}");
+        }
+    }
+
+    #[test]
+    fn task_mixin_keeps_rvo_arguments_and_the_outer_frame() {
+        let refs=RefResolver::default();
+        let mut params=vec![DataType {token:5,..Default::default()};8];params[4].token=0x41;
+        for mixin in [false,true] {
+            let mut stack=vec![Arg::obj("Outside".into()),Arg::obj("Posture".into()),Arg::obj("Language".into()),
+                Arg::obj("Camera".into()),Arg {s:"0".into(),is_int:true,cbits:Some(ConstBits::W4(0)),..Default::default()},Arg::obj("Target()".into()),
+                Arg::obj("Expression".into()),Arg::obj("Text()".into()),Arg::obj("AI()".into()),
+                Arg {s:"local_22".into(),is_psf:true,ty:Some("FAbilityTaskExecutor".into()),..Default::default()}];
+            let call=build_call(&mut stack,"Speak",false,None,Some(&params),None,Some(8),None,Some("Host"),false,
+                Some("FAbilityTaskExecutor"),false,true,mixin,&refs).unwrap();
+            assert_eq!(call,if mixin {"local_22 = (AI()).Speak(Text(), Expression, Target(), (0 != 0), Camera, Language, Posture)"}
+                else {"local_22 = ::Speak(AI(), Text(), Expression, Target(), (0 != 0), Camera, Language, Posture)"});
+            assert_eq!(stack.len(),1);assert_eq!(stack[0].s,"Outside");
+        }
+    }
+
+    #[test]
+    fn script_predicate_mixin_keeps_argument_order_and_the_outer_frame() {
+        let refs = RefResolver::default();
+        let ty = DataType { token: 5, is_object_handle: true, is_object_const: true, ..Default::default() };
+        let params = [ty.clone(), ty];
+        for mixin in [false, true] {
+            // Bytecode pushes the second argument before the receiver/first argument.
+            let mut stack = vec![Arg::obj("Outside".into()), Arg::obj("Other()".into()), Arg::obj("Self()".into())];
+            let call = build_call(&mut stack, "CanObserve", false, None, Some(&params), None, Some(2),
+                None, Some("Host"), false, Some("bool"), false, true, mixin, &refs).unwrap();
+            assert_eq!(call, if mixin { "(Self()).CanObserve(Other())" } else { "::CanObserve(Self(), Other())" });
+            assert_eq!(stack.len(), 1); assert_eq!(stack[0].s, "Outside");
+        }
+    }
+    #[test]
+    fn mixin_default_temporaries_use_rendered_parameter_positions() {
+        let refs=RefResolver::default();
+        let handle=DataType {token:5,is_object_handle:true,is_object_const:true,..Default::default()};
+        let time=DataType {token:5,is_reference:true,is_object_const:true,is_read_only:true,..Default::default()};
+        let mut params=[handle.clone(),handle,time.clone(),time];
+        for mixin in [false,true] {
+            let mut resolved=HashMap::new();
+            record_rendered_parameters(&mut resolved,"HasDefeated",&params,mixin);
+            let call=if mixin {"(Self()).HasDefeated(Other(), AfterTime, local_8);"}
+                else {"HasDefeated(Self(), Other(), AfterTime, local_8);"};
+            assert_eq!(temporary_argument_call(call,"local_8","FInGameTime","FInGameTime()",&refs,true,&resolved),
+                Some(call.replace("local_8","FInGameTime()")));
+            assert!(temporary_argument_call(call,"local_8","FInGameTime","FInGameTime()",&refs,false,&resolved).is_none());
+        }
+        let mut resolved=HashMap::new();record_rendered_parameters(&mut resolved,"HasDefeated",&params,true);
+        params[3].is_object_const=false;params[3].is_read_only=false;
+        record_rendered_parameters(&mut resolved,"HasDefeated",&params,true);
+        assert!(temporary_argument_call("(Self()).HasDefeated(Other(), AfterTime, local_8);",
+            "local_8","FInGameTime","FInGameTime()",&refs,true,&resolved).is_none());
+    }
+    #[test]
+    fn default_argument_keeps_its_declaration_before_another_value_constructor() {
+        let make = |late: bool, extra: bool| {
+            let mut a = TestAssembler::default();
+            if !late { a.op("PSF", &[4], &[]); a.op("CALLSYS", &[], &[1, 0]); }
+            a.op("PshC4", &[], &[7]); a.op("PSF", &[8], &[]); a.op("CALLSYS", &[], &[2, 0]);
+            if late { a.op("PSF", &[4], &[]); a.op("CALLSYS", &[], &[1, 0]); }
+            a.op("PSF", &[4], &[]); a.op("PSF", &[8], &[]); a.op("CALLSYS", &[], &[4, 0]);
+            if extra { a.op("PSF", &[4], &[]); }
+            a.op("PSF", &[4], &[]); a.op("CALLSYS", &[], &[3, 0]); a.op("RET", &[0], &[]);
+            let mut fixture = a.finish();
+            for i in &mut fixture.instrs { if i.op.name == "CALLSYS" { i.qwords = vec![i.dwords[0] as u64]; } }
+            fixture
+        };
+        for (late, extra, wrong_type) in [(false, false, false), (true, false, false), (false, true, false), (false, false, true)] {
+            let refs = RefResolver::from_test_ordered_default_argument(wrong_type);
+            let f = make(late, extra);
+            assert_eq!(retained_default_constructions(&f.instrs, &refs).contains(&4), !late && !extra && !wrong_type);
+        }
+    }
+
+    #[test]
+    fn default_return_order_requires_the_whole_typed_assignment_life() {
+        let make = |extra: bool, mismatch: bool| {
+            let mut a = TestAssembler::default();
+            a.op("PSF", &[4], &[]); a.op("CALLSYS", &[], &[1, 0]);
+            a.op("PshVPtr", &[(-2i16) as u16], &[]); a.op("CALLSYS", &[], &[1, 0]);
+            a.op("PSF", &[4], &[]); a.op("PshVPtr", &[(-2i16) as u16], &[]);
+            a.op("CALLSYS", &[], &[2, 0]); a.op("PSF", &[if mismatch { 6 } else { 4 }], &[]);
+            a.op("CALLSYS", &[], &[3, 0]);
+            if extra { a.op("PSF", &[4], &[]); }
+            a.op("RET", &[4], &[]);
+            let mut fixture = a.finish();
+            for ins in &mut fixture.instrs {
+                if ins.op.name == "CALLSYS" { ins.qwords = vec![ins.dwords[0] as u64]; }
+            }
+            fixture
+        };
+        for (fault, extra, mismatch, rvo, local_ty) in [(0, false, false, -2, "TArray<FEntry>"),
+            (1, false, false, -2, "TArray<FEntry>"), (2, false, false, -2, "TArray<FEntry>"),
+            (3, false, false, -2, "TArray<FEntry>"), (4, false, false, -2, "TArray<FEntry>"),
+            (0, true, false, -2, "TArray<FEntry>"), (0, false, true, -2, "TArray<FEntry>"),
+            (0, false, false, -4, "TArray<FEntry>"), (0, false, false, -2, "TArray<FOther>")]
+        {
+            let refs = RefResolver::from_test_named_default_rvo_return(fault);
+            let fixture = make(extra, mismatch);
+            let f = FuncCode { func: "Fixture::Read".into(), is_method: true, param_names: Vec::new(),
+                param_types: Vec::new(), ret: DataType { token: 5, type_info: 101, ..Default::default() },
+                bytecode: Vec::new() };
+            let locals = HashMap::from([(4, local_ty.into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(), param_off_map: HashMap::new(),
+                rvo_off: Some(rvo), keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            let expected = fault == 0 && !extra && !mismatch && rvo == -2 && local_ty == "TArray<FEntry>";
+            assert_eq!(default_local_precedes_rvo(&ctx, "local_4"), expected,
+                "{fault}/{extra}/{mismatch}/{rvo}/{local_ty}");
+            assert!(!default_local_precedes_rvo(&ctx, "local_6"));
+        }
+    }
+
+    #[test]
+    fn script_default_copy_requires_temporary_destructor_order_and_exact_type() {
+        let make = |copy_type: u32, named: bool, extra_use: bool| {
+            let mut a = TestAssembler::default();
+            a.op("PSF", &[50], &[]); a.op("CALL", &[], &[1]);
+            a.op("PSF", &[50], &[]); a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]); a.op("CopyScript", &[], &[copy_type, 0]);
+            if named { a.op("PopPtr", &[], &[]); }
+            a.op("PSF", &[50], &[]); a.op("CALL", &[], &[2]);
+            if !named { a.op("PopPtr", &[], &[]); }
+            if extra_use { a.op("PSF", &[50], &[]); }
+            a.op("RET", &[2], &[]);
+            let mut fixture = a.finish();
+            fixture.instrs[5].qwords = vec![u64::from(copy_type)];
+            fixture
+        };
+        let refs = RefResolver::from_test_script_default_copy();
+        let good = make(101, false, false);
+        assert_eq!(script_default_member_copy(&good.instrs, 5, &refs, "local_50", "this.Value"),
+            Some("Qualified::FPayload()".into()));
+        for bad in [make(102, false, false), make(101, true, false), make(101, false, true)] {
+            assert!(script_default_member_copy(&bad.instrs, 5, &refs, "local_50", "this.Value").is_none());
+        }
+        for (source, target) in [("local_51", "this.Value"), ("local_50", "__return"),
+            ("local_50", "local_4.Value")]
+        {
+            assert!(script_default_member_copy(&good.instrs, 5, &refs, source, target).is_none());
+        }
+        assert!(script_default_member_copy(&good.instrs, 5, &RefResolver::default(), "local_50", "this.Value").is_none());
+    }
+
+    #[test]
+    fn native_mutable_int_reference_update_keeps_one_call_and_real_store() {
+        let render = |ret: DataType, add_dst: u16, add_src: u16, store_src: u16,
+            intervening_call: bool, later_read: bool| {
+            let refs = RefResolver::from_test_pointer_comparison_call(ret);
+            let mut a = TestAssembler::default();
+            a.op("CALLSYS", &[], &[1, 0]);
+            a.op("RDR4", &[39], &[]);
+            if intervening_call { a.op("CALLSYS", &[], &[1, 0]); }
+            a.op("ADDIi", &[add_dst, add_src], &[1]);
+            a.op("WRTV4", &[store_src], &[]);
+            if later_read { a.op("CpyVtoV4", &[40, 39], &[]); }
+            a.op("RET", &[0], &[]);
+            let mut fixture = a.finish();
+            for ins in &mut fixture.instrs {
+                if ins.op.name == "CALLSYS" { ins.qwords = vec![1]; }
+            }
+            let f = FuncCode { func: "Fixture::Update".into(), is_method: false,
+                param_names: Vec::new(), param_types: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let ctx = Ctx {
+                f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+                fields: None, param_types: None, class_name: None, local_types: None,
+                float_slots: Default::default(), param_off_map: HashMap::new(), rvo_off: None,
+                keep_ints: None, rvo_switch_region: std::cell::Cell::new(false),
+            };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+        };
+        let reference = || DataType { token: 0x44, is_reference: true, ..Default::default() };
+        let good = render(reference(), 39, 39, 39, false, false);
+        assert_eq!(good.matches("GetPawn()").count(), 1, "{good}");
+        assert!(good.contains("GetPawn() += 1;"), "{good}");
+        assert!(!good.contains("local_39"), "{good}");
+        for ret in [DataType { token: 0x44, ..Default::default() },
+            DataType { is_read_only: true, ..reference() },
+            DataType { token: 0x50, ..reference() }] {
+            let out = render(ret, 39, 39, 39, false, false);
+            assert!(!out.contains(" += "), "{out}");
+        }
+        for (dst, src, store, call, read) in [(40, 39, 39, false, false),
+            (39, 40, 39, false, false), (39, 39, 40, false, false),
+            (39, 39, 39, true, false), (39, 39, 39, false, true)] {
+            let out = render(reference(), dst, src, store, call, read);
+            assert!(!out.contains(" += "), "{out}");
+        }
+    }
+
+    #[test]
+    fn handle_reference_parameters_keep_their_typed_output_store() {
+        let render = |param: DataType, source_type: &str, target: i16, source_opcode: &'static str| {
+            let refs = RefResolver::from_test_member_chain(&[("AGothicCharacter", "")]);
+            let mut a = TestAssembler::default();
+            a.op(source_opcode, &[10], &[]);
+            a.op("PshVPtr", &[target as u16], &[]);
+            a.op("REFCPY", &[], &[]);
+            a.op("PopPtr", &[], &[]);
+            a.op("RET", &[0], &[]);
+            let fixture = a.finish();
+            let f = FuncCode { func: "Fixture::Read".into(), is_method: true,
+                param_names: vec!["Result".into()], param_types: vec![param],
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let locals = HashMap::from([(10, source_type.to_owned())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(),
+                param_off_map: HashMap::from([(-2, 0)]), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+        };
+        let param = DataType { token: 5, type_info: 1, is_reference: true,
+            is_object_handle: true, ..Default::default() };
+        let out = render(param.clone(), "AGothicCharacter", -2, "PshVPtr");
+        assert!(out.contains("Result = local_10;"), "{out}");
+        for other in [DataType { is_reference: false, ..param.clone() },
+            DataType { is_object_handle: false, ..param.clone() },
+            DataType { is_read_only: true, ..param.clone() },
+            DataType { is_object_const: true, ..param.clone() },
+            DataType { type_info: 42, ..param.clone() }] {
+            assert!(!render(other, "AGothicCharacter", -2, "PshVPtr").contains("Result ="));
+        }
+        assert!(!render(param.clone(), "UOther", -2, "PshVPtr").contains("Result ="));
+        assert!(!render(param.clone(), "AGothicCharacter", -4, "PshVPtr").contains("Result ="));
+        assert!(!render(param, "AGothicCharacter", -2, "PSF").contains("Result ="));
+    }
+
+    #[test]
+    fn handle_reference_outputs_accept_null_and_matching_parameter_dereferences() {
+        let handle = DataType { token: 5, type_info: 1, is_object_handle: true, ..Default::default() };
+        let render = |input: DataType, null: bool, dereference: bool, source_slot: i16| {
+            let refs = RefResolver::from_test_member_chain(&[("AGothicCharacterState", "")]);
+            let mut a = TestAssembler::default();
+            if null { a.op("PshNull", &[], &[]); }
+            else { a.op("PshVPtr", &[source_slot as u16], &[]); }
+            if dereference { a.op("RDSPtr", &[], &[]); }
+            a.op("PshVPtr", &[(-4i16) as u16], &[]);
+            a.op("REFCPY", &[], &[]); a.op("PopPtr", &[], &[]); a.op("RET", &[6], &[]);
+            let fixture = a.finish();
+            let f = FuncCode { func: "Fixture::Resolve".into(), is_method: true,
+                param_names: vec!["Input".into(), "Result".into()],
+                param_types: vec![input, DataType { is_reference: true, ..handle.clone() }],
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None, local_types: None,
+                float_slots: Default::default(), param_off_map: HashMap::from([(-2, 0), (-4, 1)]),
+                rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+        };
+        assert_eq!(render(handle.clone(), true, false, -2), "Result = nullptr;\nreturn;");
+        for by_ref in [false, true] {
+            let input = DataType { is_reference: by_ref, ..handle.clone() };
+            assert_eq!(render(input.clone(), false, by_ref, -2), "Result = Input;\nreturn;");
+            assert!(!render(input.clone(), false, !by_ref, -2).contains("Result ="));
+            for bad in [DataType { is_object_const: true, ..input.clone() },
+                DataType { is_object_handle: false, ..input.clone() },
+                DataType { type_info: 999, ..input.clone() },
+                DataType { is_read_only: true, ..input.clone() }]
+            { assert!(!render(bad, false, by_ref, -2).contains("Result =")); }
+            assert!(!render(input, false, by_ref, -6).contains("Result ="));
+        }
+        assert!(!render(handle.clone(), false, false, 0).contains("Result ="));
+    }
+
+    #[test]
+    fn const_handle_stores_require_a_compatible_native_const_field() {
+        let render = |owner: &str, field: &str, value: &str| {
+            let refs = RefResolver::from_test_const_native_store(owner, field, value);
+            let mut a = TestAssembler::default();
+            a.op("CALLSYS", &[], &[3, 0]);
+            a.op("STOREOBJ", &[10], &[]);
+            a.op("PshVPtr", &[10], &[]);
+            a.op("PSF", &[20], &[]);
+            a.op("ADDSi", &[0], &[1]);
+            a.op("REFCPY", &[], &[]);
+            a.op("PopPtr", &[], &[]);
+            a.op("RET", &[0], &[]);
+            let mut fixture = a.finish();
+            fixture.instrs[0].qwords = vec![3];
+            let f = FuncCode { func: "Fixture::Copy".into(), is_method: false,
+                param_names: Vec::new(), param_types: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let locals = HashMap::from([(10, value.to_owned()), (20, owner.to_owned())]);
+            let ctx = Ctx {
+                f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+                fields: None, param_types: None, class_name: None, local_types: Some(&locals),
+                float_slots: Default::default(), param_off_map: HashMap::new(), rvo_off: None,
+                keep_ints: None, rvo_switch_region: std::cell::Cell::new(false),
+            };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0.join("\n")
+        };
+        for value in ["UObject", "UComboAttackConfig"] {
+            let out = render("FGameplayEventData", "OptionalObject", value);
+            assert!(out.contains("local_20.OptionalObject = local_10;"), "{out}");
+        }
+        for (owner, field, value) in [("FGameplayEventData", "Other", "UObject"),
+            ("FOther", "OptionalObject", "UObject"),
+            ("FGameplayEventData", "Instigator", "UComboAttackConfig")]
+        {
+            let out = render(owner, field, value);
+            assert!(!out.contains(&format!("local_20.{field} =")), "{out}");
+        }
+    }
+
+    #[test]
+    fn a_shared_double_branch_seed_is_written_to_its_field_once() {
+        let mut a = TestAssembler::default();
+        a.op("SetV8", &[8], &[0, 0]);
+        a.op("LoadThisR", &[0], &[1]);
+        a.op("WRTV8", &[8], &[]);
+        a.op("PshVPtr", &[0], &[]);
+        a.op("CALLSYS", &[], &[0, 0]);
+        a.jump("JLowZ", "fallback");
+        a.op("RDR8", &[14], &[]);
+        a.op("CpyVtoV8", &[8, 14], &[]);
+        a.jump("JMP", "join");
+        a.label("fallback");
+        a.op("SetV8", &[8], &[0, 0]);
+        a.label("join");
+        a.op("dTOf", &[15, 8], &[]);
+        a.op("PshV4", &[15], &[]);
+        a.op("RET", &[0], &[]);
+        let mut fixture = a.finish();
+        fixture.instrs[0].qwords = vec![f64::MAX.to_bits()];
+        fixture.instrs[9].qwords = vec![5.0f64.to_bits()];
+        let f = FuncCode { func: "WriteSharedSeed".into(), is_method: true,
+            param_names: Vec::new(), param_types: Vec::new(),
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+        let locals = HashMap::from([(8, "float".to_owned())]);
+        let refs = RefResolver::from_test_copied_int_field_read("float", false);
+        let seed = vec![format!("local_8 = {};", fmt_float(ConstBits::W8(f64::MAX.to_bits()), true))];
+        let render = |code: &[Instr], refs: &RefResolver, float: bool, class: &str, emitted: &[String]| {
+            let ctx = Ctx { f: &f, refs, instrs: code, super_ctor: None, ret_ty: Some(&f.ret),
+                fields: None, param_types: None, class_name: Some(class), local_types: Some(&locals),
+                float_slots: if float { std::collections::HashSet::from([8]) } else { Default::default() },
+                param_off_map: HashMap::new(), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            let proof = shared_double_field_seed(&ctx, 2, emitted, "this.Limit", Some("float"));
+            (proof, block_stmts(&ctx, 0, 3).0)
+        };
+        let (proof, out) = render(&fixture.instrs, &refs, true, "UConfig", &seed);
+        assert!(proof);
+        assert_eq!(out, vec![seed[0].clone(), "this.Limit = local_8;".into()]);
+        for ty in ["float32", "int64", "bool"] {
+            assert!(!render(&fixture.instrs, &RefResolver::from_test_copied_int_field_read(ty, false),
+                true, "UConfig", &seed).0, "{ty}");
+        }
+        assert!(!render(&fixture.instrs, &refs, false, "UConfig", &seed).0);
+        assert!(!render(&fixture.instrs, &refs, true, "OtherOwner", &seed).0);
+        assert!(!render(&fixture.instrs, &refs, true, "UConfig", &[]).0);
+        for fault in 0..7 {
+            let mut other = fixture.instrs.clone();
+            match fault {
+                0 => other[2].words[0] = 10,
+                1 => other[7].words[1] = 15,
+                2 => other[8].dwords[0] = 0,
+                3 => other[9].words[0] = 10,
+                4 => other[10].words[1] = 10,
+                5 => other[5].dwords[0] = 0,
+                _ => other[11].words[0] = 16,
+            }
+            assert!(!render(&other, &refs, true, "UConfig", &seed).0, "fault {fault}");
+        }
+        let mut no_join = fixture.instrs.clone(); no_join.truncate(3);
+        let (proof, out) = render(&no_join, &refs, true, "UConfig", &seed);
+        assert!(!proof);
+        assert_eq!(out[1], format!("this.Limit = {};", fmt_float(ConstBits::W8(f64::MAX.to_bits()), true)));
+    }
+
+    #[test]
+    fn declared_float64_field_stores_decode_the_double_bits() {
+        let make_refs = |ty| {
+            let mut refs = RefResolver::from_test_member_chain(&[("FSettings", "Duration")]);
+            refs.set_native_api(super::super::binds::NativeApi::from_test_field_types(
+                &[("FSettings", "Duration", ty)], &[], None));
+            refs
+        };
+        let refs = make_refs("float64");
+        assert_eq!(float_field_type(&refs, 1, "Duration").as_deref(), Some("float"));
+        for ty in ["int64", "uint64", "bool", "FUnknown"] {
+            assert_eq!(float_field_type(&make_refs(ty), 1, "Duration"), None);
+        }
+        let mut a = TestAssembler::default();
+        a.op("SetV8", &[4], &[0, 0x3ff00000]);
+        a.op("PshVPtr", &[0], &[]);
+        a.op("ADDSi", &[0], &[1]);
+        a.op("PopRPtr", &[], &[]);
+        a.op("WRTV8", &[4], &[]);
+        let mut fixture = a.finish();
+        fixture.instrs[0].qwords = vec![1.0f64.to_bits()];
+        let f = FuncCode {
+            func: "WriteSettings".into(), is_method: false,
+            param_names: vec!["Settings".into()],
+            param_types: vec![DataType { token: 5, type_info: 1,
+                is_reference: true, ..Default::default() }],
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new(),
+        };
+        let ctx = Ctx {
+            f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: None,
+            local_types: None, float_slots: Default::default(),
+            param_off_map: HashMap::from([(0, 0)]), rvo_off: None, keep_ints: None,
+            rvo_switch_region: std::cell::Cell::new(false),
+        };
+        let (stmts, _) = block_stmts(&ctx, 0, fixture.instrs.len());
+        assert!(stmts.iter().any(|s| s == "Settings.Duration = 1.0;"), "{stmts:?}");
+    }
+
+    #[test]
+    fn intrinsic_color_component_stores_decode_float_bits_without_binds() {
+        for component in ["R", "G", "B", "A"] {
+            let refs = RefResolver::from_test_member_chain(&[("FLinearColor", component)]);
+            let mut a = TestAssembler::default();
+            a.op("SetV4", &[4], &[1.0f32.to_bits()]);
+            a.op("PshVPtr", &[0], &[]);
+            a.op("ADDSi", &[0], &[1]);
+            a.op("PopRPtr", &[], &[]);
+            a.op("WRTV4", &[4], &[]);
+            let fixture = a.finish();
+            let f = FuncCode {
+                func: "WriteColor".into(), is_method: false,
+                param_names: vec!["Color".into()],
+                param_types: vec![DataType { token: 5, type_info: 1,
+                    is_reference: true, ..Default::default() }],
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new(),
+            };
+            let ctx = Ctx {
+                f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret),
+                fields: None, param_types: None, class_name: None,
+                local_types: None, float_slots: Default::default(),
+                param_off_map: HashMap::from([(0, 0)]), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false),
+            };
+            let (stmts, _) = block_stmts(&ctx, 0, fixture.instrs.len());
+            assert!(stmts.iter().any(|s| s == &format!("Color.{component} = 1.0f;")), "{stmts:?}");
+        }
+        for (owner, field) in [("FColor", "R"), ("FLinearColor", "Other"), ("OtherColor", "R")] {
+            let refs = RefResolver::from_test_member_chain(&[(owner, field)]);
+            assert_eq!(float_field_type(&refs, 1, field), None);
+        }
+    }
+
+    #[test]
+    fn timed_retries_preserve_outer_checks_and_the_final_inner_wait() {
+        let mut a = TestAssembler::default();
+        a.label("head"); a.op("CMPd", &[4,12], &[]); a.jump("JNS", "exit");
+        a.label("body"); a.op("SUSPEND", &[], &[]); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "first_guard");
+        a.label("early_exit"); a.jump("JMP", "ret");
+        a.label("first_guard"); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "second_guard");
+        a.label("retry1"); a.op("PshVPtr", &[0], &[]); a.label("wait1"); a.op("CALLSYS", &[], &[]); a.label("back1"); a.jump("JMP", "head");
+        a.label("second_guard"); a.op("SetV1", &[9], &[1]); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "finish");
+        a.label("retry2"); a.op("PshVPtr", &[0], &[]); a.label("wait2"); a.op("CALLSYS", &[], &[]); a.label("back2"); a.jump("JMP", "head");
+        a.label("finish"); a.op("IncVi", &[4], &[]);
+        a.label("inner"); a.op("PshVPtr", &[0], &[]); a.op("CALLINTF", &[], &[20]); a.label("inner_test"); a.op("CpyRtoV4", &[7], &[]);
+        a.op("NOT", &[7], &[]); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "break");
+        a.label("inner_body"); a.op("SUSPEND", &[], &[]); a.op("PshVPtr", &[0], &[]); a.label("wait3"); a.op("CALLSYS", &[], &[]); a.label("back3"); a.jump("JMP", "inner");
+        a.label("break"); a.jump("JMP", "exit");
+        a.label("exit"); a.op("IncVi", &[4], &[]); a.label("ret"); a.op("RET", &[0], &[]);
+        let mut fixture = a.finish();
+        for label in ["wait1","wait2","wait3"] { fixture.instrs.iter_mut().find(|i| i.offset_dw == fixture.labels[label]).unwrap().qwords = vec![10]; }
+        let refs = RefResolver::from_test_two_timed_retries(0);
+        let render = |f: &CompoundFixture, refs: &RefResolver, ret| render_fixture_range_with_return_class(f,None,refs,"float",None,ret,Some("UTask"));
+        let out = render(&fixture,&refs,0x52);
+        assert!(out.starts_with("while ("),"{out}");
+        assert_eq!(out.matches("while (").count(),2,"{out}");
+        assert_eq!(out.matches("continue;").count(),2,"{out}");
+        assert_eq!(out.matches("break;").count(),1,"{out}");
+        assert_eq!(out.matches("this.WaitTick();").count(),3,"{out}");
+        assert!(out.contains("this.Ready()"),"{out}");
+        for fault in 1..=6 { assert!(!render(&fixture,&RefResolver::from_test_two_timed_retries(fault),0x52).starts_with("while ("),"metadata {fault}"); }
+        for (label,op,words) in [("head","CMPi",vec![4,12]),("body","CpyVtoR1",vec![7]),("retry1","PshVPtr",vec![2]),
+            ("inner_body","CpyVtoR1",vec![7]),("inner_test","CpyRtoV4",vec![8])] {
+            let mut bad = fixture.clone(); replace_same_width(&mut bad,label,op,&words,&[]);
+            assert!(!render(&bad,&refs,0x52).starts_with("while ("),"accepted {label}");
+        }
+        for (label,target) in [("back1","first_guard"),("back3","head"),("early_exit","retry1")] {
+            let mut bad = fixture.clone(); retarget(&mut bad,label,target);
+            assert!(!render(&bad,&refs,0x52).starts_with("while ("),"edge {label}");
+        }
+        assert!(!render(&fixture,&refs,0x44).starts_with("while ("));
+    }
+    #[test]
+    fn bool_field_retry_keeps_the_nested_loop_and_final_cleanup_break() {
+        let mut a = TestAssembler::default();
+        a.label("entry"); a.jump("JMP", "head");
+        a.label("head"); a.op("LoadThisR", &[0], &[1]);
+        a.label("read"); a.op("RDR1", &[7], &[]); a.op("NOT", &[7], &[]); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "exit");
+        a.label("body"); a.op("SUSPEND", &[], &[]); a.jump("JMP", "inner_test");
+        a.label("inner"); a.op("SUSPEND", &[], &[]); a.op("IncVi", &[15], &[]);
+        a.label("inner_test"); a.op("CpyVtoR1", &[7], &[]); a.label("inner_back"); a.jump("JLowNZ", "inner");
+        a.label("predicate"); a.op("PshVPtr", &[12], &[]); a.op("CALL", &[], &[20]); a.jump("JLowZ", "second");
+        a.op("SetV1", &[9], &[1]); a.jump("JMP", "merge");
+        a.label("second"); a.op("PshVPtr", &[12], &[]); a.op("CALL", &[], &[21]); a.op("CpyRtoV4", &[7], &[]);
+        a.label("copy"); a.op("CpyVtoV4", &[9, 7], &[]);
+        a.label("merge"); a.op("CpyVtoR1", &[9], &[]); a.jump("JLowZ", "success");
+        a.label("retry"); a.jump("JMP", "head");
+        a.label("success"); a.op("PshVPtr", &[0], &[]); a.label("work"); a.op("CALLSYS", &[], &[]);
+        a.op("PshC4", &[], &[1.0f32.to_bits()]); a.op("PshVPtr", &[0], &[]);
+        a.label("wait"); a.op("CALLSYS", &[], &[]); a.op("PSF", &[4], &[]);
+        a.label("dtor"); a.op("CALLSYS", &[], &[]); a.label("clear"); a.op("FreeNullV8", &[6], &[]);
+        a.label("break"); a.jump("JMP", "exit");
+        a.label("exit"); a.op("IncVi", &[15], &[]); a.op("RET", &[0], &[]);
+        let mut fixture = a.finish();
+        for (label, ptr) in [("wait", 10), ("dtor", 11), ("work", 12)] {
+            fixture.instrs.iter_mut().find(|i| i.offset_dw == fixture.labels[label]).unwrap().qwords = vec![ptr];
+        }
+        let refs = RefResolver::from_test_bool_field_retry(0);
+        let render = |f: &CompoundFixture, refs: &RefResolver, ret| render_fixture_range_with_return_class(
+            f, None, refs, "FWork", None, ret, Some("URetryTask"));
+        let out = render(&fixture, &refs, 0x52);
+        assert!(out.starts_with("while (!(this.bStop))"), "{out}");
+        assert_eq!(out.matches("while (").count(), 1, "{out}");
+        assert!(out.contains("for (; local_7; )\n    {\n        ++local_15;"), "{out}");
+        assert_eq!(out.matches("continue;").count(), 1, "{out}");
+        assert_eq!(out.matches("break;").count(), 1, "{out}");
+        assert!(out.contains("Unavailable(local_12)") && out.contains("Finished(local_12)"), "{out}");
+        assert!(out.find("this.FinishWork();").unwrap() < out.find("break;").unwrap(), "{out}");
+        for fault in 1..=12 {
+            assert!(!render(&fixture, &RefResolver::from_test_bool_field_retry(fault), 0x52).starts_with("while ("), "metadata {fault}");
+        }
+        for (label, op, words) in [("read", "RDR1", vec![8]), ("body", "CpyVtoR1", vec![7]),
+            ("second", "PshVPtr", vec![14]), ("copy", "CpyVtoV4", vec![9, 8]), ("clear", "FreeNullV8", vec![4])] {
+            let mut bad = fixture.clone(); replace_same_width(&mut bad, label, op, &words, &[]);
+            assert!(!render(&bad, &refs, 0x52).starts_with("while ("), "operand {label}");
+        }
+        for (label, target) in [("entry", "retry"), ("retry", "predicate"), ("break", "success"), ("inner_back", "merge")] {
+            let mut bad = fixture.clone(); retarget(&mut bad, label, target);
+            assert!(!render(&bad, &refs, 0x52).starts_with("while ("), "edge {label}");
+        }
+        assert!(!render(&fixture, &refs, 0x44).starts_with("while ("));
+        // Allocation numbers are incidental; preserve the destructor's typed slot 4.
+        let mut renamed = fixture.clone();
+        for ins in &mut renamed.instrs {
+            for word in &mut ins.words { if *word > 0 && *word != 4 { *word += 20; } }
+        }
+        let out = render(&renamed, &refs, 0x52);
+        // The shared renderer types only slot 7; renumbering preserves the loop
+        // witness even though the generic condition printer adds integer casts.
+        assert!(out.starts_with("while (") && out.contains("this.bStop"), "{out}");
+        assert!(out.contains("Unavailable(local_32)") && out.contains("continue;"), "{out}");
+    }
+
+    #[test]
+    fn guarded_wait_repeats_the_time_test_and_target_check() {
+        let mut a = TestAssembler::default();
+        a.label("head"); a.op("CMPd", &[4, 12], &[]); a.jump("JNS", "exit");
+        a.label("body"); a.op("SUSPEND", &[], &[]); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "first_guard");
+        a.label("early_exit"); a.jump("JMP", "ret");
+        a.label("first_guard"); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "second_guard");
+        a.label("true_arm"); a.op("SetV1", &[7], &[1]); a.jump("JMP", "merge");
+        a.label("second_guard"); a.op("CpyVtoV4", &[7, 8], &[]);
+        a.label("merge"); a.op("CpyVtoR1", &[7], &[]); a.jump("JLowZ", "finish");
+        a.label("retry"); a.op("PshVPtr", &[0], &[]); a.label("wait"); a.op("CALLSYS", &[], &[]); a.label("back"); a.jump("JMP", "head");
+        a.label("finish"); a.op("SetV4", &[9], &[1]); a.label("break"); a.jump("JMP", "exit");
+        a.label("exit"); a.op("IncVi", &[4], &[]); a.label("ret"); a.op("RET", &[0], &[]);
+        let mut fixture = a.finish();
+        fixture.instrs.iter_mut().find(|i| i.offset_dw == fixture.labels["wait"]).unwrap().qwords = vec![10];
+        let refs = RefResolver::from_test_guarded_retry_loop(0);
+        let render = |f: &CompoundFixture, refs: &RefResolver, ret| render_fixture_range_with_return_class(f, None, refs, "float", None, ret, Some("UTask"));
+        let out = render(&fixture, &refs, 0x52);
+        assert!(out.starts_with("while ("), "{out}");
+        assert_eq!(out.matches("while (").count(), 1, "{out}");
+        assert_eq!(out.matches("continue;").count(), 1, "{out}");
+        assert_eq!(out.matches("break;").count(), 1, "{out}");
+        assert!(out.contains("this.WaitTick();"), "{out}");
+        for fault in 1..=3 { assert!(!render(&fixture, &RefResolver::from_test_guarded_retry_loop(fault), 0x52).starts_with("while ("), "metadata {fault}"); }
+        for (label, op, words) in [("head", "CMPi", vec![4, 12]), ("body", "CpyVtoR1", vec![7]), ("retry", "PshVPtr", vec![2])] {
+            let mut bad = fixture.clone(); replace_same_width(&mut bad, label, op, &words, &[]);
+            assert!(!render(&bad, &refs, 0x52).starts_with("while ("), "accepted {label}");
+        }
+        let mut bad = fixture.clone(); retarget(&mut bad, "early_exit", "retry");
+        assert!(!render(&bad, &refs, 0x52).starts_with("while ("));
+        let mut bad = fixture.clone(); retarget(&mut bad, "back", "first_guard");
+        assert!(!render(&bad, &refs, 0x52).starts_with("while ("));
+        assert!(!render(&fixture, &refs, 0x44).starts_with("while ("));
+    }
+
+    #[test]
+    fn released_retry_leaves_repeat_the_task_before_testing_again() {
+        let mut a = TestAssembler::default();
+        a.label("head"); a.op("SetV1", &[1], &[1]);
+        a.op("CpyVtoR1", &[1], &[]); a.jump("JLowZ", "exit");
+        a.label("body"); a.op("SUSPEND", &[], &[]);
+        a.op("CALLSYS", &[], &[]); a.op("STOREOBJ", &[14], &[]);
+        a.op("PSF", &[22], &[]); a.op("CALLSYS", &[], &[]);
+        a.op("RDR1", &[25], &[]); a.op("CpyVtoV4", &[24,25], &[]);
+        a.op("PSF", &[22], &[]); a.op("CALLSYS", &[], &[]);
+        a.op("LoadRObjR", &[14], &[0,1]); a.op("RDR1", &[1], &[]);
+        a.op("CpyVtoR1", &[1], &[]); a.jump("JLowZ", "check");
+        a.label("retry_one_clear"); a.op("FreeNullV8", &[14], &[]);
+        a.label("retry_one"); a.jump("JMP", "head");
+        a.label("check"); a.op("sbTOi", &[26,24], &[]);
+        a.op("CMPIi", &[26], &[0]); a.jump("JZ", "break_clear");
+        a.label("retry_two_clear"); a.op("FreeNullV8", &[14], &[]);
+        a.label("retry_two"); a.jump("JMP", "head");
+        a.label("break_clear"); a.op("FreeNullV8", &[14], &[]);
+        a.label("break"); a.jump("JMP", "exit");
+        a.label("exit"); a.op("RET", &[0], &[]);
+        let fixture = a.finish();
+        let refs = RefResolver::default();
+        let render = |f: &CompoundFixture, ret| render_fixture_range_with_return(f,None,&refs,"int",None,ret);
+        let out = render(&fixture,0x52);
+        assert!(out.starts_with("while (true)\n"), "{out}");
+        assert_eq!(out.matches("continue;").count(),2,"{out}");
+        assert_eq!(out.matches("break;").count(),1,"{out}");
+        assert_eq!(out.matches("while (").count(),1,"{out}");
+        // Every cleanup and both predicates belong to the same iteration.
+        for (label,op,words,dwords) in [
+            ("head","SetV1",vec![1],vec![0]),
+            ("body","CpyVtoR1",vec![1],vec![]),
+            ("check","sbTOi",vec![26,23],vec![]),
+            ("retry_one_clear","FreeNullV8",vec![16],vec![]),
+            ("retry_two_clear","FreeNullV8",vec![16],vec![]),
+            ("break_clear","FreeNullV8",vec![16],vec![]),
+        ] {
+            let mut bad = fixture.clone();
+            replace_same_width(&mut bad,label,op,&words,&dwords);
+            let out = render(&bad,0x52);
+            assert!(!out.starts_with("while (true)\n"),"accepted {label}: {out}");
+        }
+        for (label,target) in [("retry_one","check"),("retry_two","exit")] {
+            let mut bad = fixture.clone(); retarget(&mut bad,label,target);
+            assert!(!render(&bad,0x52).starts_with("while (true)\n"),"accepted {label}");
+        }
+        assert!(!render(&fixture,0x44).starts_with("while (true)\n"));
+    }
+
+    #[test]
+    fn loop_return_uses_the_value_from_the_consumed_store() {
+        for arithmetic in [false, true] {
+            let mut a = TestAssembler::default();
+            a.label("body");
+            if arithmetic {
+                a.op("ADDi", &[4, 6, 8], &[]);
+            } else {
+                a.op("SetV4", &[4], &[(-1000i32) as u32]);
+            }
+            a.op("CpyVtoR4", &[4], &[]);
+            a.jump("JMP", "shared_ret");
+            a.label("shared_ret");
+            a.op("RET", &[0], &[]);
+            let fixture = a.finish();
+            let scope = LoopScope { continue_off: usize::MAX, break_off: usize::MAX - 1,
+                continue_only: false, latch_block: None };
+            let output = render_fixture_range_with_selector(&fixture,
+                Some(("body", "shared_ret", scope)), &RefResolver::default(), "int");
+            let expected = if arithmetic { "return local_6 + local_8;" } else { "return -1000;" };
+            assert_eq!(output.trim(), expected);
+        }
+    }
+
+    #[test]
+    fn a_void_loop_return_bypasses_the_following_iteration_handle_clear() {
+        for (already_cleared, clear_slot, return_token, call_token, expected) in [
+            (false, 16, 0x52, 0x52, "return;"),
+            (true, 16, 0x52, 0x52, "break;"),
+            (false, 18, 0x52, 0x52, "break;"),
+            (false, 16, 0x44, 0x52, "break;"),
+            (false, 16, 0x52, 0x41, "break;"),
+        ] {
+            let mut a = TestAssembler::default(); a.label("body");
+            a.op("PshVPtr", &[16], &[]); a.op("CALLSYS", &[], &[]);
+            if already_cleared { a.op("FreeNullV8", &[16], &[]); }
+            a.jump("JMP", "shared_ret");
+            a.label("cleanup"); a.op("FreeNullV8", &[clear_slot], &[]);
+            a.jump("JMP", "shared_ret");
+            a.label("shared_ret"); a.op("RET", &[0], &[]);
+            let mut fixture = a.finish(); fixture.instrs[1].qwords = vec![2];
+            let scope = LoopScope { continue_off: usize::MAX, break_off: fixture.labels["shared_ret"],
+                continue_only: false, latch_block: None };
+            let refs = RefResolver::from_test_retained_receiver(call_token, true);
+            let out = render_fixture_range_with_return(&fixture,
+                Some(("body", "cleanup", scope)), &refs, "int", None, return_token);
+            assert!(out.trim_end().ends_with(expected), "{out}");
+        }
+    }
+
+    #[test]
+    fn a_selected_loop_break_does_not_consume_the_plain_return_store() {
+        let mut a = TestAssembler::default();
+        a.label("body");
+        a.op("SetV4", &[4], &[17]);
+        a.op("CpyVtoR4", &[4], &[]);
+        a.jump("JMP", "shared_ret");
+        a.label("shared_ret");
+        a.op("RET", &[0], &[]);
+        let fixture = a.finish();
+        let scope = LoopScope { continue_off: usize::MAX, break_off: fixture.labels["shared_ret"],
+            continue_only: false, latch_block: None };
+        let output = render_fixture_range_with_selector(&fixture,
+            Some(("body", "shared_ret", scope)), &RefResolver::default(), "int");
+        assert!(output.contains("local_4 = 17;"), "{output}");
+        assert!(output.trim_end().ends_with("break;"), "{output}");
+    }
+
+    fn returning_bool_switch_fixture() -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        a.op("CpyVtoR1", &[7], &[]); a.label("early_guard"); a.jump("JLowZ","switch");
+        a.op("SetV1", &[6], &[0]); a.op("CpyVtoR4", &[6], &[]); a.jump("JMP","ret");
+        a.label("switch"); a.op("SetV1", &[9], &[2]); a.op("sbTOi", &[4,9], &[]);
+        a.op("CMPIi", &[4], &[2]); a.jump("JP","default");
+        a.op("CMPIi", &[4], &[1]); a.jump("JZ","passive");
+        a.op("CMPIi", &[4], &[2]); a.jump("JZ","active"); a.jump("JMP","default");
+        for (label,offset,slot) in [("active",0,6),("passive",1,8)] {
+            a.label(label); a.op("PshVPtr", &[0], &[]); a.op("ADDSi", &[0], &[1]);
+            a.op("ADDSi", &[offset], &[2]); a.op("PopRPtr", &[], &[]); a.op("RDR1", &[slot], &[]);
+            a.op("CpyVtoR4", &[slot], &[]); a.jump("JMP","ret");
+        }
+        a.label("default"); a.op("SetV1", &[6], &[1]); a.op("CpyVtoR4", &[6], &[]);
+        a.label("ret"); a.op("RET", &[2], &[]); a.finish()
+    }
+
+    #[test]
+    fn returning_bool_switch_preserves_field_arms_and_early_return() {
+        let refs = RefResolver::from_test_returning_bool_switch(0);
+        let f = returning_bool_switch_fixture();
+        let source = render_fixture_range_with_return_class(&f,None,&refs,"int",None,0x41,Some("UOwner"));
+        assert!(source.contains("switch (local_4)"),"{source}");
+        assert!(source.contains("case 2:\n        return this.Config.Active;"),"{source}");
+        assert!(source.contains("case 1:\n        return this.Config.Passive;"),"{source}");
+        assert!(source.contains("default:\n        return true;"),"{source}");
+        assert!(source.find("return false;").unwrap() < source.find("switch (").unwrap(),"{source}");
+        assert!(source.find("case 2:").unwrap() < source.find("case 1:").unwrap());
+        assert!(!source.contains("break;") && !source.contains("case 2:\n    {"),"{source}");
+    }
+
+    #[test]
+    fn returning_bool_switch_rejects_wrong_owners_types_and_case_entries() {
+        let f = returning_bool_switch_fixture();
+        let render = |f: &CompoundFixture, fault, ty, owner| render_fixture_range_with_return_class(
+            f,None,&RefResolver::from_test_returning_bool_switch(fault),"int",None,ty,owner);
+        assert!(render(&f,0,0x41,Some("UOwner")).contains("switch ("));
+        for fault in 1..=5 { assert!(!render(&f,fault,0x41,Some("UOwner")).contains("switch ("),"metadata {fault}"); }
+        for (ty,owner) in [(0x44,Some("UOwner")),(0x50,Some("UOwner")),(0x41,Some("UOther")),(0x41,None)] {
+            assert!(!render(&f,0,ty,owner).contains("switch ("));
+        }
+        let mut other = f.clone();
+        let (from,to)=(other.labels["early_guard"],other.labels["active"]);
+        other.instrs.iter_mut().find(|i| i.offset_dw==from).unwrap().dwords[0]=(to as i64-from as i64-2) as i32 as u32;
+        assert!(!render(&other,0,0x41,Some("UOwner")).contains("switch ("));
+        let mut other = f.clone(); replace_same_width(&mut other,"default","SetV1",&[6],&[2]);
+        assert!(!render(&other,0,0x41,Some("UOwner")).contains("switch ("));
+        let mut other = f.clone(); replace_same_width(&mut other,"active","PshVPtr",&[2],&[]);
+        assert!(!render(&other,0,0x41,Some("UOwner")).contains("switch ("));
+        let mut other = f.clone();
+        let read = other.instrs.iter_mut().find(|i| i.op.name=="RDR1").unwrap(); read.words[0]=10;
+        assert!(!render(&other,0,0x41,Some("UOwner")).contains("switch ("));
+    }
+
+    fn returning_two_case_fixture(reverse: bool, carry: bool) -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        // A value temporary survives an early return and is destroyed separately
+        // in each returning arm, matching the real FGameplayTag lifetime.
+        a.op("PSF", &[12], &[]); a.op("CALLSYS", &[], &[]);
+        a.op("CpyVtoR1", &[7], &[]); a.label("early_guard"); a.jump("JLowZ", "switch");
+        a.op("SetV4", &[6], &[0]); a.op("PSF", &[12], &[]); a.op("CALLSYS", &[], &[]);
+        a.label("early_copy"); a.op("CpyVtoR4", &[6], &[]); a.jump("JMP", "ret");
+        a.label("switch"); a.op("SetV1", &[9], &[3]); a.label("widen"); a.op("sbTOi", &[4, 9], &[]);
+        if carry { a.op("PshVPtr", &[20], &[]); }
+        a.label("upper"); a.op("CMPIi", &[4], &[3]); a.jump("JP", "default");
+        a.label("first_compare"); a.op("CMPIi", &[4], &[2]); a.jump("JZ", "case_two");
+        a.label("second_compare"); a.op("CMPIi", &[4], &[3]); a.jump("JZ", "case_three");
+        a.jump("JMP", "default");
+        let order = if reverse { [("case_two", 6, 1), ("case_three", 10, 2)] }
+            else { [("case_three", 10, 2), ("case_two", 6, 1)] };
+        for (n, (label, slot, value)) in order.into_iter().enumerate() {
+            a.label(label); a.op("SetV4", &[slot], &[value]);
+            a.op("PSF", &[12], &[]); a.op("CALLSYS", &[], &[]);
+            a.label(if n == 0 { "first_copy" } else { "second_copy" }); a.op("CpyVtoR4", &[slot], &[]);
+            a.label(if n == 0 { "first_exit" } else { "second_exit" }); a.jump("JMP", "ret");
+        }
+        a.label("default"); a.op("SetV4", &[10], &[0]);
+        a.op("PSF", &[12], &[]); a.op("CALLSYS", &[], &[]);
+        a.label("default_copy"); a.op("CpyVtoR4", &[10], &[]);
+        a.label("ret"); a.op("RET", &[2], &[]);
+        let mut f = a.finish();
+        let mut ctor = true;
+        for op in &mut f.instrs {
+            if op.op.name == "CALLSYS" { op.qwords = vec![if ctor { 1 } else { 3 }]; ctor = false; }
+        }
+        f
+    }
+
+    #[test]
+    fn returning_two_case_switch_keeps_cleanup_early_return_and_physical_order() {
+        // Reuse typed native default-ctor/dtor metadata; no copy constructor.
+        let refs = RefResolver::from_test_named_default_rvo_return(0);
+        for reverse in [false, true] {
+            let fixture = returning_two_case_fixture(reverse, false);
+            let source = render_fixture_range_with_return(&fixture, None, &refs, "", None, 0x44);
+            assert!(source.contains("switch (local_4)"), "{source}");
+            assert_eq!(source.matches("return 0;").count(), 2, "{source}");
+            assert_eq!(source.matches("return 1;").count(), 1, "{source}");
+            assert_eq!(source.matches("return 2;").count(), 1, "{source}");
+            let two = source.find("case 2:").unwrap(); let three = source.find("case 3:").unwrap();
+            assert_eq!(two < three, reverse, "{source}");
+            assert!(source.find("return 0;").unwrap() < source.find("switch (").unwrap(), "{source}");
+            assert!(!source.contains("break;"), "{source}");
+            for label in ["case 2", "case 3", "default"] {
+                assert!(!source.contains(&format!("{label}:\n    {{")), "redundant case scope: {source}");
+            }
+            assert!(source.trim_end().ends_with('}'), "shared RET was emitted twice: {source}");
+        }
+    }
+
+    #[test]
+    fn returning_two_case_switch_rejects_other_entries_types_carries_and_returns() {
+        let refs = RefResolver::from_test_named_default_rvo_return(0);
+        let f = returning_two_case_fixture(false, false);
+        let render = |f: &CompoundFixture| render_fixture_range_with_return(f, None, &refs, "int", None, 0x44);
+        for (label, slot, value) in [("upper", 4, 4), ("first_compare", 5, 2), ("first_compare", 4, 3)] {
+            let mut bad = f.clone(); replace_same_width(&mut bad, label, "CMPIi", &[slot], &[value]);
+            assert!(!render(&bad).contains("switch ("));
+        }
+        for label in ["early_copy", "first_copy", "default_copy"] {
+            let mut bad = f.clone(); let at = bad.labels[label];
+            let slot = bad.instrs.iter().find(|i| i.offset_dw == at).unwrap().words[0];
+            replace_same_width(&mut bad, label, "CpyVtoR8", &[slot], &[]);
+            assert!(!render(&bad).contains("switch ("));
+        }
+        for (label, dst) in [("case_three", 10), ("case_two", 6), ("default", 10)] {
+            let mut bad = f.clone(); replace_same_width(&mut bad, label, "CpyVtoV4", &[dst, 8], &[]);
+            assert!(!render(&bad).contains("switch ("), "nonconstant arm {label}");
+        }
+        let mut bad = f.clone(); retarget(&mut bad, "first_exit", "case_two");
+        assert!(!render(&bad).contains("switch ("));
+        let mut bad = f.clone();
+        let jump = bad.instrs.iter_mut().find(|i| i.offset_dw == f.labels["early_guard"]).unwrap();
+        jump.dwords[0] = (f.labels["case_three"] as i64 - jump.offset_dw as i64 - 2) as i32 as u32;
+        assert!(!render(&bad).contains("switch ("));
+        assert!(!render(&returning_two_case_fixture(false, true)).contains("switch ("));
+        for (op, dst) in [("fTOi", 4), ("sbTOi", 6)] {
+            let mut bad = f.clone(); replace_same_width(&mut bad, "widen", op, &[dst, 9], &[]);
+            assert!(!render_fixture_range_with_return(&bad, None, &refs, "", None, 0x44).contains("switch ("));
+        }
+        for (selector, ret) in [("uint", 0x44), ("int", 0x50), ("int", 0x52)] {
+            assert!(!render_fixture_range_with_return(&f, None, &refs, selector, None, ret).contains("switch ("));
+        }
+        let scope = LoopScope { continue_off: f.labels["switch"], break_off: f.labels["ret"],
+            continue_only: false, latch_block: None };
+        assert!(!render_fixture_range_with_return(&f, Some(("switch", "ret", scope)),
+            &refs, "int", None, 0x44).contains("switch ("));
+
+        // A carry can originate before this suffix. The real emit_range hook
+        // must see it before take(), even though empty-init prefix simulation
+        // would show a balanced stack in each of its immediate predecessors.
+        let fc = FuncCode { func: "Fixture::ReturningSwitch".into(), is_method: false,
+            param_names: Vec::new(), param_types: Vec::new(),
+            ret: DataType { token: 0x44, ..Default::default() }, bytecode: Vec::new() };
+        let locals = HashMap::from([(4, "int".to_owned()), (7, "bool".to_owned())]);
+        let ctx = Ctx { f: &fc, refs: &refs, instrs: &f.instrs, super_ctor: None, ret_ty: Some(&fc.ret),
+            fields: None, param_types: None, class_name: None, local_types: Some(&locals),
+            float_slots: Default::default(), param_off_map: HashMap::new(), rvo_off: None,
+            keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+        let g = cfg::build(&f.instrs);
+        let idx_of: HashMap<_, _> = g.blocks.iter().enumerate().map(|(i,b)| (b.start_dw,i)).collect();
+        let start = idx_of[&f.labels["switch"]];
+        let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None,
+            exit_join_is_ret: false, exit_ret_rows_ok: false, exit_rvo_return: false,
+            exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0,
+            carry: Some((start, vec![Arg::obj("local_20".into()).carry()])),
+            loop_scope: None, pending_loop_exit: None, shared_return: None };
+        let mut out = String::new(); st.emit_range(start, g.blocks.len(), 0, &mut out);
+        assert!(!out.contains("switch ("), "incoming carry accepted: {out}");
+    }
+
+    fn returning_void_switch_fixture(reverse: bool, fault: u8) -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        // Both earlier returns force else nesting. The inner emit_range stops
+        // immediately before RET, exactly like the two guards in the real body.
+        a.op("CpyVtoR1", &[7], &[]); a.label("first_guard"); a.jump("JLowZ", "second_guard");
+        a.op("SetV4", &[8], &[11]); a.op("LoadThisR", &[0], &[1]);
+        a.label("early_store"); a.op(if fault == 1 { "PshV4" } else { "WRTV4" }, &[8], &[]);
+        a.jump("JMP", "ret");
+        a.label("second_guard"); a.op("CpyVtoR1", &[9], &[]); a.jump("JLowZ", "switch");
+        a.label("bare_exit"); a.jump("JMP", "ret");
+        a.label("switch"); a.op("SetV1", &[1], &[3]);
+        a.label("widen"); a.op("sbTOi", &[4, 1], &[]);
+        a.op("CMPIi", &[4], &[3]); a.jump("JP", "default");
+        a.op("CMPIi", &[4], &[2]); a.jump("JZ", "case_two");
+        a.op("CMPIi", &[4], &[3]); a.jump("JZ", "case_three");
+        a.jump("JMP", "default");
+        let order = if reverse { [("case_two", 1, 22), ("case_three", 2, 33)] }
+            else { [("case_three", 2, 33), ("case_two", 1, 22)] };
+        for (n, (label, field, value)) in order.into_iter().enumerate() {
+            a.label(label); a.op("SetV4", &[8], &[value]); a.op("LoadThisR", &[0], &[field]);
+            a.label(if n == 0 { "first_store" } else { "second_store" });
+            a.op(if fault == 2 && n == 0 { "PshV4" } else if fault == 3 && n == 0 { "CpyVtoR4" } else { "WRTV4" }, &[8], &[]);
+            a.label(if n == 0 { "first_exit" } else { "second_exit" }); a.jump("JMP", "ret");
+        }
+        a.label("default");
+        if fault == 4 { a.op("PshC4", &[], &[0]); } else { a.jump("JMP", "ret"); }
+        a.label("ret"); a.op("RET", &[2], &[]);
+        a.finish()
+    }
+
+    #[test]
+    fn returning_void_switch_keeps_nested_guards_case_order_and_one_final_return() {
+        let refs = RefResolver::from_test_member_chain(&[("UHost", "First"), ("UHost", "Second")]);
+        let render = |f: &CompoundFixture| render_fixture_range_with_return(f, None, &refs, "", None, 0x52);
+        for reverse in [false, true] {
+            let f = returning_void_switch_fixture(reverse, 0);
+            let source = render(&f);
+            let at = source.find("switch (local_4)").expect(&source);
+            assert_eq!(source[..at].matches("return;").count(), 2, "{source}");
+            assert_eq!(source.matches("return;").count(), 5, "{source}");
+            assert_eq!(source.find("case 2:").unwrap() < source.find("case 3:").unwrap(), reverse);
+            assert!(source.contains("        switch (local_4)"), "nested range was flattened: {source}");
+            assert!(source.contains("        }\n        return;"), "missing default exit: {source}");
+            assert!(!source.contains("default:") && !source.contains("break;"), "{source}");
+            assert!(!source.contains("case 2:\n            {") && !source.contains("case 3:\n            {"), "new case scope: {source}");
+            assert_eq!(source.matches(".First =").count(), 2, "{source}");
+            assert_eq!(source.matches(".Second =").count(), 1, "{source}");
+        }
+        for fault in 1..=4 { assert!(!render(&returning_void_switch_fixture(false, fault)).contains("switch ("), "unbalanced/value/default {fault}"); }
+        let f = returning_void_switch_fixture(false, 0);
+        for (from, to) in [("first_guard", "case_three"), ("bare_exit", "case_two"), ("first_exit", "case_two"), ("default", "case_three")] {
+            let mut bad = f.clone(); retarget(&mut bad, from, to);
+            assert!(!render(&bad).contains("switch ("), "foreign edge {from}->{to}");
+        }
+        for token in [0x44, 0x41, 0x50] {
+            assert!(!render_fixture_range_with_return(&f, None, &refs, "int", None, token).contains("switch ("));
+        }
+        let scope = LoopScope { continue_off: f.labels["switch"], break_off: f.labels["ret"], continue_only: false, latch_block: None };
+        assert!(!render_fixture_range_with_return(&f, Some(("switch", "ret", scope)), &refs, "int", None, 0x52).contains("switch ("));
+
+        // Exercise the exact range boundary directly, including the unchanged
+        // explicit case-exit and incoming-carry refusals.
+        let fc = FuncCode { func: "Fixture::VoidSwitch".into(), is_method: false,
+            param_names: Vec::new(), param_types: Vec::new(), bytecode: Vec::new(),
+            ret: DataType { token: 0x52, ..Default::default() } };
+        let locals = HashMap::from([(4, "int".into()), (7, "bool".into()), (9, "bool".into())]);
+        let ctx = Ctx { f: &fc, refs: &refs, instrs: &f.instrs, super_ctor: None, ret_ty: Some(&fc.ret),
+            fields: None, param_types: None, class_name: None, local_types: Some(&locals),
+            float_slots: Default::default(), param_off_map: HashMap::new(), rvo_off: None,
+            keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+        let g = cfg::build(&f.instrs);
+        let idx_of: HashMap<_, _> = g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
+        let start = idx_of[&f.labels["switch"]];
+        for fault in 0..=3 {
+            let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of,
+                exit_join: (fault == 2).then_some(f.labels["ret"]), exit_join_is_ret: false,
+                exit_ret_rows_ok: false, exit_rvo_return: false, exit_mixed_rvo_ret_rows_ok: false,
+                exit_scan_floor: 0, carry: (fault == 3).then(|| (start, vec![Arg::obj("Held".into()).carry()])),
+                loop_scope: None, pending_loop_exit: None, shared_return: None };
+            let stop = g.blocks.len() - if fault == 1 { 2 } else { 1 };
+            let mut out = String::new();
+            let got = st.try_emit_returning_two_case_switch(start, stop, 2, &mut out);
+            assert_eq!(got.is_some(), fault == 0, "range/exit/carry {fault}: {out}");
+            if fault != 0 { assert!(out.is_empty()); }
+        }
+    }
+
+    fn two_case_void_switch_fixture(selector: u16, outside_entry: bool, carried_prefix: bool) -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        if outside_entry {
+            a.op("CpyVtoR1", &[7], &[]);
+            a.jump("JLowNZ", "case_b");
+        }
+        a.label("prefix");
+        a.op("SetV4", &[8], &[17]);
+        if carried_prefix { a.op("PshVPtr", &[2], &[]); }
+        a.label("upper_compare");
+        a.op("CMPIi", &[selector], &[1]);
+        a.jump("JP", "join");
+        a.label("first_compare");
+        a.op("CMPIi", &[selector], &[0]);
+        a.jump("JZ", "case_a");
+        a.label("second_compare");
+        a.op("CMPIi", &[selector], &[1]);
+        a.jump("JZ", "case_b");
+        a.jump("JMP", "join");
+        a.label("case_a");
+        a.op("LoadThisR", &[0], &[1]);
+        a.op("WRTV4", &[8], &[]);
+        a.label("case_a_exit");
+        a.jump("JMP", "join");
+        a.label("case_b");
+        a.op("LoadThisR", &[0], &[2]);
+        a.op("WRTV4", &[8], &[]);
+        a.label("join");
+        a.op("RET", &[3], &[]);
+        a.finish()
+    }
+
+    #[test]
+    fn two_case_void_switch_preserves_prefix_and_both_field_mutations() {
+        let refs = RefResolver::from_test_member_chain(&[("UHolder", "Left"), ("UHolder", "Right")]);
+        for (selector, expected) in [((-2i16) as u16, "newState"), (4, "local_4")] {
+            let fixture = two_case_void_switch_fixture(selector, false, false);
+            let source = render_fixture_range_with_return(&fixture, None, &refs, "int", Some("int"), 0x52);
+            assert_eq!(source, format!(concat!("local_8 = 17;\nswitch ({})\n{{\n",
+                "    case 0:\n    {{\n        this.Left = local_8;\n        break;\n    }}\n",
+                "    case 1:\n    {{\n        this.Right = local_8;\n    }}\n",
+                "}}\nreturn;\n"), expected));
+        }
+    }
+
+    #[test]
+    fn two_case_void_switch_rejects_mismatched_guards_types_entries_and_exits() {
+        let refs = RefResolver::from_test_member_chain(&[("UHolder", "Left"), ("UHolder", "Right")]);
+        let fixture = two_case_void_switch_fixture((-2i16) as u16, false, false);
+        let render = |f: &CompoundFixture| render_fixture_range_with_return(f, None, &refs, "int", Some("int"), 0x52);
+        for (label, slot, value) in [("upper_compare", -2i16, 2), ("first_compare", -3, 0),
+            ("first_compare", -2, 1), ("second_compare", -2, 0)]
+        {
+            let mut other = fixture.clone();
+            replace_same_width(&mut other, label, "CMPIi", &[slot as u16], &[value]);
+            assert!(!render(&other).contains("switch ("));
+        }
+        let mut falling_into_other_case = fixture.clone();
+        retarget(&mut falling_into_other_case, "case_a_exit", "case_b");
+        assert!(!render(&falling_into_other_case).contains("switch ("));
+        for (external, carried) in [(true, false), (false, true)] {
+            let other = two_case_void_switch_fixture((-2i16) as u16, external, carried);
+            assert!(!render(&other).contains("switch ("));
+        }
+        for ty in ["uint", "bool", "EHeaderStatus", ""] {
+            let source = render_fixture_range_with_return(&fixture, None, &refs, "int", Some(ty), 0x52);
+            assert!(!source.contains("switch ("));
+        }
+        let source = render_fixture_range_with_return(&fixture, None, &refs, "int", Some("int"), 0x44);
+        assert!(!source.contains("switch ("));
+        let scope = LoopScope { continue_off: fixture.labels["prefix"], break_off: fixture.labels["join"],
+            continue_only: false, latch_block: None };
+        let source = render_fixture_range_with_return(&fixture, Some(("prefix", "join", scope)),
+            &refs, "int", Some("int"), 0x52);
+        assert!(!source.contains("switch ("));
+    }
+
+    fn trap_switch_fixture(trap: bool) -> CompoundFixture {
+        trap_switch_fixture_after(trap, TestAssembler::default())
+    }
+
+    fn trap_switch_fixture_after(trap: bool, a: TestAssembler) -> CompoundFixture {
+        trap_switch_fixture_with_return(trap, a, true)
+    }
+
+    fn trap_switch_fixture_with_return(
+        trap: bool, mut a: TestAssembler, returns_value: bool,
+    ) -> CompoundFixture {
+        a.label("switch");
+        a.op("CMPIi", &[4], &[2]);
+        a.jump("JP", "default");
+        a.op("CMPIi", &[4], &[0]);
+        a.jump("JS", "default");
+        a.op("SUBIi", &[6, 4], &[0]);
+        a.op("JMPP", &[6], &[2]);
+        a.jump("JMP", "case_zero");
+        a.jump("JMP", "case_one");
+        for (label, value) in [("case_two", 2), ("case_zero", 0), ("case_one", 1)] {
+            a.label(label);
+            a.op("SetV1", &[5], &[value]);
+            if returns_value {
+                a.op("CpyVtoR4", &[5], &[]);
+            }
+            a.jump("JMP", "shared_ret");
+        }
+        a.label("default");
+        if trap {
+            a.op("ThrowException", &[0], &[]);
+        } else {
+            a.op("SetV1", &[5], &[3]);
+            if returns_value {
+                a.op("CpyVtoR4", &[5], &[]);
+            }
+            a.jump("JMP", "shared_ret");
+        }
+        a.label("shared_ret");
+        a.op("RET", &[0], &[]);
+        a.finish()
+    }
+
+    #[test]
+    fn typed_trap_switch_uses_enumerators_and_omits_unreachable_return() {
+        let mut refs = RefResolver::default();
+        refs.set_enum_entries(HashMap::from([("EHeaderStatus".to_owned(), vec![
+            ("Zero".to_owned(), 0), ("One".to_owned(), 1), ("Two".to_owned(), 2),
+        ])]));
+        let src = render_fixture_range_with_selector(&trap_switch_fixture(true), None, &refs, "EHeaderStatus");
+        assert!(src.contains("switch (local_4)"), "{src}");
+        for label in ["Zero", "One", "Two"] {
+            assert!(src.contains(&format!("case EHeaderStatus::{label}:")), "{src}");
+        }
+        assert!(!src.contains("default:"), "{src}");
+        assert_eq!(src.matches("return ").count(), 3, "{src}");
+        assert!(src.trim_end().ends_with('}'), "unreachable join return survived:\n{src}");
+    }
+
+    #[test]
+    fn trap_switch_keeps_numeric_fallback_for_unknown_ambiguous_or_non_enum_cases() {
+        let full = vec![("Zero".to_owned(), 0), ("One".to_owned(), 1), ("Two".to_owned(), 2)];
+        for (selector, entries) in [
+            ("int", full.clone()),
+            ("EHeaderStatus", full[..2].to_vec()),
+            ("EHeaderStatus", vec![("Zero".to_owned(), 0), ("Alias".to_owned(), 0),
+                ("One".to_owned(), 1), ("Two".to_owned(), 2)]),
+        ] {
+            let mut refs = RefResolver::default();
+            refs.set_enum_entries(HashMap::from([("EHeaderStatus".to_owned(), entries)]));
+            let src = render_fixture_range_with_selector(&trap_switch_fixture(true), None, &refs, selector);
+            assert!(src.contains("case 0:"), "{src}");
+            assert!(!src.contains("case EHeaderStatus::"), "{src}");
+            if selector != "int" {
+                assert!(src.contains("switch (int(local_4))"), "{src}");
+            }
+            assert!(src.lines().last().unwrap().trim_start().starts_with("return"), "{src}");
+        }
+        let mut refs = RefResolver::default();
+        refs.set_enum_entries(HashMap::from([("EHeaderStatus".to_owned(), full)]));
+        let src = render_fixture_range_with_selector(&trap_switch_fixture(false), None, &refs, "EHeaderStatus");
+        assert!(src.contains("switch (int(local_4))"), "{src}");
+        assert!(src.contains("case 0:") && src.contains("default:"), "{src}");
+    }
+
+
+    #[test]
+    fn trap_switch_recovers_an_adjacent_widened_enum_parameter() {
+        let mut refs = RefResolver::default();
+        refs.set_enum_entries(HashMap::from([("EHeaderStatus".to_owned(), vec![
+            ("Zero".to_owned(), 0), ("One".to_owned(), 1), ("Two".to_owned(), 2),
+        ])]));
+        for widening in ["sbTOi", "ubTOi"] {
+            let mut prefix = TestAssembler::default();
+            // An earlier life of the same physical carrier is not the suffix.
+            prefix.op("SetV4", &[4], &[99]);
+            prefix.op(widening, &[4, (-2i16) as u16], &[]);
+            let fixture = trap_switch_fixture_after(true, prefix);
+            let src = render_fixture_range_with_parameter(
+                &fixture, None, &refs, "int", Some("EHeaderStatus"));
+            assert!(src.contains("switch (newState)"), "{src}");
+            assert!(src.contains("case EHeaderStatus::Two:"), "{src}");
+            assert!(src.contains("local_4 = 99;"), "{src}");
+            assert!(!src.contains("local_4 = int(newState);"), "{src}");
+            assert_eq!(src.matches("newState").count(), 1, "{src}");
+            assert_eq!(src.matches("return ").count(), 3, "{src}");
+        }
+    }
+
+    #[test]
+    fn widened_switch_requires_adjacent_enum_metadata_and_trap() {
+        let mut refs = RefResolver::default();
+        refs.set_enum_entries(HashMap::from([("EHeaderStatus".to_owned(), vec![
+            ("Zero".to_owned(), 0), ("One".to_owned(), 1), ("Two".to_owned(), 2),
+        ])]));
+        for (parameter, gap, trap) in [
+            ("int", false, true), ("EHeaderStatus", true, true),
+            ("EHeaderStatus", false, false),
+        ] {
+            let mut prefix = TestAssembler::default();
+            prefix.op("sbTOi", &[4, (-2i16) as u16], &[]);
+            if gap {
+                prefix.op("SUSPEND", &[], &[]);
+            }
+            let fixture = trap_switch_fixture_after(trap, prefix);
+            let src = render_fixture_range_with_parameter(
+                &fixture, None, &refs, "int", Some(parameter));
+            assert!(src.contains("switch (local_4)"), "{src}");
+            assert!(src.contains("case 0:"), "{src}");
+            assert!(!src.contains("case EHeaderStatus::"), "{src}");
+            assert!(src.contains("local_4 = "), "{src}");
+        }
+    }
+
+
+    #[test]
+    fn typed_void_switch_omits_join_return_also_targeted_by_an_early_return() {
+        let mut refs = RefResolver::default();
+        refs.set_enum_entries(HashMap::from([("EHeaderStatus".to_owned(), vec![
+            ("Zero".to_owned(), 0), ("One".to_owned(), 1), ("Two".to_owned(), 2),
+        ])]));
+        let mut prefix = TestAssembler::default();
+        prefix.op("CpyVtoR1", &[7], &[]);
+        prefix.jump("JLowZ", "switch");
+        prefix.jump("JMP", "shared_ret");
+        let fixture = trap_switch_fixture_with_return(true, prefix, false);
+        let src = render_fixture_range_with_return(
+            &fixture, None, &refs, "EHeaderStatus", None, 0x52);
+        assert!(src.contains("switch (local_4)"), "{src}");
+        assert!(src.contains("case EHeaderStatus::Two:"), "{src}");
+        let switch_at = src.find("switch (").unwrap();
+        assert!(src[..switch_at].contains("return;"), "early return lost:\n{src}");
+        assert_eq!(src.matches("return;").count(), 4, "{src}");
+        assert!(src.trim_end().ends_with('}'), "unreachable join survived:\n{src}");
+        let numeric = render_fixture_range_with_return(
+            &fixture, None, &refs, "int", None, 0x52);
+        assert!(numeric.contains("case 0:"), "{numeric}");
+        assert!(numeric.trim_end().ends_with("return;"),
+            "numeric trap fallback lost its join:\n{numeric}");
+    }
+
+    #[test]
+    fn addressing_or_writing_carried_default_drops_only_its_candidate() {
+        let ins = |name, slot| Instr {
+            offset_dw: 0,
+            op: crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap(),
+            words: vec![slot], dwords: Vec::new(), qwords: Vec::new(),
+        };
+        for name in ["PSF", "PshVPtr", "RDR4", "STOREOBJ"] {
+            let mut arg = Arg::psf("local_26".to_owned(), Some("FGameplayTagContainer".to_owned())).carry();
+            arg.default_ctor = Some((26, "FGameplayTagContainer".to_owned(), 138));
+            arg.reeval = true;
+            let mut stack = vec![arg];
+            assert!(invalidate_carried_defaults(&mut stack, &ins(name, 14)).is_empty());
+            assert!(stack[0].default_ctor.is_some());
+            assert_eq!(invalidate_carried_defaults(&mut stack, &ins(name, 26)), vec!["local_26"]);
+            assert!(stack[0].default_ctor.is_none());
+            assert_eq!(stack[0].s, "local_26");
+            assert_eq!(stack[0].ty.as_deref(), Some("FGameplayTagContainer"));
+            assert!(stack[0].is_psf && stack[0].carryable && !stack[0].reeval);
+        }
+    }
+
+
+    #[test]
+    fn parameter_field_enum_requires_matching_owner_and_the_actual_field_value_type() {
+        let mut refs = RefResolver::default();
+        refs.set_class_fields(HashMap::from([
+            ("UAIState_PerceptionResponse".to_owned(), HashMap::from([
+                ("SwitchAIStateMode".to_owned(), "ESwitchAIStateMode".to_owned()),
+                ("Priority".to_owned(), "int".to_owned()),
+            ])),
+            // An identically named field on the current class is no foreign witness.
+            ("UAIEventResponse_SwitchState".to_owned(), HashMap::from([
+                ("SwitchAIStateMode".to_owned(), "EOtherMode".to_owned()),
+            ])),
+        ]));
+        assert_eq!(enum_parameter_field_type(&refs, "const UAIState_PerceptionResponse",
+            "UAIState_PerceptionResponse", "SwitchAIStateMode").as_deref(), Some("ESwitchAIStateMode"));
+        assert_eq!(enum_parameter_field_type(&refs, "UAIEventResponse_SwitchState",
+            "UAIState_PerceptionResponse", "SwitchAIStateMode"), None);
+        assert_eq!(enum_parameter_field_type(&refs, "UAIState_PerceptionResponse",
+            "UAIState_PerceptionResponse", "Priority"), None);
+        assert_eq!(enum_parameter_field_type(&refs, "UAIState_PerceptionResponse",
+            "UAIState_PerceptionResponse", "MissingField"), None);
+    }
+
+    #[test]
+    fn a_native_f64_predicate_keeps_the_widened_argument_explicit() {
+        let ins = |name, words: &[u16], qwords: &[u64]| Instr {
+            offset_dw: 0, op: crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap(),
+            words: words.to_vec(), dwords: Vec::new(), qwords: qwords.to_vec(),
+        };
+        let refs = RefResolver::from_test_scalar_predicate_widening(0);
+        let code = vec![ins("PshC8", &[], &[0.0001f64.to_bits()]), ins("PshC8", &[], &[1.0f64.to_bits()]),
+            ins("fTOd", &[12,6], &[]), ins("PshV8", &[12], &[]), ins("CALLSYS", &[], &[10])];
+        assert!(scalar_argument_widening(&code, 2, &refs));
+        for fault in 1..=6 {
+            assert!(!scalar_argument_widening(&code, 2, &RefResolver::from_test_scalar_predicate_widening(fault)), "metadata {fault}");
+        }
+        for (at, other) in [(0, ins("PshC4", &[], &[0])), (1, ins("PshC8", &[], &[f64::NAN.to_bits()])),
+            (2, ins("iTOd", &[12,6], &[])), (3, ins("PshV8", &[14], &[])), (4, ins("CALLSYS", &[], &[11]))] {
+            let mut wrong = code.clone(); wrong[at] = other;
+            assert!(!scalar_argument_widening(&wrong, 2, &refs), "instruction {at}");
+        }
+        assert!(!scalar_argument_widening(&code, 0, &refs));
+        assert!(!scalar_argument_widening(&code[..4], 2, &refs));
+    }
+
+    #[test]
+    fn a_native_f64_range_keeps_the_widened_upper_bound_explicit() {
+        let ins = |name, words: &[u16], qwords: &[u64]| Instr {
+            offset_dw: 0, op: crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap(),
+            words: words.to_vec(), dwords: Vec::new(), qwords: qwords.to_vec(),
+        };
+        let refs = RefResolver::from_test_range_widening(0);
+        let code = vec![ins("fTOd", &[30, 11], &[]), ins("PshV8", &[30], &[]),
+            ins("PshC8", &[], &[0]), ins("CALLSYS", &[], &[10]), ins("CpyRtoV8", &[34], &[])];
+        assert!(scalar_argument_widening(&code, 0, &refs));
+        for fault in 1..=10 {
+            assert!(!scalar_argument_widening(&code, 0, &RefResolver::from_test_range_widening(fault)), "metadata {fault}");
+        }
+        for (at, other) in [(0, ins("iTOd", &[30, 11], &[])), (0, ins("fTOd", &[30, 30], &[])),
+            (0, ins("fTOd", &[30], &[])), (1, ins("PshV8", &[32], &[])),
+            (2, ins("PshC8", &[], &[1.0f64.to_bits()])), (2, ins("PshC4", &[], &[0])),
+            (3, ins("CALLSYS", &[], &[11])), (4, ins("CpyRtoV4", &[34], &[]))] {
+            let mut wrong = code.clone(); wrong[at] = other;
+            assert!(!scalar_argument_widening(&wrong, 0, &refs), "instruction {at}");
+        }
+        assert!(!scalar_argument_widening(&code[..4], 0, &refs));
+        assert!(!scalar_argument_widening(&code, 1, &refs));
+    }
+
+    #[test]
+    fn a_field_widening_keeps_its_cast_only_when_the_destination_is_addressed_next() {
+        let ins = |name, words: &[u16]| Instr {
+            offset_dw: 0,
+            op: crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap(),
+            words: words.to_vec(), dwords: Vec::new(), qwords: Vec::new(),
+        };
+        let code = vec![ins("RDR4", &[105]), ins("fTOd", &[26, 105]), ins("PSF", &[26])];
+        assert!(addressed_field_widening(&code, 1));
+        for (at, replacement) in [
+            (0, ins("RDR4", &[104])),
+            (0, ins("CpyRtoV4", &[105])),
+            (1, ins("iTOd", &[26, 105])),
+            (2, ins("PSF", &[28])),
+            (2, ins("CpyVtoV8", &[30, 26])),
+            (2, ins("PshV8", &[26])),
+        ] {
+            let mut other = code.clone();
+            other[at] = replacement;
+            assert!(!addressed_field_widening(&other, 1));
+        }
+        assert!(!addressed_field_widening(&code, 0));
+        assert!(!addressed_field_widening(&code[..2], 1));
+    }
+
     fn compound_switch_fixture() -> CompoundFixture {
         let mut a = TestAssembler::default();
         a.label("preheader");
@@ -9392,7 +14915,7 @@ mod tests {
             .iter_mut()
             .find(|ins| ins.offset_dw == source)
             .expect("source instruction");
-        assert!(matches!(ins.op.name, "JMP" | "JZ" | "JNZ"));
+        assert!(matches!(ins.op.name, "JMP" | "JZ" | "JNZ" | "JLowZ" | "JLowNZ"));
         ins.dwords[0] = (target as i64 - source as i64 - 2) as i32 as u32;
     }
 
@@ -9440,24 +14963,187 @@ mod tests {
         ins.op = op;
     }
 
+    #[test]
+    fn compound_test_first_retry_consumes_the_full_predicate_dag() {
+        let make = |fault: u8, shift: u16| {
+            let mut a = TestAssembler::default();
+            if fault == 2 { a.jump("JMP", "join"); }
+            if fault == 11 { a.jump("JMP", "increment"); }
+            a.label("entry");
+            a.op("SetV4", &[49 + shift], &[3]); a.op("SetV1", &[79 + shift], &[0]);
+            a.op("SetV4", &[85 + shift], &[0]); a.jump("JMP", if fault == 1 { "body" } else { "test" });
+            a.label("body"); a.op("SUSPEND", &[], &[]);
+            if fault == 7 { a.op("CpyVtoR1", &[72 + shift], &[]); }
+            if fault == 9 { a.jump("JMP", "rhs"); }
+            if fault == 12 { a.op("JMPP", &[85 + shift], &[0]); }
+            a.op("SetV4", &[69 + shift], &[0]); a.op("SetV1", &[72 + shift], &[0]);
+            a.op("CMPIi", &[85 + shift], &[0]); a.jump("JZ", "increment");
+            a.op("CMPIi", &[85 + shift], &[2]); a.jump("JNZ", "increment");
+            a.op("SetV1", &[79 + shift], &[1]); a.jump("JMP", "exit");
+            a.label("increment"); a.op("IncVi", &[85 + shift], &[]);
+            a.label("test"); a.op("CMPi", &[85 + shift, 49 + shift], &[]); a.jump("JS", "rhs");
+            if fault == 3 { a.op("CALLSYS", &[], &[0, 0]); }
+            else { a.op("SetV4", &[if fault == 13 { 65534 } else { 69 + shift }], &[if fault == 4 { 2 } else { 0 }]); }
+            a.jump("JMP", if fault == 14 { "test" } else { "join" });
+            a.label("rhs"); a.op("CpyVtoV4", &[72 + shift, if fault == 5 { 69 + shift } else { 79 + shift }], &[]);
+            a.op("NOT", &[72 + shift], &[]); a.op("CpyVtoV4", &[69 + shift, 72 + shift], &[]);
+            a.label("join"); a.op("CpyVtoR1", &[69 + shift], &[]);
+            a.jump("JLowNZ", match fault { 8 => "increment", 10 => "exit", _ => "body" });
+            a.label("exit");
+            if fault == 6 { a.op("CpyVtoR1", &[69 + shift], &[]); }
+            a.op("SetV4", &[69 + shift], &[0]); a.op("SetV1", &[72 + shift], &[0]); a.op("RET", &[0], &[]);
+            a.finish()
+        };
+        let inspect = |fixture: &CompoundFixture, shift: i32, type_fault: u8, emit: bool| {
+            let refs = RefResolver::default();
+            let f = FuncCode { func: "Synthetic::Retry".into(), is_method: false, param_names: Vec::new(), param_types: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new() };
+            let mut local_types = HashMap::from([(49 + shift, "int".to_owned()), (85 + shift, "int".to_owned()),
+                (69 + shift, "bool".to_owned()), (72 + shift, "bool".to_owned()), (79 + shift, "bool".to_owned())]);
+            match type_fault {
+                1 => { local_types.insert(85 + shift, "float32".into()); },
+                2 => { local_types.insert(69 + shift, "int".into()); },
+                3 => { local_types.insert(79 + shift, "float32".into()); },
+                _ => {}
+            }
+            let g = cfg::build(&fixture.instrs);
+            let idx_of: HashMap<usize, usize> = g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None, ret_ty: Some(&f.ret), fields: None,
+                param_types: None, class_name: None, local_types: Some(&local_types), float_slots: std::collections::HashSet::new(),
+                param_off_map: HashMap::new(), rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false,
+                exit_rvo_return: false, exit_mixed_rvo_ret_rows_ok: false, exit_scan_floor: 0, carry: None, loop_scope: None,
+                pending_loop_exit: None, shared_return: None };
+            let found = st.compound_test_first_for_loop(idx_of[&fixture.labels["entry"]], g.blocks.len());
+            if let Some((terminal, cond, body_end, increment, continue_off, break_off)) = &found {
+                assert_eq!(*terminal, idx_of[&fixture.labels["join"]]);
+                assert_eq!(*body_end, idx_of[&fixture.labels["increment"]]);
+                assert_eq!(*continue_off, fixture.labels["increment"]); assert_eq!(*break_off, fixture.labels["exit"]);
+                assert_eq!(increment, &format!("++local_{}", 85 + shift));
+                assert!(cond.contains(&format!("local_{} < local_{}", 85 + shift, 49 + shift)), "{cond}");
+                assert!(cond.contains(&format!("local_{}", 79 + shift)) && cond.contains('!'), "{cond}");
+                assert!(!cond.contains(&format!("local_{}", 69 + shift)) && !cond.contains(&format!("local_{}", 72 + shift)), "{cond}");
+            }
+            let mut source = String::new(); if emit { st.emit_range(0, g.blocks.len(), 0, &mut source); }
+            (found.is_some(), source)
+        };
+        for shift in [0, 100] {
+            let f = make(0, shift); let (found, source) = inspect(&f, shift as i32, 0, true);
+            assert!(found, "{source}"); assert_eq!(source.matches("for (;").count(), 1, "{source}");
+            assert_eq!(source.matches(&format!("++local_{}", 85 + shift)).count(), 1, "{source}");
+            // A continue at the end of this body is represented by guarding the remaining work.
+            // Its target is independently checked above against the extracted increment block.
+            let guarded_break = format!("    if (local_{} != 0)\n    {{\n        if (local_{} == 2)\n        {{\n            local_{} = true;\n            break;", 85 + shift, 85 + shift, 79 + shift);
+            assert!(source.contains(&guarded_break), "{source}");
+            assert!(!source.contains("while (") && !source.contains("// JMP"), "{source}");
+            assert!(source.find(&format!("local_{} = 0", 85 + shift)).unwrap() < source.find("for (;").unwrap(), "{source}");
+            assert_eq!(inspect(&f, shift as i32, 0, true).1, source);
+        }
+        for fault in 1..=14 { assert!(!inspect(&make(fault, 0), 0, 0, false).0, "raw/CFG {fault}"); }
+        for fault in 1..=3 { assert!(!inspect(&make(0, 0), 0, fault, false).0, "type {fault}"); }
+        assert!(header_set_value("SetV4", 1, Some("bool".into())).unwrap().full_bool);
+        assert!(header_set_value("SetV4", 2, Some("bool".into())).is_none());
+    }
+
+    #[test]
+    fn copied_script_int_field_keeps_the_plain_read_and_copy() {
+        let mut a = TestAssembler::default();
+        a.op("LoadRObjR", &[8, 0], &[1]); a.op("RDR4", &[1], &[]);
+        a.op("CpyVtoV4", &[2, 1], &[]);
+        // The return can be in a later basic block; inspect the complete function.
+        a.op("SetV1", &[5], &[1]); a.op("CpyVtoR1", &[5], &[]); a.jump("JLowZ", "return");
+        a.op("SetV4", &[6], &[3]); a.label("return");
+        a.op("CpyVtoR4", &[2], &[]); a.op("RET", &[0], &[]);
+        let fixture = a.finish();
+        let refs = RefResolver::from_test_copied_int_field_read("int", false);
+        assert!(copied_int_field_read(&fixture.instrs, 1, &refs));
+        let source = render_fixture_range_with_selector(&fixture, None, &refs, "");
+        assert!(source.contains("local_1 = local_8.Limit;"), "{source}");
+        assert!(source.contains("local_2 = local_1;"), "{source}");
+        assert!(!source.contains("int(local_8.Limit)"), "{source}");
+        for ty in ["float32", "bool", "EKind", "uint", "int64"] {
+            let refs = RefResolver::from_test_copied_int_field_read(ty, false);
+            assert!(!copied_int_field_read(&fixture.instrs, 1, &refs), "{ty}");
+            let source = render_fixture_range_with_selector(&fixture, None, &refs, "");
+            assert!(source.contains("int(local_8.Limit)"), "{ty}: {source}");
+        }
+        assert!(!copied_int_field_read(&fixture.instrs, 1, &RefResolver::default()));
+        assert!(!copied_int_field_read(&fixture.instrs, 1, &RefResolver::from_test_copied_int_field_read("int", true)));
+        assert!(!copied_int_field_read(&fixture.instrs, 0, &refs));
+        let mut other = fixture.instrs.clone(); other[2].words[1] = 4;
+        assert!(!copied_int_field_read(&other, 1, &refs));
+        let mut other = fixture.instrs.clone(); other[2].words[0] = 1;
+        assert!(!copied_int_field_read(&other, 1, &refs));
+        let mut a = TestAssembler::default();
+        a.op("SetV4", &[2], &[0]);
+        a.op("LoadRObjR", &[8, 0], &[1]); a.op("RDR4", &[1], &[]);
+        a.op("CpyVtoV4", &[2, 1], &[]); a.op("CpyVtoR4", &[2], &[]); a.op("RET", &[0], &[]);
+        assert!(!copied_int_field_read(&a.finish().instrs, 2, &refs));
+        let mut a = TestAssembler::default();
+        a.op("LoadRObjR", &[8, 0], &[1]); a.op("RDR4", &[1], &[]);
+        a.op("CpyVtoV4", &[2, 1], &[]); a.op("ADDIi", &[1, 3], &[1]);
+        a.op("CMPi", &[2, 1], &[]); a.op("TNS", &[], &[]); a.op("RET", &[0], &[]);
+        assert!(!copied_int_field_read(&a.finish().instrs, 1, &refs));
+        let mut other = fixture.instrs.clone();
+        other[1].op = crate::cache::isa::OPCODES.iter().find(|op| op.name == "RDR8").unwrap();
+        assert!(!copied_int_field_read(&other, 1, &refs));
+    }
     fn render_fixture_range(
         fixture: &CompoundFixture,
         range: Option<(&'static str, &'static str, LoopScope)>,
     ) -> String {
+        render_fixture_range_with_selector(fixture, range, &RefResolver::default(), "EHeaderStatus")
+    }
+
+    fn render_fixture_range_with_selector(
+        fixture: &CompoundFixture,
+        range: Option<(&'static str, &'static str, LoopScope)>,
+        refs: &RefResolver,
+        selector_type: &str,
+    ) -> String {
+        render_fixture_range_with_parameter(fixture, range, refs, selector_type, None)
+    }
+
+    fn render_fixture_range_with_parameter(
+        fixture: &CompoundFixture,
+        range: Option<(&'static str, &'static str, LoopScope)>,
+        refs: &RefResolver,
+        selector_type: &str,
+        parameter_type: Option<&str>,
+    ) -> String {
+        render_fixture_range_with_return(fixture, range, refs, selector_type, parameter_type, 0x44)
+    }
+
+    fn render_fixture_range_with_return(
+        fixture: &CompoundFixture,
+        range: Option<(&'static str, &'static str, LoopScope)>,
+        refs: &RefResolver,
+        selector_type: &str,
+        parameter_type: Option<&str>,
+        return_token: i32,
+    ) -> String {
+        render_fixture_range_with_return_class(fixture,range,refs,selector_type,parameter_type,return_token,None)
+    }
+
+    fn render_fixture_range_with_return_class(
+        fixture: &CompoundFixture, range: Option<(&'static str,&'static str,LoopScope)>,
+        refs: &RefResolver, selector_type: &str, parameter_type: Option<&str>,
+        return_token: i32, class_name: Option<&str>,
+    ) -> String {
+        let parameter_types: Vec<String> = parameter_type.into_iter().map(str::to_owned).collect();
         let f = FuncCode {
             func: "Synthetic::CompoundLoopSwitch".into(),
-            is_method: false,
-            param_names: Vec::new(),
+            is_method: parameter_type.is_some() || class_name.is_some(),
+            param_names: parameter_type.map(|_| vec!["newState".to_owned()]).unwrap_or_default(),
             param_types: Vec::new(),
             ret: DataType {
-                token: 0x44,
+                token: return_token,
                 ..Default::default()
             },
             bytecode: Vec::new(),
         };
-        let refs = RefResolver::default();
-        let local_types =
-            HashMap::from([(4, "EHeaderStatus".to_string()), (7, "bool".to_string())]);
+        let mut local_types = HashMap::from([(7, "bool".to_string())]);
+        if !selector_type.is_empty() { local_types.insert(4, selector_type.to_string()); }
         let g = cfg::build(&fixture.instrs);
         let idx_of: HashMap<usize, usize> = g
             .blocks
@@ -9467,16 +15153,16 @@ mod tests {
             .collect();
         let ctx = Ctx {
             f: &f,
-            refs: &refs,
+            refs,
             instrs: &fixture.instrs,
             super_ctor: None,
             ret_ty: Some(&f.ret),
             fields: None,
-            param_types: None,
-            class_name: None,
+            param_types: Some(&parameter_types),
+            class_name,
             local_types: Some(&local_types),
             float_slots: std::collections::HashSet::new(),
-            param_off_map: HashMap::new(),
+            param_off_map: parameter_type.map(|_| HashMap::from([(-2, 0)])).unwrap_or_default(),
             rvo_off: None,
             keep_ints: None,
             rvo_switch_region: std::cell::Cell::new(false),
@@ -9492,7 +15178,7 @@ mod tests {
             exit_mixed_rvo_ret_rows_ok: false,
             exit_scan_floor: 0,
             carry: None,
-            loop_scope: None,
+            loop_scope: None, pending_loop_exit: None,
             shared_return: None,
         };
         let (start, stop) = if let Some((start, stop, scope)) = range {
@@ -9834,6 +15520,376 @@ mod tests {
     }
 
     #[test]
+    fn copy_constructor_guard_keeps_forwarded_value_but_allows_credit_declaration() {
+        // GA_Falling after constructing v148: its address is immediately forwarded
+        // into the WeaponUsed opAssign. Keep TSubclassOf<T>(member) for inlining.
+        let mut falling = TestAssembler::default();
+        falling.op("PSF", &[148], &[]);
+        falling.op("PSF", &[146], &[]);
+        falling.op("ADDSi", &[0], &[0]);
+        falling.op("CALLSYS", &[], &[]);
+        let falling = falling.finish();
+        assert!(copy_receiver_is_immediately_pushed(
+            falling.instrs.first(), "local_148"
+        ));
+        assert!(!copy_receiver_is_immediately_pushed(
+            falling.instrs.first(), "local_146"
+        ));
+
+        // CreditMusicMode first pushes nullptr for its equality comparison.
+        // Its named copy declaration remains eligible for direct initialization.
+        let mut credit = TestAssembler::default();
+        credit.op("PshNull", &[], &[]);
+        credit.op("PSF", &[12], &[]);
+        credit.op("CALLSYS", &[], &[]);
+        let credit = credit.finish();
+        assert!(!copy_receiver_is_immediately_pushed(
+            credit.instrs.first(), "local_12"
+        ));
+        assert!(!copy_receiver_is_immediately_pushed(None, "local_148"));
+    }
+
+    #[test]
+    fn native_psf_field_copy_survives_the_constructor_gate_and_unwraps() {
+        fn push(code: &mut Vec<i32>, name: &str, word: u16, dword: Option<i32>) -> usize {
+            let op = crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap();
+            let at = code.len(); let mut row = vec![0; op.size_dwords as usize];
+            row[0] = op.opcode as i32 | ((word as i32) << 16);
+            if let Some(v) = dword { row[1] = v; }
+            code.extend(row); at
+        }
+        let mut code = Vec::new();
+        push(&mut code, "PSF", 62, None);
+        let field = push(&mut code, "ADDSi", 0, Some(1));
+        push(&mut code, "PSF", 65, None);
+        push(&mut code, "CALLSYS", 0, Some(1));
+        // A distinct RVO is evaluated after the field copy, before the comparison.
+        push(&mut code, "PSF", 67, None);
+        push(&mut code, "CALLSYS", 0, Some(2));
+        push(&mut code, "PSF", 67, None);
+        push(&mut code, "PSF", 65, None);
+        push(&mut code, "CALLSYS", 0, Some(3));
+        push(&mut code, "CpyRtoV4", 5, None);
+        push(&mut code, "CpyVtoR4", 5, None);
+        push(&mut code, "RET", 0, None);
+        let ret = DataType { token: 0x41, ..Default::default() };
+        let f = FuncCode { func: "Synthetic::FieldEqualsName".into(), is_method: false,
+            param_names: Vec::new(), param_types: Vec::new(), ret: ret.clone(), bytecode: code };
+        let locals = HashMap::from([(62, "FEntry".into()), (65, "FName".into()), (67, "FName".into()), (5, "bool".into())]);
+        let render = |f: &FuncCode, refs: &RefResolver, locals: &HashMap<i32, String>|
+            body_statements_ctor(f, refs, 0, None, Some(&ret), None, None, None, Some(locals), None);
+        let refs = RefResolver::from_test_native_psf_member_copy(0);
+        let source = render(&f, &refs, &locals);
+        let copy = "local_65 = local_62.Name;";
+        assert!(source.contains(copy), "{source}");
+        assert!(!source.contains("FName(local_62.Name)"), "{source}");
+        assert!(source.find(copy).unwrap() < source.find("local_67 = OtherName();").unwrap(), "{source}");
+        assert!(source.contains("local_65 == local_67"), "{source}");
+        for fault in 1..=13 {
+            assert!(!render(&f, &RefResolver::from_test_native_psf_member_copy(fault), &locals).contains(copy), "metadata {fault}");
+        }
+        for (slot, ty) in [(62, "FOther"), (65, "FOther")] {
+            let mut other = locals.clone(); other.insert(slot, ty.into());
+            assert!(!render(&f, &refs, &other).contains(copy));
+        }
+        let mut unknown = f.clone(); unknown.bytecode[field + 1] = 99;
+        assert!(!render(&unknown, &refs, &locals).contains(copy));
+        // A separate member address cannot be substituted for the recorded PSF source.
+        let mut other = f.clone(); other.bytecode[0] = (other.bytecode[0] & 0xffff) | (61 << 16);
+        assert!(!render(&other, &refs, &locals).contains("local_65 = local_61.Name;"));
+    }
+
+    #[test]
+    fn native_member_copy_without_field_metadata_keeps_its_explicit_constructor() {
+        fn push(code: &mut Vec<i32>, name: &str, word: u16, dword: Option<i32>) {
+            let op = crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap();
+            let mut row = vec![0; op.size_dwords as usize];
+            row[0] = op.opcode as i32 | ((word as i32) << 16);
+            if let Some(value) = dword { row[1] = value; }
+            code.extend(row);
+        }
+        let mut code = Vec::new();
+        // The destination has an older value, so losing the field copy would read stale data.
+        push(&mut code, "PSF", 65, None);
+        push(&mut code, "CALLSYS", 0, Some(2));
+        push(&mut code, "PSF", 62, None);
+        push(&mut code, "ADDSi", 0, Some(1));
+        push(&mut code, "PSF", 65, None);
+        push(&mut code, "CALLSYS", 0, Some(1));
+        push(&mut code, "PSF", 67, None);
+        push(&mut code, "CALLSYS", 0, Some(2));
+        push(&mut code, "PSF", 67, None);
+        push(&mut code, "PSF", 65, None);
+        push(&mut code, "CALLSYS", 0, Some(3));
+        push(&mut code, "CpyRtoV4", 5, None);
+        push(&mut code, "CpyVtoR4", 5, None);
+        push(&mut code, "RET", 0, None);
+        let ret = DataType { token: 0x41, ..Default::default() };
+        let f = FuncCode { func: "Synthetic::ReusedMemberCopy".into(), is_method: false,
+            param_names: Vec::new(), param_types: Vec::new(), ret: ret.clone(), bytecode: code };
+        let locals = HashMap::from([(62, "FEntry".into()), (65, "FName".into()),
+            (67, "FName".into()), (5, "bool".into())]);
+        let render = |fault| body_statements_ctor(&f, &RefResolver::from_test_native_psf_member_copy(fault),
+            0, None, Some(&ret), None, None, None, Some(&locals), None);
+        let source = render(14); // Native field declaration is unavailable.
+        let explicit = "local_65 = FName(local_62.Name);";
+        assert!(source.contains(explicit), "{source}");
+        assert!(!source.contains("local_65 = local_62.Name;"), "{source}");
+        assert!(source.find("local_65 = OtherName();").unwrap() < source.find(explicit).unwrap(), "{source}");
+        assert!(source.find(explicit).unwrap() < source.find("local_67 = OtherName();").unwrap(), "{source}");
+        assert!(source.contains("local_65 == local_67"), "{source}");
+        assert!(render(0).contains("local_65 = local_62.Name;")); // Known identical field type still unwraps.
+        assert!(!render(1).contains("local_62.Name")); // Known conflicting field type still rejects.
+    }
+
+    #[test]
+    fn native_value_conversion_keeps_the_local_initialized_before_the_if() {
+        fn push(code: &mut Vec<i32>, name: &str, word: u16, dword: Option<i32>) -> usize {
+            let op = crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap();
+            let at = code.len(); let mut encoded = vec![0; op.size_dwords as usize];
+            encoded[0] = op.opcode as i32 | ((word as i32) << 16);
+            if let Some(value) = dword { encoded[1] = value; }
+            code.extend(encoded); at
+        }
+        let mut code = Vec::new();
+        push(&mut code, "PSF", 16, None);
+        push(&mut code, "CALLSYS", 0, Some(2)); // Source() builds the FString before the branch.
+        push(&mut code, "CALLSYS", 0, Some(3));
+        push(&mut code, "CpyRtoV4", 7, None);
+        push(&mut code, "CpyVtoR1", 7, None);
+        let branch = push(&mut code, "JLowZ", 0, Some(0));
+        push(&mut code, "PSF", 16, None);
+        push(&mut code, "PSF", 21, None);
+        push(&mut code, "CALLSYS", 0, Some(1)); // FName(const FString&).
+        push(&mut code, "PSF", 21, None);
+        push(&mut code, "CALLSYS", 0, Some(4)); // Save(const FName&).
+        let cleanup = push(&mut code, "PSF", 16, None);
+        push(&mut code, "CALLSYS", 0, Some(5));
+        push(&mut code, "RET", 0, None);
+        code[branch + 1] = cleanup as i32 - branch as i32 - 2;
+        let ret = DataType { token: 0x52, ..Default::default() };
+        let f = FuncCode { func: "Synthetic::SaveValue".into(), is_method: false,
+            param_names: Vec::new(), param_types: Vec::new(), ret: ret.clone(), bytecode: code };
+        let locals = HashMap::from([(7, "bool".into()), (16, "FString".into()), (21, "FName".into())]);
+        let refs = RefResolver::from_test_typed_psf_conversion(0);
+        let source = body_statements_ctor(&f, &refs, 0, None, Some(&ret), None, None, None, Some(&locals), None);
+        assert!(source.contains("local_16 = Source();"), "{source}");
+        assert!(source.contains("local_21 = FName(local_16);"), "{source}");
+        assert!(source.contains("Save(local_21);"), "{source}");
+        assert!(source.find("local_16 =").unwrap() < source.find("if (").unwrap(), "{source}");
+        assert!(source.find("if (").unwrap() < source.find("local_21 =").unwrap(), "{source}");
+    }
+
+    #[test]
+    fn a_plain_native_value_constructor_input_survives_an_enclosing_branch() {
+        fn push(code: &mut Vec<i32>, name: &str, word: u16, dword: Option<i32>) -> usize {
+            let op = crate::cache::isa::OPCODES.iter().find(|op| op.name == name).unwrap();
+            let at = code.len(); let mut row = vec![0; op.size_dwords as usize];
+            row[0] = op.opcode as i32 | ((word as i32) << 16);
+            if let Some(value) = dword { row[1] = value; }
+            code.extend(row); at
+        }
+        let mut code = Vec::new();
+        push(&mut code, "PSF", 16, None);
+        push(&mut code, "CALLSYS", 0, Some(2)); // Input exists before the branch.
+        push(&mut code, "CALLSYS", 0, Some(3));
+        push(&mut code, "CpyRtoV4", 7, None);
+        push(&mut code, "CpyVtoR1", 7, None);
+        let branch = push(&mut code, "JLowZ", 0, Some(0));
+        push(&mut code, "PSF", 16, None);
+        push(&mut code, "PSF", 21, None);
+        push(&mut code, "CALLSYS", 0, Some(1)); // One plain, by-value native object parameter.
+        push(&mut code, "PSF", 21, None);
+        push(&mut code, "CALLSYS", 0, Some(4));
+        let cleanup = push(&mut code, "PSF", 16, None);
+        push(&mut code, "CALLSYS", 0, Some(5));
+        push(&mut code, "RET", 0, None);
+        code[branch + 1] = cleanup as i32 - branch as i32 - 2;
+        let ret = DataType { token: 0x52, ..Default::default() };
+        let f = FuncCode { func: "Synthetic::ConsumePlainValue".into(), is_method: false,
+            param_names: Vec::new(), param_types: Vec::new(), ret: ret.clone(), bytecode: code };
+        let locals = HashMap::from([(7, "bool".into()), (16, "FString".into()), (21, "FName".into())]);
+        let render = |fault| body_statements_ctor(&f, &RefResolver::from_test_typed_psf_conversion(fault),
+            0, None, Some(&ret), None, None, None, Some(&locals), None);
+        let source = render(13);
+        let constructor = "local_21 = FName(local_16);";
+        assert!(source.contains("local_16 = Source();"), "{source}");
+        assert!(source.contains(constructor), "{source}");
+        assert!(source.contains("Save(local_21);"), "{source}");
+        assert!(source.find("local_16 =").unwrap() < source.find("if (").unwrap(), "{source}");
+        assert!(source.find("if (").unwrap() < source.find(constructor).unwrap(), "{source}");
+        assert!(source.find(constructor).unwrap() < source.find("Save(local_21);").unwrap(), "{source}");
+        // Wrong type, partial reference qualifiers, handle/auto/conditional-handle remain rejected.
+        for fault in [1, 2, 3, 4, 5, 14, 15, 16] {
+            assert!(!render(fault).contains(constructor), "metadata {fault}");
+        }
+    }
+
+    #[test]
+    fn constructor_can_read_an_entry_constructed_value_across_a_branch() {
+        let render = |fault: u8, branch_first: bool, released: bool, known_type: bool| {
+            let mut a = TestAssembler::default();
+            if branch_first { a.jump("JMP", "construct"); }
+            a.label("construct"); a.op("PSF", &[48], &[]); a.op("CALLSYS", &[], &[1, 0]);
+            a.op("PSF", &[62], &[]); a.op("CALLSYS", &[], &[2, 0]);
+            a.jump("JMP", "body"); a.label("body");
+            if released { a.op("PSF", &[48], &[]); a.op("CALLSYS", &[], &[6, 0]); }
+            a.op("PshC4", &[], &[5]); a.op("PshGPtr", &[], &[100, 0]);
+            a.op("PSF", &[48], &[]); a.op("PSF", &[62], &[]); a.op("PSF", &[88], &[]);
+            a.op("CALLSYS", &[], &[3, 0]); a.op("PSF", &[88], &[]); a.op("CALLSYS", &[], &[4, 0]);
+            let mut fixture = a.finish();
+            for i in &mut fixture.instrs {
+                if matches!(i.op.name, "CALLSYS" | "PshGPtr") { i.qwords = vec![i.dwords[0] as u64]; }
+            }
+            let begin = fixture.instrs.iter().position(|i| i.offset_dw == fixture.labels["body"]).unwrap();
+            let refs = RefResolver::from_test_entry_constructed_value(fault);
+            let f = FuncCode { func: "Fixture::Construct".into(), is_method: false,
+                param_names: Vec::new(), param_types: Vec::new(), bytecode: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() } };
+            let mut locals = HashMap::from([(48, "FVector".into()), (62, "FRotator".into()), (88, "FTransform".into())]);
+            if !known_type { locals.remove(&48); }
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(), param_off_map: HashMap::new(),
+                rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, begin, fixture.instrs.len()).0.join("\n")
+        };
+        let source = render(0, false, false, true);
+        assert!(source.contains("local_88 = FTransform(local_62, local_48, FVector::OneVector);"), "{source}");
+        assert!(source.contains("Use(local_88, 5);"), "{source}");
+        for fault in 1..=6 { assert!(!render(fault, false, false, true).contains("local_88 = FTransform("), "{fault}"); }
+        for (branch_first, released, known_type) in [(true, false, true), (false, true, true), (false, false, false)] {
+            assert!(!render(0, branch_first, released, known_type).contains("local_88 = FTransform("));
+        }
+    }
+
+    #[test]
+    fn constructor_keeps_a_typed_native_rvo_input_from_before_the_later_branch() {
+        let render = |fault: u8, hazard: u8| {
+            let mut a = TestAssembler::default();
+            // There is already a branch before the native value's construction.
+            a.jump("JMP", if hazard == 1 { "body" } else if hazard == 2 { "produce" } else { "init" });
+            a.label("init"); a.op("PSF", &[48], &[]); a.op("PshVPtr", &[2], &[]);
+            a.label("produce"); a.op("CALLSYS", &[], &[7, 0]);
+            match hazard {
+                3 => { a.op("PSF", &[48], &[]); a.op("CALLSYS", &[], &[6, 0]); }
+                4 => a.op("SetV4", &[48], &[0]),
+                5 => a.op("RET", &[0], &[]),
+                6 => { a.op("PSF", &[48], &[]); a.op("CALLSYS", &[], &[1, 0]); }
+                7 => a.op("JMPP", &[1], &[0]),
+                _ => {}
+            }
+            a.jump("JMP", "body"); a.label("body");
+            a.op("PSF", &[48], &[]); a.op("PSF", &[62], &[]); a.op("CALLSYS", &[], &[8, 0]);
+            a.op("PshC4", &[], &[5]); a.op("PshGPtr", &[], &[100, 0]);
+            a.op("PSF", &[48], &[]); a.op("PSF", &[62], &[]); a.op("PSF", &[88], &[]);
+            a.op("CALLSYS", &[], &[3, 0]); a.op("PSF", &[88], &[]); a.op("CALLSYS", &[], &[4, 0]);
+            let mut fixture = a.finish();
+            for i in &mut fixture.instrs {
+                if matches!(i.op.name, "CALLSYS" | "PshGPtr") { i.qwords = vec![i.dwords[0] as u64]; }
+            }
+            let begin = fixture.instrs.iter().position(|i| i.offset_dw == fixture.labels["body"]).unwrap();
+            let refs = RefResolver::from_test_native_rvo_constructor_input(fault);
+            let f = FuncCode { func: "Fixture::ConstructFromPriorRvo".into(), is_method: false,
+                param_names: Vec::new(), param_types: Vec::new(), bytecode: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() } };
+            let mut locals = HashMap::from([(2, "USceneComponent".into()), (48, "FVector".into()),
+                (62, "FRotator".into()), (88, "FTransform".into())]);
+            if hazard == 8 { locals.remove(&48); }
+            if hazard == 9 { locals.remove(&2); }
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(), param_off_map: HashMap::new(),
+                rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, begin, fixture.instrs.len()).0.join("\n")
+        };
+        let source = render(0, 0);
+        let ctor = "local_88 = FTransform(local_62, local_48, FVector::OneVector);";
+        assert!(source.contains("local_62 = Rotation(local_48);"), "{source}");
+        assert!(source.contains(ctor), "{source}");
+        assert!(source.contains("Use(local_88, 5);"), "{source}");
+        for fault in 1..=11 { assert!(!render(fault, 0).contains(ctor), "metadata {fault}"); }
+        for hazard in 1..=9 { assert!(!render(0, hazard).contains(ctor), "flow/life {hazard}"); }
+    }
+    #[test]
+    fn a_bool_parameter_reload_does_not_consume_a_pending_call_result() {
+        let render = |parameter_slot: i32, tested: Option<i32>, return_token| {
+            let mut a = TestAssembler::default();
+            a.op("CALLSYS", &[], &[1, 0]);
+            if let Some(slot) = tested { a.op("CpyVtoR1", &[slot as u16], &[]); }
+            a.op("RET", &[2], &[]);
+            let mut fixture = a.finish(); fixture.instrs[0].qwords = vec![1];
+            let refs = RefResolver::from_test_pointer_comparison_call(DataType { token: return_token, ..Default::default() });
+            let boolean = DataType { token: 0x41, ..Default::default() };
+            let f = FuncCode { func: "Fixture::TestParameter".into(), is_method: parameter_slot < 0,
+                param_names: vec!["Enabled".into()], param_types: vec![boolean.clone()], bytecode: Vec::new(),
+                ret: boolean };
+            let params = vec!["bool".into()];
+            let locals = HashMap::from([(7, "bool".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: Some(&params), class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(),
+                param_off_map: HashMap::from([(parameter_slot, 0)]), rvo_off: None, keep_ints: None,
+                rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0
+        };
+        for slot in [-2, 0] {
+            assert_eq!(render(slot, Some(slot), 0x41), ["GetPawn();", "return Enabled;"]);
+            assert_eq!(render(slot, Some(slot), 0x52), ["GetPawn();", "return Enabled;"]);
+        }
+        // The parameter guard does not change the existing local-result fold
+        // or a directly returned native result with no slot reload.
+        assert_eq!(render(-2, Some(7), 0x41), ["return GetPawn();"]);
+        assert_eq!(render(-2, None, 0x41), ["return GetPawn();"]);
+    }
+
+    #[test]
+    fn fresh_bool_test_survives_a_pending_void_statement() {
+        let render = |fresh: bool, dest_type: &str| {
+            let mut a = TestAssembler::default();
+            a.op("CALLSYS", &[], &[1, 0]);
+            if fresh { a.op("CMPd", &[40, 42], &[]); a.op("TS", &[], &[]); }
+            a.op("CpyRtoV4", &[49], &[]); a.op("PshV4", &[49], &[]);
+            let mut fixture = a.finish(); fixture.instrs[0].qwords = vec![1];
+            let refs = RefResolver::from_test_pointer_comparison_call(DataType { token: 0x52, ..Default::default() });
+            let f = FuncCode { func: "Fixture::Compare".into(), is_method: false,
+                param_names: Vec::new(), param_types: Vec::new(), bytecode: Vec::new(),
+                ret: DataType { token: 0x52, ..Default::default() } };
+            let locals = HashMap::from([(49, dest_type.into()), (40, "float".into()), (42, "float".into())]);
+            let ctx = Ctx { f: &f, refs: &refs, instrs: &fixture.instrs, super_ctor: None,
+                ret_ty: Some(&f.ret), fields: None, param_types: None, class_name: None,
+                local_types: Some(&locals), float_slots: Default::default(), param_off_map: HashMap::new(),
+                rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false) };
+            block_stmts(&ctx, 0, fixture.instrs.len()).0
+        };
+        assert_eq!(render(true, "bool"), ["GetPawn();", "local_49 = (local_40 < local_42);"]);
+        assert_eq!(render(false, "bool"), ["GetPawn();"]);
+        assert_eq!(render(true, "int"), ["GetPawn();"]);
+    }
+
+    #[test]
+    fn typed_psf_conversion_requires_exact_native_parameter_and_local_value_types() {
+        let refs = RefResolver::from_test_typed_psf_conversion(0);
+        let dst = Arg::psf("local_21".into(), Some("FName".into()));
+        let src = Arg::psf("local_16".into(), Some("FString".into()));
+        assert!(is_proven_typed_psf_conversion(&dst, std::slice::from_ref(&src), 1, &refs));
+        for fault in 1..=12 {
+            assert!(!is_proven_typed_psf_conversion(&dst, std::slice::from_ref(&src), 1,
+                &RefResolver::from_test_typed_psf_conversion(fault)), "metadata {fault}");
+        }
+        for (name, ty) in [("local_16", None), ("local_16", Some("FOther")),
+            ("local_16", Some("FName")), ("local_21", Some("FString")),
+            ("Source()", Some("FString")), ("local_-2", Some("FString")), ("local_0", Some("FString"))] {
+            let other = Arg::psf(name.into(), ty.map(str::to_owned));
+            assert!(!is_proven_typed_psf_conversion(&dst, &[other], 1, &refs));
+        }
+        let mut other = src.clone(); other.is_psf = false;
+        assert!(!is_proven_typed_psf_conversion(&dst, &[other], 1, &refs));
+        let mut other = dst; other.is_psf = false;
+        assert!(!is_proven_typed_psf_conversion(&other, &[src], 1, &refs));
+    }
+
+    #[test]
     fn same_type_psf_copy_requires_all_type_witnesses() {
         let dst = Arg::psf("local_28".into(), Some("FTransform".into()));
         let src = Arg::psf("local_52".into(), Some("FTransform".into()));
@@ -9923,5 +15979,137 @@ mod tests {
             "__return = local_32;".to_string(),
         ];
         assert_eq!(single_clean_rvo_store(&duplicate), None);
+    }
+}
+
+#[cfg(test)]
+mod namespaced_script_constructor_tests {
+    use super::*;
+
+    fn render_ctor(
+        refs: &RefResolver, id: u32, out_type: &str, args: &[u32], unknown_arg: bool,
+    ) -> String {
+        let mut instrs = Vec::new();
+        let mut offset_dw = 0;
+        let mut push = |name: &str, words: Vec<u16>, dwords: Vec<u32>| {
+            let op = super::super::isa::OPCODES.iter().find(|op| op.name == name).unwrap();
+            instrs.push(Instr { offset_dw, op, words, dwords, qwords: Vec::new() });
+            offset_dw += op.size_dwords as usize;
+        };
+        // Source arguments are pushed in reverse order, followed by the output address.
+        for (index, value) in args.iter().rev().enumerate() {
+            if unknown_arg && index == 0 {
+                push("PSF", vec![7], vec![]);
+            } else {
+                push("PshC4", vec![], vec![*value]);
+            }
+        }
+        push("PSF", vec![8], vec![]);
+        push("CALL", vec![], vec![id]);
+        let f = FuncCode {
+            func: "Synthetic::SetItemToBePickedUp".into(), is_method: false,
+            param_names: Vec::new(), param_types: Vec::new(),
+            ret: DataType { token: 0x52, ..Default::default() }, bytecode: Vec::new(),
+        };
+        let locals = HashMap::from([(8, out_type.to_owned())]);
+        let ctx = Ctx {
+            f: &f, refs, instrs: &instrs, super_ctor: None, ret_ty: Some(&f.ret),
+            fields: None, param_types: None, class_name: None, local_types: Some(&locals),
+            float_slots: Default::default(), param_off_map: HashMap::new(),
+            rvo_off: None, keep_ints: None, rvo_switch_region: std::cell::Cell::new(false),
+        };
+        block_stmts(&ctx, 0, instrs.len()).0.join("\n")
+    }
+
+    fn fixture() -> RefResolver {
+        RefResolver::from_test_script_constructors(
+            &["Warning_Crime_Theft", "Other", ""], "FItemPickupHandle",
+            &vec![DataType { token: 0x44, ..Default::default() }; 4],
+        )
+    }
+
+    #[test]
+    fn script_constructor_uses_exact_owner_namespace() {
+        let refs = fixture();
+        for (id, ty) in [
+            (1, "Warning_Crime_Theft::FItemPickupHandle"),
+            (2, "Other::FItemPickupHandle"),
+            (3, "FItemPickupHandle"),
+        ] {
+            let source = render_ctor(&refs, id, ty, &[111, 222, 333, 444], false);
+            assert_eq!(source, format!("local_8 = {ty}(111, 222, 333, 444);"));
+        }
+    }
+
+    #[test]
+    fn script_constructor_rejects_wrong_owner_and_incomplete_arguments() {
+        let refs = fixture();
+        for (ty, args, unknown) in [
+            ("Other::FItemPickupHandle", &[111, 222, 333, 444][..], false),
+            ("FItemPickupHandle", &[111, 222, 333, 444][..], false),
+            ("Warning_Crime_Theft::FItemPickupHandle", &[111, 222, 333][..], false),
+            ("Warning_Crime_Theft::FItemPickupHandle", &[111, 222, 333, 444][..], true),
+        ] {
+            let source = render_ctor(&refs, 1, ty, args, unknown);
+            assert!(!source.contains("local_8 ="), "unsafe constructor recovered: {source}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod direct_const_member_return_tests {
+    use super::*;
+
+    fn getter(intervening_op: Option<&str>, load_slot: u16, by_reference: bool) -> String {
+        let refs = RefResolver::from_test_member_chain(&[
+            ("UGothicCharacterAIState", "AI"),
+            ("UGameplayAbility_CharacterAI_Gothic", "SelectedItemAction"),
+            ("FItemActionHandler", "ItemDefinition"),
+            ("UItemDefinition", ""),
+        ]);
+        let mut code = Vec::new();
+        let mut push = |name: &str, word: u16, dword: Option<i32>| {
+            let op = super::super::isa::OPCODES.iter().find(|op| op.name == name).unwrap();
+            let mut encoded = vec![0i32; op.size_dwords as usize];
+            encoded[0] = op.opcode as i32 | ((word as i32) << 16);
+            if let Some(dword) = dword { encoded[1] = dword; }
+            code.extend(encoded);
+        };
+        // The real GetSelectedItem nine-instruction shape, including its full
+        // three-owner field chain. The native const-field table supplies provenance.
+        push("PshVPtr", 0, None);
+        push("ADDSi", 0, Some(1));
+        push("RDSPtr", 0, None);
+        push("ADDSi", 0, Some(2));
+        push("ADDSi", 0, Some(3));
+        push("RDSPtr", 0, None);
+        push("RefCpyV", 2, None);
+        if let Some(op) = intervening_op { push(op, 0, None); }
+        push("LOADOBJ", load_slot, None);
+        push("RET", 2, None);
+        let ret = DataType {
+            token: 5, type_info: 4, is_object_handle: true, is_object_const: true,
+            is_reference: by_reference, ..Default::default()
+        };
+        let f = FuncCode {
+            func: "UGothicCharacterAIState::GetSelectedItem".into(), is_method: true,
+            param_names: Vec::new(), param_types: Vec::new(), ret: ret.clone(), bytecode: code,
+        };
+        let locals = HashMap::from([(2, "UItemDefinition".into()), (3, "UItemDefinition".into())]);
+        body_statements_ctor(&f, &refs, 0, None, Some(&ret), None, None,
+            Some("UGothicCharacterAIState"), Some(&locals), None)
+    }
+
+    #[test]
+    fn selected_item_returns_the_const_native_member_path() {
+        assert_eq!(getter(None, 2, false).trim(),
+            "return this.AI.SelectedItemAction.ItemDefinition;");
+    }
+
+    #[test]
+    fn const_member_exception_requires_the_same_immediate_value_return() {
+        for source in [getter(Some("SUSPEND"), 2, false), getter(None, 3, false), getter(None, 2, true)] {
+            assert!(!source.contains("return this.AI.SelectedItemAction.ItemDefinition;"), "{source}");
+        }
     }
 }

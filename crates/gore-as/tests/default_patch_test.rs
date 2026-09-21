@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use gore_as::cache::{
     header::{CacheHeader, CACHE_MAGIC},
@@ -810,7 +810,7 @@ struct DefaultCensus {
 
 /// One entry per row of `gore_generation::rows()`;
 /// `every_audited_generation_has_a_recorded_default_census` is what keeps that true.
-static DEFAULT_CENSUS: [DefaultCensus; 4] = [
+static DEFAULT_CENSUS: [DefaultCensus; 5] = [
     DefaultCensus {
         generation: "g1r-steam-1.0.3",
         bridged_classes: 6_572,
@@ -862,6 +862,19 @@ static DEFAULT_CENSUS: [DefaultCensus; 4] = [
     // fields across the unchanged 6,582-class bridge.
     DefaultCensus {
         generation: "g1r-steam-24878692",
+        bridged_classes: 6_582,
+        init_functions: 30_013,
+        plain_initializers: 3_255,
+        ufunction_initializers: 26_758,
+        branched_init_functions: 1,
+        unresolved_fields: 5_209,
+        unresolved_types: 1,
+        ambiguous_fields: 1,
+    },
+    // The hotfix adds one ordinary AI-state function and changes no initializer shape or scalar
+    // default window. The configured cache golden measures these values against its sealed cache.
+    DefaultCensus {
+        generation: "g1r-steam-25168047",
         bridged_classes: 6_582,
         init_functions: 30_013,
         plain_initializers: 3_255,
@@ -1631,8 +1644,35 @@ fn configured_build_24878692_profile_and_item_field_matrix_are_exact() {
         eprintln!("skip: set GORE_AS_BUILD_24878692_USMAP to the fresh 172709 dump");
         return;
     };
-    let game = std::path::PathBuf::from(game);
-    let usmap = std::path::PathBuf::from(usmap);
+    verify_configured_build_profile_and_item_field_matrix(
+        PathBuf::from(game),
+        PathBuf::from(usmap),
+        &gore_generation::ROW_G1R_24878692,
+    );
+}
+
+#[test]
+fn configured_build_25168047_profile_and_item_field_matrix_are_exact() {
+    let Some(game) = std::env::var_os("GORE_AS_BUILD_25168047_GAME") else {
+        eprintln!("skip: set GORE_AS_BUILD_25168047_GAME");
+        return;
+    };
+    let Some(usmap) = std::env::var_os("GORE_AS_BUILD_25168047_USMAP") else {
+        eprintln!("skip: set GORE_AS_BUILD_25168047_USMAP to the fresh 173255 dump");
+        return;
+    };
+    verify_configured_build_profile_and_item_field_matrix(
+        PathBuf::from(game),
+        PathBuf::from(usmap),
+        &gore_generation::ROW_G1R_25168047,
+    );
+}
+
+fn verify_configured_build_profile_and_item_field_matrix(
+    game: PathBuf,
+    usmap: PathBuf,
+    row: &gore_generation::GenerationRow,
+) {
     let exe = game.join("G1R/Binaries/Win64/G1R-Win64-Shipping.exe");
     let cache_path = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
     let binds_path = game.join("G1R/Script/Binds.Cache");
@@ -1655,7 +1695,6 @@ fn configured_build_24878692_profile_and_item_field_matrix_are_exact() {
         )
     }
 
-    let row = &gore_generation::ROW_G1R_24878692;
     for (path, seal) in [
         (&exe, row.executable),
         (&cache_path, row.shipping_cache),
@@ -1676,10 +1715,7 @@ fn configured_build_24878692_profile_and_item_field_matrix_are_exact() {
     let cache = std::fs::read(&cache_path).expect("read Shipping cache");
     assert_eq!(
         CacheHeader::parse(&cache).expect("parse header").hash,
-        [
-            0x78, 0x35, 0xbc, 0xc0, 0x9c, 0x5e, 0xee, 0x48, 0x8d, 0x72, 0xcb, 0x5f, 0xfb, 0x0f,
-            0xb0, 0xc3,
-        ]
+        row.script_cache_guid
     );
     let binds_bytes = std::fs::read(&binds_path).expect("read Binds");
     let binds_profile = gore_as::cache::binds::derive_binds_profile(&binds_bytes);
@@ -1705,13 +1741,35 @@ fn configured_build_24878692_profile_and_item_field_matrix_are_exact() {
             .properties
             .iter()
             .any(|property| property.name == "m_FollowBone"),
-        "the fresh 172709 USMAP must carry the Binds-added m_FollowBone property"
+        "the fresh USMAP must carry the Binds-added m_FollowBone property"
     );
+    let tag_map_fields = binds_profile
+        .class_paths
+        .values()
+        .filter_map(|path| schemas.resolve_class(path).ok())
+        .map(|id| {
+            schemas
+                .schema(id)
+                .expect("resolved schema")
+                .properties
+                .iter()
+                .filter(|property| {
+                    schemas
+                        .exact_declared_property_shape(id, &property.name)
+                        .expect("declared property shape")
+                        == Some(
+                            gore_asset::schema::ExactDeclaredPropertyShape::GameplayTagFloat32Map,
+                        )
+                })
+                .count()
+        })
+        .sum::<usize>();
+    assert_eq!(tag_map_fields, 8);
 
     let profile = gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
         &binds, &cache, &schemas,
     )
-    .expect("derive exact BuildID-24878692 profile");
+    .expect("derive exact configured-build profile");
     assert_eq!(profile.class_count(), 6_582);
     assert_eq!(profile.profile_id(), row.native_ancestry_profile_id);
     assert_eq!(
@@ -1786,4 +1844,34 @@ fn configured_build_24878692_profile_and_item_field_matrix_are_exact() {
     assert_eq!(counts, expected_counts);
     assert_eq!(native_counts, expected_native_counts);
     assert_eq!(target_fields.len(), 918);
+
+    if row.id == gore_generation::ROW_G1R_25168047.id {
+        // The V5 catalog seals PreparedEmit's defaults-free source. Prove the class default
+        // separately, since the quest-parent selection relies on its actual cache value.
+        let modules = gore_as::cache::model::parse_modules(&cache).expect("parse modules");
+        let mut refs = gore_as::cache::refs::RefResolver::build(&cache).expect("build resolver");
+        let prepared = gore_as::cache::emit_all::PreparedEmit::new(
+            &modules,
+            &mut refs,
+            Some(
+                gore_as::cache::binds::NativeApi::from_bytes(&binds_bytes)
+                    .expect("parse sealed Binds for emission"),
+            ),
+        )
+        .expect("prepare complete source emission")
+        .with_class_defaults(true);
+        let index = modules
+            .iter()
+            .position(|module| module.name == "Story.G1R.Quest.Quest_SwampCamp_SCCHAPTER2")
+            .expect("find curated quest module");
+        let source = prepared
+            .emit_module(index)
+            .expect("emit curated quest defaults");
+        assert!(source.contains("default ParentQuestClass = G1R::Quest::UQuest_SwampCamp;"));
+        assert_eq!(source.len(), 662);
+        assert_eq!(
+            gore_as::cache::default_patch::encode_hex(&Sha256::digest(source.as_bytes())),
+            "54af04e01907df876eacc6ae5a39489e8af9eecb3b63d5c8959ddedc46e2c9e1"
+        );
+    }
 }

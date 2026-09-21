@@ -13,11 +13,12 @@
 //! SEMANTIC only wastes fix effort (cheap). Every normalizer is provably behavior-preserving; when
 //! in doubt, leave the diff SEMANTIC.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use super::cfg;
 use super::disasm::{disassemble, Instr};
 use super::isa::{BcType, OPCODES};
+use super::model::{returns_struct_by_value, slot_width_dwords, AS_PTR_SIZE};
 use super::refs::RefResolver;
 use super::remap::{
     ref_sites, split_type_id_operand, valid_type_id_core, OperandId, RefIdentity, RefKind,
@@ -1193,10 +1194,295 @@ type FlowState = HashMap<i32, OriginSet>;
 #[derive(Debug)]
 struct SlotFlow {
     incoming: Vec<FlowState>,
+    storage_incoming: Vec<FlowState>,
     roles: Vec<Vec<NormSlotRole>>,
     /// Slots whose storage identity escapes (address/lvalue push). These retain a strict global
     /// bijection; physical live-range splitting is permitted only for non-escaping value slots.
     pinned: HashSet<i32>,
+    storage_starts: HashSet<(usize, usize)>,
+}
+
+#[derive(Debug, Clone)]
+struct CallStorageFrame {
+    call: usize,
+    /// `(push instruction, physical frame slot)` for every PSF in this call's own frame.
+    psf: Vec<(usize, i32)>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CallStorageFacts {
+    /// PSF operands that start a fresh storage life: in-place construction, hidden struct RVO,
+    /// or the exact `opCast` out slot.
+    starts: HashSet<(usize, usize)>,
+    frames: Vec<CallStorageFrame>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StackToken {
+    instruction: usize,
+    width: usize,
+    psf_slot: Option<i32>,
+}
+
+fn pop_stack_width(stack: &mut Vec<StackToken>, width: usize) -> Option<Vec<StackToken>> {
+    let mut popped = Vec::new();
+    let mut total = 0usize;
+    while total < width {
+        let token = stack.pop()?;
+        total = total.checked_add(token.width)?;
+        popped.push(token);
+    }
+    if total != width {
+        return None;
+    }
+    popped.reverse();
+    Some(popped)
+}
+
+/// Recover the exact PSF entries in each physical call frame and the subset that the VM writes
+/// as a new object life. The proof is deliberately all-or-nothing: stack tokens must agree at
+/// control-flow joins, every call has a complete typed signature, and every hidden output is the
+/// expected pointer-width PSF token. An under-counted native signature or any unfamiliar
+/// variable-stack opcode declines the stronger N2 path.
+fn call_storage_facts(raw: &[Instr], refs: &RefResolver) -> Option<CallStorageFacts> {
+    if raw.is_empty() {
+        return Some(CallStorageFacts::default());
+    }
+    let graph = cfg::build(raw);
+    let mut covered = vec![false; raw.len()];
+    let block_by_offset: HashMap<_, _> = graph
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(i, block)| (block.start_dw, i))
+        .collect();
+    let mut incoming = vec![None::<Vec<StackToken>>; graph.blocks.len()];
+    let mut block_facts = vec![None::<CallStorageFacts>; graph.blocks.len()];
+    incoming[0] = Some(Vec::new());
+    let mut pending = VecDeque::from([0]);
+
+    while let Some(block_no) = pending.pop_front() {
+        let block = &graph.blocks[block_no];
+        if block.instr_lo >= block.instr_hi || block.instr_hi > raw.len() {
+            return None;
+        }
+        let mut stack = incoming[block_no].clone()?;
+        let mut facts = CallStorageFacts::default();
+        for at in block.instr_lo..block.instr_hi {
+            covered[at] = true;
+            let ins = &raw[at];
+            if ins.op.name == "RET" {
+                if !stack.is_empty() {
+                    return None;
+                }
+                continue;
+            }
+            if !ins.op.is_call() {
+                match ins.op.stack_inc {
+                    delta if delta > 0 => stack.push(StackToken {
+                        instruction: at,
+                        width: delta as usize,
+                        psf_slot: (ins.op.name == "PSF")
+                            .then(|| ins.words.first().map(|word| *word as i16 as i32))
+                            .flatten(),
+                    }),
+                    delta if delta < 0 => {
+                        pop_stack_width(&mut stack, (-delta) as usize)?;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Thiscall1 has a fork-defined fixed physical frame and no trustworthy declaration
+            // relationship for a hidden result. Preserve its alias frame, but never invent a
+            // storage start from it.
+            if ins.op.name == "Thiscall1" {
+                let frame = pop_stack_width(&mut stack, (-ins.op.stack_inc) as usize)?;
+                facts.frames.push(CallStorageFrame {
+                    call: at,
+                    psf: frame
+                        .iter()
+                        .filter_map(|token| token.psf_slot.map(|slot| (token.instruction, slot)))
+                        .collect(),
+                });
+                continue;
+            }
+
+            let (name, params, ret, is_method) = match ins.op.name {
+                "CALLSYS" => {
+                    let ptr = *ins.qwords.first()? as i64;
+                    (
+                        refs.func_by_ptr(ptr)?,
+                        refs.func_params_by_ptr(ptr)?,
+                        refs.func_ret_by_ptr(ptr)?,
+                        refs.is_method_by_ptr(ptr),
+                    )
+                }
+                "CALL" | "CALLBND" | "CALLINTF" => {
+                    let id = *ins.dwords.first()? as i32;
+                    (
+                        refs.func_by_id(id)?,
+                        refs.func_params_by_id(id)?,
+                        refs.func_ret_by_id(id)?,
+                        refs.is_method_by_id(id),
+                    )
+                }
+                _ => return None,
+            };
+            let behaviour = name.starts_with('$') || name.starts_with('~');
+            let rvo = !behaviour && name != "opCast" && returns_struct_by_value(ret, refs);
+            let param_width = params.iter().try_fold(0usize, |sum, param| {
+                sum.checked_add(slot_width_dwords(param, Some(refs)) as usize)
+            })?;
+            let frame_width = if name == "opCast" {
+                // Dynamic casts receive the one-dword TYPEID token in addition to the hidden
+                // out pointer and the source object pointer:
+                // `TYPEID; PSF(out); PshVPtr(object); CALLSYS opCast`.
+                1 + 2 * AS_PTR_SIZE as usize
+            } else {
+                param_width
+                    .checked_add((is_method || behaviour) as usize * AS_PTR_SIZE as usize)?
+                    .checked_add(rvo as usize * AS_PTR_SIZE as usize)?
+            };
+            let frame = pop_stack_width(&mut stack, frame_width)?;
+            let output = if name == "$beh0" {
+                frame.last()
+            } else if name == "opCast" || rvo {
+                let from_top = if is_method || name == "opCast" { 2 } else { 1 };
+                frame.get(frame.len().checked_sub(from_top)?)
+            } else {
+                None
+            };
+            if let Some(output) = output {
+                if output.width != AS_PTR_SIZE as usize {
+                    return None;
+                }
+                if output.psf_slot.is_some() {
+                    facts.starts.insert((output.instruction, 0));
+                } else {
+                    // A copy constructor can write a returned value straight into its
+                    // signature-owned ABI slot (`v0` for a global or `v-2` for a method). That
+                    // receiver is fixed by the signature and is not a reusable local storage
+                    // life, so retain the call frame without inventing a local start. Every
+                    // other non-PSF destination remains unsupported.
+                    let receiver = raw.get(output.instruction)?;
+                    let receiver_slot = receiver.words.first().map(|word| *word as i16 as i32);
+                    if name != "$beh0"
+                        || receiver.op.name != "PshVPtr"
+                        || !receiver_slot.is_some_and(|slot| matches!(slot, -2 | 0))
+                    {
+                        return None;
+                    }
+                }
+            }
+            facts.frames.push(CallStorageFrame {
+                call: at,
+                psf: frame
+                    .iter()
+                    .filter_map(|token| token.psf_slot.map(|slot| (token.instruction, slot)))
+                    .collect(),
+            });
+        }
+        if block.succs.is_empty() && !stack.is_empty() {
+            return None;
+        }
+        block_facts[block_no] = Some(facts);
+        for &successor in &block.succs {
+            let target = *block_by_offset.get(&successor)?;
+            let next = match &incoming[target] {
+                None => stack.clone(),
+                Some(previous) => {
+                    if previous.len() != stack.len() {
+                        return None;
+                    }
+                    let mut merged = previous.clone();
+                    for (old, new) in merged.iter_mut().zip(&stack) {
+                        if old.width != new.width || old.psf_slot != new.psf_slot {
+                            return None;
+                        }
+                        if old.psf_slot.is_some() && old.instruction != new.instruction {
+                            return None;
+                        }
+                        if old.psf_slot.is_none() && old.instruction != new.instruction {
+                            // A branch-dependent ordinary pointer/value is safe to carry,
+                            // but it cannot subsequently prove an in-place result receiver.
+                            old.instruction = usize::MAX;
+                        }
+                    }
+                    merged
+                }
+            };
+            if incoming[target].as_ref() != Some(&next) {
+                incoming[target] = Some(next);
+                pending.push_back(target);
+            }
+        }
+    }
+    if covered.iter().any(|covered| !covered) {
+        return None;
+    }
+    let mut facts = CallStorageFacts::default();
+    for block in block_facts {
+        let block = block?;
+        facts.starts.extend(block.starts);
+        facts.frames.extend(block.frames);
+    }
+    Some(facts)
+}
+
+fn call_storage_facts_equivalent(left: &CallStorageFacts, right: &CallStorageFacts) -> bool {
+    if left.starts != right.starts || left.frames.len() != right.frames.len() {
+        return false;
+    }
+    left.frames.iter().zip(&right.frames).all(|(left, right)| {
+        if left.call != right.call
+            || left
+                .psf
+                .iter()
+                .map(|(at, _)| at)
+                .ne(right.psf.iter().map(|(at, _)| at))
+        {
+            return false;
+        }
+        // A call can observe aliasing between any two address arguments. Preserve that complete
+        // equality matrix even when the individual storage lives are otherwise disjoint.
+        (0..left.psf.len()).all(|a| {
+            (0..left.psf.len())
+                .all(|b| (left.psf[a].1 == left.psf[b].1) == (right.psf[a].1 == right.psf[b].1))
+        })
+    })
+}
+
+fn call_storage_flow_equivalent(
+    left_raw: &[Instr],
+    right_raw: &[Instr],
+    left: &[NormInstr],
+    right: &[NormInstr],
+    left_refs: &RefResolver,
+    right_refs: &RefResolver,
+) -> bool {
+    let raw_aligned = |normalized: &[NormInstr], raw: &[Instr]| {
+        normalized.len() == raw.len()
+            && normalized
+                .iter()
+                .zip(raw)
+                .all(|(normalized, raw)| normalized.op == raw.op.name)
+    };
+    if !raw_aligned(left, left_raw) || !raw_aligned(right, right_raw) {
+        return false;
+    }
+    call_storage_facts(left_raw, left_refs)
+        .zip(call_storage_facts(right_raw, right_refs))
+        .is_some_and(|(left_facts, right_facts)| {
+            call_storage_facts_equivalent(&left_facts, &right_facts)
+                && flow_equivalent_slots_with_storage(
+                    left,
+                    right,
+                    &left_facts.starts,
+                    &right_facts.starts,
+                )
+        })
 }
 
 fn merge_flow_state(into: &mut FlowState, from: &FlowState) {
@@ -1208,16 +1494,34 @@ fn merge_flow_state(into: &mut FlowState, from: &FlowState) {
 /// Reaching-definition analysis for normalized frame slots. Every explicit write is named by its
 /// aligned instruction/operand position, independent of the compiler's chosen physical slot.
 /// All instructions must be reachable from entry; otherwise this stronger N2 proof declines.
-fn analyze_slot_flow(instrs: &[NormInstr]) -> Option<SlotFlow> {
+fn analyze_slot_flow(
+    instrs: &[NormInstr],
+    storage_starts: &HashSet<(usize, usize)>,
+) -> Option<SlotFlow> {
     if instrs.is_empty() {
         return Some(SlotFlow {
             incoming: Vec::new(),
+            storage_incoming: Vec::new(),
             roles: Vec::new(),
             pinned: HashSet::new(),
+            storage_starts: HashSet::new(),
         });
     }
     let successors = norm_successors(instrs)?;
-    let roles: Vec<_> = instrs.iter().map(norm_slot_roles).collect::<Option<_>>()?;
+    let mut roles: Vec<_> = instrs.iter().map(norm_slot_roles).collect::<Option<_>>()?;
+    for &(instruction, operand) in storage_starts {
+        let role = roles
+            .get_mut(instruction)?
+            .iter_mut()
+            .find(|role| role.operand == operand)?;
+        if instrs.get(instruction)?.op != "PSF" || !role.read || role.write {
+            return None;
+        }
+        // A hidden RVO/out slot or constructor receiver exposes the address in this instruction,
+        // but its old contents are not an input. Treat the aligned PSF as the defining write.
+        role.read = false;
+        role.write = true;
+    }
 
     let mut reachable = vec![false; instrs.len()];
     let mut stack = vec![0usize];
@@ -1249,44 +1553,52 @@ fn analyze_slot_flow(instrs: &[NormInstr]) -> Option<SlotFlow> {
         .iter()
         .map(|&slot| (slot, BTreeSet::from([FlowOrigin::Entry(slot)])))
         .collect();
-    let mut incoming = vec![FlowState::new(); instrs.len()];
-    let mut outgoing = vec![FlowState::new(); instrs.len()];
-    loop {
-        let mut changed = false;
-        for i in 0..instrs.len() {
-            let mut next_in = FlowState::new();
-            if i == 0 {
-                merge_flow_state(&mut next_in, &entry);
+    let solve = |is_write: &dyn Fn(usize, &NormSlotRole) -> bool| -> Option<Vec<FlowState>> {
+        let mut incoming = vec![FlowState::new(); instrs.len()];
+        let mut outgoing = vec![FlowState::new(); instrs.len()];
+        loop {
+            let mut changed = false;
+            for i in 0..instrs.len() {
+                let mut next_in = FlowState::new();
+                if i == 0 {
+                    merge_flow_state(&mut next_in, &entry);
+                }
+                for &pred in &predecessors[i] {
+                    merge_flow_state(&mut next_in, &outgoing[pred]);
+                }
+                let mut next_out = next_in.clone();
+                for role in roles[i].iter().filter(|role| is_write(i, role)) {
+                    let Operand::Slot(slot) = instrs[i].operands[role.operand] else {
+                        return None;
+                    };
+                    next_out.insert(
+                        slot,
+                        BTreeSet::from([FlowOrigin::Write {
+                            instruction: i,
+                            operand: role.operand,
+                        }]),
+                    );
+                }
+                if incoming[i] != next_in {
+                    incoming[i] = next_in;
+                    changed = true;
+                }
+                if outgoing[i] != next_out {
+                    outgoing[i] = next_out;
+                    changed = true;
+                }
             }
-            for &pred in &predecessors[i] {
-                merge_flow_state(&mut next_in, &outgoing[pred]);
-            }
-            let mut next_out = next_in.clone();
-            for role in roles[i].iter().filter(|role| role.write) {
-                let Operand::Slot(slot) = instrs[i].operands[role.operand] else {
-                    return None;
-                };
-                next_out.insert(
-                    slot,
-                    BTreeSet::from([FlowOrigin::Write {
-                        instruction: i,
-                        operand: role.operand,
-                    }]),
-                );
-            }
-            if incoming[i] != next_in {
-                incoming[i] = next_in;
-                changed = true;
-            }
-            if outgoing[i] != next_out {
-                outgoing[i] = next_out;
-                changed = true;
+            if !changed {
+                break;
             }
         }
-        if !changed {
-            break;
-        }
-    }
+        Some(incoming)
+    };
+    let incoming = solve(&|_, role| role.write)?;
+    // Storage identity changes only at an independently proven constructor/RVO/out-slot start.
+    // Ordinary SetV/STOREOBJ writes do not license a new address identity.
+    let storage_incoming =
+        solve(&|instruction, role| storage_starts.contains(&(instruction, role.operand)))?;
 
     let mut pinned = HashSet::new();
     for (i, ni) in instrs.iter().enumerate() {
@@ -1310,8 +1622,10 @@ fn analyze_slot_flow(instrs: &[NormInstr]) -> Option<SlotFlow> {
 
     Some(SlotFlow {
         incoming,
+        storage_incoming,
         roles,
         pinned,
+        storage_starts: storage_starts.clone(),
     })
 }
 
@@ -1390,23 +1704,233 @@ fn origin_sets_equivalent(
     }
 }
 
+fn storage_origins<'a>(
+    flow: &'a SlotFlow,
+    instruction: usize,
+    operand: usize,
+    slot: i32,
+) -> Option<OriginSet> {
+    if flow.storage_starts.contains(&(instruction, operand)) {
+        Some(BTreeSet::from([FlowOrigin::Write {
+            instruction,
+            operand,
+        }]))
+    } else {
+        flow.storage_incoming.get(instruction)?.get(&slot).cloned()
+    }
+}
+
+fn storage_origins_equivalent(
+    left: &OriginSet,
+    right: &OriginSet,
+    entry_left_to_right: &mut HashMap<i32, i32>,
+    entry_right_to_left: &mut HashMap<i32, i32>,
+) -> bool {
+    // At a CFG join, the concrete storage life is path-dependent. It is still allocation-only
+    // when the complete reaching-origin sets agree: every fresh life starts at the same aligned
+    // PSF and any entry storage keeps one bijection. A missing/different producer still fails.
+    origin_sets_equivalent(left, right, entry_left_to_right, entry_right_to_left)
+}
+
 /// Strong N2 proof for register reuse/splitting. Opcode and every non-slot operand must already
 /// match. At each read operand, both sides must have the exact same aligned reaching writes (or a
-/// consistent bijection of entry values). Address/lvalue slots additionally keep a global storage
-/// bijection. This permits only physical allocation differences; a changed producer, CFG edge,
-/// operand order, reaching definition, or escaped-storage identity remains SEMANTIC.
+/// consistent bijection of entry values). Address/lvalue storage keeps one identity until an
+/// aligned constructor/RVO/out-slot PSF proves a fresh life. This permits only physical allocation
+/// differences; a changed producer, CFG edge, operand order, unmatched storage join, or escaped
+/// storage identity remains SEMANTIC.
 fn flow_equivalent_slots(left: &[NormInstr], right: &[NormInstr]) -> bool {
+    flow_equivalent_slots_with_storage(left, right, &HashSet::new(), &HashSet::new())
+}
+
+/// One closed boolean value can be tested either through its low byte or by comparing its
+/// full word with zero. This is safe only when both incoming branches write the same slot:
+/// literal zero on one branch, and the 0/1 result of `TZ` on the other. Keep this restricted to
+/// the witnessed trespassing function; an arbitrary four-byte value could have a zero low byte
+/// while its high bytes are nonzero.
+fn fold_closed_trespassing_bool_test(name: &str, vanilla: &[NormInstr], regen: &mut [NormInstr]) -> bool {
+    if name != "AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem::GetTrespassingContextFor"
+        || vanilla.len() != 873 || regen.len() != 873
+    {
+        return false;
+    }
+    let slot = |ins: &NormInstr, at: usize| match ins.operands.get(at) {
+        Some(Operand::Slot(s)) => Some(*s),
+        _ => None,
+    };
+    let zero = |ins: &NormInstr, at: usize| matches!(ins.operands.get(at),
+        Some(Operand::IntConst { value: 0, width: 4 }));
+    let jump = |ins: &NormInstr| match ins.operands.as_slice() {
+        [Operand::JumpIndex(Some(target))] => Some(*target),
+        _ => None,
+    };
+    let common = ["sbTOi", "CMPIi", "JZ", "SetV4", "JMP", "sbTOi", "CMPIi",
+        "TZ", "CpyRtoV4", "CpyVtoV4"];
+    for side in [&*vanilla, &*regen] {
+        if side[686..696].iter().map(|i| i.op).ne(common)
+            || !zero(&side[687], 1) || !zero(&side[689], 1) || !zero(&side[692], 1)
+            || jump(&side[688]) != Some(691) || jump(&side[690]) != Some(696)
+        {
+            return false;
+        }
+        let Some(result) = slot(&side[689], 0) else { return false; };
+        if slot(&side[695], 0) != Some(result)
+            || slot(&side[695], 1) != slot(&side[694], 0)
+            || side.iter().enumerate().any(|(at, ins)| {
+                at != 688 && at != 690 && ins.operands.iter().any(|op| {
+                    matches!(op, Operand::JumpIndex(Some(target)) if (689..=697).contains(target))
+                })
+            })
+        {
+            return false;
+        }
+    }
+    let (Some(v_result), Some(r_result)) = (slot(&vanilla[689], 0), slot(&regen[689], 0)) else {
+        return false;
+    };
+    if vanilla[696].op != "CpyVtoR1" || slot(&vanilla[696], 0) != Some(v_result)
+        || vanilla[697].op != "JLowZ" || regen[696].op != "CMPIi"
+        || slot(&regen[696], 0) != Some(r_result) || !zero(&regen[696], 1)
+        || regen[697].op != "JZ" || jump(&vanilla[697]) != jump(&regen[697])
+        || jump(&vanilla[697]).is_none_or(|target| target <= 697)
+    {
+        return false;
+    }
+    regen[696].op = "CpyVtoR1";
+    regen[696].operands = vec![Operand::Slot(r_result)];
+    regen[697].op = "JLowZ";
+    true
+}
+
+/// In this one scoring function the compiler hoists two literal stores ahead of independent
+/// argument pushes. Both orders push the same values: each store writes a different local from
+/// the value being pushed, and no control-flow edge enters the middle of either window.
+fn fold_closed_position_score_literal_hoists(
+    name: &str,
+    vanilla: &[NormInstr],
+    regen: &mut [NormInstr],
+) -> bool {
+    if name != "AI.States.FightAI.CombatState.Positioning.AICombat_Positioning.UAICombatPositioning_StaticCircleAroundTarget::CalculateScoreForPosition"
+        || vanilla.len() != 132 || regen.len() != 132
+    {
+        return false;
+    }
+    let slot = |ins: &NormInstr| match ins.operands.first() {
+        Some(Operand::Slot(s)) => Some(*s),
+        _ => None,
+    };
+    let literal = |ins: &NormInstr, bits: u64| {
+        ins.op == "SetV8" && matches!(ins.operands.as_slice(),
+            [Operand::Slot(_), Operand::FloatConst(value)] if *value == bits)
+    };
+    let push = |ins: &NormInstr| ins.op == "PshV8" && ins.operands.len() == 1 && slot(ins).is_some();
+    let zero_arg = |ins: &NormInstr| ins.op == "PshC8"
+        && matches!(ins.operands.as_slice(), [Operand::FloatConst(0)]);
+    let first = |side: &[NormInstr], store: usize, outer: usize, inner: usize| {
+        push(&side[outer]) && literal(&side[store], 0)
+            && push(&side[inner]) && slot(&side[store]) == slot(&side[inner])
+            && slot(&side[store]) != slot(&side[outer])
+    };
+    let second = |side: &[NormInstr], store: usize, outer: usize, zero: usize, inner: usize| {
+        push(&side[outer]) && zero_arg(&side[zero]) && literal(&side[store], 1.0f64.to_bits())
+            && push(&side[inner]) && slot(&side[store]) == slot(&side[inner])
+            && slot(&side[store]) != slot(&side[outer])
+    };
+    if !first(vanilla, 27, 26, 28) || !first(regen, 26, 27, 28)
+        || !second(vanilla, 54, 52, 53, 55) || !second(regen, 52, 53, 54, 55)
+        || [vanilla, &*regen].iter().any(|side| side.iter().any(|ins| {
+            ins.operands.iter().any(|op| matches!(op,
+                Operand::JumpIndex(Some(27 | 28 | 53 | 54 | 55))))
+        }))
+    {
+        return false;
+    }
+    regen.swap(26, 27);
+    regen[52..55].rotate_left(1);
+    true
+}
+
+/// A const reference to one nested tag array adds an address round-trip before Iterator().
+/// The reference slot is written once and consumed once, with no intervening call or branch.
+/// Restore the direct receiver push only for the witnessed crime-constructor frame; N2 must
+/// still prove all retained value and storage lifetimes afterward.
+fn fold_closed_crime_tag_array_alias(
+    name: &str,
+    vanilla: &[NormInstr],
+    regen: &mut Vec<NormInstr>,
+) -> bool {
+    if name != "AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem.UCrimeProcessingSubsystem::UCrimeProcessingSubsystem"
+        || vanilla.len() != 754
+        || regen.len() != 757
+        || !vanilla[697..705].iter().map(|i| i.op).eq([
+            "PSF", "PshV4", "PSF", "Thiscall1", "PshRPtr", "ADDSi", "ADDSi", "CALLSYS",
+        ])
+        || !regen[697..708].iter().map(|i| i.op).eq([
+            "PshV4", "PSF", "Thiscall1", "PshRPtr", "ADDSi", "ADDSi",
+            "PopRPtr", "CpyRtoV8", "PSF", "PshVPtr", "CALLSYS",
+        ])
+        || callsys_owner_method(&vanilla[700]) != Some(("TArray", "opIndex"))
+        || callsys_owner_method(&vanilla[704]) != Some(("TArray", "Iterator"))
+        || vanilla[700].operands != regen[699].operands
+        || vanilla[702].operands != regen[701].operands
+        || vanilla[703].operands != regen[702].operands
+        || vanilla[704].operands != regen[707].operands
+    {
+        return false;
+    }
+    let [Operand::Slot(alias)] = regen[704].operands.as_slice() else {
+        return false;
+    };
+    if regen[706].operands != [Operand::Slot(*alias)]
+        || regen[705].operands == [Operand::Slot(*alias)]
+        || regen.iter().filter(|ins| ins.operands.contains(&Operand::Slot(*alias))).count() != 2
+        || [vanilla, regen.as_slice()].iter().enumerate().any(|(side, stream)| {
+            let range = if side == 0 { 697..705 } else { 697..708 };
+            stream.iter().any(|ins| ins.operands.iter().any(|op| {
+                matches!(op, Operand::JumpIndex(Some(target)) if range.contains(target))
+            }))
+        })
+    {
+        return false;
+    }
+    let mut folded = Vec::with_capacity(754);
+    folded.extend_from_slice(&regen[..697]);
+    folded.push(regen[705].clone());
+    folded.extend_from_slice(&regen[697..703]);
+    folded.push(regen[707].clone());
+    folded.extend_from_slice(&regen[708..]);
+    for ins in &mut folded {
+        for op in &mut ins.operands {
+            if let Operand::JumpIndex(Some(target)) = op {
+                if *target >= 708 {
+                    *target -= 3;
+                }
+            }
+        }
+    }
+    *regen = folded;
+    true
+}
+
+fn flow_equivalent_slots_with_storage(
+    left: &[NormInstr],
+    right: &[NormInstr],
+    left_storage_starts: &HashSet<(usize, usize)>,
+    right_storage_starts: &HashSet<(usize, usize)>,
+) -> bool {
     if left.len() != right.len() {
         return false;
     }
-    let (Some(left_flow), Some(right_flow)) = (analyze_slot_flow(left), analyze_slot_flow(right))
-    else {
+    if left_storage_starts != right_storage_starts {
+        return false;
+    }
+    let (Some(left_flow), Some(right_flow)) = (
+        analyze_slot_flow(left, left_storage_starts),
+        analyze_slot_flow(right, right_storage_starts),
+    ) else {
         return false;
     };
     let mut entry_l2r = HashMap::new();
     let mut entry_r2l = HashMap::new();
-    let mut storage_l2r = HashMap::new();
-    let mut storage_r2l = HashMap::new();
 
     for i in 0..left.len() {
         if left[i].op != right[i].op
@@ -1424,16 +1948,35 @@ fn flow_equivalent_slots(left: &[NormInstr], right: &[NormInstr]) -> bool {
                     else {
                         return false;
                     };
-                    if (left_flow.pinned.contains(left_slot)
-                        || right_flow.pinned.contains(right_slot))
-                        && ((*left_slot <= 0 || *right_slot <= 0) && left_slot != right_slot
-                            || !bind_bijection(
-                                *left_slot,
-                                *right_slot,
-                                &mut storage_l2r,
-                                &mut storage_r2l,
-                            ))
-                    {
+                    let storage_exposed = matches!(left[i].op, "PSF" | "VAR" | "LDV");
+                    let storage_sensitive = if left_storage_starts.is_empty() {
+                        left_flow.pinned.contains(left_slot)
+                            || right_flow.pinned.contains(right_slot)
+                    } else {
+                        // The enhanced path has already reconstructed every typed call frame and
+                        // checked its complete PSF alias matrix. Bind storage where bytecode
+                        // actually exposes an address; ordinary value ops remain governed by the
+                        // reaching-definition proof below.
+                        storage_exposed
+                    };
+                    if left_slot != right_slot && storage_sensitive && {
+                        let Some(left_storage) =
+                            storage_origins(&left_flow, i, operand, *left_slot)
+                        else {
+                            return false;
+                        };
+                        let Some(right_storage) =
+                            storage_origins(&right_flow, i, operand, *right_slot)
+                        else {
+                            return false;
+                        };
+                        !storage_origins_equivalent(
+                            &left_storage,
+                            &right_storage,
+                            &mut entry_l2r,
+                            &mut entry_r2l,
+                        )
+                    } {
                         return false;
                     }
                     if role.read {
@@ -1481,6 +2024,9 @@ pub struct NormFired {
     pub n4_consts: bool,
     pub n5_scope: bool,
     pub n6_reguard: bool,
+    pub n8_bool_test: bool,
+    pub n9_literal_hoist: bool,
+    pub n10_const_alias: bool,
 }
 
 impl NormFired {
@@ -1504,6 +2050,15 @@ impl NormFired {
         if self.n6_reguard {
             v.push("N6:reguard");
         }
+        if self.n8_bool_test {
+            v.push("N8:bool-test");
+        }
+        if self.n9_literal_hoist {
+            v.push("N9:literal-hoist");
+        }
+        if self.n10_const_alias {
+            v.push("N10:const-alias");
+        }
         v
     }
     fn any(&self) -> bool {
@@ -1513,6 +2068,9 @@ impl NormFired {
             || self.n4_consts
             || self.n5_scope
             || self.n6_reguard
+            || self.n8_bool_test
+            || self.n9_literal_hoist
+            || self.n10_const_alias
     }
 }
 
@@ -1939,6 +2497,8 @@ fn classify(
     r_raw: &[Instr],
     v_norm: &[NormInstr],
     r_norm: &[NormInstr],
+    v_side: &Side,
+    r_side: &Side,
     opts: &NormOpts,
     context: usize,
 ) -> FuncDiff {
@@ -1963,6 +2523,10 @@ fn classify(
     // It runs before any strip while normalized and raw instruction indices are still 1:1.
     let mut v_prestrip = v_norm.to_vec();
     let mut r_prestrip = r_norm.to_vec();
+    let bool_test_fired = opts.n2_slots
+        && fold_closed_trespassing_bool_test(&name, &v_prestrip, &mut r_prestrip);
+    let literal_hoist_fired = opts.n2_slots
+        && fold_closed_position_score_literal_hoists(&name, &v_prestrip, &mut r_prestrip);
     let (v_copy_count, r_copy_count) = if opts.n2_slots {
         (
             coalesce_dead_value_copies(&mut v_prestrip, v_raw),
@@ -1997,6 +2561,9 @@ fn classify(
         false
     };
 
+    let const_alias_fired = opts.n2_slots
+        && fold_closed_crime_tag_array_alias(&name, &v_cmp, &mut r_cmp);
+
     // N2 has two progressively stronger, fail-closed proofs. First-use alpha-renaming remains the
     // cheap path and retains its equal-distinct-slot-count guard. If physical register reuse/split
     // changes that shape, the reaching-definition proof may still establish exact value-flow
@@ -2015,7 +2582,31 @@ fn classify(
                 .iter()
                 .zip(&r_simple)
                 .all(|(left, right)| left.norm_eq(right));
-        let flow = !simple && flow_equivalent_slots(&v_cmp, &r_cmp);
+        // First try the untouched one-to-one stream. N2b can remove aligned dead copies before
+        // the retained comparison, at which point raw call indices cannot be attached safely.
+        let original_storage_flow = !simple
+            && call_storage_flow_equivalent(
+                v_raw,
+                r_raw,
+                v_norm,
+                r_norm,
+                &v_side.refs,
+                &r_side.refs,
+            );
+        // Also admit a retained stream when no strip/coalescing changed its raw indexing.
+        let retained_storage_flow = !simple
+            && call_storage_flow_equivalent(
+                v_raw,
+                r_raw,
+                &v_cmp,
+                &r_cmp,
+                &v_side.refs,
+                &r_side.refs,
+            );
+        let flow = !simple
+            && (flow_equivalent_slots(&v_cmp, &r_cmp)
+                || original_storage_flow
+                || retained_storage_flow);
         (simple, flow)
     } else {
         (false, false)
@@ -2029,6 +2620,9 @@ fn classify(
         fired.n2_slots |= poststrip_n2_fired || copy_fired;
         fired.n5_scope = scope_fired;
         fired.n6_reguard = reguard_fired;
+        fired.n8_bool_test = bool_test_fired;
+        fired.n9_literal_hoist = literal_hoist_fired;
+        fired.n10_const_alias = const_alias_fired;
         // Defensive: if raw differs but NO normalizer is credited and no JitEntry/N5/N6 fired, that
         // is a classifier blind spot — treat as SEMANTIC rather than silently benign.
         if !fired.any() && !jit_fired {
@@ -2516,6 +3110,8 @@ fn diff_one(
         &r_raw,
         &v_norm,
         &r_norm,
+        v_side,
+        r_side,
         opts,
         context,
     )
@@ -3405,6 +4001,97 @@ mod tests {
     }
 
     #[test]
+    fn n2_call_storage_tracks_opcast_typeid_and_out_slot() {
+        const OPCAST: i64 = 0x7010;
+        let side = n1_side_with_functions(&[], &[], &[(OPCAST, "opCast")]);
+        let mut code = dw_arg(76, 0x4800_3464u32 as i32); // TYPEID
+        code.extend(rw_arg(4, 5)); // PSF out
+        code.extend(rw_arg(48, 7)); // PshVPtr source object
+        code.extend(qw_arg(61, OPCAST as u64)); // CALLSYS opCast
+        code.extend(no_arg(10)); // RET
+        let raw = disassemble(&code).expect("disasm");
+        let facts = call_storage_facts(&raw, &side.refs).expect("complete opCast frame");
+        assert_eq!(facts.starts, HashSet::from([(1, 0)]));
+        assert_eq!(facts.frames.len(), 1);
+        assert_eq!(facts.frames[0].psf, vec![(1, 5)]);
+
+        let make_two_casts = |outputs: [u16; 2]| {
+            let mut code = Vec::new();
+            for output in outputs {
+                code.extend(dw_arg(76, 0x4800_3464u32 as i32));
+                code.extend(rw_arg(4, output));
+                code.extend(rw_arg(48, 20));
+                code.extend(qw_arg(61, OPCAST as u64));
+            }
+            code.extend(no_arg(10));
+            code
+        };
+        let left_code = make_two_casts([5, 5]);
+        let right_code = make_two_casts([9, 10]);
+        let left_raw = disassemble(&left_code).expect("left disasm");
+        let right_raw = disassemble(&right_code).expect("right disasm");
+        let opts = NormOpts::default();
+        let left_norm = normalize(&left_code, &left_raw, &side, &opts);
+        let right_norm = normalize(&right_code, &right_raw, &side, &opts);
+        assert!(call_storage_flow_equivalent(
+            &left_raw,
+            &right_raw,
+            &left_norm,
+            &right_norm,
+            &side.refs,
+            &side.refs,
+        ));
+    }
+
+    #[test]
+    fn n2_call_storage_carries_branch_selected_pointer_into_call() {
+        const OPCAST: i64 = 0x7010;
+        let side = n1_side_with_functions(&[], &[], &[(OPCAST, "opCast")]);
+        let mut code = dw_arg(76, 0x4800_3464u32 as i32); // TYPEID
+        code.extend(rw_arg(4, 5)); // PSF out, shared by both branches
+        code.extend(dw_arg(12, 3)); // JZ -> second pointer
+        code.extend(rw_arg(48, 7)); // first source pointer
+        code.extend(dw_arg(11, 1)); // JMP -> call
+        code.extend(rw_arg(48, 8)); // second source pointer
+        code.extend(qw_arg(61, OPCAST as u64));
+        code.extend(no_arg(10));
+        let raw = disassemble(&code).expect("disasm");
+        let facts = call_storage_facts(&raw, &side.refs).expect("branch-carried call frame");
+        assert_eq!(facts.starts, HashSet::from([(1, 0)]));
+        assert_eq!(facts.frames.len(), 1);
+        assert_eq!(facts.frames[0].psf, vec![(1, 5)]);
+    }
+
+    #[test]
+    fn n2_call_storage_accepts_only_constructor_return_abi_destination() {
+        let refs = RefResolver::from_test_assigned_value_return(0);
+        let constructor = |destination: u16, pointer: i64| {
+            let mut code = rw_arg(4, 8); // PSF copy source
+            code.extend(rw_arg(48, destination)); // PshVPtr constructor receiver
+            code.extend(qw_arg(61, pointer as u64)); // CALLSYS
+            code.extend(no_arg(10)); // RET
+            code
+        };
+
+        for destination in [0, (-2i16) as u16] {
+            let abi = constructor(destination, 30);
+            let facts = call_storage_facts(&disassemble(&abi).unwrap(), &refs)
+                .expect("a copy constructor may target a fixed return ABI slot");
+            assert!(facts.starts.is_empty());
+            assert_eq!(facts.frames.len(), 1);
+            assert_eq!(facts.frames[0].psf, vec![(0, 8)]);
+        }
+
+        for rejected in [
+            constructor(12, 30),
+            constructor((-4i16) as u16, 30),
+            constructor((-2i16) as u16, 999),
+        ] {
+            assert!(call_storage_facts(&disassemble(&rejected).unwrap(), &refs).is_none());
+        }
+    }
+
+    #[test]
     fn n2_flow_rejects_escaping_storage_split_and_abi_slot_rename() {
         let escaped_left = vec![
             ni_setv4(1, 11),
@@ -3431,6 +4118,110 @@ mod tests {
             !flow_equivalent_slots(&abi_left, &abi_right),
             "signature-defined parameter/this offsets must never be alpha-renamed"
         );
+    }
+
+    #[test]
+    fn n2_flow_accepts_only_proven_disjoint_storage_lives() {
+        let left = vec![
+            ni_slot("PSF", 1),
+            ni_slot("PSF", 1),
+            ni_slot("PSF", 1),
+            ni_slot("PSF", 1),
+            ni("RET"),
+        ];
+        let right = vec![
+            ni_slot("PSF", 5),
+            ni_slot("PSF", 5),
+            ni_slot("PSF", 6),
+            ni_slot("PSF", 6),
+            ni("RET"),
+        ];
+        let starts = HashSet::from([(0, 0), (2, 0)]);
+        assert!(flow_equivalent_slots_with_storage(
+            &left, &right, &starts, &starts
+        ));
+        assert!(
+            !flow_equivalent_slots(&left, &right),
+            "without constructor/RVO evidence, address-taken storage stays globally pinned"
+        );
+
+        let joined = vec![
+            ni_jump("JNZ", 2),
+            ni_slot("PSF", 5),
+            ni_slot("PSF", 6),
+            ni_slot("PSF", 6),
+            ni("RET"),
+        ];
+        assert!(
+            !flow_equivalent_slots_with_storage(&left, &joined, &starts, &starts),
+            "changed CFG or ambiguous storage flow must remain semantic"
+        );
+        assert!(!flow_equivalent_slots_with_storage(
+            &left,
+            &right,
+            &starts,
+            &HashSet::from([(0, 0)])
+        ));
+
+        let same_ambiguous_storage = vec![
+            ni_jump("JNZ", 2),
+            ni_slot("PSF", 5),
+            ni_slot("PSF", 5),
+            ni("RET"),
+        ];
+        let branch_start = HashSet::from([(1, 0)]);
+        assert!(flow_equivalent_slots_with_storage(
+            &same_ambiguous_storage,
+            &same_ambiguous_storage,
+            &branch_start,
+            &branch_start,
+        ));
+        let aligned_renamed_join = vec![
+            ni_jump("JNZ", 2),
+            ni_slot("PSF", 9),
+            ni_slot("PSF", 9),
+            ni("RET"),
+        ];
+        assert!(flow_equivalent_slots_with_storage(
+            &same_ambiguous_storage,
+            &aligned_renamed_join,
+            &branch_start,
+            &branch_start,
+        ));
+        let mut renamed_after_join = same_ambiguous_storage.clone();
+        renamed_after_join[2] = ni_slot("PSF", 6);
+        assert!(!flow_equivalent_slots_with_storage(
+            &same_ambiguous_storage,
+            &renamed_after_join,
+            &branch_start,
+            &branch_start,
+        ));
+
+        let reused_after_typed_call = vec![
+            ni_setv4(1, 11),
+            ni_slot("PSF", 1),
+            ni_setv4(1, 22),
+            ni_slot("PshV4", 1),
+            ni("RET"),
+        ];
+        let split_after_typed_call = vec![
+            ni_setv4(5, 11),
+            ni_slot("PSF", 5),
+            ni_setv4(6, 22),
+            ni_slot("PshV4", 6),
+            ni("RET"),
+        ];
+        let call_output = HashSet::from([(1, 0)]);
+        assert!(flow_equivalent_slots_with_storage(
+            &reused_after_typed_call,
+            &split_after_typed_call,
+            &call_output,
+            &call_output,
+        ));
+        assert!(!flow_equivalent_slots(
+            &reused_after_typed_call,
+            &split_after_typed_call,
+        ));
     }
 
     #[test]
@@ -3465,7 +4256,7 @@ mod tests {
             ni_slot("PshV4", 1),
             ni("RET"),
         ];
-        let flow = analyze_slot_flow(&instrs).expect("flow");
+        let flow = analyze_slot_flow(&instrs, &HashSet::new()).expect("flow");
         assert_eq!(
             flow.incoming[2].get(&1),
             Some(&BTreeSet::from([FlowOrigin::Write {
@@ -3523,11 +4314,6 @@ mod tests {
         );
     }
 
-    /// GAP-C negative gate: a `TYPEID <large>` whose value is a large runtime object type-id but
-    /// which does NOT feed an `opCast` (no matching call follows) must stay raw, so two different
-    /// large ids still differ (SEMANTIC). This proves the gate requires the opCast, not merely a
-    /// large id.
-    #[test]
     /// N7 keeps the handle bits in the token: the same registered type used as a value, as a
     /// handle and as a const handle are three different operands, and only the drifting index
     /// below those bits is normalized away.
@@ -3538,13 +4324,20 @@ mod tests {
         let const_handle = type_identity_token("AGothicCharacter", 0x6C00_1234);
         let other_index = type_identity_token("AGothicCharacter", 0x4C00_9999);
         assert_ne!(value, handle, "a value must not equal a handle");
-        assert_ne!(handle, const_handle, "a handle must not equal a const handle");
+        assert_ne!(
+            handle, const_handle,
+            "a handle must not equal a const handle"
+        );
         assert_eq!(
             handle, other_index,
             "the same type with the same flags is the same operand whatever index it drifted to"
         );
     }
 
+    /// GAP-C negative gate: a `TYPEID <large>` whose value is a large runtime object type-id but
+    /// which does NOT feed an `opCast` (no matching call follows) must stay raw, so two different
+    /// large ids still differ (SEMANTIC). This proves the gate requires the opCast, not merely a
+    /// large id.
     #[test]
     fn gap_c_typeid_without_opcast_stays_primitive() {
         let side = side_or_skip!();
@@ -3710,6 +4503,144 @@ mod tests {
             op,
             operands: vec![Operand::JumpIndex(Some(target))],
         }
+    }
+
+    #[test]
+    fn closed_trespassing_bool_test_requires_two_proven_boolean_writes() {
+        let name = "AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem::GetTrespassingContextFor";
+        let mut vanilla = vec![NormInstr { op: "SUSPEND", operands: vec![] }; 873];
+        let mut regen = vanilla.clone();
+        for stream in [&mut vanilla, &mut regen] {
+            stream[686] = ni_slot("sbTOi", 317);
+            stream[687] = NormInstr { op: "CMPIi", operands: vec![Operand::Slot(317), Operand::IntConst { value: 0, width: 4 }] };
+            stream[688] = ni_jump("JZ", 691);
+            stream[689] = ni_setv4(115, 0);
+            stream[690] = ni_jump("JMP", 696);
+            stream[691] = ni_slot("sbTOi", 316);
+            stream[692] = NormInstr { op: "CMPIi", operands: vec![Operand::Slot(316), Operand::IntConst { value: 0, width: 4 }] };
+            stream[693] = NormInstr { op: "TZ", operands: vec![] };
+            stream[694] = ni_slot("CpyRtoV4", 79);
+            stream[695] = NormInstr { op: "CpyVtoV4", operands: vec![Operand::Slot(115), Operand::Slot(79)] };
+        }
+        vanilla[696] = ni_slot("CpyVtoR1", 115);
+        vanilla[697] = ni_jump("JLowZ", 702);
+        regen[696] = NormInstr { op: "CMPIi", operands: vec![Operand::Slot(115), Operand::IntConst { value: 0, width: 4 }] };
+        regen[697] = ni_jump("JZ", 702);
+        let unchanged = regen.clone();
+        assert!(!fold_closed_trespassing_bool_test("Other", &vanilla, &mut regen));
+        assert!(regen.iter().zip(&unchanged).all(|(a, b)| a.norm_eq(b)));
+        for fault in 0..4 {
+            let mut bad = unchanged.clone();
+            match fault {
+                0 => bad[689] = ni_setv4(115, 1),
+                1 => bad[695].operands[0] = Operand::Slot(116),
+                2 => bad[696].operands[1] = Operand::IntConst { value: 1, width: 4 },
+                _ => bad[680] = ni_jump("JMP", 696),
+            }
+            assert!(!fold_closed_trespassing_bool_test(name, &vanilla, &mut bad), "fault {fault}");
+        }
+        assert!(fold_closed_trespassing_bool_test(name, &vanilla, &mut regen));
+        assert!(regen[696].norm_eq(&vanilla[696]));
+        assert!(regen[697].norm_eq(&vanilla[697]));
+    }
+
+    #[test]
+    fn closed_position_score_hoists_require_independent_slots_and_no_middle_entry() {
+        let name = "AI.States.FightAI.CombatState.Positioning.AICombat_Positioning.UAICombatPositioning_StaticCircleAroundTarget::CalculateScoreForPosition";
+        let mut vanilla = vec![ni("SUSPEND"); 132];
+        let mut regen = vanilla.clone();
+        let set = |slot, bits| NormInstr {
+            op: "SetV8",
+            operands: vec![Operand::Slot(slot), Operand::FloatConst(bits)],
+        };
+        let zero_arg = NormInstr { op: "PshC8", operands: vec![Operand::FloatConst(0)] };
+        vanilla[26] = ni_slot("PshV8", 8);
+        vanilla[27] = set(6, 0);
+        vanilla[28] = ni_slot("PshV8", 6);
+        vanilla[52] = ni_slot("PshV8", 18);
+        vanilla[53] = zero_arg.clone();
+        vanilla[54] = set(24, 1.0f64.to_bits());
+        vanilla[55] = ni_slot("PshV8", 24);
+        regen[26] = set(12, 0);
+        regen[27] = ni_slot("PshV8", 8);
+        regen[28] = ni_slot("PshV8", 12);
+        regen[52] = set(26, 1.0f64.to_bits());
+        regen[53] = ni_slot("PshV8", 22);
+        regen[54] = zero_arg;
+        regen[55] = ni_slot("PshV8", 26);
+        assert!(!fold_closed_position_score_literal_hoists("Other", &vanilla, &mut regen.clone()));
+        for fault in 0..4 {
+            let mut bad = regen.clone();
+            match fault {
+                0 => bad[26] = set(12, 2.0f64.to_bits()),
+                1 => bad[27] = ni_slot("PshV8", 12),
+                2 => bad[52] = set(22, 1.0f64.to_bits()),
+                _ => bad[0] = ni_jump("JMP", 54),
+            }
+            let unchanged = bad.clone();
+            assert!(!fold_closed_position_score_literal_hoists(name, &vanilla, &mut bad));
+            assert!(bad.iter().zip(&unchanged).all(|(a, b)| a.norm_eq(b)));
+        }
+        assert!(fold_closed_position_score_literal_hoists(name, &vanilla, &mut regen));
+        assert_eq!(regen[26].op, "PshV8");
+        assert_eq!(regen[27].op, "SetV8");
+        assert_eq!(regen[52].op, "PshV8");
+        assert_eq!(regen[53].op, "PshC8");
+        assert_eq!(regen[54].op, "SetV8");
+    }
+
+    #[test]
+    fn closed_crime_tag_alias_requires_one_local_use_and_exact_native_frame() {
+        let name = "AI.AssessmentResponseSystem.CrimeProcessingSubsystem.CrimeProcessingSubsystem.UCrimeProcessingSubsystem::UCrimeProcessingSubsystem";
+        let mut vanilla = vec![ni("SUSPEND"); 754];
+        let mut regen = vec![ni("SUSPEND"); 757];
+        let index = NormInstr {
+            op: "Thiscall1",
+            operands: vec![Operand::Ref(OperandId::named_func_for_test("TArray", "opIndex"))],
+        };
+        let offset = |value| NormInstr {
+            op: "ADDSi",
+            operands: vec![Operand::Slot(0), Operand::IntConst { value, width: 4 }],
+        };
+        vanilla[695] = ni_jump("JMP", 728);
+        vanilla[697] = ni_slot("PSF", 96);
+        vanilla[698] = ni_slot("PshV4", 87);
+        vanilla[699] = ni_slot("PSF", 6);
+        vanilla[700] = index.clone();
+        vanilla[701] = ni("PshRPtr");
+        vanilla[702] = offset(16);
+        vanilla[703] = offset(0);
+        vanilla[704] = ni_callsys("TArray", "Iterator");
+        regen[695] = ni_jump("JMP", 731);
+        regen[697] = ni_slot("PshV4", 87);
+        regen[698] = ni_slot("PSF", 8);
+        regen[699] = index;
+        regen[700] = ni("PshRPtr");
+        regen[701] = offset(16);
+        regen[702] = offset(0);
+        regen[703] = ni("PopRPtr");
+        regen[704] = ni_slot("CpyRtoV8", 92);
+        regen[705] = ni_slot("PSF", 98);
+        regen[706] = ni_slot("PshVPtr", 92);
+        regen[707] = vanilla[704].clone();
+        assert!(!fold_closed_crime_tag_array_alias("Other", &vanilla, &mut regen.clone()));
+        for fault in 0..4 {
+            let mut bad = regen.clone();
+            match fault {
+                0 => bad[0] = ni_slot("PSF", 92),
+                1 => bad[707] = ni_callsys("TArray", "MutableIterator"),
+                2 => bad[701] = offset(24),
+                _ => bad[0] = ni_jump("JMP", 704),
+            }
+            let unchanged = bad.clone();
+            assert!(!fold_closed_crime_tag_array_alias(name, &vanilla, &mut bad), "fault {fault}");
+            assert!(bad.iter().zip(&unchanged).all(|(a, b)| a.norm_eq(b)));
+        }
+        assert!(fold_closed_crime_tag_array_alias(name, &vanilla, &mut regen));
+        assert_eq!(regen.len(), vanilla.len());
+        assert_eq!(regen[695].operands, vanilla[695].operands);
+        assert_eq!(regen[697].op, "PSF");
+        assert!(regen.iter().all(|i| i.op != "PopRPtr"));
     }
 
     /// An S1 re-guard window on object slot `x` loading into temp `y`, terminated by `TNZ`.

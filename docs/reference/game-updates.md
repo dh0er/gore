@@ -59,9 +59,10 @@ qualified and admitted:
 | **Degraded** | `as default-sites`, `as patch-default`. They fall back to scalar-only: sites the script cache can type on its own stay editable, anything needing native ancestry does not. |
 | **Refused** | `as tag-map-sites`, `as patch-tag-map`, and Mod Studio's story, NPC, quest and item authoring. |
 
-After qualification, the central registry contains exactly four reviewed Steam
+After qualification, the central registry contains exactly five reviewed Steam
 rows: Steam 1.0.3 Hotfix 1, build `24169431`, build `24340829`, and build
-`24878692` from the 2026-08-27/28 update. Each row is a closed exact-generation
+`24878692` from the 2026-08-27/28 update, and build `25168047` from the
+2026-09-21 1.0.5 hotfix. Each row is a closed exact-generation
 admission, not a range or a promise about nearby builds.
 
 The `24340829` row retains its bounded offline qualification: no class was
@@ -103,6 +104,23 @@ The ordered API delta requires a new standalone-compiler profile. It is not by
 itself evidence of AngelScript language or compiler-core semantic drift; the
 frozen 27-case and full-tree embedded-versus-standalone comparisons remain the
 separate compiler gate.
+
+The `25168047` hotfix keeps `Binds.Cache` byte-identical to `24878692`, so
+the standalone compiler retains that build's ordered API profile. Its fresh
+173255 USMAP has the same 6,602 class rows, direct-parent graph, 6,582-class
+bridge, 402/402 native-base resolution, and GameplayTag-to-float32 profile.
+All 26,389 scalar default windows still resolve. The Shipping cache moves
+crime assessment in one AI state to a next-tick timer and adds the corresponding
+`AssessCrimeEvent` function; no other aligned function changes behavior.
+The complete 7,317-module source tree compiles offline against the unchanged
+Binds API to 164,724/164,724 aligned functions with zero semantic differences.
+This is an offline compiler comparison, not a live-game behavior claim.
+
+The curated story catalog advances to V5 because the current defaults-free
+emitter represents the unchanged Swamp Camp chapter quest with a 600-byte
+source seal. Its `ParentQuestClass` default is checked separately in the
+defaults-bearing 662-byte emission. The other five curated modules retain
+their source seals, and all six reproduce on the hotfix.
 
 Mod Studio's Story/NPC/Quest authoring recognizes each exact registered triple
 only within its existing project-only contract. Item authoring is separately
@@ -218,8 +236,8 @@ rebuild and test the sidecar but do not rerun the private game comparison.
 the evidence is the evidence, never that the game agrees with it. Patch one
 default you can see and look before claiming that live behavior. When the
 admitted scope stops at bounded offline authoring, record that boundary instead
-of implying this step happened: neither build `24340829` nor build `24878692`
-gains dialog-runtime qualification from its central generation row.
+of implying this step happened: none of builds `24340829`, `24878692`, or
+`25168047` gains dialog-runtime qualification from its central generation row.
 
 ## What is deliberately not automated
 
