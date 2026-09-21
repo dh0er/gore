@@ -1752,6 +1752,54 @@ fn fold_closed_trespassing_bool_test(name: &str, vanilla: &[NormInstr], regen: &
     true
 }
 
+/// In this one scoring function the compiler hoists two literal stores ahead of independent
+/// argument pushes. Both orders push the same values: each store writes a different local from
+/// the value being pushed, and no control-flow edge enters the middle of either window.
+fn fold_closed_position_score_literal_hoists(
+    name: &str,
+    vanilla: &[NormInstr],
+    regen: &mut [NormInstr],
+) -> bool {
+    if name != "AI.States.FightAI.CombatState.Positioning.AICombat_Positioning.UAICombatPositioning_StaticCircleAroundTarget::CalculateScoreForPosition"
+        || vanilla.len() != 132 || regen.len() != 132
+    {
+        return false;
+    }
+    let slot = |ins: &NormInstr| match ins.operands.first() {
+        Some(Operand::Slot(s)) => Some(*s),
+        _ => None,
+    };
+    let literal = |ins: &NormInstr, bits: u64| {
+        ins.op == "SetV8" && matches!(ins.operands.as_slice(),
+            [Operand::Slot(_), Operand::FloatConst(value)] if *value == bits)
+    };
+    let push = |ins: &NormInstr| ins.op == "PshV8" && ins.operands.len() == 1 && slot(ins).is_some();
+    let zero_arg = |ins: &NormInstr| ins.op == "PshC8"
+        && matches!(ins.operands.as_slice(), [Operand::FloatConst(0)]);
+    let first = |side: &[NormInstr], store: usize, outer: usize, inner: usize| {
+        push(&side[outer]) && literal(&side[store], 0)
+            && push(&side[inner]) && slot(&side[store]) == slot(&side[inner])
+            && slot(&side[store]) != slot(&side[outer])
+    };
+    let second = |side: &[NormInstr], store: usize, outer: usize, zero: usize, inner: usize| {
+        push(&side[outer]) && zero_arg(&side[zero]) && literal(&side[store], 1.0f64.to_bits())
+            && push(&side[inner]) && slot(&side[store]) == slot(&side[inner])
+            && slot(&side[store]) != slot(&side[outer])
+    };
+    if !first(vanilla, 27, 26, 28) || !first(regen, 26, 27, 28)
+        || !second(vanilla, 54, 52, 53, 55) || !second(regen, 52, 53, 54, 55)
+        || [vanilla, &*regen].iter().any(|side| side.iter().any(|ins| {
+            ins.operands.iter().any(|op| matches!(op,
+                Operand::JumpIndex(Some(27 | 28 | 53 | 54 | 55))))
+        }))
+    {
+        return false;
+    }
+    regen.swap(26, 27);
+    regen[52..55].rotate_left(1);
+    true
+}
+
 fn flow_equivalent_slots_with_storage(
     left: &[NormInstr],
     right: &[NormInstr],
@@ -1866,6 +1914,7 @@ pub struct NormFired {
     pub n5_scope: bool,
     pub n6_reguard: bool,
     pub n8_bool_test: bool,
+    pub n9_literal_hoist: bool,
 }
 
 impl NormFired {
@@ -1892,6 +1941,9 @@ impl NormFired {
         if self.n8_bool_test {
             v.push("N8:bool-test");
         }
+        if self.n9_literal_hoist {
+            v.push("N9:literal-hoist");
+        }
         v
     }
     fn any(&self) -> bool {
@@ -1902,6 +1954,7 @@ impl NormFired {
             || self.n5_scope
             || self.n6_reguard
             || self.n8_bool_test
+            || self.n9_literal_hoist
     }
 }
 
@@ -2356,6 +2409,8 @@ fn classify(
     let mut r_prestrip = r_norm.to_vec();
     let bool_test_fired = opts.n2_slots
         && fold_closed_trespassing_bool_test(&name, &v_prestrip, &mut r_prestrip);
+    let literal_hoist_fired = opts.n2_slots
+        && fold_closed_position_score_literal_hoists(&name, &v_prestrip, &mut r_prestrip);
     let (v_copy_count, r_copy_count) = if opts.n2_slots {
         (
             coalesce_dead_value_copies(&mut v_prestrip, v_raw),
@@ -2447,6 +2502,7 @@ fn classify(
         fired.n5_scope = scope_fired;
         fired.n6_reguard = reguard_fired;
         fired.n8_bool_test = bool_test_fired;
+        fired.n9_literal_hoist = literal_hoist_fired;
         // Defensive: if raw differs but NO normalizer is credited and no JitEntry/N5/N6 fired, that
         // is a classifier blind spot — treat as SEMANTIC rather than silently benign.
         if !fired.any() && !jit_fired {
@@ -4347,6 +4403,51 @@ mod tests {
         assert!(fold_closed_trespassing_bool_test(name, &vanilla, &mut regen));
         assert!(regen[696].norm_eq(&vanilla[696]));
         assert!(regen[697].norm_eq(&vanilla[697]));
+    }
+
+    #[test]
+    fn closed_position_score_hoists_require_independent_slots_and_no_middle_entry() {
+        let name = "AI.States.FightAI.CombatState.Positioning.AICombat_Positioning.UAICombatPositioning_StaticCircleAroundTarget::CalculateScoreForPosition";
+        let mut vanilla = vec![ni("SUSPEND"); 132];
+        let mut regen = vanilla.clone();
+        let set = |slot, bits| NormInstr {
+            op: "SetV8",
+            operands: vec![Operand::Slot(slot), Operand::FloatConst(bits)],
+        };
+        let zero_arg = NormInstr { op: "PshC8", operands: vec![Operand::FloatConst(0)] };
+        vanilla[26] = ni_slot("PshV8", 8);
+        vanilla[27] = set(6, 0);
+        vanilla[28] = ni_slot("PshV8", 6);
+        vanilla[52] = ni_slot("PshV8", 18);
+        vanilla[53] = zero_arg.clone();
+        vanilla[54] = set(24, 1.0f64.to_bits());
+        vanilla[55] = ni_slot("PshV8", 24);
+        regen[26] = set(12, 0);
+        regen[27] = ni_slot("PshV8", 8);
+        regen[28] = ni_slot("PshV8", 12);
+        regen[52] = set(26, 1.0f64.to_bits());
+        regen[53] = ni_slot("PshV8", 22);
+        regen[54] = zero_arg;
+        regen[55] = ni_slot("PshV8", 26);
+        assert!(!fold_closed_position_score_literal_hoists("Other", &vanilla, &mut regen.clone()));
+        for fault in 0..4 {
+            let mut bad = regen.clone();
+            match fault {
+                0 => bad[26] = set(12, 2.0f64.to_bits()),
+                1 => bad[27] = ni_slot("PshV8", 12),
+                2 => bad[52] = set(22, 1.0f64.to_bits()),
+                _ => bad[0] = ni_jump("JMP", 54),
+            }
+            let unchanged = bad.clone();
+            assert!(!fold_closed_position_score_literal_hoists(name, &vanilla, &mut bad));
+            assert!(bad.iter().zip(&unchanged).all(|(a, b)| a.norm_eq(b)));
+        }
+        assert!(fold_closed_position_score_literal_hoists(name, &vanilla, &mut regen));
+        assert_eq!(regen[26].op, "PshV8");
+        assert_eq!(regen[27].op, "SetV8");
+        assert_eq!(regen[52].op, "PshV8");
+        assert_eq!(regen[53].op, "PshC8");
+        assert_eq!(regen[54].op, "SetV8");
     }
 
     /// An S1 re-guard window on object slot `x` loading into temp `y`, terminated by `TNZ`.
