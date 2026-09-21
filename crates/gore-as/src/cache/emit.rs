@@ -3556,6 +3556,8 @@ fn emit_function_ctor(
         pass_trace("restore_attack_reach_trace_lifetimes", &rendered);
         let rendered = split_continue_guard_bool_lifetime(&rendered);
         pass_trace("split_continue_guard_bool_lifetime", &rendered);
+        let rendered = restore_circling_path_argument_lifetimes(&rendered, f, class_name, is_method);
+        pass_trace("restore_circling_path_argument_lifetimes", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -7657,6 +7659,126 @@ fn restore_evaluate_crime_argument_order(
         return body.to_owned();
     }
     body.replacen(old, new, 1)
+}
+
+/// Preserve the original temporary lifetimes and right-to-left argument evaluation in the
+/// circling path. In particular, the later navigation point reuses the earlier flatten-result
+/// storage; a fresh vector constructor has the same opcode shape but a different native callee.
+fn restore_circling_path_argument_lifetimes(
+    body: &str,
+    f: &Func,
+    class_name: Option<&str>,
+    is_method: bool,
+) -> String {
+    if !is_method
+        || class_name != Some("UAICombatPositioning")
+        || f.name != "GetCirclingPathAroundTarget"
+        || f.params.len() != 5
+        || disassemble(&f.bytecode).ok().is_none_or(|code| code.len() != 935)
+    {
+        return body.to_owned();
+    }
+    let rewrites = [
+        (
+            r#"        FVector local_50 = this.UnflattenPositionVector(local_62, 0.0);
+        FVector2D local_58 = this.FlattenPositionVector(local_50.CrossProduct(FVector::UpVector).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector));"#,
+            r#"        FVector2D local_58 = this.FlattenPositionVector(this.UnflattenPositionVector(local_62, 0.0).CrossProduct(FVector::UpVector).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector));"#,
+        ),
+        (
+            r#"        FName local_52 = FName("Angelscript");
+        FVector local_50_2 = this.UnflattenPositionVector(local_78, 0.0);
+        FVector local_50_3 = (local_18 + (local_50_2 * 100.0));
+        VLog::Arrow(this.Combat.GetSelf(), "SelfForward", local_18, local_50_3, FColor::Green, local_52);"#,
+            r#"        VLog::Arrow(this.Combat.GetSelf(), "SelfForward", local_18, (local_18 + (this.UnflattenPositionVector(local_78, 0.0) * 100.0)), FColor::Green, FName("Angelscript"));"#,
+        ),
+        (
+            r#"        FVector local_50_4 = this.UnflattenPositionVector(local_66, 0.0);
+        FVector local_72_2 = (local_50_4 * 100.0);
+        FVector local_50_5 = (local_42 + local_72_2);
+        VLog::Arrow(this.Combat.GetSelf(), "TargetForward", local_42, local_50_5, FColor::Red, local_52_2);"#,
+            r#"        VLog::Arrow(this.Combat.GetSelf(), "TargetForward", local_42, (local_42 + (this.UnflattenPositionVector(local_66, 0.0) * 100.0)), FColor::Red, local_52_2);"#,
+        ),
+        (
+            r#"        FVector local_96 = (this.UnflattenPositionVector(local_62, 0.0) * 100.0);
+        VLog::Arrow(this.Combat.GetSelf(), "TtoS", local_42, (local_42 + local_96), FColor::Blue, local_52_3);"#,
+            r#"        VLog::Arrow(this.Combat.GetSelf(), "TtoS", local_42, (local_42 + (this.UnflattenPositionVector(local_62, 0.0) * 100.0)), FColor::Blue, local_52_3);"#,
+        ),
+        (
+            r#"        FVector local_96_2 = (this.UnflattenPositionVector(local_58, 0.0) * 100.0);
+        VLog::Arrow(this.Combat.GetSelf(), "TtoSPerp", local_42, (local_42 + local_96_2), FColor::Blue, local_52_4);
+        FVector local_108;"#,
+            r#"        VLog::Arrow(this.Combat.GetSelf(), "TtoSPerp", local_42, (local_42 + (this.UnflattenPositionVector(local_58, 0.0) * 100.0)), FColor::Blue, local_52_4);"#,
+        ),
+        (
+            r#"                    bool local_100;
+                    if (!(local_98) && !(local_3))"#,
+            r#"                    if (!(local_98) && !(local_3))"#,
+        ),
+        (
+            r#"                    local_100 = ::IsCharacterDirectionFacingOtherCharacter(this.Combat.GetCharacterOfInterest(), this.Combat.GetSelf(), this.Combat.GetCharacterOfInterest().GetActorForwardVector(), -0.44999998807907104);"#,
+            r#"                    bool local_100 = ::IsCharacterDirectionFacingOtherCharacter(this.Combat.GetCharacterOfInterest(), this.Combat.GetSelf(), this.Combat.GetCharacterOfInterest().GetActorForwardVector(), -0.44999998807907104);"#,
+        ),
+        (
+            r#"                        FVector local_96_3 = this.UnflattenPositionVector(local_66, 0.0);
+                        FVector local_72_3 = local_96_3.GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);"#,
+            r#"                        FVector local_72_3 = this.UnflattenPositionVector(local_66, 0.0).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);"#,
+        ),
+        (
+            r#"                        local_108 = this.Combat.GetCharacterOfInterest().GetActorForwardVector().opNeg();
+                        local_100 = ::IsCharacterDirectionFacingOtherCharacter(this.Combat.GetCharacterOfInterest(), this.Combat.GetSelf(), local_108, -0.44999998807907104);
+                        if (local_100)"#,
+            r#"                        bool local_100_2 = ::IsCharacterDirectionFacingOtherCharacter(this.Combat.GetCharacterOfInterest(), this.Combat.GetSelf(), this.Combat.GetCharacterOfInterest().GetActorForwardVector().opNeg(), -0.44999998807907104);
+                        if (local_100_2)"#,
+        ),
+        (
+            r#"                            FVector local_120 = this.UnflattenPositionVector(local_66.opNeg(), 0.0);
+                            local_108 = local_120.GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);"#,
+            r#"                            FVector local_108 = this.UnflattenPositionVector(local_66.opNeg(), 0.0).GetSafeNormal2D(9.99999993922529e-9, FVector::ZeroVector);"#,
+        ),
+        (
+            r#"        FVector local_96_5 = (local_42 + this.UnflattenPositionVector(local_82_2, 0.0));
+        VLog::Arrow(this.Combat.GetSelf(), "PerpComp", local_42, local_96_5, FColor::Yellow, local_52_5);"#,
+            r#"        VLog::Arrow(this.Combat.GetSelf(), "PerpComp", local_42, (local_42 + this.UnflattenPositionVector(local_82_2, 0.0)), FColor::Yellow, local_52_5);"#,
+        ),
+        (
+            r#"        FVector local_96_6 = (local_42 + this.UnflattenPositionVector(local_130, 0.0));
+        VLog::Arrow(this.Combat.GetSelf(), "ParaComp", local_42, local_96_6, FColor::Yellow, local_52_6);"#,
+            r#"        VLog::Arrow(this.Combat.GetSelf(), "ParaComp", local_42, (local_42 + this.UnflattenPositionVector(local_130, 0.0)), FColor::Yellow, local_52_6);
+        FVector local_108;"#,
+        ),
+        (
+            r#"            FVector local_96_7 = this.RaisePosition(local_108, 10.0);
+            VLog::Arrow(this.Combat.GetSelf(), "", this.RaisePosition(this.Combat.GetSelf().GetNavAgentLocation(), 10.0), local_96_7, FColor::Purple, local_52_7);"#,
+            r#"            VLog::Arrow(this.Combat.GetSelf(), "", this.RaisePosition(this.Combat.GetSelf().GetNavAgentLocation(), 10.0), this.RaisePosition(local_108, 10.0), FColor::Purple, local_52_7);"#,
+        ),
+        (
+            r#"        local_86_2 = this.Combat.GetSelf().GetNavAgentLocation().Distance(local_108);"#,
+            r#"        float local_86_3 = this.Combat.GetSelf().GetNavAgentLocation().Distance(local_108);"#,
+        ),
+        (
+            r#"        FVector2D local_138 = (this.FlattenPositionVector(local_108) - local_36);"#,
+            r#"        FVector2D local_134 = this.FlattenPositionVector(local_108);
+        FVector2D local_138 = (local_134 - local_36);"#,
+        ),
+        (
+            r#"            if (!(this.GetProjectedPointToNavigation(local_108, (local_36 + (local_138 * local_74)), this.Combat.GetCharacterOfInterest())))"#,
+            r#"            local_134 = (local_36 + (local_138 * local_74));
+            if (!(this.GetProjectedPointToNavigation(local_108, local_134, this.Combat.GetCharacterOfInterest())))"#,
+        ),
+        (
+            r#"            VLog::Location(this.Combat.GetSelf(), FString().Append("FinalPosition"), this.RaisePosition(local_108, 10.0), 10.0f, FColor::Purple, FName("Angelscript"));"#,
+            r#"            local_148 = this.RaisePosition(local_108, 10.0);
+            VLog::Location(this.Combat.GetSelf(), FString().Append("FinalPosition"), local_148, 10.0f, FColor::Purple, FName("Angelscript"));"#,
+        ),
+    ];
+    if rewrites.iter().any(|(old, _)| body.matches(old).count() != 1) {
+        return body.to_owned();
+    }
+    let mut out = body.to_owned();
+    for (old, new) in rewrites {
+        out = out.replacen(old, new, 1);
+    }
+    out
 }
 
 /// Restore the inferred handle and value lifetimes used by the transform spawn-position source.
