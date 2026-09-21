@@ -1,11 +1,13 @@
-//! Splice one game-compiled module into the shipped cache (Weg B).
+//! Splice game-compiled modules into the shipped cache (Weg B).
 //!
 //! Per `work/reversing/gore-as/findings/container-splice.md` §5: insert the mini-cache's
-//! single module entry immediately before the base cache's global tail tables, and bump
-//! the `Modules` count at 0x14 by one. The runtime may not enforce the FGuid, but GORE does:
+//! module entries immediately before the base cache's global tail tables, and bump the
+//! `Modules` count at 0x14 by the number of inserted modules. A mini-cache carries one or more
+//! modules; a multi-module mini is composed as one unit, so references between its own modules
+//! resolve through its own tail rows. The runtime may not enforce the FGuid, but GORE does:
 //! prepared minis are bound to the exact base generation before composition.
 //!
-//! [`splice`] is the strict **case-(b)** fast path: the mini module references no global
+//! [`splice`] is the strict **case-(b)** fast path: the mini modules reference no global
 //! types (its 7 tail tables are 28 zero bytes). [`splice_auto`] also supports **case-(a)**
 //! class-/native-reference-bearing modules by merging their minimal tail-table rows with
 //! collision checks.
@@ -51,8 +53,10 @@ pub enum SpliceError {
     Header(#[from] super::header::HeaderError),
     #[error("walk error: {0}")]
     Wire(#[from] WireError),
-    #[error("mini-cache must contain exactly 1 module, found {0}")]
+    #[error("mini-cache must contain exactly 1 module for a single-target operation, found {0}")]
     MiniNotSingle(u32),
+    #[error("mini-cache contains no modules")]
+    MiniEmpty,
     #[error(
         "mini-cache has non-empty global tables ({0} trailing bytes): strict splice only accepts referenceless modules; use splice_auto for a remapped class/function-bearing mini"
     )]
@@ -708,6 +712,34 @@ impl SequentialMiniGuard {
         Ok(composed)
     }
 
+    /// Validate `mini` and fold every one of its modules onto `running`: existing modules are
+    /// replaced in place, new ones are appended. This is the composition for a multi-module mini
+    /// that edits shipped modules and adds new ones as one unit.
+    pub fn compose_upsert(&mut self, running: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
+        self.require_running_state(running)?;
+        let prospective = checked_composed_capacity(&[running.len(), mini.len()])?;
+        let scan_bytes = u64::try_from(prospective)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(2);
+        checked_usage_add(
+            self.usage.composed_scan_bytes,
+            scan_bytes,
+            "composed validation scan bytes",
+            MAX_SEQUENTIAL_COMPOSED_SCAN_BYTES,
+        )?;
+        let (prepared, delta) = self.stage(mini)?;
+        let composed = upsert_modules(running, &prepared)?;
+        self.base
+            .reference_context
+            .validate_composed_declarations(&composed)
+            .map_err(SpliceError::ComposedModule)?;
+        let mut delta = delta;
+        delta.usage.composed_scan_bytes = scan_bytes;
+        self.commit(delta);
+        self.expected_running_sha256 = Sha256::digest(&composed).into();
+        Ok(composed)
+    }
+
     fn require_running_state(&self, running: &[u8]) -> Result<(), SpliceError> {
         if !self.composition_state_valid
             || <[u8; 32]>::from(Sha256::digest(running)) != self.expected_running_sha256
@@ -723,9 +755,8 @@ impl SequentialMiniGuard {
         checked_composed_capacity(&[mini.len()])?;
         checked_usage_add(self.usage.minis, 1, "mini count", MAX_SEQUENTIAL_MINIS)?;
         let header = CacheHeader::parse(mini)?;
-        let count = header.type_count;
-        if count != 1 {
-            return Err(SpliceError::MiniNotSingle(count));
+        if header.type_count == 0 {
+            return Err(SpliceError::MiniEmpty);
         }
         let mini_guid = header.hash;
         if mini_guid != self.base.base_guid {
@@ -886,16 +917,34 @@ impl SequentialMiniGuard {
     }
 }
 
-/// Append `mini`'s single referenceless module to `base`, returning the new cache bytes.
+/// The mini's declared module count, refusing an empty mini before any walk.
+fn nonempty_module_count(mini: &[u8]) -> Result<u32, SpliceError> {
+    match module_count(mini) {
+        0 => Err(SpliceError::MiniEmpty),
+        count => Ok(count),
+    }
+}
+
+/// Refuse to append any mini module whose outer key already exists in `base`. The first
+/// colliding name in mini order is reported.
+fn ensure_no_name_collision(base: &[u8], mini: &[u8]) -> Result<(), SpliceError> {
+    let base_names: HashSet<String> = module_names(base)?.into_iter().collect();
+    if let Some(name) = module_names(mini)?
+        .into_iter()
+        .find(|name| base_names.contains(name))
+    {
+        return Err(SpliceError::NameCollision(name));
+    }
+    Ok(())
+}
+
+/// Append every referenceless module of `mini` to `base`, returning the new cache bytes.
 ///
 /// This is a low-level composition primitive. It validates the mechanical container shape but
 /// does not establish generation binding or executable-reference authority. Publishing callers
 /// must use [`SequentialMiniGuard::compose_add`] instead.
 pub fn splice(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
-    let mini_n = module_count(mini);
-    if mini_n != 1 {
-        return Err(SpliceError::MiniNotSingle(mini_n));
-    }
+    let mini_n = nonempty_module_count(mini)?;
 
     let mini_tail = module_region_end(mini)?;
     let trailing = &mini[mini_tail..];
@@ -903,13 +952,9 @@ pub fn splice(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
         return Err(SpliceError::MiniHasGlobalRefs(trailing.len()));
     }
 
-    // The mini's module entry = TMap (FString key + module value) at [0x18 .. mini_tail].
+    // The mini's module entries = TMap (FString key + module value) at [0x18 .. mini_tail].
     let mod_bytes = &mini[CacheHeader::SIZE..mini_tail];
-
-    let new_name = module_names(mini)?.into_iter().next().unwrap_or_default();
-    if module_names(base)?.iter().any(|n| n == &new_name) {
-        return Err(SpliceError::NameCollision(new_name));
-    }
+    ensure_no_name_collision(base, mini)?;
 
     let base_tail = module_region_end(base)?;
     let base_count = module_count(base);
@@ -917,9 +962,9 @@ pub fn splice(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
     let capacity = checked_composed_capacity(&[base.len(), mod_bytes.len()])?;
     let mut out = Vec::with_capacity(capacity);
     out.extend_from_slice(&base[..0x14]); // FGuid + magic
-    out.extend_from_slice(&(base_count + 1).to_le_bytes()); // bumped Modules count
+    out.extend_from_slice(&(base_count + mini_n).to_le_bytes()); // bumped Modules count
     out.extend_from_slice(&base[CacheHeader::SIZE..base_tail]); // all existing modules
-    out.extend_from_slice(mod_bytes); // the new module, before the tail tables
+    out.extend_from_slice(mod_bytes); // the new modules, before the tail tables
     out.extend_from_slice(&base[base_tail..]); // global tail tables, unchanged
     finish_composition(out)
 }
@@ -932,10 +977,7 @@ pub fn splice(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
 /// the guard. The caller owns sequential guard history; this function deliberately does not
 /// construct or advance a guard itself.
 pub fn splice_auto(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
-    let mini_n = module_count(mini);
-    if mini_n != 1 {
-        return Err(SpliceError::MiniNotSingle(mini_n));
-    }
+    nonempty_module_count(mini)?;
     let mini_tail = module_region_end(mini)?;
     if mini[mini_tail..].iter().all(|&x| x == 0) {
         splice(base, mini)
@@ -944,7 +986,7 @@ pub fn splice_auto(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
     }
 }
 
-/// Case-(a): append the mini's module AND merge its 7 global tail-table entries into the
+/// Case-(a): append the mini's modules AND merge its 7 global tail-table entries into the
 /// base cache (per `case-a-tables-and-exec.md` §3). Used when the mini references native
 /// types/functions (its tail tables are non-empty), e.g. a class or a PrintString call.
 ///
@@ -952,10 +994,7 @@ pub fn splice_auto(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
 /// [`SequentialMiniGuard::compose_add`] so the mini is validated against its pristine base before
 /// any rows are merged.
 pub fn splice_case_a(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
-    let mini_n = module_count(mini);
-    if mini_n != 1 {
-        return Err(SpliceError::MiniNotSingle(mini_n));
-    }
+    let mini_n = nonempty_module_count(mini)?;
 
     let base_tail = module_region_end(base)?;
     let mini_tail = module_region_end(mini)?;
@@ -977,11 +1016,7 @@ pub fn splice_case_a(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
         });
     }
 
-    // Module name collision.
-    let new_name = module_names(mini)?.into_iter().next().unwrap_or_default();
-    if module_names(base)?.iter().any(|n| n == &new_name) {
-        return Err(SpliceError::NameCollision(new_name));
-    }
+    ensure_no_name_collision(base, mini)?;
 
     let mod_bytes = &mini[CacheHeader::SIZE..mini_tail];
     let base_count = module_count(base);
@@ -990,9 +1025,9 @@ pub fn splice_case_a(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
         checked_composed_capacity(&[base.len(), mod_bytes.len(), mini.len() - mini_tail])?;
     let mut out = Vec::with_capacity(capacity);
     out.extend_from_slice(&base[..0x14]);
-    out.extend_from_slice(&(base_count + 1).to_le_bytes());
+    out.extend_from_slice(&(base_count + mini_n).to_le_bytes());
     out.extend_from_slice(&base[CacheHeader::SIZE..base_tail]); // existing modules
-    out.extend_from_slice(mod_bytes); // new module, before tables
+    out.extend_from_slice(mod_bytes); // new modules, before tables
 
     append_merged_tables(&mut out, base, &base_tt, mini, &mini_tt);
     finish_composition(out)
@@ -1055,26 +1090,117 @@ fn append_merged_tables(
 /// every ref the module's bytecode uses is present, and `replace_module`'s merge folds them into
 /// the base.
 pub fn extract_module(cache: &[u8], target_name: &str) -> Result<Vec<u8>, SpliceError> {
+    extract_modules(cache, &[target_name])
+}
+
+/// Extract several modules from `cache` into one standalone multi-module mini-cache (in cache
+/// order, followed by the cache's FULL global tail tables). See [`extract_module`]; a mini built
+/// this way is one composition unit, so modules that reference each other stay resolvable.
+pub fn extract_modules(cache: &[u8], target_names: &[&str]) -> Result<Vec<u8>, SpliceError> {
+    if target_names.is_empty() {
+        return Err(SpliceError::MiniEmpty);
+    }
     super::remap::preflight_cache_module_work(cache)?;
     super::remap::preflight_tail_tables(cache)?;
     let ranges = module_ranges(cache)?;
-    let matches: Vec<_> = ranges
-        .iter()
-        .filter(|(n, _, _)| n == target_name)
-        .cloned()
-        .collect();
-    let (_, start, end) = match matches.as_slice() {
-        [entry] => entry.clone(),
-        [] => return Err(SpliceError::NameNotFound(target_name.to_string())),
-        _ => return Err(SpliceError::AmbiguousTarget(target_name.to_string())),
-    };
+    let mut selected = Vec::with_capacity(target_names.len());
+    let mut requested = HashSet::new();
+    for &target_name in target_names {
+        if !requested.insert(target_name) {
+            return Err(SpliceError::AmbiguousTarget(target_name.to_string()));
+        }
+        let matches: Vec<usize> = ranges
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (n, _, _))| (n == target_name).then_some(index))
+            .collect();
+        match matches.as_slice() {
+            [index] => selected.push(*index),
+            [] => return Err(SpliceError::NameNotFound(target_name.to_string())),
+            _ => return Err(SpliceError::AmbiguousTarget(target_name.to_string())),
+        }
+    }
+    selected.sort_unstable();
     let tail_off = module_region_end(cache)?;
-    let mut out = Vec::with_capacity(0x18 + (end - start) + (cache.len() - tail_off));
+    let module_bytes: usize = selected
+        .iter()
+        .map(|&index| ranges[index].2 - ranges[index].1)
+        .sum();
+    let mut out = Vec::with_capacity(0x18 + module_bytes + (cache.len() - tail_off));
     out.extend_from_slice(&cache[..0x14]); // FGuid + magic
-    out.extend_from_slice(&1u32.to_le_bytes()); // Modules count = 1
-    out.extend_from_slice(&cache[start..end]); // the one module's TMap entry
+    out.extend_from_slice(&(selected.len() as u32).to_le_bytes()); // Modules count
+    for index in selected {
+        let (_, start, end) = &ranges[index];
+        out.extend_from_slice(&cache[*start..*end]); // the module's TMap entry
+    }
     out.extend_from_slice(&cache[tail_off..]); // full global tail tables
     Ok(out)
+}
+
+/// Fold every module of `mini` onto `base`: a module whose outer key already exists in `base` is
+/// replaced in place, every other module is appended, and the mini's tail rows are merged once
+/// (mini wins on key collision, StaticNames appends). This is the multi-module counterpart of
+/// [`replace_module`] + [`splice_case_a`] for a mini that edits and adds modules together.
+///
+/// This is a low-level composition primitive. Publishing callers must use
+/// [`SequentialMiniGuard::compose_upsert`].
+pub fn upsert_modules(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
+    let mini_n = nonempty_module_count(mini)?;
+    let base_tail = module_region_end(base)?;
+    let mini_tail = module_region_end(mini)?;
+    let base_tt = parse_tail_tables(base, base_tail)?;
+    if base_tt.end != base.len() {
+        return Err(SpliceError::TailNotAtEof {
+            which: "base",
+            got: base_tt.end,
+            len: base.len(),
+        });
+    }
+    let mini_tt = parse_tail_tables(mini, mini_tail)?;
+    if mini_tt.end != mini.len() {
+        return Err(SpliceError::TailNotAtEof {
+            which: "mini",
+            got: mini_tt.end,
+            len: mini.len(),
+        });
+    }
+
+    let base_ranges = module_ranges(base)?;
+    let mini_ranges = module_ranges(mini)?;
+    let mut replacements: HashMap<&str, usize> = HashMap::new();
+    for (index, (name, _, _)) in mini_ranges.iter().enumerate() {
+        if replacements.insert(name.as_str(), index).is_some() {
+            return Err(SpliceError::ModuleKeyCollision(name.clone()));
+        }
+    }
+    let base_names: HashSet<&str> = base_ranges.iter().map(|(n, _, _)| n.as_str()).collect();
+    let appended: Vec<usize> = mini_ranges
+        .iter()
+        .enumerate()
+        .filter(|(_, (name, _, _))| !base_names.contains(name.as_str()))
+        .map(|(index, _)| index)
+        .collect();
+
+    let capacity = checked_composed_capacity(&[base.len(), mini.len()])?;
+    let mut out = Vec::with_capacity(capacity);
+    out.extend_from_slice(&base[..0x14]);
+    out.extend_from_slice(&(module_count(base) + appended.len() as u32).to_le_bytes());
+    for (name, start, end) in &base_ranges {
+        match replacements.get(name.as_str()) {
+            Some(&index) => {
+                let (_, mini_start, mini_end) = &mini_ranges[index];
+                out.extend_from_slice(&mini[*mini_start..*mini_end]);
+            }
+            None => out.extend_from_slice(&base[*start..*end]),
+        }
+    }
+    for index in appended {
+        let (_, start, end) = &mini_ranges[index];
+        out.extend_from_slice(&mini[*start..*end]);
+    }
+    debug_assert!(replacements.len() == mini_n as usize);
+    append_merged_tables(&mut out, base, &base_tt, mini, &mini_tt);
+    finish_composition(out)
 }
 
 /// Rewrite an extracted (regen-tables) 1-module mini's bytecode refs to the VANILLA `base`'s

@@ -12,7 +12,9 @@
 //!     This is both "what he sells" and "how much ore he can pay with" — the
 //!     ore is an ordinary entry keyed [`ORE_PATH`].
 //!   - `m_DefaultItems` (same shape): the restock baseline. NOT a frozen vanilla
-//!     snapshot; it grows as story events grant new batches.
+//!     snapshot; it grows as story events grant new batches and the runtime can
+//!     rebuild it from its trader configuration. Editing it is therefore not a
+//!     durable way to define custom stock.
 //!   - `m_GeneratedEvents` (`ArrayProperty<StrProperty>`): which batches this
 //!     trader has already been granted (the idempotency ledger).
 //!   - `m_ItemsByDifficulty` (`MapProperty`): empty in every save observed.
@@ -99,10 +101,16 @@ pub struct TraderDetail {
     pub summary: TraderSummary,
     /// Live stock, sorted by class name.
     pub items: Vec<TraderItem>,
-    /// Restock baseline, sorted by class name. Diverges from `items` in played
-    /// saves in both values AND key set.
+    /// Saved restock input, sorted by class name. Diverges from `items` in
+    /// played saves in both values AND key set, but is runtime-rebuildable and
+    /// therefore not a durable custom-stock definition.
     pub default_items: Vec<TraderItem>,
     pub generated_events: Vec<String>,
+    /// Typed-property path of `m_TotalSeconds`. Returned by the same recursive
+    /// lookup as the reader so clients never have to assume where
+    /// `m_GenericData` sits in a particular save shape. Absent when the member
+    /// itself is absent or is not a DoubleProperty.
+    pub total_seconds_path: Option<Vec<String>>,
     /// `true` when `m_ItemsByDifficulty` holds entries. Empty in every save
     /// observed so far; if this ever flips, the staging map needs modelling.
     pub has_items_by_difficulty: bool,
@@ -303,11 +311,28 @@ pub fn trader_detail(root: &RootObject, index: usize) -> Result<TraderDetail, Co
         member(props, "m_ItemsByDifficulty"),
         Some(PropertyValue::Map { entries, .. }) if !entries.is_empty()
     );
+    let total_seconds_path = if matches!(
+        member(props, "m_TotalSeconds"),
+        Some(PropertyValue::Double(_))
+    ) {
+        let (mut path, _) = crate::factions::find_generic_instanced(root, GAME_STATE_KEY)
+            .ok_or_else(|| {
+                CoreError::Parse(format!("m_GenericData[\"{GAME_STATE_KEY}\"] not found"))
+            })?;
+        path.push(format!("{{{GAME_STATE_KEY}}}"));
+        path.push(TRADERS_PROPERTY.to_string());
+        path.push(format!("[{index}]"));
+        path.push("m_TotalSeconds".to_string());
+        Some(path)
+    } else {
+        None
+    };
     Ok(TraderDetail {
         summary,
         items,
         default_items,
         generated_events,
+        total_seconds_path,
         has_items_by_difficulty,
     })
 }

@@ -57,13 +57,29 @@ void main() {
     });
 
     expect(profile.profileId, 0);
-    expect(profile.displayName, 'Profile 0');
+    expect(profile.displayName, 'Profile 1');
     expect(profile.quickSaveSlots, ['G1R-001', 'G1R-002', 'G1R-003']);
     expect(profile.autoSaveSlots, ['G1R-001', 'G1R-002']);
     expect(profile.savedSlots, ['G1R-001', 'G1R-002']);
     expect(profile.difficultyPreset, '/Game/Difficulty/Normal');
     expect(profile.permanentDeath, isTrue);
     expect(profile.maxQuick, 3);
+  });
+
+  test('ProfileSummary maps numeric game slots independently from ids', () {
+    final profiles = [
+      {'profileId': 0, 'profileName': '0'},
+      {'profileId': 1, 'profileName': '1'},
+      {'profileId': 2, 'profileName': '3'},
+      {'profileId': 3, 'profileName': '2'},
+    ].map(ProfileSummary.fromJson).toList();
+
+    expect(profiles.map((profile) => profile.displayName), [
+      'Profile 1',
+      'Profile 2',
+      'Profile 4',
+      'Profile 3',
+    ]);
   });
 
   test('SaveInspection reads nested public and stream summaries', () {

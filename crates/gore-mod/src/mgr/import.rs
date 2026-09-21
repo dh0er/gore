@@ -5707,8 +5707,40 @@ fn goremod_components(
                     limits.max_manifest_bytes,
                 )?;
                 let entries: Vec<ScriptEntry> = serde_json::from_slice(&bytes)?;
-                let mut targets: Vec<String> = entries.iter().map(|e| e.module.clone()).collect();
+                // Conflict targets are every module the mini actually carries: a multi-module
+                // mini names only one of them in its manifest entry. Fall back to the manifest
+                // name when the payload cannot be read here; inspection validates it later.
+                // Each distinct payload is read once and the whole scan shares the aggregate
+                // script budget, so a short manifest pointing many entries at one large mini
+                // cannot turn this best-effort pass into unbounded I/O.
+                let mut targets: Vec<String> = Vec::new();
+                let mut scanned: BTreeMap<String, Option<Vec<String>>> = BTreeMap::new();
+                let mut scan_bytes = 0u64;
+                for e in &entries {
+                    if !scanned.contains_key(&e.mini) {
+                        let remaining =
+                            crate::MAX_SCRIPT_MINI_TOTAL_BYTES.saturating_sub(scan_bytes);
+                        let carried = read_bounded_bundle_file(
+                            bundle_dir,
+                            Path::new(&e.mini),
+                            "script mini-cache target scan",
+                            crate::MAX_SCRIPT_MINI_BYTES.min(remaining),
+                        )
+                        .ok()
+                        .and_then(|mini| {
+                            scan_bytes = scan_bytes.saturating_add(mini.len() as u64);
+                            gore_as::cache::walk_modules::module_names(&mini).ok()
+                        })
+                        .filter(|names| !names.is_empty());
+                        scanned.insert(e.mini.clone(), carried);
+                    }
+                    match scanned.get(&e.mini).and_then(Clone::clone) {
+                        Some(names) => targets.extend(names),
+                        None => targets.push(e.module.clone()),
+                    }
+                }
                 targets.sort();
+                targets.dedup();
                 ComponentInfo::AngelScriptPatch {
                     rel: join_rel(prefix, path),
                     targets,
@@ -6088,7 +6120,13 @@ fn validate_inspected_gore_bundle(
                                 entry.mini
                             ))
                         })?;
-                    if module_names.as_slice() != [entry.module.as_str()] {
+                    // A multi-module mini names one of its modules in the manifest; a
+                    // single-module mini must name exactly that module.
+                    let manifest_names_mini = match module_names.as_slice() {
+                        [only] => only == &entry.module,
+                        names => names.iter().any(|name| name == &entry.module),
+                    };
+                    if !manifest_names_mini {
                         return Err(ModError::Other(format!(
                             "script mini-cache {:?} declares modules {module_names:?}, but its manifest names {:?}",
                             entry.mini, entry.module

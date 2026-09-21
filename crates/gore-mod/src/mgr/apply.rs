@@ -394,17 +394,31 @@ fn snapshot_raw_payload(
     Ok((candidate, len))
 }
 
-/// Keep the last script entry for each exact manifest module target while preserving the original
-/// order of all winners. The returned set records winning edits whose target was introduced by an
-/// earlier, now-shadowed add; composition may retry those winners as adds if the effective base does
-/// not already contain the target. `analyze` uses the authored target string as `ScriptModule`
-/// identity, so this intentionally does not case-fold names or infer identity from mini contents.
+/// Keep the last script entry for each exact module target while preserving the original order
+/// of all winners. `targets` lists every module each entry carries (a multi-module mini names only
+/// one of them in its manifest). An entry survives only when it is the last contributor of every
+/// module it carries and is dropped when a later entry re-targets all of them; a mini that would
+/// lose only some of its modules is refused, because a multi-module mini composes as one unit and
+/// its stale rows for the replaced module would otherwise stay in the ID plan and the tail. The
+/// returned sets record winning edits whose target was introduced by an earlier, now-shadowed add,
+/// plus every module such shadowed adds carried;
+/// composition may retry those winners as adds if the effective base does not already contain the
+/// target. `analyze` uses the same target strings as `ScriptModule` identity, so this intentionally
+/// does not case-fold names.
 fn retain_last_script_target_winners(
     scripts: Vec<(String, String, PendingPayload)>,
-) -> crate::Result<(Vec<(String, String, PendingPayload)>, BTreeSet<String>)> {
+    targets: Vec<Vec<String>>,
+) -> crate::Result<(
+    Vec<(String, String, PendingPayload)>,
+    BTreeSet<String>,
+    BTreeSet<String>,
+)> {
+    debug_assert_eq!(scripts.len(), targets.len());
     let mut last_by_target = BTreeMap::<String, usize>::new();
-    for (index, (_, module, _)) in scripts.iter().enumerate() {
-        last_by_target.insert(module.clone(), index);
+    for (index, entry_targets) in targets.iter().enumerate() {
+        for module in entry_targets {
+            last_by_target.insert(module.clone(), index);
+        }
     }
 
     let mut winners = Vec::new();
@@ -415,17 +429,29 @@ fn retain_last_script_target_winners(
         })?;
     let mut prior_add_targets = BTreeSet::new();
     let mut winner_edits_after_add = BTreeSet::new();
-    for (index, script) in scripts.into_iter().enumerate() {
-        if last_by_target.get(&script.1) == Some(&index) {
+    for (index, (script, entry_targets)) in scripts.into_iter().zip(targets).enumerate() {
+        let shadowed: Vec<&String> = entry_targets
+            .iter()
+            .filter(|module| last_by_target.get(*module) != Some(&index))
+            .collect();
+        if shadowed.is_empty() {
             if script.0 == "edit" && prior_add_targets.contains(&script.1) {
                 winner_edits_after_add.insert(script.1.clone());
             }
             winners.push(script);
-        } else if script.0 == "add" {
-            prior_add_targets.insert(script.1.clone());
+        } else if shadowed.len() == entry_targets.len() {
+            if script.0 == "add" {
+                prior_add_targets.extend(entry_targets);
+            }
+        } else {
+            return Err(ModError::Other(format!(
+                "script mini {} of {:?} carries modules {entry_targets:?}, but later entries re-target {shadowed:?}: a multi-module mini composes as one unit, so disable or reorder one of them",
+                script.2.rel.display(),
+                script.2.entry
+            )));
         }
     }
-    Ok((winners, winner_edits_after_add))
+    Ok((winners, winner_edits_after_add, prior_add_targets))
 }
 
 fn validate_standalone_script_candidate(
@@ -1372,10 +1398,34 @@ fn apply_loadout_with_limits(
                 "invalid script op {op:?} for module {module:?}"
             )));
         }
-        // Conflict analysis and the UI promise exact-target later-wins semantics. Reduce before
-        // inventory, canonicalization, and composition so a shadowed mini cannot still collide in
-        // the global ID plan or attempt a duplicate module splice.
-        let (winning_scripts, winner_edits_after_add) = retain_last_script_target_winners(scripts)?;
+        // Conflict analysis and the UI promise exact-target later-wins semantics for every module
+        // a mini carries, not only the one its manifest names. Read the carried module names first
+        // (a mini that cannot be read here fails with its real error in the passes below), then
+        // reduce before inventory, canonicalization, and composition so a shadowed mini cannot
+        // still collide in the global ID plan or attempt a duplicate module splice.
+        let mut target_scan_bytes = 0u64;
+        let mut targets = Vec::new();
+        targets.try_reserve_exact(scripts.len()).map_err(|error| {
+            ModError::Other(format!("cannot reserve script target lists: {error}"))
+        })?;
+        for (_, module, mini_payload) in &scripts {
+            // A read or budget failure is fatal here: swallowing it would let a later mini hide
+            // the modules it carries from winner reduction. Only an unparseable payload falls
+            // back to its manifest name; inspection reports that payload with its real error.
+            let mini = read_pending_payload(
+                mini_payload,
+                "script mini-cache target scan",
+                limits.max_mini_bytes,
+                &mut target_scan_bytes,
+                limits.max_mini_total_bytes,
+            )?;
+            let carried = gore_as::cache::walk_modules::module_names(&mini)
+                .ok()
+                .filter(|names| names.iter().any(|name| name == module));
+            targets.push(carried.unwrap_or_else(|| vec![module.clone()]));
+        }
+        let (winning_scripts, winner_edits_after_add, shadowed_add_targets) =
+            retain_last_script_target_winners(scripts, targets)?;
         scripts = winning_scripts;
         let (base, pristine_source) =
             match rawfile_sources.remove(&raw_target_identity(&RawTarget::ScriptCache)) {
@@ -1458,10 +1508,33 @@ fn apply_loadout_with_limits(
                 &mut canonical_read_bytes,
                 limits.max_mini_total_bytes,
             )?;
+            // Every multi-module entry must name one of its carried modules, whatever its op;
+            // an edit additionally needs an existing target, checked in its arm, which knows
+            // about targets an earlier shadowed add introduced.
+            if gore_as::cache::walk_modules::module_count(&mini) > 1 {
+                crate::require_multi_module_carried_target(&mini, op, module)?;
+            }
             acc = match op.as_str() {
                 "add" => merge_guard
                     .compose_add(&acc, &mini)
                     .map_err(|e| ModError::Other(format!("splice {module}: {e}")))?,
+                // A multi-module mini edits and adds its modules as one unit. A module that an
+                // earlier, now-shadowed add introduced satisfies the edit-target requirement the
+                // same way a single-module edit may retry as an add after a shadowed add.
+                "edit" if gore_as::cache::walk_modules::module_count(&mini) > 1 => {
+                    let carried = gore_as::cache::walk_modules::module_names(&mini).map_err(|e| {
+                        ModError::Other(format!("reading script mini modules for {module}: {e}"))
+                    })?;
+                    if !carried
+                        .iter()
+                        .any(|name| shadowed_add_targets.contains(name))
+                    {
+                        crate::require_multi_module_edit_target(&acc, &mini, module)?;
+                    }
+                    merge_guard
+                        .compose_upsert(&acc, &mini)
+                        .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?
+                }
                 "edit" if winner_edits_after_add.contains(module) => merge_guard
                     .compose_edit_or_add(&acc, &mini, module)
                     .map_err(|e| ModError::Other(format!("replace or splice {module}: {e}")))?,
@@ -2668,8 +2741,10 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
+        // Mini reads are bounded in several phases (target scan, inventory, canonicalization) and
+        // each names its own budget. Assert the condition, not which phase happens to run first.
         assert!(
-            error.contains("script mini-cache payloads exceeds the 4 byte limit"),
+            error.contains("script mini-cache") && error.contains("exceeds the 4 byte limit"),
             "{error}"
         );
         assert_no_apply_artifacts(&script_game, &script_game.script_cache(), &base);
@@ -5290,6 +5365,57 @@ mod tests {
 
         run(false);
         run(true);
+    }
+
+    #[test]
+    fn apply_scripts_multi_module_mini_is_one_unit_under_later_wins() {
+        use gore_as::cache::walk_modules::{collect_function_bytecodes, module_names};
+        let g = FakeGame::new();
+        let base = build_script_cache(&["_gore_base"]);
+        fs::write(g.script_cache(), &base).unwrap();
+
+        // X carries two modules but names only `_gore_a`; Y adds `_gore_b` alone.
+        let multi = build_script_cache(&["_gore_a", "_gore_b"]);
+        let mini_b = build_script_cache_with_static_name_and_keys(
+            "_gore_b",
+            "FromY",
+            "TypeY",
+            41,
+            41,
+            0x0801_0041,
+        );
+        let x = g.add_script_mod("script-x", "Script X", "add", "_gore_a", &multi);
+        let y = g.add_script_mod("script-y", "Script Y", "add", "_gore_b", &mini_b);
+
+        // Y later re-targets only one of X's modules: X would keep `_gore_a` but lose `_gore_b`,
+        // and its stale `_gore_b` rows cannot be pruned from the plan or the tail. Refuse.
+        let error = apply_loadout(&g.root, &g.lib, &loadout(&[(&x, true), (&y, true)]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("composes as one unit") && error.contains("_gore_b"),
+            "{error}"
+        );
+        assert_eq!(
+            module_names(&fs::read(g.script_cache()).unwrap()).unwrap(),
+            vec!["_gore_base"],
+            "a refused loadout must leave the pristine cache untouched"
+        );
+
+        // X later carries `_gore_b` too, so Y contributes nothing and is dropped; X composes alone.
+        apply_loadout(&g.root, &g.lib, &loadout(&[(&y, true), (&x, true)])).unwrap();
+        let live = fs::read(g.script_cache()).unwrap();
+        assert_eq!(
+            module_names(&live).unwrap(),
+            vec!["_gore_base", "_gore_a", "_gore_b"]
+        );
+        assert!(
+            !collect_function_bytecodes(&live)
+                .unwrap()
+                .iter()
+                .any(|f| f.func.starts_with("_gore_b::")),
+            "X's empty `_gore_b` must have won over Y's"
+        );
     }
 
     #[test]

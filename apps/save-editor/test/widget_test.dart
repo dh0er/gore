@@ -171,7 +171,7 @@ void main() {
     // Header pills summarise chapter and time played for the save.
     expect(find.text('Chapter 1'), findsOneWidget);
     expect(find.text('1 hr 56 min'), findsAtLeastNWidgets(1));
-    expect(find.text('Profile 0'), findsWidgets);
+    expect(find.text('Profile 1'), findsWidgets);
     // The profile header carries the difficulty chip (profile-wide difficulty).
     expect(find.text('Custom'), findsAtLeastNWidgets(1));
     // The profile menu contains only real profiles and the dedicated Other
@@ -1868,7 +1868,7 @@ void main() {
       expect(find.text('Delete savegame?'), findsOneWidget);
       expect(
         find.textContaining(
-          'G1R-001.sav)? It will be removed from Profile 0',
+          'G1R-001.sav)? It will be removed from Profile 1',
           findRichText: true,
         ),
         findsOneWidget,
@@ -2028,13 +2028,13 @@ void main() {
 
     final selector = find.byKey(const ValueKey('save-profile-selector'));
     expect(
-      find.descendant(of: selector, matching: find.text('Profile 0')),
+      find.descendant(of: selector, matching: find.text('Profile 1')),
       findsOneWidget,
     );
 
     await tester.tap(find.byType(DropdownButton<int>));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Profile 1').last);
+    await tester.tap(find.text('Profile 2').last);
     await tester.pumpAndSettle();
 
     final assignment = core.requests.singleWhere(
@@ -2042,13 +2042,66 @@ void main() {
     );
     expect(assignment.payload['profileId'], 1);
     expect(
-      find.descendant(of: selector, matching: find.text('Profile 0')),
+      find.descendant(of: selector, matching: find.text('Profile 1')),
       findsOneWidget,
     );
     expect(
-      find.descendant(of: selector, matching: find.text('Profile 1')),
+      find.descendant(of: selector, matching: find.text('Profile 2')),
       findsNothing,
     );
+  });
+
+  testWidgets('profile switcher follows game slots instead of internal ids', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _CrossedProfileNamesCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byTooltip('Switch profile'),
+        matching: find.text('Profile 1'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.byTooltip('Switch profile'));
+    await tester.pumpAndSettle();
+
+    final profileChoices = tester
+        .widgetList<PopupMenuItem<String>>(find.byType(PopupMenuItem<String>))
+        .map((item) => item.value)
+        .where((value) => value?.startsWith('profile:') ?? false);
+    expect(profileChoices, [
+      'profile:0',
+      'profile:1',
+      'profile:3',
+      'profile:2',
+    ]);
+    expect(find.text('Profile 1 (1 saves)'), findsOneWidget);
+    expect(find.text('Profile 2 (0 saves)'), findsOneWidget);
+    expect(find.text('Profile 3 (0 saves)'), findsOneWidget);
+    expect(find.text('Profile 4 (0 saves)'), findsOneWidget);
+
+    await tester.tap(find.text('Profile 4 (0 saves)'));
+    await tester.pumpAndSettle();
+    final state = ProviderScope.containerOf(
+      tester.element(find.byType(Scaffold).first),
+    ).read(editorProvider);
+    expect(state.selectedProfileId, 2);
   });
 
   testWidgets(
@@ -3159,6 +3212,30 @@ class _FailedProfileAssignmentCoreService extends _FakeCoreService {
       'maxQuick': 3,
       'maxAuto': 2,
     });
+    return response;
+  }
+}
+
+class _CrossedProfileNamesCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command != 'scan_save_dir') return response;
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    data['profiles'] = [
+      {'profileId': 3, 'profileName': '2', 'savedSlots': <String>[]},
+      {'profileId': 1, 'profileName': '1', 'savedSlots': <String>[]},
+      {'profileId': 2, 'profileName': '3', 'savedSlots': <String>[]},
+      {
+        'profileId': 0,
+        'profileName': '0',
+        'savedSlots': ['G1R-001'],
+      },
+    ];
     return response;
   }
 }

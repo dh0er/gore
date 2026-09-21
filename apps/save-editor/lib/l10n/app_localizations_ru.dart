@@ -27,7 +27,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      'Авторитетный каталог постоянных состояний сюжета, объявленных в поставляемых с игрой скриптах. Сохранённые записи показывают исходное значение; отсутствующие в сохранении поля каталога отмечены как незаданные. Метки времени, объявленные в коде, показываются как игровое время; остальные целые числа могут быть логическими значениями, счётчиками или многоуровневыми состояниями.';
+      'Здесь игра хранит прогресс заданий, диалогов и событий. «Сохранено» показывает значения из вашего сохранения, а «Не задано» — остальные известные записи. В зависимости от записи число может означать да/нет, счётчик или этап прохождения. Метки времени показывают день и время в игре.';
 
   @override
   String get storyStateReadOnly =>
@@ -56,6 +56,11 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get storyStateUnknown => 'Неизвестный исходный тип';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return 'Показать неиспользуемые ($count)';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -105,7 +110,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      'Каждую запись можно редактировать во всём диапазоне знакового int32. Флаги и предлагаемые значения, основанные на скриптах, служат лишь подсказками; исходное значение всегда можно ввести вручную. Изменение состояния сюжета может пропустить переходы диалогов, заданий или мира, поэтому сохраняйте такие правки осознанно. Резервная копия создаётся автоматически.';
+      'Выберите запись, чтобы изменить её значение. Изменения применяются при сохранении. Меняйте только значения, действие которых вам понятно: иначе задания или диалоги могут перестать работать как ожидается. При сохранении автоматически создаётся резервная копия.';
 
   @override
   String get storyStatePending => 'Ожидает';
@@ -450,18 +455,162 @@ class AppLocalizationsRu extends AppLocalizations {
   String get traderNoOre => 'нет руды';
 
   @override
-  String get traderStockCurrent => 'Запас';
+  String get traderStockCurrent => 'Сохранённый запас';
 
   @override
-  String get traderStockBase => 'База пополнения';
+  String get traderStockCurrentTooltip =>
+      'Запас, сохранённый сейчас для этого торговца. Добавленные предметы могут исчезнуть, когда игра снова обновит торговца.';
+
+  @override
+  String get traderStockBase => 'Запас для сравнения';
+
+  @override
+  String get traderStockBaseTooltip =>
+      'Сохранённая копия, которую игра может изменить или создать заново по правилам этого торговца. Она доступна только для чтения и не хранит добавленные предметы постоянно.';
 
   @override
   String get traderStockBaseHint =>
-      'То, к чему торговец пополняет запасы. Растёт по ходу сюжета, поэтому это не исходное состояние.';
+      'Только чтение. Этот сохранённый запас растёт по ходу сюжета и может быть заменён по правилам торговца. Это не начальный запас игры.';
+
+  @override
+  String get traderCurrentStockWarning =>
+      'Изменения инвентаря торговца сохраняются только до следующего пополнения.';
+
+  @override
+  String get traderRestockTitle => 'Ожидаемое пополнение';
+
+  @override
+  String get traderRestockTitleTooltip =>
+      'Оценка по последней активности торговца, времени в игре и сложности Ресурсов.';
+
+  @override
+  String get traderRestockPending => 'ожидает';
+
+  @override
+  String get traderRestockRevertTooltip =>
+      'Отменить несохранённое изменение последней активности';
+
+  @override
+  String get traderRestockNever => 'Никогда';
+
+  @override
+  String get traderRestockUnavailable => 'Недоступно';
+
+  @override
+  String get traderRestockIntervalUnknown => 'Неизвестное число игровых дней';
+
+  @override
+  String get traderRestockNeverStatus =>
+      'Активность этого торговца ещё не записывалась.';
+
+  @override
+  String get traderRestockClockAhead =>
+      'Последняя активность торговца позже текущего времени в игре.';
+
+  @override
+  String traderRestockNotDueYet(String time) {
+    return 'Ожидается не раньше $time.';
+  }
+
+  @override
+  String get traderRestockPossiblyDue =>
+      'Оценка: запас уже может быть готов к обновлению.';
+
+  @override
+  String get traderRestockEligible => 'Оценка: пополнение уже ожидается.';
+
+  @override
+  String get traderRestockNoWorldTime =>
+      'Текущее время в игре недоступно, поэтому оценить срок нельзя.';
+
+  @override
+  String get traderRestockLastActivity => 'Последняя активность торговца';
+
+  @override
+  String get traderRestockLastActivityTooltip =>
+      'Это сохранённое время может измениться после торговли или обновления запаса игрой. Оно не обязательно означает последнее пополнение.';
+
+  @override
+  String get traderRestockForecastWindow => 'Ожидаемое время';
+
+  @override
+  String get traderRestockForecastWindowTooltip =>
+      'Показывает самое раннее и позднее время вероятного пополнения. Точных правил игры в сохранении нет, поэтому это лишь оценка.';
+
+  @override
+  String get traderRestockIntervalLabel => 'Дни между пополнениями';
+
+  @override
+  String traderRestockInterval(int days, String level) {
+    return '$days дн. · $level';
+  }
+
+  @override
+  String get traderRestockIntervalTooltip =>
+      'По сложности Ресурсов: Новичок — 2, Gothic — 3, Высокая — 5 игровых дней.';
+
+  @override
+  String get traderRestockAutomationLabel => 'Автоматическое пополнение';
+
+  @override
+  String get traderRestockAutomationValue => 'Нельзя отключить в сохранении';
+
+  @override
+  String get traderRestockAutomationTooltip =>
+      'Автоматическое пополнение нельзя отключить в сохранении. Изменить это правило игры может только мод.';
+
+  @override
+  String get traderRestockSetNow => 'Установить время игры';
+
+  @override
+  String get traderRestockSetNowTooltip =>
+      'Использовать текущее время в игре, включая несохранённое изменение, как последнюю активность торговца. Это отложит ожидаемое пополнение.';
+
+  @override
+  String get traderRestockMakeDue => 'Подготовить пополнение';
+
+  @override
+  String get traderRestockMakeDueTooltip =>
+      'Сдвинуть последнюю активность достаточно далеко назад, чтобы пополнение уже ожидалось.';
+
+  @override
+  String get traderRestockCustom => 'Своё время…';
+
+  @override
+  String get traderRestockCustomTooltip =>
+      'Выбрать игровой день и время последней активности торговца.';
+
+  @override
+  String get traderRestockEditTitle => 'Последняя активность торговца';
 
   @override
   String get traderOreHint =>
       'В игре число другое: при загрузке игра добавляет накопившееся с его последней торговли — он продаёт излишки и пополняет запасы. Это число — отправная точка, а не сумма в окне торговли.';
+
+  @override
+  String get traderOreHintShort =>
+      'Исходное значение — сумма в окне торговли может отличаться.';
+
+  @override
+  String get traderRestockStatusLabel => 'Состояние';
+
+  @override
+  String get traderRestockStatusNever => 'Нет активности';
+
+  @override
+  String get traderRestockStatusWaiting => 'Ожидание пополнения';
+
+  @override
+  String get traderRestockStatusReady => 'Готов к пополнению';
+
+  @override
+  String get traderRestockStatusPossiblyReady => 'Возможно, готов';
+
+  @override
+  String get traderRestockStatusCheckTime => 'Проверить сохранённое время';
+
+  @override
+  String get traderRestockStatusUnknown => 'Неизвестно';
 
   @override
   String get traderPriceWarning =>
@@ -498,7 +647,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String traderStockLineCount(int count) {
-    return '$count строк';
+    return '$count позиций';
   }
 
   @override
@@ -3118,4 +3267,65 @@ class AppLocalizationsRu extends AppLocalizations {
   ) {
     return 'Уровень $level, $guild, глава $chapter. Выполнено заданий: $completed, провалено: $failed. Время игры: $playTime.';
   }
+
+  @override
+  String get locksSidebar => 'Замки';
+
+  @override
+  String editorLockListFailed(String details) {
+    return 'Не удалось загрузить список замков: $details';
+  }
+
+  @override
+  String get locksSearchHint => 'Поиск замка или ключа';
+
+  @override
+  String get locksAllRegions => 'Все регионы';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$shown из $total';
+  }
+
+  @override
+  String get locksFilterChests => 'Сундуки';
+
+  @override
+  String get locksFilterDoors => 'Двери';
+
+  @override
+  String get locksFilterUnlocked => 'Открыт';
+
+  @override
+  String get locksFilterLocked => 'Заперт';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return 'Сложность $bars из 4 (внутренний уровень $level из 7)';
+  }
+
+  @override
+  String get locksKeyOnly => 'Только ключом';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return 'Ключ: $keys';
+  }
+
+  @override
+  String get locksPermalocked => 'Запечатано навсегда';
+
+  @override
+  String get locksReadOnly =>
+      'В этом сохранении нет редактируемого списка замков.';
+
+  @override
+  String get locksUnknownEntry => 'Отсутствует в этой версии игры';
+
+  @override
+  String get locksDoorLeafHint =>
+      'Повторное запирание двери также закрывает саму дверь.';
+
+  @override
+  String get locksResetPending => 'Отменить несохранённые изменения замков';
 }

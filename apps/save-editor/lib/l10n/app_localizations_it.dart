@@ -27,7 +27,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      'Catalogo autorevole degli stati persistenti dichiarati dagli script distribuiti con il gioco. Le voci salvate mostrano il valore grezzo; i campi del catalogo assenti dal salvataggio sono indicati come non impostati. I marcatori temporali dichiarati nel codice sono formattati come tempo di gioco; gli altri interi possono essere booleani, contatori o stati a più livelli.';
+      'Qui il gioco registra i progressi di missioni, dialoghi ed eventi. «Salvato» mostra i valori del salvataggio; «Non impostato», le altre voci note. A seconda della voce, un numero può indicare sì/no, un conteggio o una fase di avanzamento. I riferimenti temporali mostrano un giorno e un’ora nel gioco.';
 
   @override
   String get storyStateReadOnly =>
@@ -56,6 +56,11 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get storyStateUnknown => 'Tipo sorgente sconosciuto';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return 'Mostra inutilizzati ($count)';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -103,7 +108,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      'Ogni voce resta modificabile nell’intero intervallo int32 con segno. Gli indicatori e i suggerimenti di valore ricavati dagli script sono solo indicativi; l’inserimento del valore grezzo è sempre disponibile. Le modifiche allo stato della storia possono saltare transizioni di dialoghi, missioni o del mondo, quindi salvale con cautela; viene creata automaticamente una copia di sicurezza.';
+      'Seleziona una voce per modificarne il valore. Le modifiche vengono applicate quando salvi. Modifica solo valori di cui conosci gli effetti: altrimenti missioni o dialoghi potrebbero non funzionare più come previsto. Quando salvi, viene creata automaticamente una copia di sicurezza.';
 
   @override
   String get storyStatePending => 'In sospeso';
@@ -448,18 +453,164 @@ class AppLocalizationsIt extends AppLocalizations {
   String get traderNoOre => 'nessun minerale';
 
   @override
-  String get traderStockCurrent => 'Scorte';
+  String get traderStockCurrent => 'Scorte salvate';
 
   @override
-  String get traderStockBase => 'Base di rifornimento';
+  String get traderStockCurrentTooltip =>
+      'Le scorte attualmente salvate per questo mercante. Gli oggetti aggiunti possono scomparire quando il gioco aggiorna nuovamente il mercante.';
+
+  @override
+  String get traderStockBase => 'Scorte di riferimento';
+
+  @override
+  String get traderStockBaseTooltip =>
+      'Una copia salvata che il gioco può modificare o ricreare secondo le sue regole per questo mercante. È in sola lettura e non conserva in modo permanente gli oggetti aggiunti.';
 
   @override
   String get traderStockBaseHint =>
-      'Ciò verso cui il mercante si rifornisce. Cresce con la storia, quindi non è uno stato originale.';
+      'Sola lettura. Queste scorte salvate crescono con la storia e possono essere sostituite secondo le regole del mercante. Non sono le scorte originali del gioco.';
+
+  @override
+  String get traderCurrentStockWarning =>
+      'Le modifiche all\'inventario del mercante durano solo fino al prossimo rifornimento.';
+
+  @override
+  String get traderRestockTitle => 'Rifornimento stimato';
+
+  @override
+  String get traderRestockTitleTooltip =>
+      'Stima basata sull\'ultima attività del mercante, sull\'ora di gioco e sulla difficoltà Risorse.';
+
+  @override
+  String get traderRestockPending => 'in sospeso';
+
+  @override
+  String get traderRestockRevertTooltip =>
+      'Annulla la modifica non salvata dell\'ultima attività';
+
+  @override
+  String get traderRestockNever => 'Mai';
+
+  @override
+  String get traderRestockUnavailable => 'Non disponibile';
+
+  @override
+  String get traderRestockIntervalUnknown =>
+      'Numero di giorni di gioco sconosciuto';
+
+  @override
+  String get traderRestockNeverStatus =>
+      'Non è ancora stata registrata alcuna attività per questo mercante.';
+
+  @override
+  String get traderRestockClockAhead =>
+      'L\'ultima attività del mercante è successiva all\'ora di gioco attuale.';
+
+  @override
+  String traderRestockNotDueYet(String time) {
+    return 'Non previsto prima di $time.';
+  }
+
+  @override
+  String get traderRestockPossiblyDue =>
+      'Stima: le scorte potrebbero essere già pronte per l\'aggiornamento.';
+
+  @override
+  String get traderRestockEligible => 'Stima: il rifornimento è previsto.';
+
+  @override
+  String get traderRestockNoWorldTime =>
+      'L\'ora di gioco attuale non è disponibile, quindi non è possibile fare una stima.';
+
+  @override
+  String get traderRestockLastActivity => 'Ultima attività del mercante';
+
+  @override
+  String get traderRestockLastActivityTooltip =>
+      'Quest\'ora salvata può cambiare dopo uno scambio o quando il gioco aggiorna le scorte. Non indica necessariamente l\'ultimo rifornimento.';
+
+  @override
+  String get traderRestockForecastWindow => 'Periodo stimato';
+
+  @override
+  String get traderRestockForecastWindowTooltip =>
+      'Mostra il momento più vicino e quello più lontano in cui il rifornimento sembra probabile. Le regole esatte del gioco non sono presenti nel salvataggio, quindi è solo una stima.';
+
+  @override
+  String get traderRestockIntervalLabel => 'Giorni tra i rifornimenti';
+
+  @override
+  String traderRestockInterval(int days, String level) {
+    return '$days giorni · $level';
+  }
+
+  @override
+  String get traderRestockIntervalTooltip =>
+      'In base alla difficoltà Risorse: Principiante 2, Gothic 3, Difficile 5 giorni di gioco.';
+
+  @override
+  String get traderRestockAutomationLabel => 'Rifornimento automatico';
+
+  @override
+  String get traderRestockAutomationValue =>
+      'Non può essere disattivato nel salvataggio';
+
+  @override
+  String get traderRestockAutomationTooltip =>
+      'Il rifornimento automatico non può essere disattivato in un salvataggio. Solo una mod può cambiare questa regola del gioco.';
+
+  @override
+  String get traderRestockSetNow => 'Imposta sull\'ora di gioco';
+
+  @override
+  String get traderRestockSetNowTooltip =>
+      'Usa l\'ora di gioco attuale, compresa una modifica non salvata, come ultima attività del mercante. Questo sposta più avanti il prossimo rifornimento stimato.';
+
+  @override
+  String get traderRestockMakeDue => 'Prepara il rifornimento';
+
+  @override
+  String get traderRestockMakeDueTooltip =>
+      'Sposta abbastanza indietro l\'ultima attività perché il rifornimento sia previsto.';
+
+  @override
+  String get traderRestockCustom => 'Ora personalizzata…';
+
+  @override
+  String get traderRestockCustomTooltip =>
+      'Scegli il giorno e l\'ora di gioco dell\'ultima attività del mercante.';
+
+  @override
+  String get traderRestockEditTitle => 'Ultima attività del mercante';
 
   @override
   String get traderOreHint =>
       'Il valore nel gioco è diverso: al caricamento il gioco aggiunge quanto maturato dall\'ultimo scambio — vende le eccedenze e si rifornisce. Questo numero è il punto di partenza, non quello mostrato nella schermata di commercio.';
+
+  @override
+  String get traderOreHintShort =>
+      'Valore iniziale: l\'importo nella schermata di commercio può variare.';
+
+  @override
+  String get traderRestockStatusLabel => 'Stato';
+
+  @override
+  String get traderRestockStatusNever => 'Nessuna attività';
+
+  @override
+  String get traderRestockStatusWaiting => 'In attesa del rifornimento';
+
+  @override
+  String get traderRestockStatusReady => 'Pronto per il rifornimento';
+
+  @override
+  String get traderRestockStatusPossiblyReady => 'Forse pronto';
+
+  @override
+  String get traderRestockStatusCheckTime => 'Controlla l\'ora salvata';
+
+  @override
+  String get traderRestockStatusUnknown => 'Sconosciuto';
 
   @override
   String get traderPriceWarning =>
@@ -496,7 +647,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String traderStockLineCount(int count) {
-    return '$count righe';
+    return '$count articoli';
   }
 
   @override
@@ -3110,4 +3261,66 @@ class AppLocalizationsIt extends AppLocalizations {
   ) {
     return 'Livello $level, $guild, capitolo $chapter. $completed missioni completate, $failed fallite. Tempo di gioco: $playTime.';
   }
+
+  @override
+  String get locksSidebar => 'Serrature';
+
+  @override
+  String editorLockListFailed(String details) {
+    return 'Impossibile caricare l\'elenco delle serrature: $details';
+  }
+
+  @override
+  String get locksSearchHint => 'Cerca serratura o chiave';
+
+  @override
+  String get locksAllRegions => 'Tutte le regioni';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$shown di $total';
+  }
+
+  @override
+  String get locksFilterChests => 'Casse';
+
+  @override
+  String get locksFilterDoors => 'Porte';
+
+  @override
+  String get locksFilterUnlocked => 'Aperta';
+
+  @override
+  String get locksFilterLocked => 'Chiusa';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return 'Difficoltà $bars su 4 (livello interno $level su 7)';
+  }
+
+  @override
+  String get locksKeyOnly => 'Solo con chiave';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return 'Chiave: $keys';
+  }
+
+  @override
+  String get locksPermalocked => 'Sigillata per sempre';
+
+  @override
+  String get locksReadOnly =>
+      'Questo salvataggio non ha un elenco di serrature modificabile.';
+
+  @override
+  String get locksUnknownEntry => 'Non presente in questa versione del gioco';
+
+  @override
+  String get locksDoorLeafHint =>
+      'Richiudere una porta chiude anche il battente.';
+
+  @override
+  String get locksResetPending =>
+      'Scarta le modifiche alle serrature in sospeso';
 }

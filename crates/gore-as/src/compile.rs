@@ -1591,13 +1591,22 @@ fn compile_module_with_backend_v1_with_guard_and_optional_target(
     guard: InstallMutationGuard,
     target: Option<ValidatedCompilerTargetInputsV1>,
 ) -> CompileModuleReport {
+    let game_fallback_blocker = target.as_ref().and_then(|target| {
+        backup_pinned_target_blocker(target.shipping_cache_path(), &opts.game_dir)
+    });
     let guard = std::cell::RefCell::new(Some(guard));
     let target = std::cell::RefCell::new(target);
-    let mut report = compile_module_report_with_backend_runner_v1(
+    let mut report = compile_module_report_with_game_fallback_blocker(
         opts,
         mode,
         standalone,
+        game_fallback_blocker.clone(),
         |game_dir, source_tree| {
+            // An explicit `game` policy reaches this closure with the blocker still set: refuse
+            // before the guard is even taken, so nothing in the installation is touched.
+            if let Some(blocker) = game_fallback_blocker.as_ref() {
+                return Err(blocker.clone());
+            }
             let guard = guard
                 .borrow_mut()
                 .take()
@@ -1769,6 +1778,42 @@ where
         output_recovery_required: false,
         target_pins: None,
     }
+}
+
+/// [`compile_module_report_with_backend_runner_v1`] with a known reason the game backend must
+/// not run. `standalone-then-game` then runs the standalone compiler only and, when that fails,
+/// reports the standalone failure itself with the reason appended, instead of a refused game
+/// attempt that would hide the standalone diagnostics.
+fn compile_module_report_with_game_fallback_blocker<G>(
+    opts: &CompileOpts,
+    mode: CompilerBackendModeV1,
+    standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    game_fallback_blocker: Option<String>,
+    run_game: G,
+) -> CompileModuleReport
+where
+    G: FnOnce(&Path, &Path) -> Result<GameRunRegenExtendedReport, String>,
+{
+    let skipped_fallback = match (mode, game_fallback_blocker) {
+        (CompilerBackendModeV1::StandaloneThenGame, Some(blocker)) => Some(blocker),
+        _ => None,
+    };
+    let effective_mode = if skipped_fallback.is_some() {
+        CompilerBackendModeV1::Standalone
+    } else {
+        mode
+    };
+    let mut report =
+        compile_module_report_with_backend_runner_v1(opts, effective_mode, standalone, run_game);
+    if let Some(blocker) = skipped_fallback {
+        if let CompileModuleReportOutcome::Failed(error) = report.outcome {
+            report.outcome = CompileModuleReportOutcome::Failed(append_compile_error_note(
+                error,
+                &format!("the game fallback was not attempted: {blocker}"),
+            ));
+        }
+    }
+    report
 }
 
 fn compile_module_report_with_backend_runner_v1<G>(
@@ -2449,6 +2494,14 @@ where
                     format!("prepared full-graph source seal no longer matches: {error}"),
                 )
             })?;
+            if let Some(blocker) = target.borrow().as_ref().and_then(|target| {
+                backup_pinned_target_blocker(target.shipping_cache_path(), &opts.game_dir)
+            }) {
+                return Err(CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Preflight,
+                    blocker,
+                ));
+            }
             let input_pins = match target.borrow_mut().take() {
                 Some(target) => ProjectGameInputPins::from_compiler_target(target),
                 None => pin_game_input_seals(&opts.game_dir, &opts.base_cache, &opts.binds_cache)
@@ -4769,6 +4822,49 @@ fn vanilla_cache(game_dir: &Path) -> PathBuf {
         .join("PrecompiledScript_Shipping.Cache")
 }
 
+/// Whether a qualified target's Shipping path names the live cache of `script_dir`. Both are
+/// resolved through the filesystem so a differently spelled path to the same file still counts
+/// as live; only when either cannot be resolved does the lexical comparison decide.
+fn target_shipping_is_live(target_shipping: &Path, script_dir: &Path) -> bool {
+    let live = script_dir.join("PrecompiledScript_Shipping.Cache");
+    match (
+        std::fs::canonicalize(target_shipping),
+        std::fs::canonicalize(&live),
+    ) {
+        (Ok(target), Ok(live)) => target == live,
+        _ => target_shipping == live,
+    }
+}
+
+/// Why the game compiler must not run on this qualified target, if it must not: the target's
+/// Shipping path is the deployment backup (a script mod is installed) rather than the live cache
+/// the game compiler regenerates into and restores. `None` when the target pins the live cache.
+fn backup_pinned_target_blocker(target_shipping: &Path, game_dir: &Path) -> Option<String> {
+    let script_dir = g1r_dir(game_dir).join("Script");
+    (!target_shipping_is_live(target_shipping, &script_dir)).then(|| {
+        format!(
+            "the qualified compiler target pins the deployment backup {} rather than the live \
+             Shipping cache; the game compiler regenerates into the live cache and cannot run \
+             while a script mod is installed (undeploy the mod first, or compile with the \
+             standalone backend)",
+            target_shipping.display()
+        )
+    })
+}
+
+fn append_compile_error_note(error: CompileError, note: &str) -> CompileError {
+    match error {
+        CompileError::Io(message) => CompileError::Io(format!("{message}; {note}")),
+        CompileError::Regen(message) => CompileError::Regen(format!("{message}; {note}")),
+        CompileError::NoRegen(message) => CompileError::NoRegen(format!("{message}; {note}")),
+        CompileError::Other(message) => CompileError::Other(format!("{message}; {note}")),
+        CompileError::ArtifactIo { message, artifact } => CompileError::ArtifactIo {
+            message: format!("{message}; {note}"),
+            artifact,
+        },
+    }
+}
+
 /// The deploy backup path for a live cache: the live path with `.gore-bak` APPENDED to the full
 /// filename (so `…Shipping.Cache` -> `…Shipping.Cache.gore-bak`). Mirrors gore-mod's `bak_path`;
 /// built via `OsString::push` (NOT `with_extension`, which would clobber the `.Cache` extension).
@@ -6920,10 +7016,18 @@ struct FullGraphPublicationFailureV1 {
 }
 
 fn preflight_full_graph_path_layout_v1(opts: &FullGraphCompileOptsV1) -> Result<(), CompileError> {
-    if !opts.game_dir.is_absolute()
-        || !opts.work_dir.is_absolute()
-        || !opts.output_path.is_absolute()
-    {
+    preflight_full_graph_path_layout_paths_v1(&opts.game_dir, &opts.work_dir, &opts.output_path)
+}
+
+/// The complete full-graph path-layout preflight on bare paths, so a front end can refuse a
+/// layout the compiler would reject before it plans the complete source graph (a multi-minute
+/// step on the shipped tree). Identical to the check the compiler repeats before running.
+pub fn preflight_full_graph_path_layout_paths_v1(
+    game_dir: &Path,
+    work_dir: &Path,
+    output_path: &Path,
+) -> Result<(), CompileError> {
+    if !game_dir.is_absolute() || !work_dir.is_absolute() || !output_path.is_absolute() {
         return Err(CompileError::Other(
             "full-graph game, work, and output paths must be absolute".to_owned(),
         ));
@@ -6936,24 +7040,22 @@ fn preflight_full_graph_path_layout_v1(opts: &FullGraphCompileOptsV1) -> Result<
             )
         })
     };
-    if contains_dot_component(&opts.work_dir) || contains_dot_component(&opts.output_path) {
+    if contains_dot_component(work_dir) || contains_dot_component(output_path) {
         return Err(CompileError::Other(
             "full-graph work/output paths must not contain `.` or `..` components".to_owned(),
         ));
     }
-    let requested_output_parent = opts
-        .output_path
+    let requested_output_parent = output_path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .ok_or_else(|| {
             CompileError::Other("full-graph output has no parent directory".to_owned())
         })?;
-    let game_root = opts
-        .game_dir
+    let game_root = game_dir
         .canonicalize()
         .map_err(|error| CompileError::Io(format!("resolving game root: {error}")))?;
     let projected_work_root =
-        resolve_missing_path_via_existing_ancestor_v1(&opts.work_dir, "full-graph work directory")?;
+        resolve_missing_path_via_existing_ancestor_v1(work_dir, "full-graph work directory")?;
     let projected_output_parent = resolve_missing_path_via_existing_ancestor_v1(
         requested_output_parent,
         "full-graph output parent",
@@ -6984,13 +7086,13 @@ fn preflight_full_graph_path_layout_v1(opts: &FullGraphCompileOptsV1) -> Result<
         ));
     }
 
-    ensure_real_directory(&opts.work_dir).map_err(|error| {
+    ensure_real_directory(work_dir).map_err(|error| {
         CompileError::Io(format!("preparing full-graph work directory: {error}"))
     })?;
     ensure_real_directory(requested_output_parent).map_err(|error| {
         CompileError::Io(format!("preparing full-graph output parent: {error}"))
     })?;
-    let work_root = opts.work_dir.canonicalize().map_err(|error| {
+    let work_root = work_dir.canonicalize().map_err(|error| {
         CompileError::Io(format!("resolving full-graph work directory: {error}"))
     })?;
     let output_parent = requested_output_parent.canonicalize().map_err(|error| {
@@ -7065,6 +7167,20 @@ fn resolve_missing_path_via_existing_ancestor_v1(
             }
         }
     }
+}
+
+/// Resolve a full-graph side-output path (compiled cache, mini-cache, receipt) the way the
+/// path-layout preflight does, without creating anything: existing ancestors are canonicalized and
+/// the missing suffix is appended lexically. Front ends compare the results to reject two outputs
+/// that name the same file, or nest inside one another, through different spellings.
+pub fn resolve_projected_output_path_v1(path: &Path, label: &str) -> Result<PathBuf, CompileError> {
+    resolve_missing_path_via_existing_ancestor_v1(path, label)
+}
+
+/// Whether `path` is `root` or lives inside it, using the same case/UNC folding as the full-graph
+/// containment checks. Both inputs should already be resolved.
+pub fn resolved_path_is_within_v1(path: &Path, root: &Path) -> bool {
+    path_is_within_v1(path, root)
 }
 
 fn preflight_full_graph_publication_v1(opts: &FullGraphCompileOptsV1) -> Result<(), CompileError> {
@@ -8982,6 +9098,28 @@ impl CompileTransaction {
                 game_dir,
                 mutation_guard,
                 vec![error],
+            ));
+        }
+        // The game compiler regenerates INTO the live Shipping cache, and the exact restore
+        // afterwards reopens the target pin as that live file. A target validated against the
+        // deployment backup (a script mod is installed) would restore the original over the mod,
+        // so it is refused here, before the first install mutation. The standalone compiler keeps
+        // working from the backup; the game compiler needs the live cache as its base.
+        if let Some(pinned) = project_input_pins
+            .as_ref()
+            .and_then(|pins| pins.target_paths.as_ref())
+            .filter(|paths| !target_shipping_is_live(paths.shipping_cache(), script_dir))
+            .map(|paths| paths.shipping_cache().display().to_string())
+        {
+            return Err(finalize_compile_transaction_begin_failure(
+                game_dir,
+                mutation_guard,
+                vec![format!(
+                    "the qualified compiler target pins the deployment backup {pinned} rather \
+                     than the live Shipping cache; the game compiler cannot run while a script \
+                     mod is installed (undeploy the mod first, or compile with the standalone \
+                     backend)"
+                )],
             ));
         }
         // The caller briefly released and identity-repinned qualified target directories to
@@ -16010,6 +16148,157 @@ mod tests {
         assert!(!install_mutation_lock_path(&game).exists());
         drop(report);
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// While a script mod is installed, the compiler target is validated against the deployment
+    /// backup. The game compiler regenerates INTO the live cache and restores it from the target
+    /// pin afterwards, so that pin must name the live cache; a target pinned on the backup is
+    /// refused before the first install mutation instead of restoring the original over the mod.
+    #[cfg(windows)]
+    #[test]
+    fn game_transaction_refuses_a_target_pinned_on_the_deployment_backup() {
+        let base = unique_test_root("qualified-target-backup-refused");
+        let (game, shipping) = fake_install(&base);
+        let _game_process = StatedGameProcess::not_running();
+        let script = shipping.parent().unwrap();
+        let binds = script.join("Binds.Cache");
+        std::fs::write(&binds, b"BINDS").unwrap();
+        let backup = deploy_bak_path(&shipping);
+        std::fs::write(&backup, b"OLD").unwrap();
+        std::fs::write(&shipping, b"MODDED").unwrap();
+        let executable = game
+            .join("G1R")
+            .join("Binaries")
+            .join("Win64")
+            .join("G1R-Win64-Shipping.exe");
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        let pins = ProjectGameInputPins {
+            _executable: Some(open_regular_file_no_follow_read(&executable).unwrap()),
+            shipping: open_regular_file_no_follow_read(&backup).unwrap(),
+            _binds: open_regular_file_no_follow_read(&binds).unwrap(),
+            _directory_pins: Vec::new(),
+            target_paths: Some(
+                crate::compiler_target::CompilerTargetOwnedPathsV1::for_test(
+                    executable,
+                    backup.clone(),
+                    binds,
+                ),
+            ),
+        };
+        let guard = InstallMutationGuard::acquire(&game, "gore-as:compile").unwrap();
+        let generated = std::cell::Cell::new(false);
+        let result = game_run_regen_with_install_report_with_guard_and_pins_and_after_restore(
+            &game,
+            &src,
+            guard,
+            pins,
+            |_, _, dev| {
+                generated.set(true);
+                let bytes = valid_cache();
+                std::fs::write(dev, &bytes).unwrap();
+                GeneratorRunResult::confirmed(Ok(bytes))
+            },
+            |_, _| Ok(()),
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("a backup-pinned target must be refused"),
+        };
+
+        assert!(error.contains("deployment backup"), "got: {error}");
+        assert!(!generated.get(), "the game compiler must not launch");
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"MODDED");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"OLD");
+        assert!(!compile_bak_path(&shipping).exists());
+        assert!(!compile_lock_path(&game).exists());
+        assert!(!install_mutation_lock_path(&game).exists());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn backup_pinned_target_blocker_names_the_backup_and_accepts_the_live_cache() {
+        let base = unique_test_root("backup-pinned-blocker");
+        let (game, shipping) = fake_install(&base);
+        let backup = deploy_bak_path(&shipping);
+        std::fs::write(&backup, b"OLD").unwrap();
+
+        assert!(backup_pinned_target_blocker(&shipping, &game).is_none());
+        let blocker = backup_pinned_target_blocker(&backup, &game)
+            .expect("a backup-pinned target blocks the game compiler");
+        assert!(blocker.contains("deployment backup"), "got: {blocker}");
+        assert!(
+            !blocker.contains("the standalone compiler can"),
+            "must not claim the standalone compiler succeeded: {blocker}"
+        );
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// With the game fallback blocked, `standalone-then-game` reports the standalone failure
+    /// itself (its diagnostics included) plus a note, instead of a refused game attempt.
+    #[test]
+    fn standalone_then_game_keeps_the_standalone_failure_when_the_game_fallback_is_blocked() {
+        let root = unique_test_root("backend-v1-blocked-fallback");
+        std::fs::create_dir_all(&root).unwrap();
+        let opts = CompileOpts {
+            game_dir: root.join("game"),
+            op: "add".to_owned(),
+            module_name: "NewModule".to_owned(),
+            rel_path: "NewModule.as".to_owned(),
+            as_path: root.join("must-not-be-opened.as"),
+            source_override: Some(b"// fallback source\n".to_vec()),
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: None,
+        };
+        let mut standalone = |_: StandaloneCompilerInputsV1<'_>| {
+            Err(CompilerBackendFailureV1::new(
+                CompilerBackendFailureKindV1::Unsupported,
+                "unsupported test construct",
+            ))
+        };
+        let game_calls = std::cell::Cell::new(0u8);
+
+        let report = compile_module_report_with_game_fallback_blocker(
+            &opts,
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            Some("the target pins the deployment backup".to_owned()),
+            |_, _| {
+                game_calls.set(game_calls.get().saturating_add(1));
+                panic!("the blocked game fallback must not run")
+            },
+        );
+
+        let CompileModuleReportOutcome::Failed(error) = &report.outcome else {
+            panic!("a failed standalone attempt without a fallback must fail")
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains("unsupported test construct"),
+            "got: {message}"
+        );
+        assert!(
+            message.contains("game fallback was not attempted"),
+            "got: {message}"
+        );
+        assert!(
+            message.contains("the target pins the deployment backup"),
+            "got: {message}"
+        );
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert!(report.standalone_attempted());
+        assert!(!report.game_attempted());
+        assert!(report.fallback_reason().is_none());
+        assert_eq!(game_calls.get(), 0);
+        drop(report);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -248,10 +248,16 @@ class ProfileSummary {
   final int? maxQuick;
   final int? maxAuto;
 
-  String get displayName {
-    final name = profileName?.trim();
-    if (name == null || name.isEmpty) return 'Profile $profileId';
-    return name == profileId.toString() ? 'Profile $name' : name;
+  String get displayName => 'Profile $displayNumber';
+
+  /// The game-facing slot is stored as a zero-based numeric `m_ProfileName`.
+  /// It can differ from the stable internal id used by save mutations.
+  int get displayNumber {
+    final gameSlot = int.tryParse(profileName?.trim() ?? '');
+    if (gameSlot != null && gameSlot >= 0 && gameSlot < 4) {
+      return gameSlot + 1;
+    }
+    return gameProfileNumber(profileId);
   }
 
   /// The profile's difficulty, mapped into the same [DifficultySettings] shape
@@ -266,6 +272,8 @@ class ProfileSummary {
     permadeath: permanentDeath,
   );
 }
+
+int gameProfileNumber(int profileId) => profileId + 1;
 
 /// Maps a difficulty class short-name suffix to its UI label.
 String _difficultyLevelLabel(String? className) {

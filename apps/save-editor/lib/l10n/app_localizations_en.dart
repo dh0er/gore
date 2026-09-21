@@ -26,7 +26,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      'Authoritative catalog of persisted story state declared by the shipped game scripts. Stored entries show their raw value; catalog fields missing from this save are marked as not set. Source-declared time markers are formatted as game time, while other integers may be booleans, counters, or multi-state values.';
+      'The game tracks progress in quests, dialogues and events here. “Stored” shows the values in your save; “Not set” shows the other known entries. Depending on the entry, a number can mean yes/no, a count or a stage of progress. Time markers show a day and time in the game.';
 
   @override
   String get storyStateReadOnly =>
@@ -55,6 +55,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get storyStateUnknown => 'Unknown source type';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return 'Show unused ($count)';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -102,7 +107,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      'Every entry remains editable across the full signed int32 range. Script-backed switches and value suggestions are guidance; raw input is always available. Story changes can skip dialogue, quest, or world transitions, so save them deliberately — a backup is created automatically.';
+      'Select an entry to change its value. Changes take effect when you save. Only change values whose effects you understand: quests or dialogues may otherwise stop working as expected. A backup is created automatically when you save.';
 
   @override
   String get storyStatePending => 'Pending';
@@ -449,15 +454,159 @@ class AppLocalizationsEn extends AppLocalizations {
   String get traderStockCurrent => 'Stock';
 
   @override
+  String get traderStockCurrentTooltip =>
+      'What this merchant currently has for sale. Added items can disappear again when the game updates the merchant.';
+
+  @override
   String get traderStockBase => 'Restock baseline';
 
   @override
+  String get traderStockBaseTooltip =>
+      'The save contains this list to help the game restock the merchant. The game can recalculate it from its merchant rules, so changes here would not last.';
+
+  @override
   String get traderStockBaseHint =>
-      'What the merchant restocks back toward. It grows with story progress, so it is not a vanilla snapshot.';
+      'Read-only: the game uses this list when restocking, but can recalculate it. Items added here would not stay permanently.';
+
+  @override
+  String get traderCurrentStockWarning =>
+      'Changes to the merchant\'s inventory last only until the next restock.';
+
+  @override
+  String get traderRestockTitle => 'Restock timer';
+
+  @override
+  String get traderRestockTitleTooltip =>
+      'An estimate based on the merchant\'s last activity, the current game time, and Resources difficulty.';
+
+  @override
+  String get traderRestockPending => 'pending';
+
+  @override
+  String get traderRestockRevertTooltip => 'Undo the pending time change';
+
+  @override
+  String get traderRestockNever => 'Never';
+
+  @override
+  String get traderRestockUnavailable => 'Unavailable';
+
+  @override
+  String get traderRestockIntervalUnknown => 'Restock wait unknown';
+
+  @override
+  String get traderRestockNeverStatus =>
+      'No merchant activity has been recorded yet.';
+
+  @override
+  String get traderRestockClockAhead =>
+      'The merchant\'s saved time is ahead of the current game time.';
+
+  @override
+  String traderRestockNotDueYet(String time) {
+    return 'Not expected before $time.';
+  }
+
+  @override
+  String get traderRestockPossiblyDue =>
+      'The merchant may already be ready for restocking.';
+
+  @override
+  String get traderRestockEligible =>
+      'The merchant should now be ready for restocking.';
+
+  @override
+  String get traderRestockNoWorldTime =>
+      'The current game time is unavailable, so the editor cannot tell whether restocking is due.';
+
+  @override
+  String get traderRestockLastActivity => 'Last merchant activity';
+
+  @override
+  String get traderRestockLastActivityTooltip =>
+      'The last time saved for this merchant. It can come from trading or another merchant update, so it is not necessarily the last restock.';
+
+  @override
+  String get traderRestockForecastWindow => 'Restock expected';
+
+  @override
+  String get traderRestockForecastWindowTooltip =>
+      'The exact time is not stored in the save. The editor therefore shows a range from the earliest to the latest expected time.';
+
+  @override
+  String get traderRestockIntervalLabel => 'Restock wait';
+
+  @override
+  String traderRestockInterval(int days, String level) {
+    return '$days days · $level';
+  }
+
+  @override
+  String get traderRestockIntervalTooltip =>
+      'Waiting time set by Resources difficulty: Novice 2, Gothic 3, Hard 5 in-game days.';
+
+  @override
+  String get traderRestockAutomationLabel => 'Automatic restock';
+
+  @override
+  String get traderRestockAutomationValue => 'Cannot be disabled in the save';
+
+  @override
+  String get traderRestockAutomationTooltip =>
+      'The save editor cannot reliably stop automatic restocking. That requires a game mod.';
+
+  @override
+  String get traderRestockSetNow => 'Set to world time';
+
+  @override
+  String get traderRestockSetNowTooltip =>
+      'Use the current game time as the merchant\'s last activity. This postpones the next expected restock.';
+
+  @override
+  String get traderRestockMakeDue => 'Make due now';
+
+  @override
+  String get traderRestockMakeDueTooltip =>
+      'Move the merchant\'s last activity far enough back that restocking should be due now.';
+
+  @override
+  String get traderRestockCustom => 'Custom time…';
+
+  @override
+  String get traderRestockCustomTooltip =>
+      'Choose the in-game day and time of the merchant\'s last activity.';
+
+  @override
+  String get traderRestockEditTitle => 'Change last merchant activity';
 
   @override
   String get traderOreHint =>
       'The in-game figure differs: on load the game adds what accrued since his last trade — he sells surplus goods and restocks from it. This number is the starting point, not what the trade screen shows.';
+
+  @override
+  String get traderOreHintShort =>
+      'Starting value — the amount in the trade screen can differ.';
+
+  @override
+  String get traderRestockStatusLabel => 'Status';
+
+  @override
+  String get traderRestockStatusNever => 'No activity';
+
+  @override
+  String get traderRestockStatusWaiting => 'Waiting for restock';
+
+  @override
+  String get traderRestockStatusReady => 'Ready for restock';
+
+  @override
+  String get traderRestockStatusPossiblyReady => 'Possibly ready';
+
+  @override
+  String get traderRestockStatusCheckTime => 'Check saved time';
+
+  @override
+  String get traderRestockStatusUnknown => 'Unknown';
 
   @override
   String get traderPriceWarning =>
@@ -3085,4 +3234,64 @@ class AppLocalizationsEn extends AppLocalizations {
   ) {
     return 'Level $level, $guild, chapter $chapter. $completed quests completed, $failed failed. Play time: $playTime.';
   }
+
+  @override
+  String get locksSidebar => 'Locks';
+
+  @override
+  String editorLockListFailed(String details) {
+    return 'Lock list failed: $details';
+  }
+
+  @override
+  String get locksSearchHint => 'Search lock or key';
+
+  @override
+  String get locksAllRegions => 'All regions';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$shown of $total';
+  }
+
+  @override
+  String get locksFilterChests => 'Chests';
+
+  @override
+  String get locksFilterDoors => 'Doors';
+
+  @override
+  String get locksFilterUnlocked => 'Unlocked';
+
+  @override
+  String get locksFilterLocked => 'Locked';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return 'Difficulty $bars of 4 (internal tier $level of 7)';
+  }
+
+  @override
+  String get locksKeyOnly => 'Key only';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return 'Key: $keys';
+  }
+
+  @override
+  String get locksPermalocked => 'Sealed permanently';
+
+  @override
+  String get locksReadOnly => 'This save has no editable lock set.';
+
+  @override
+  String get locksUnknownEntry => 'Not in this game version';
+
+  @override
+  String get locksDoorLeafHint =>
+      'Locking a door again also shuts the door itself.';
+
+  @override
+  String get locksResetPending => 'Discard queued lock changes';
 }

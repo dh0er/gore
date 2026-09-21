@@ -298,6 +298,11 @@ pub enum AsCmd {
         /// game installation.
         #[arg(short, long)]
         out: PathBuf,
+        /// Also publish a deployable multi-module mini-cache holding only the authored Add/Edit
+        /// modules, remapped to the pristine cache. This is the artifact a bundle spec's
+        /// `scripts[].mini_cache` should point at when a mod spans several modules.
+        #[arg(long, value_name = "PATH")]
+        mini: Option<PathBuf>,
         /// Existing private workspace outside the game installation. GORE recreates only its
         /// fixed `tree` child and uses this root for isolated standalone scratch directories.
         #[arg(long, value_name = "DIR")]
@@ -306,6 +311,14 @@ pub enum AsCmd {
         /// path, then Steam auto-detect.
         #[arg(long)]
         game: Option<PathBuf>,
+        /// Refuse to compile unless the selected original script cache is byte-identical to this
+        /// file, for example a frozen copy of the vanilla cache. Never selects the base.
+        #[arg(long, value_name = "CACHE", conflicts_with = "expect_base_sha256")]
+        expect_base: Option<PathBuf>,
+        /// Refuse to compile unless the selected original script cache has this SHA-256
+        /// (64 hex digits, `sha256:` prefix optional). Never selects the base.
+        #[arg(long, value_name = "HEX")]
+        expect_base_sha256: Option<String>,
         /// Disable the optional runtime compiler-diagnostic hook and use the normal generator.
         #[arg(long, conflicts_with = "diagnostics_hook")]
         no_diagnostics: bool,
@@ -357,6 +370,14 @@ pub enum AsCmd {
         /// Game install root. Falls back to configured path, then Steam auto-detect.
         #[arg(long)]
         game: Option<PathBuf>,
+        /// Refuse to compile unless the selected original script cache is byte-identical to this
+        /// file, for example a frozen copy of the vanilla cache. Never selects the base.
+        #[arg(long, value_name = "CACHE", conflicts_with = "expect_base_sha256")]
+        expect_base: Option<PathBuf>,
+        /// Refuse to compile unless the selected original script cache has this SHA-256
+        /// (64 hex digits, `sha256:` prefix optional). Never selects the base.
+        #[arg(long, value_name = "HEX")]
+        expect_base_sha256: Option<String>,
         /// Disable the optional runtime compiler-diagnostic hook and use the normal generator.
         #[arg(long, conflicts_with = "diagnostics_hook")]
         no_diagnostics: bool,
@@ -390,13 +411,17 @@ pub enum AsCmd {
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// Splice a base-bound mini-cache module into a base cache.
+    /// Splice the modules of a base-bound mini-cache into a base cache.
     Splice {
         /// Base cache (e.g. PrecompiledScript_Shipping.Cache).
         base: PathBuf,
-        /// Base-bound mini-cache from `compile-module` or `extract-remap`; raw generator output
-        /// has a fresh GUID and is refused until it is remapped to this exact base.
+        /// Base-bound mini-cache from `compile-module`, `compile --mini` or `extract-remap`; raw
+        /// generator output has a fresh GUID and is refused until it is remapped to this exact base.
         mini: PathBuf,
+        /// Replace modules that already exist in the base in place instead of refusing them; new
+        /// modules are still appended. Needed for a multi-module mini that edits a shipped module.
+        #[arg(long)]
+        upsert: bool,
         /// Output path for the spliced cache.
         #[arg(short, long)]
         out: PathBuf,
@@ -1788,48 +1813,254 @@ fn acquire_compile_guard(game: &Path) -> Result<gore_as::compile::InstallMutatio
 
 fn guarded_pristine_script_cache(
     game: &Path,
+    selected: &gore_mod::PristineScriptCacheSource,
 ) -> Result<(Vec<u8>, gore_as::compile::InstallMutationGuard)> {
     let mut guard = acquire_compile_guard(game)
         .map_err(anyhow::Error::msg)
         .context("acquiring the AngelScript install-mutation guard")?;
-    match gore_mod::pristine_script_cache(game) {
+    // The bytes read under the guard must still be the original selected before it. The game
+    // backend has no pinned target handle, so this comparison is its equivalent of the post-pin
+    // check on the standalone path.
+    // A deploy landing before the guard leaves the original's bytes in place (its backup holds
+    // them) while installing a mod the game compiler must not run on, so the source is selected
+    // again under the guard and not only compared by identity.
+    let outcome = match compiler_shipping_source(game).map_err(|error| error.to_string()) {
+        Err(error) => Err(error),
+        Ok(current) if current.from_backup => Err(format!(
+            "a script mod was installed after the compiler selected its base ({}); the game compiler cannot run on the deployment backup, retry the compile (the standalone compiler will be used)",
+            current.path.display()
+        )),
+        Ok(_) => match gore_mod::pristine_script_cache(game) {
+        Ok(base) if selected.matches(&base) => Ok(base),
+        Ok(_) => Err(
+            "the pristine script cache changed between selecting it and reading it (a \
+             deployment change or a game update ran alongside); retry the compile"
+                .to_owned(),
+        ),
+        Err(error) => Err(format!(
+            "reading the drift-aware pristine script cache: {error}"
+        )),
+        },
+    };
+    match outcome {
         Ok(base) => Ok((base, guard)),
-        Err(error) => {
-            let primary = format!("reading the drift-aware pristine script cache: {error}");
-            match guard.release() {
-                Ok(()) => Err(anyhow::Error::msg(primary)),
-                Err(release) => {
-                    guard.preserve_for_manual_recovery();
-                    bail!(
-                        "COMPILE_RECOVERY_REQUIRED: {primary}; additionally failed to release the \
-                         pre-held install-mutation guard: {release}"
-                    )
-                }
+        Err(primary) => match guard.release() {
+            Ok(()) => Err(anyhow::Error::msg(primary)),
+            Err(release) => {
+                guard.preserve_for_manual_recovery();
+                bail!(
+                    "COMPILE_RECOVERY_REQUIRED: {primary}; additionally failed to release the \
+                     pre-held install-mutation guard: {release}"
+                )
             }
-        }
+        },
     }
 }
 
+/// The Shipping cache file the standalone compiler target is validated against: the
+/// deployment-aware pristine source. While a script mod is installed that is the deployment's
+/// `*.gore-bak`, so the installed mod stays in place and the compiler still works from the
+/// original the deployment preserved; otherwise it is the live cache.
+fn compiler_shipping_source(game: &Path) -> Result<gore_mod::PristineScriptCacheSource> {
+    gore_mod::pristine_script_cache_source(game)
+        .context("selecting the deployment-aware pristine script cache")
+}
+
+fn announce_compiler_shipping_source(source: &gore_mod::PristineScriptCacheSource) {
+    if source.from_backup {
+        eprintln!(
+            "compiling against the deployment backup {} (the installed script mod stays in place)",
+            source.path.display()
+        );
+    }
+}
+
+/// What `--expect-base` / `--expect-base-sha256` demand of the selected original. Neither form
+/// selects the base: the deployment-aware selection stays the only source of truth, and the
+/// expectation merely refuses a compile whose original is not the one the caller vouches for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExpectedBase {
+    /// `sha256:<hex>` in the deploy record's notation.
+    Identity(String),
+    /// A file whose bytes the selected original must equal.
+    File(PathBuf),
+}
+
+const EXPECTED_BASE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+
+fn expected_base_from_args(
+    file: Option<PathBuf>,
+    sha256: Option<String>,
+) -> Result<Option<ExpectedBase>> {
+    if let Some(path) = file {
+        return Ok(Some(ExpectedBase::File(path)));
+    }
+    let Some(raw) = sha256 else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    let hex = trimmed
+        .get(..7)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("sha256:"))
+        .map_or(trimmed, |_| &trimmed[7..]);
+    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!(
+            "--expect-base-sha256 must be 64 hex digits (a `sha256:` prefix is optional), got {raw:?}"
+        );
+    }
+    Ok(Some(ExpectedBase::Identity(format!(
+        "sha256:{}",
+        hex.to_ascii_lowercase()
+    ))))
+}
+
+fn base_identity(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn describe_shipping_source(source: &gore_mod::PristineScriptCacheSource) -> &'static str {
+    if source.from_backup {
+        "the deployment backup"
+    } else if source.drifted {
+        "the live cache, updated since the deployment"
+    } else {
+        "the live cache"
+    }
+}
+
+/// Refuse to go on unless the selected original is the one the caller vouches for.
+fn require_expected_base(
+    source: &gore_mod::PristineScriptCacheSource,
+    expected: &ExpectedBase,
+) -> Result<()> {
+    let (expected_identity, vouched_by) = match expected {
+        ExpectedBase::Identity(identity) => (identity.clone(), "--expect-base-sha256".to_owned()),
+        ExpectedBase::File(path) => {
+            let bytes = read_regular_bounded(path, EXPECTED_BASE_MAX_BYTES, "AS_EXPECTED_BASE")
+                .with_context(|| format!("reading the expected base file {}", path.display()))?;
+            (
+                base_identity(&bytes),
+                format!("--expect-base {}", path.display()),
+            )
+        }
+    };
+    if source.identity != expected_identity {
+        bail!(
+            "the selected original script cache is not the expected one: {} ({}) has {}, but {} \
+             vouches for {}",
+            source.path.display(),
+            describe_shipping_source(source),
+            source.identity,
+            vouched_by,
+            expected_identity
+        );
+    }
+    eprintln!("the selected original matches the expected base ({expected_identity})");
+    Ok(())
+}
+
+/// The compiler policy actually run for `requested` given where the original was found. While
+/// a script mod is installed the base is the deployment backup, which the game compiler cannot
+/// restore over the live cache: an explicit `game` policy is refused up front, and
+/// `standalone-then-game` runs the standalone compiler only, announcing the skipped fallback.
+fn effective_compile_mode(
+    requested: gore_as::compile::CompilerBackendModeV1,
+    source: &gore_mod::PristineScriptCacheSource,
+) -> Result<(gore_as::compile::CompilerBackendModeV1, Option<String>)> {
+    use gore_as::compile::CompilerBackendModeV1 as Mode;
+    if !source.from_backup {
+        return Ok((requested, None));
+    }
+    match requested {
+        Mode::Standalone => Ok((Mode::Standalone, None)),
+        Mode::StandaloneThenGame => Ok((
+            Mode::Standalone,
+            Some(
+                "the game fallback is unavailable while a script mod is installed (the compiler \
+                 base is the deployment backup, which the game compiler cannot restore over the \
+                 live cache); compiling with the standalone backend only"
+                    .to_owned(),
+            ),
+        )),
+        Mode::Game => bail!(
+            "the game compiler cannot run while a script mod is installed: the compiler base is \
+             the deployment backup {}, which the game compiler would restore over the live cache; \
+             use --backend standalone, or undeploy the mod first",
+            source.path.display()
+        ),
+    }
+}
+
+/// The closing check of `compile-module`: the pristine base the mini was remapped against must
+/// still be the deployment-aware pristine cache now that the compiler has run, by selection and
+/// by bytes. `gore as compile` audits this inside the full-graph transaction; the module path has
+/// no such hook, so it re-reads here before the mini is published.
+fn audit_compile_module_base(
+    game: &Path,
+    selected: &gore_mod::PristineScriptCacheSource,
+    base: &[u8],
+) -> Result<()> {
+    let current = compiler_shipping_source(game)?;
+    if current.identity != selected.identity || !current.matches(base) {
+        bail!(
+            "the pristine script cache changed during compilation: the compiler used {} ({}), \
+             but the deployment-aware original is now {} ({}); retry the compile",
+            selected.path.display(),
+            selected.identity,
+            current.path.display(),
+            current.identity
+        );
+    }
+    Ok(())
+}
+
+/// Prove that the pinned compiler target holds the pristine base: its bytes must be the current
+/// deployment-aware pristine cache AND the bytes selected before the pin was taken. Anything else
+/// means the base changed in between (a deployment change or a game update ran alongside), which
+/// is a retry and never a reason to remove the installed mod.
 fn require_qualified_target_pristine_base(
+    selected: &gore_mod::PristineScriptCacheSource,
     qualified_shipping: &[u8],
     pristine: Vec<u8>,
 ) -> Result<Vec<u8>> {
-    if qualified_shipping != pristine {
+    if qualified_shipping != pristine || !selected.matches(qualified_shipping) {
         bail!(
-            "standalone compiler target uses the live Shipping cache, but the deployment-aware \
-             pristine script cache differs; reset or undeploy active script mods before compiling"
+            "the standalone compiler target no longer holds the deployment-aware pristine script \
+             cache: the base changed between selecting it and pinning it (a deployment change or \
+             a game update ran alongside); retry the compile"
         );
     }
     Ok(pristine)
 }
 
+/// The selection made before the guard must still hold once the guard is held. A deploy landing
+/// in between leaves the pinned bytes and the backup identical to the original while installing
+/// a script mod on the live cache, which only a fresh selection notices.
+fn require_unchanged_selection(
+    game: &Path,
+    selected: &gore_mod::PristineScriptCacheSource,
+) -> Result<()> {
+    let current = compiler_shipping_source(game)?;
+    if current.from_backup != selected.from_backup
+        || current.identity != selected.identity
+        || current.path != selected.path
+    {
+        bail!(
+            "the deployment-aware pristine script cache changed between selecting it and pinning it (a deployment change or a game update ran alongside); retry the compile"
+        );
+    }
+    Ok(())
+}
+
 fn qualified_target_pristine_script_cache(
     game: &Path,
     target: &gore_as::compiler_target::ValidatedCompilerTargetInputsV1,
+    selected: &gore_mod::PristineScriptCacheSource,
 ) -> Result<Vec<u8>> {
+    require_unchanged_selection(game, selected)?;
     let pristine = gore_mod::pristine_script_cache(game)
         .context("reading the deployment-aware pristine script cache")?;
-    require_qualified_target_pristine_base(target.shipping_cache(), pristine)
+    require_qualified_target_pristine_base(selected, target.shipping_cache(), pristine)
 }
 
 fn compiler_binds_path(game: &Path) -> PathBuf {
@@ -1850,15 +2081,6 @@ fn compiler_executable_path(game: &Path) -> PathBuf {
     g1r.join("Binaries")
         .join("Win64")
         .join("G1R-Win64-Shipping.exe")
-}
-
-fn compiler_shipping_path(game: &Path) -> PathBuf {
-    let g1r = if game.file_name().is_some_and(|name| name == "G1R") {
-        game.to_path_buf()
-    } else {
-        game.join("G1R")
-    };
-    g1r.join("Script").join("PrecompiledScript_Shipping.Cache")
 }
 
 enum ProductStandaloneRunnerV1 {
@@ -1922,8 +2144,10 @@ impl gore_as::compile::StandaloneCompilerRunnerV1 for CompileModuleStandaloneRun
 fn compile_full_graph_command(
     src: PathBuf,
     out: PathBuf,
+    mini: Option<PathBuf>,
     work_dir: PathBuf,
     game: Option<PathBuf>,
+    expected_base: Option<ExpectedBase>,
     no_diagnostics: bool,
     diagnostics_hook: Option<PathBuf>,
     diagnostics_inject_delay_ms: u64,
@@ -1948,15 +2172,64 @@ fn compile_full_graph_command(
         .generation_receipt
         .map(|path| absolute_cli_path(path, "generation receipt"))
         .transpose()?;
-    if receipt_path.as_ref().is_some_and(|path| path == &out) {
-        bail!("generation receipt path must differ from the compiled cache path");
+    let mini_path = mini
+        .map(|path| absolute_cli_path(path, "multi-module mini-cache"))
+        .transpose()?;
+    // Two side outputs may name the same file, or nest inside one another, through different
+    // spellings of the same directory. Compare the projected paths before ANY preflight below,
+    // because those create the output parents: an accepted nesting would otherwise leave a
+    // directory where a corrected retry wants its file.
+    {
+        let mut resolved: Vec<(&'static str, PathBuf)> = Vec::new();
+        for (label, path) in [
+            ("compiled cache", Some(&out)),
+            ("multi-module mini-cache", mini_path.as_ref()),
+            ("generation receipt", receipt_path.as_ref()),
+        ] {
+            let Some(path) = path else { continue };
+            let projected = gore_as::compile::resolve_projected_output_path_v1(path, label)
+                .map_err(anyhow::Error::new)
+                .with_context(|| format!("resolving the {label} destination"))?;
+            for (other_label, other) in &resolved {
+                if gore_as::compile::resolved_path_is_within_v1(&projected, other)
+                    || gore_as::compile::resolved_path_is_within_v1(other, &projected)
+                {
+                    bail!(
+                        "the {label} and {other_label} destinations resolve to the same path or nest inside one another: {} vs {}",
+                        projected.display(),
+                        other.display()
+                    );
+                }
+            }
+            resolved.push((label, projected));
+        }
     }
+    // The compiler repeats this preflight only after the complete source graph has been
+    // planned, which takes many minutes on the shipped tree. Run the identical check up front.
+    gore_as::compile::preflight_full_graph_path_layout_paths_v1(&game, &work_dir, &out)
+        .map_err(anyhow::Error::new)
+        .context("full-graph path layout")?;
     if let Some(path) = receipt_path.as_ref() {
         validate_auxiliary_output_path(path, &game, "generation receipt")?;
     }
+    if let Some(path) = mini_path.as_ref() {
+        // The same resolved layout check the compiled cache gets: a lexical comparison would
+        // accept an aliased or symlinked spelling of the workspace, and the next compile's tree
+        // reset would then delete the published mini.
+        gore_as::compile::preflight_full_graph_path_layout_paths_v1(&game, &work_dir, path)
+            .map_err(anyhow::Error::new)
+            .context("multi-module mini-cache path layout")?;
+        // Also covers no-clobber: an existing destination is refused here.
+        validate_auxiliary_output_path(path, &game, "multi-module mini-cache")?;
+    }
 
     let executable_path = compiler_executable_path(&game);
-    let shipping_path = compiler_shipping_path(&game);
+    let shipping_source = compiler_shipping_source(&game)?;
+    announce_compiler_shipping_source(&shipping_source);
+    if let Some(expected) = expected_base.as_ref() {
+        require_expected_base(&shipping_source, expected)?;
+    }
+    let shipping_path = shipping_source.path.clone();
     let binds_path = compiler_binds_path(&game);
     let host_module = std::env::current_exe().context("resolving the GORE host executable")?;
     let resolution = gore_as::standalone_package_resolver::resolve_embedded_product_standalone_compiler_package_for_inputs_v1(
@@ -1969,13 +2242,18 @@ fn compile_full_graph_command(
     );
 
     let requested_mode: CompilerBackendModeV1 = compiler.backend.into();
+    let (effective_mode, game_fallback_note) =
+        effective_compile_mode(requested_mode, &shipping_source)?;
+    if let Some(note) = game_fallback_note.as_deref() {
+        eprintln!("{note}");
+    }
     let mut standalone_runner: Option<ProductStandaloneRunnerV1> = None;
     let mut receipt_authority = None;
     let mut target = None;
     let mut package_unavailable = None;
     match resolution {
         ProductStandaloneCompilerPackageResolutionV1::Available(available) => {
-            let runner = (requested_mode != CompilerBackendModeV1::Game)
+            let runner = (effective_mode != CompilerBackendModeV1::Game)
                 .then(|| available.sidecar_runner(work_dir.clone()));
             let (authority, target_inputs) = available.into_execution_parts();
             receipt_authority = Some(authority);
@@ -1992,7 +2270,7 @@ fn compile_full_graph_command(
                             error.kind().as_str()
                         );
                         package_unavailable = Some(detail.clone());
-                        if requested_mode == CompilerBackendModeV1::StandaloneThenGame {
+                        if effective_mode == CompilerBackendModeV1::StandaloneThenGame {
                             standalone_runner =
                                 Some(ProductStandaloneRunnerV1::Unavailable { detail });
                         }
@@ -2007,7 +2285,7 @@ fn compile_full_graph_command(
             package_unavailable = Some(format!("{:?}: {}", reason.kind(), reason.detail()));
         }
     }
-    if requested_mode == CompilerBackendModeV1::Standalone && standalone_runner.is_none() {
+    if effective_mode == CompilerBackendModeV1::Standalone && standalone_runner.is_none() {
         bail!(
             "standalone compiler unavailable: {}",
             package_unavailable
@@ -2023,7 +2301,7 @@ fn compile_full_graph_command(
                 .unwrap_or("no product-authenticated package matched the installed target")
         );
     }
-    if requested_mode == CompilerBackendModeV1::StandaloneThenGame {
+    if effective_mode == CompilerBackendModeV1::StandaloneThenGame {
         if let Some(reason) = package_unavailable.as_deref() {
             eprintln!(
                 "standalone package unavailable; explicit game fallback remains enabled: {reason}"
@@ -2032,7 +2310,7 @@ fn compile_full_graph_command(
     }
 
     let mut guard = None;
-    if requested_mode != CompilerBackendModeV1::Standalone {
+    if effective_mode != CompilerBackendModeV1::Standalone {
         if let Some(target) = target.as_mut() {
             // Target validation pins every parent directory without delete sharing. Keep the exact
             // EXE/Shipping/Binds file handles open, release only those directory handles while the
@@ -2051,7 +2329,7 @@ fn compile_full_graph_command(
         }
     }
     let (base_cache, binds_cache) = if let Some(target) = target.as_ref() {
-        let base = match qualified_target_pristine_script_cache(&game, target) {
+        let base = match qualified_target_pristine_script_cache(&game, target, &shipping_source) {
             Ok(base) => base,
             Err(error) => {
                 return match guard.take() {
@@ -2061,10 +2339,10 @@ fn compile_full_graph_command(
             }
         };
         (base, target.binds_cache().to_vec())
-    } else if requested_mode == CompilerBackendModeV1::Standalone {
+    } else if effective_mode == CompilerBackendModeV1::Standalone {
         unreachable!("strict standalone availability was checked above")
     } else {
-        let (base, acquired) = guarded_pristine_script_cache(&game)?;
+        let (base, acquired) = guarded_pristine_script_cache(&game, &shipping_source)?;
         guard = Some(acquired);
         let binds =
             match read_regular_bounded(&binds_path, DEFAULT_BINDS_MAX_BYTES, "AS_FULL_GRAPH_BINDS")
@@ -2106,6 +2384,19 @@ fn compile_full_graph_command(
         }
     };
     let (changes, final_manifest) = plan.into_parts();
+    if mini_path.is_some()
+        && !changes.iter().any(|change| {
+            change.operation != gore_as::compile::FullGraphCompileOperationV1::Delete
+        })
+    {
+        let error = anyhow::anyhow!(
+            "--mini needs at least one added or edited module, but the source tree matches the target cache"
+        );
+        return match guard.take() {
+            Some(guard) => Err(release_compile_guard_after_error(guard, error)),
+            None => Err(error),
+        };
+    }
     let opts = FullGraphCompileOptsV1 {
         game_dir: game.clone(),
         work_dir: work_dir.clone(),
@@ -2124,7 +2415,7 @@ fn compile_full_graph_command(
     let audit_base = opts.base_cache.clone();
     let audit_binds = opts.binds_cache.clone();
     let closing_audit = move || audit_full_graph_inputs(&audit_game, &audit_base, &audit_binds);
-    let report = match requested_mode {
+    let report = match effective_mode {
         CompilerBackendModeV1::Standalone if complete_qualification => {
             gore_as::compile::compile_full_graph_qualification_standalone_v1_with_target(
                 &opts,
@@ -2158,7 +2449,7 @@ fn compile_full_graph_command(
                     gore_as::compile::compile_full_graph_with_backend_v1_with_guard_and_target(
                         &opts,
                         &diagnostics,
-                        requested_mode,
+                        effective_mode,
                         standalone_runner
                             .as_mut()
                             .map(|runner| runner as &mut dyn StandaloneCompilerRunnerV1),
@@ -2170,7 +2461,7 @@ fn compile_full_graph_command(
                 None => gore_as::compile::compile_full_graph_with_backend_v1_with_guard(
                     &opts,
                     &diagnostics,
-                    requested_mode,
+                    effective_mode,
                     standalone_runner
                         .as_mut()
                         .map(|runner| runner as &mut dyn StandaloneCompilerRunnerV1),
@@ -2225,6 +2516,31 @@ fn compile_full_graph_command(
         "full-graph compiler succeeded without identifying the backend that produced the cache",
     )?;
 
+    // The mini is part of this command's product: derive it before the receipt and before any
+    // success line, and neutralize the already published complete cache when it cannot be
+    // produced, exactly like a failed generation receipt, so a retry is not blocked by a
+    // half-finished no-clobber output. Nothing else has been published at this point.
+    let published_mini = match mini_path.as_ref() {
+        Some(mini_path) => match publish_full_graph_mini(
+            &artifact,
+            &opts.base_cache,
+            &game,
+            &work_dir,
+            mini_path,
+        ) {
+            Ok(published) => Some(published),
+            Err(error) => {
+                return fail_after_full_graph_side_output_error(
+                    &artifact,
+                    "MINI_CACHE",
+                    None,
+                    format!("publishing {}: {error:#}", mini_path.display()),
+                );
+            }
+        },
+        None => None,
+    };
+
     if let Some(receipt_path) = receipt_path.as_ref() {
         let authority = receipt_authority
             .as_ref()
@@ -2247,8 +2563,10 @@ fn compile_full_graph_command(
             ) {
                 Ok(receipt) => receipt,
                 Err(error) => {
-                    return fail_after_full_graph_receipt_error(
+                    return fail_after_full_graph_side_output_error(
                         &artifact,
+                        "GENERATION_RECEIPT",
+                        published_mini.as_ref(),
                         format!("building {}: {error}", receipt_path.display()),
                     );
                 }
@@ -2256,8 +2574,10 @@ fn compile_full_graph_command(
         if let Err(error) =
             gore_as::generation_receipt_v2::publish_generation_receipt_v2(receipt_path, &receipt)
         {
-            return fail_after_full_graph_receipt_error(
+            return fail_after_full_graph_side_output_error(
                 &artifact,
+                "GENERATION_RECEIPT",
+                published_mini.as_ref(),
                 format!("publishing {}: {error}", receipt_path.display()),
             );
         }
@@ -2280,20 +2600,175 @@ fn compile_full_graph_command(
         artifact.byte_len(),
         artifact.sha256()
     );
+    if let Some(published) = published_mini {
+        print!("{}", published.report);
+    }
     Ok(())
 }
 
-fn fail_after_full_graph_receipt_error<T>(
+/// A published multi-module mini-cache retained through its exact creation handle, so a later
+/// failure of this command can neutralize the bytes it wrote without trusting the path again.
+struct PublishedMini {
+    path: PathBuf,
+    file: std::fs::File,
+    report: String,
+}
+
+impl PublishedMini {
+    /// Reduce the written mini to zero bytes through the retained handle. A zero-byte file at the
+    /// destination is never a usable mini-cache and is reported for removal before a retry.
+    fn neutralize(&self) -> std::io::Result<()> {
+        self.file.set_len(0)?;
+        self.file.sync_all()
+    }
+}
+
+/// Reduce a selectively composed complete cache to a deployable multi-module mini-cache: the
+/// authored Add/Edit modules are extracted with the composed tail and remapped against the
+/// sealed pristine base, so the mini carries only its own new rows and is bound to the base GUID.
+fn publish_full_graph_mini(
     artifact: &gore_as::compile::FullGraphCompileArtifactV1,
+    base_cache: &[u8],
+    game: &Path,
+    work_dir: &Path,
+    mini_path: &Path,
+) -> Result<PublishedMini> {
+    use gore_as::compile::FullGraphCompileOperationV1;
+    use std::fmt::Write as _;
+    let authored: Vec<(&str, FullGraphCompileOperationV1)> = artifact
+        .changes()
+        .iter()
+        .filter(|change| change.operation != FullGraphCompileOperationV1::Delete)
+        .map(|change| (change.module_name.as_str(), change.operation))
+        .collect();
+    if authored.is_empty() {
+        bail!("no authored Add/Edit module to place in a mini-cache");
+    }
+    // Read the exact retained handle, never the path: the output directory may be writable by
+    // another process, and a swapped file must not become the source of the mini.
+    let composed = gore_as::generation_receipt_v2::read_full_graph_compile_output_bytes_v2(artifact)
+        .map_err(anyhow::Error::new)
+        .with_context(|| format!("reading the composed cache {}", artifact.path().display()))?;
+    let names: Vec<&str> = authored.iter().map(|(name, _)| *name).collect();
+    let extracted = gore_as::cache::splice::extract_modules(&composed, &names)
+        .context("extracting the authored modules from the composed cache")?;
+    let (mini, _counts) = gore_as::cache::remap::remap_module_to_base_with_options(
+        &extracted,
+        base_cache,
+        gore_as::cache::remap::RemapOptions {
+            allow_new_symbols: true,
+        },
+    )
+    .context("remapping the authored modules to the pristine cache")?;
+    // Prove the mini composes back onto the sealed base before publishing it.
+    let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(base_cache)
+        .context("validating the pristine base for the mini-cache self-check")?;
+    guard
+        .compose_upsert(base_cache, &mini)
+        .context("multi-module mini-cache does not compose onto the pristine base")?;
+    // Compilation takes minutes, and the layout checks ran before it. Re-resolve the destination
+    // now and repeat them, then create the file at the resolved path so a parent that was renamed
+    // or replaced with a symlink in the meantime cannot redirect the mini into the workspace or
+    // the game tree.
+    let file_name = mini_path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("mini-cache path has no file name"))?;
+    let parent = mini_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("mini-cache path has no parent directory"))?;
+    let destination = parent
+        .canonicalize()
+        .with_context(|| format!("resolving the mini-cache parent {}", parent.display()))?
+        .join(file_name);
+    gore_as::compile::preflight_full_graph_path_layout_paths_v1(game, work_dir, &destination)
+        .map_err(anyhow::Error::new)
+        .context("multi-module mini-cache path layout changed during compilation")?;
+    validate_auxiliary_output_path(&destination, game, "multi-module mini-cache")?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .with_context(|| format!("creating {}", mini_path.display()))?;
+    if let Err(error) = std::io::Write::write_all(&mut file, &mini).and_then(|()| file.sync_all()) {
+        // Never leave a truncated artifact behind that could be mistaken for a usable mini-cache.
+        // Neutralize through the exact handle just created: the path may already point at a
+        // different file when another process can write to the destination directory.
+        let cleanup = file
+            .set_len(0)
+            .and_then(|()| file.sync_all())
+            .map(|()| "; the partial file was reduced to zero bytes and must be removed before retrying".to_owned())
+            .unwrap_or_else(|neutralize| format!("; neutralizing the partial file failed too: {neutralize}"));
+        bail!("writing {}: {error}{cleanup}", mini_path.display());
+    }
+    let has_edit = authored
+        .iter()
+        .any(|(_, op)| *op == FullGraphCompileOperationV1::Edit);
+    // Name an edited shipped module in the spec entry when there is one: deploy requires an
+    // `edit` mini to carry at least one module that exists in the cache.
+    let spec_module = authored
+        .iter()
+        .find(|(_, op)| *op == FullGraphCompileOperationV1::Edit)
+        .map(|(name, _)| *name)
+        .unwrap_or(names[0]);
+    let mut report = String::new();
+    let _ = writeln!(
+        report,
+        "multi-module mini-cache -> {} ({} modules, {} bytes)",
+        mini_path.display(),
+        names.len(),
+        mini.len()
+    );
+    for (name, op) in &authored {
+        let _ = writeln!(report, "  {:<4} {name}", format!("{op:?}").to_lowercase());
+    }
+    let _ = writeln!(
+        report,
+        "bundle spec entry: {{ \"op\": \"{}\", \"module_name\": \"{}\", \"mini_cache\": \"{}\" }}",
+        if has_edit { "edit" } else { "add" },
+        spec_module,
+        mini_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    );
+    Ok(PublishedMini {
+        path: mini_path.to_path_buf(),
+        file,
+        report,
+    })
+}
+
+/// A side output of the full-graph command (mini-cache, receipt) could not be produced after the
+/// complete cache was already published. The command's product is all-or-nothing: reduce the
+/// retained cache to zero bytes so the next run is not blocked by a no-clobber destination that
+/// looks like a usable result, and neutralize an already published mini-cache through its retained
+/// handle so it cannot describe the neutralized cache.
+fn fail_after_full_graph_side_output_error<T>(
+    artifact: &gore_as::compile::FullGraphCompileArtifactV1,
+    label: &str,
+    published_mini: Option<&PublishedMini>,
     primary: String,
 ) -> Result<T> {
+    let mini_cleanup = published_mini
+        .map(|mini| match mini.neutralize() {
+            Ok(()) => format!(
+                "; the published mini-cache at {} was reduced to zero bytes and must be removed before retrying",
+                mini.path.display()
+            ),
+            Err(error) => format!(
+                "; neutralizing the published mini-cache at {} failed too: {error}",
+                mini.path.display()
+            ),
+        })
+        .unwrap_or_default();
     match artifact.neutralize() {
         Ok(()) => bail!(
-            "GENERATION_RECEIPT_PUBLICATION_FAILED_OUTPUT_NEUTRALIZED: {primary}; the exact retained cache at {} was reduced to zero bytes and must be removed before retrying",
+            "{label}_PUBLICATION_FAILED_OUTPUT_NEUTRALIZED: {primary}; the exact retained cache at {} was reduced to zero bytes and must be removed before retrying{mini_cleanup}",
             artifact.path().display()
         ),
         Err(cleanup) => bail!(
-            "GENERATION_RECEIPT_RECOVERY_REQUIRED: {primary}; failed to neutralize the retained cache at {}: {cleanup}",
+            "{label}_RECOVERY_REQUIRED: {primary}; failed to neutralize the retained cache at {}: {cleanup}{mini_cleanup}",
             artifact.path().display()
         ),
     }
@@ -3143,8 +3618,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
         AsCmd::Compile {
             src,
             out,
+            mini,
             work_dir,
             game,
+            expect_base,
+            expect_base_sha256,
             no_diagnostics,
             diagnostics_hook,
             diagnostics_inject_delay_ms,
@@ -3153,8 +3631,10 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             compile_full_graph_command(
                 src,
                 out,
+                mini,
                 work_dir,
                 game,
+                expected_base_from_args(expect_base, expect_base_sha256)?,
                 no_diagnostics,
                 diagnostics_hook,
                 diagnostics_inject_delay_ms,
@@ -3170,21 +3650,34 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             allow_new_symbols,
             out,
             game,
+            expect_base,
+            expect_base_sha256,
             no_diagnostics,
             diagnostics_hook,
             diagnostics_inject_delay_ms,
             compiler,
         } => {
             let game = gore_loc::config::game_root(game).context("resolving game path")?;
+            let expected_base = expected_base_from_args(expect_base, expect_base_sha256)?;
             let work_dir = resolve_compile_module_work_dir(work_dir, &game)?;
             let source_bytes = read_regular_bounded(
                 &source,
                 gore_as::generation_receipt::MAX_GENERATION_SOURCE_FILE_BYTES_V1 as u64,
                 "AS_COMPILE_SOURCE",
             )?;
-            let requested_mode: gore_as::compile::CompilerBackendModeV1 = compiler.backend.into();
             let executable_path = compiler_executable_path(&game);
-            let shipping_path = compiler_shipping_path(&game);
+            let shipping_source = compiler_shipping_source(&game)?;
+            announce_compiler_shipping_source(&shipping_source);
+            if let Some(expected) = expected_base.as_ref() {
+                require_expected_base(&shipping_source, expected)?;
+            }
+            let shipping_path = shipping_source.path.clone();
+            let requested_mode: gore_as::compile::CompilerBackendModeV1 = compiler.backend.into();
+            let (effective_mode, game_fallback_note) =
+                effective_compile_mode(requested_mode, &shipping_source)?;
+            if let Some(note) = game_fallback_note.as_deref() {
+                eprintln!("{note}");
+            }
             let binds_path = compiler_binds_path(&game);
             let target_paths = gore_as::compiler_target::CompilerTargetInputPathsV1 {
                 executable: &executable_path,
@@ -3223,7 +3716,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 );
                 match resolution {
                     ProductStandaloneCompilerPackageResolutionV1::Available(available) => {
-                        let runner = (requested_mode
+                        let runner = (effective_mode
                             != gore_as::compile::CompilerBackendModeV1::Game)
                             .then(|| available.sidecar_runner(work_dir.clone()));
                         let (authority, target) = available.into_execution_parts();
@@ -3242,7 +3735,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                                         error.kind().as_str()
                                     );
                                     package_unavailable = Some(detail.clone());
-                                    if requested_mode
+                                    if effective_mode
                                         == gore_as::compile::CompilerBackendModeV1::StandaloneThenGame
                                     {
                                         standalone_runner = Some(
@@ -3266,7 +3759,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                             Some(format!("{:?}: {}", reason.kind(), reason.detail()));
                     }
                 }
-                if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone
+                if effective_mode == gore_as::compile::CompilerBackendModeV1::Standalone
                     && standalone_runner.is_none()
                 {
                     bail!(
@@ -3285,7 +3778,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                         )
                     );
                 }
-                if requested_mode == gore_as::compile::CompilerBackendModeV1::StandaloneThenGame {
+                if effective_mode == gore_as::compile::CompilerBackendModeV1::StandaloneThenGame {
                     if let Some(reason) = package_unavailable.as_deref() {
                         eprintln!(
                             "standalone compiler unavailable; using the visible game fallback: \
@@ -3303,7 +3796,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             }
 
             let (base_override, guard) = if let Some(target) = standalone_target.as_mut() {
-                let guard = if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone
+                let guard = if effective_mode == gore_as::compile::CompilerBackendModeV1::Standalone
                 {
                     None
                 } else {
@@ -3325,7 +3818,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     }
                     Some(acquired)
                 };
-                let base = match qualified_target_pristine_script_cache(&game, target) {
+                let base = qualified_target_pristine_script_cache(&game, target, &shipping_source);
+                let base = match base {
                     Ok(base) => base,
                     Err(error) => {
                         return match guard {
@@ -3335,10 +3829,10 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     }
                 };
                 (base, guard)
-            } else if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone {
+            } else if effective_mode == gore_as::compile::CompilerBackendModeV1::Standalone {
                 unreachable!("strict standalone availability was checked above")
             } else {
-                let (base, guard) = guarded_pristine_script_cache(&game)?;
+                let (base, guard) = guarded_pristine_script_cache(&game, &shipping_source)?;
                 (base, Some(guard))
             };
             let binds_override = standalone_target
@@ -3399,7 +3893,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     gore_as::compile::compile_module_with_backend_v1_with_guard_and_target(
                         &opts,
                         &diagnostics,
-                        requested_mode,
+                        effective_mode,
                         standalone.as_mut().map(|runner| {
                             runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
                         }),
@@ -3410,7 +3904,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 (Some(guard), None) => gore_as::compile::compile_module_with_backend_v1_with_guard(
                     &opts,
                     &diagnostics,
-                    requested_mode,
+                    effective_mode,
                     standalone.as_mut().map(|runner| {
                         runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
                     }),
@@ -3427,7 +3921,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     gore_as::compile::compile_module_with_backend_v1(
                         &opts,
                         &diagnostics,
-                        requested_mode,
+                        effective_mode,
                         pinned_standalone.as_mut().map(|runner| {
                             runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
                         }),
@@ -3436,7 +3930,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 (None, None) => gore_as::compile::compile_module_with_backend_v1(
                     &opts,
                     &diagnostics,
-                    requested_mode,
+                    effective_mode,
                     standalone.as_mut().map(|runner| {
                         runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
                     }),
@@ -3475,6 +3969,21 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     return Err(anyhow::Error::new(error)).context("compiling module");
                 }
             };
+            let mut compiled = compiled;
+            if let Err(audit) =
+                audit_compile_module_base(&opts.game_dir, &shipping_source, &base_override)
+            {
+                let cleanup = compiled
+                    .neutralize_retained_artifact()
+                    .err()
+                    .map(|error| {
+                        format!("; discarding the compiled mini-cache also failed: {error}")
+                    })
+                    .unwrap_or_default();
+                return Err(
+                    audit.context(format!("the compiled mini-cache was discarded{cleanup}"))
+                );
+            }
             let used_backend = used_backend.context(
                 "compiler succeeded without reporting the backend that produced its output",
             )?;
@@ -3605,16 +4114,28 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 out.display()
             );
         }
-        AsCmd::Splice { base, mini, out } => {
+        AsCmd::Splice {
+            base,
+            mini,
+            upsert,
+            out,
+        } => {
             let base_b = read_module_cache(&base)?;
             let mini_b = read_module_cache(&mini)?;
             let before = module_count(&base_b);
             let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(&base_b)
                 .context("validating splice base")?;
-            let spliced = guard.compose_add(&base_b, &mini_b).context("splicing")?;
+            let spliced = if upsert {
+                guard
+                    .compose_upsert(&base_b, &mini_b)
+                    .context("splicing (upsert)")?
+            } else {
+                guard.compose_add(&base_b, &mini_b).context("splicing")?
+            };
             std::fs::write(&out, &spliced).with_context(|| format!("writing {}", out.display()))?;
             println!(
-                "spliced: {} modules -> {} ; {} -> {} bytes ; wrote {}",
+                "spliced{}: {} modules -> {} ; {} -> {} bytes ; wrote {}",
+                if upsert { " (upsert)" } else { "" },
                 before,
                 module_count(&spliced),
                 base_b.len(),
@@ -5881,20 +6402,304 @@ mod default_cli_tests {
         assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
     }
 
+    /// Writes the on-disk state a script deployment leaves behind: the modded live cache, the
+    /// pristine `*.gore-bak`, and a deploy record that authenticates both.
+    fn install_script_mod_record(game: &Path, pristine: &[u8], deployed: &[u8]) -> PathBuf {
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        let backup = PathBuf::from(format!("{}.gore-bak", live.display()));
+        std::fs::write(&backup, pristine).unwrap();
+        std::fs::write(&live, deployed).unwrap();
+        // Production deploy records persist canonical paths even when the caller uses an alias.
+        let recorded_live = std::fs::canonicalize(&live).unwrap();
+        let recorded_backup = std::fs::canonicalize(&backup).unwrap();
+        let identity = |bytes: &[u8]| format!("sha256:{:x}", Sha256::digest(bytes));
+        let mut record = gore_mod::DeployRecord {
+            mod_name: "fixture".to_owned(),
+            backups: vec![(
+                recorded_live.display().to_string(),
+                recorded_backup.display().to_string(),
+                true,
+            )],
+            ..Default::default()
+        };
+        record
+            .deployed_hashes
+            .insert(recorded_live.display().to_string(), identity(deployed));
+        record
+            .backup_hashes
+            .insert(recorded_backup.display().to_string(), identity(pristine));
+        std::fs::write(
+            game.join("gore-mod.deployed.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        backup
+    }
+
+    /// While a script mod is installed, the compiler target is validated against the
+    /// deployment's pristine backup, not the modded live cache, so the mod stays installed while
+    /// its next version compiles.
     #[test]
-    fn standalone_target_must_match_the_deployment_aware_pristine_base() {
-        let pristine = b"pristine-cache".to_vec();
+    fn compiler_shipping_source_is_the_deployment_backup_while_a_script_mod_is_installed() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let script = game.join("G1R/Script");
+        std::fs::create_dir_all(&script).unwrap();
+        let live = script.join("PrecompiledScript_Shipping.Cache");
+        std::fs::write(&live, b"pristine").unwrap();
+
+        let untouched = compiler_shipping_source(&game).unwrap();
+        assert_eq!(untouched.path, live);
+        assert!(!untouched.from_backup);
+        assert!(untouched.matches(b"pristine"));
+
+        let backup = install_script_mod_record(&game, b"pristine", b"deployed");
+        let installed = compiler_shipping_source(&game).unwrap();
+        assert_eq!(installed.path, backup);
+        assert!(installed.from_backup);
+        assert!(installed.matches(b"pristine"));
+        assert!(!installed.matches(b"deployed"));
+        assert_eq!(std::fs::read(&live).unwrap(), b"deployed");
+    }
+
+    #[test]
+    fn expected_base_sha256_is_normalized_and_validated() {
+        let hex = "ab".repeat(32);
         assert_eq!(
-            require_qualified_target_pristine_base(b"pristine-cache", pristine.clone()).unwrap(),
-            pristine
+            expected_base_from_args(None, Some(format!("SHA256:{}", hex.to_uppercase()))).unwrap(),
+            Some(ExpectedBase::Identity(format!("sha256:{hex}")))
         );
+        assert_eq!(expected_base_from_args(None, None).unwrap(), None);
+        assert_eq!(
+            expected_base_from_args(Some(PathBuf::from("frozen.Cache")), None).unwrap(),
+            Some(ExpectedBase::File(PathBuf::from("frozen.Cache")))
+        );
+        for bad in ["abc", &"zz".repeat(32), ""] {
+            let error = expected_base_from_args(None, Some(bad.to_owned()))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("64 hex digits"), "got: {error}");
+        }
+    }
+
+    /// `--expect-base` / `--expect-base-sha256` never choose the base; they only refuse a compile
+    /// whose selected original is not the one the caller vouches for.
+    #[test]
+    fn expected_base_must_match_the_selected_original() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"pristine-cache").unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+        let identity = format!("sha256:{:x}", Sha256::digest(b"pristine-cache"));
+        let other = format!("sha256:{:x}", Sha256::digest(b"other-cache"));
+
+        require_expected_base(&selected, &ExpectedBase::Identity(identity.clone())).unwrap();
+        let error = require_expected_base(&selected, &ExpectedBase::Identity(other.clone()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&other), "got: {error}");
+        assert!(error.contains(&identity), "got: {error}");
+        assert!(
+            error.contains(&selected.path.display().to_string()),
+            "the message must name the selected original: {error}"
+        );
+
+        let same = root.path().join("frozen.Cache");
+        std::fs::write(&same, b"pristine-cache").unwrap();
+        require_expected_base(&selected, &ExpectedBase::File(same)).unwrap();
+        let different = root.path().join("different.Cache");
+        std::fs::write(&different, b"other-cache").unwrap();
+        let error = require_expected_base(&selected, &ExpectedBase::File(different.clone()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&other), "got: {error}");
+        assert!(error.contains(&identity), "got: {error}");
+        assert!(
+            error.contains(&different.display().to_string()),
+            "the message must name the expected file: {error}"
+        );
+        let missing = root.path().join("missing.Cache");
+        let error = require_expected_base(&selected, &ExpectedBase::File(missing))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("missing.Cache"), "got: {error}");
+    }
+
+    /// The game backend reads its base after the selection; those bytes must still be the
+    /// selected original, exactly like the pinned standalone target.
+    #[test]
+    fn game_backend_base_must_still_be_the_selected_original() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"selected").unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+
+        std::fs::write(&live, b"replaced").unwrap();
+        let error = guarded_pristine_script_cache(&game, &selected)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("changed between selecting it and reading it"),
+            "got: {error}"
+        );
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    /// While a script mod is installed the compiler base is the deployment backup, which the
+    /// game compiler cannot restore over the live cache: `game` is refused up front and
+    /// `standalone-then-game` runs the standalone compiler only, saying so.
+    #[test]
+    fn effective_compile_mode_skips_the_game_fallback_while_a_script_mod_is_installed() {
+        use gore_as::compile::CompilerBackendModeV1 as Mode;
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"pristine").unwrap();
+        let untouched = compiler_shipping_source(&game).unwrap();
+        for mode in [Mode::Standalone, Mode::Game, Mode::StandaloneThenGame] {
+            let (effective, note) = effective_compile_mode(mode, &untouched).unwrap();
+            assert_eq!(effective, mode);
+            assert!(note.is_none());
+        }
+
+        install_script_mod_record(&game, b"pristine", b"deployed");
+        let installed = compiler_shipping_source(&game).unwrap();
+        let (effective, note) = effective_compile_mode(Mode::Standalone, &installed).unwrap();
+        assert_eq!(effective, Mode::Standalone);
+        assert!(note.is_none());
+        let (effective, note) =
+            effective_compile_mode(Mode::StandaloneThenGame, &installed).unwrap();
+        assert_eq!(effective, Mode::Standalone);
+        let note = note.expect("the skipped fallback is announced");
+        assert!(note.contains("game fallback"), "got: {note}");
+        let error = effective_compile_mode(Mode::Game, &installed)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("script mod is installed"), "got: {error}");
+        assert!(error.contains("--backend standalone"), "got: {error}");
+    }
+
+    /// The module path has no transaction hook for a closing audit, so the CLI re-reads the
+    /// deployment-aware pristine source before it publishes the mini and refuses a base that
+    /// changed while the compiler ran.
+    #[test]
+    fn compile_module_base_audit_refuses_a_base_that_changed_during_compilation() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"pristine-cache").unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+
+        audit_compile_module_base(&game, &selected, b"pristine-cache").unwrap();
+
+        std::fs::write(&live, b"updated-by-the-game").unwrap();
+        let error = audit_compile_module_base(&game, &selected, b"pristine-cache")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("changed during compilation"), "got: {error}");
+    }
+
+    /// A deploy landing between the selection and the guard leaves the bytes unchanged (the
+    /// backup holds the same original) but installs a mod the game compiler must not run on.
+    /// The guarded read therefore re-selects the source instead of trusting the identity alone.
+    #[test]
+    fn game_backend_refuses_a_script_mod_installed_after_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"pristine").unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+        assert!(!selected.from_backup);
+
+        install_script_mod_record(&game, b"pristine", b"deployed");
+        let error = guarded_pristine_script_cache(&game, &selected)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("script mod"), "got: {error}");
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    /// The qualified-target path selects its base before the guard too. A deploy landing in
+    /// between keeps the pinned bytes and the backup identical to the original, so only a fresh
+    /// selection under the guard notices the installed mod.
+    #[test]
+    fn qualified_target_selection_must_survive_the_guard() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"pristine").unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+        require_unchanged_selection(&game, &selected).unwrap();
+
+        install_script_mod_record(&game, b"pristine", b"deployed");
+        let error = require_unchanged_selection(&game, &selected)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("changed between selecting it and pinning it"),
+            "got: {error}"
+        );
+    }
+
+    #[test]
+    fn standalone_target_must_carry_the_selected_pristine_base() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"pristine-cache").unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+
+        // The pinned target holds the current pristine bytes, which are the bytes selected
+        // before the pin.
+        assert_eq!(
+            require_qualified_target_pristine_base(
+                &selected,
+                b"pristine-cache",
+                b"pristine-cache".to_vec()
+            )
+            .unwrap(),
+            b"pristine-cache"
+        );
+
+        // The pinned target is not the current pristine cache: the base changed between the
+        // selection and the pin. That asks for a retry, not for an undeploy.
         let error = require_qualified_target_pristine_base(
+            &selected,
             b"live-cache-with-active-mod",
             b"pristine-cache".to_vec(),
         )
         .unwrap_err()
         .to_string();
-        assert!(error.contains("deployment-aware pristine script cache differs"));
+        assert!(
+            error.contains("changed between selecting it and pinning it"),
+            "got: {error}"
+        );
+        assert!(!error.contains("undeploy"), "got: {error}");
+
+        // The pinned target equals the current pristine cache, but not the bytes selected before
+        // the pin: the selection flipped underneath the compile.
+        std::fs::write(&live, b"other-cache").unwrap();
+        let flipped = compiler_shipping_source(&game).unwrap();
+        let error = require_qualified_target_pristine_base(
+            &flipped,
+            b"pristine-cache",
+            b"pristine-cache".to_vec(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("changed between selecting it and pinning it"),
+            "got: {error}"
+        );
     }
 
     #[test]
@@ -5949,7 +6754,8 @@ mod default_cli_tests {
         )
         .unwrap();
 
-        let (base, mut guard) = guarded_pristine_script_cache(&game).unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+        let (base, mut guard) = guarded_pristine_script_cache(&game, &selected).unwrap();
         assert_eq!(base, b"authoritative-pristine");
         let contender = gore_as::compile::InstallMutationGuard::acquire(&game, "gore-mod:deploy")
             .expect_err("deploy must remain blocked after the authoritative read");
@@ -5966,9 +6772,13 @@ mod default_cli_tests {
     fn compile_module_cli_releases_guard_when_pristine_selection_fails() {
         let root = tempfile::tempdir().unwrap();
         let game = root.path().join("game");
-        std::fs::create_dir_all(&game).unwrap();
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"selected").unwrap();
+        let selected = compiler_shipping_source(&game).unwrap();
+        std::fs::remove_file(&live).unwrap();
 
-        let error = guarded_pristine_script_cache(&game)
+        let error = guarded_pristine_script_cache(&game, &selected)
             .unwrap_err()
             .to_string();
         assert!(error.contains("pristine script cache"), "got: {error}");

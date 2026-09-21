@@ -149,7 +149,7 @@ abstract class AppLocalizations {
   /// No description provided for @storyStateDescription.
   ///
   /// In en, this message translates to:
-  /// **'Authoritative catalog of persisted story state declared by the shipped game scripts. Stored entries show their raw value; catalog fields missing from this save are marked as not set. Source-declared time markers are formatted as game time, while other integers may be booleans, counters, or multi-state values.'**
+  /// **'The game tracks progress in quests, dialogues and events here. “Stored” shows the values in your save; “Not set” shows the other known entries. Depending on the entry, a number can mean yes/no, a count or a stage of progress. Time markers show a day and time in the game.'**
   String get storyStateDescription;
 
   /// No description provided for @storyStateReadOnly.
@@ -199,6 +199,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Unknown source type'**
   String get storyStateUnknown;
+
+  /// No description provided for @storyStateShowDormant.
+  ///
+  /// In en, this message translates to:
+  /// **'Show unused ({count})'**
+  String storyStateShowDormant(int count);
 
   /// No description provided for @storyStateUnknownDetail.
   ///
@@ -263,7 +269,7 @@ abstract class AppLocalizations {
   /// No description provided for @storyStateEditingGuidance.
   ///
   /// In en, this message translates to:
-  /// **'Every entry remains editable across the full signed int32 range. Script-backed switches and value suggestions are guidance; raw input is always available. Story changes can skip dialogue, quest, or world transitions, so save them deliberately — a backup is created automatically.'**
+  /// **'Select an entry to change its value. Changes take effect when you save. Only change values whose effects you understand: quests or dialogues may otherwise stop working as expected. A backup is created automatically when you save.'**
   String get storyStateEditingGuidance;
 
   /// No description provided for @storyStatePending.
@@ -896,23 +902,269 @@ abstract class AppLocalizations {
   /// **'Stock'**
   String get traderStockCurrent;
 
+  /// No description provided for @traderStockCurrentTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'What this merchant currently has for sale. Added items can disappear again when the game updates the merchant.'**
+  String get traderStockCurrentTooltip;
+
   /// No description provided for @traderStockBase.
   ///
   /// In en, this message translates to:
   /// **'Restock baseline'**
   String get traderStockBase;
 
+  /// No description provided for @traderStockBaseTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'The save contains this list to help the game restock the merchant. The game can recalculate it from its merchant rules, so changes here would not last.'**
+  String get traderStockBaseTooltip;
+
   /// No description provided for @traderStockBaseHint.
   ///
   /// In en, this message translates to:
-  /// **'What the merchant restocks back toward. It grows with story progress, so it is not a vanilla snapshot.'**
+  /// **'Read-only: the game uses this list when restocking, but can recalculate it. Items added here would not stay permanently.'**
   String get traderStockBaseHint;
+
+  /// No description provided for @traderCurrentStockWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Changes to the merchant\'s inventory last only until the next restock.'**
+  String get traderCurrentStockWarning;
+
+  /// No description provided for @traderRestockTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Restock timer'**
+  String get traderRestockTitle;
+
+  /// No description provided for @traderRestockTitleTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'An estimate based on the merchant\'s last activity, the current game time, and Resources difficulty.'**
+  String get traderRestockTitleTooltip;
+
+  /// No description provided for @traderRestockPending.
+  ///
+  /// In en, this message translates to:
+  /// **'pending'**
+  String get traderRestockPending;
+
+  /// No description provided for @traderRestockRevertTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Undo the pending time change'**
+  String get traderRestockRevertTooltip;
+
+  /// No description provided for @traderRestockNever.
+  ///
+  /// In en, this message translates to:
+  /// **'Never'**
+  String get traderRestockNever;
+
+  /// No description provided for @traderRestockUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Unavailable'**
+  String get traderRestockUnavailable;
+
+  /// No description provided for @traderRestockIntervalUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Restock wait unknown'**
+  String get traderRestockIntervalUnknown;
+
+  /// No description provided for @traderRestockNeverStatus.
+  ///
+  /// In en, this message translates to:
+  /// **'No merchant activity has been recorded yet.'**
+  String get traderRestockNeverStatus;
+
+  /// No description provided for @traderRestockClockAhead.
+  ///
+  /// In en, this message translates to:
+  /// **'The merchant\'s saved time is ahead of the current game time.'**
+  String get traderRestockClockAhead;
+
+  /// No description provided for @traderRestockNotDueYet.
+  ///
+  /// In en, this message translates to:
+  /// **'Not expected before {time}.'**
+  String traderRestockNotDueYet(String time);
+
+  /// No description provided for @traderRestockPossiblyDue.
+  ///
+  /// In en, this message translates to:
+  /// **'The merchant may already be ready for restocking.'**
+  String get traderRestockPossiblyDue;
+
+  /// No description provided for @traderRestockEligible.
+  ///
+  /// In en, this message translates to:
+  /// **'The merchant should now be ready for restocking.'**
+  String get traderRestockEligible;
+
+  /// No description provided for @traderRestockNoWorldTime.
+  ///
+  /// In en, this message translates to:
+  /// **'The current game time is unavailable, so the editor cannot tell whether restocking is due.'**
+  String get traderRestockNoWorldTime;
+
+  /// No description provided for @traderRestockLastActivity.
+  ///
+  /// In en, this message translates to:
+  /// **'Last merchant activity'**
+  String get traderRestockLastActivity;
+
+  /// No description provided for @traderRestockLastActivityTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'The last time saved for this merchant. It can come from trading or another merchant update, so it is not necessarily the last restock.'**
+  String get traderRestockLastActivityTooltip;
+
+  /// No description provided for @traderRestockForecastWindow.
+  ///
+  /// In en, this message translates to:
+  /// **'Restock expected'**
+  String get traderRestockForecastWindow;
+
+  /// No description provided for @traderRestockForecastWindowTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact time is not stored in the save. The editor therefore shows a range from the earliest to the latest expected time.'**
+  String get traderRestockForecastWindowTooltip;
+
+  /// No description provided for @traderRestockIntervalLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Restock wait'**
+  String get traderRestockIntervalLabel;
+
+  /// No description provided for @traderRestockInterval.
+  ///
+  /// In en, this message translates to:
+  /// **'{days} days · {level}'**
+  String traderRestockInterval(int days, String level);
+
+  /// No description provided for @traderRestockIntervalTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting time set by Resources difficulty: Novice 2, Gothic 3, Hard 5 in-game days.'**
+  String get traderRestockIntervalTooltip;
+
+  /// No description provided for @traderRestockAutomationLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic restock'**
+  String get traderRestockAutomationLabel;
+
+  /// No description provided for @traderRestockAutomationValue.
+  ///
+  /// In en, this message translates to:
+  /// **'Cannot be disabled in the save'**
+  String get traderRestockAutomationValue;
+
+  /// No description provided for @traderRestockAutomationTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'The save editor cannot reliably stop automatic restocking. That requires a game mod.'**
+  String get traderRestockAutomationTooltip;
+
+  /// No description provided for @traderRestockSetNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Set to world time'**
+  String get traderRestockSetNow;
+
+  /// No description provided for @traderRestockSetNowTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Use the current game time as the merchant\'s last activity. This postpones the next expected restock.'**
+  String get traderRestockSetNowTooltip;
+
+  /// No description provided for @traderRestockMakeDue.
+  ///
+  /// In en, this message translates to:
+  /// **'Make due now'**
+  String get traderRestockMakeDue;
+
+  /// No description provided for @traderRestockMakeDueTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Move the merchant\'s last activity far enough back that restocking should be due now.'**
+  String get traderRestockMakeDueTooltip;
+
+  /// No description provided for @traderRestockCustom.
+  ///
+  /// In en, this message translates to:
+  /// **'Custom time…'**
+  String get traderRestockCustom;
+
+  /// No description provided for @traderRestockCustomTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose the in-game day and time of the merchant\'s last activity.'**
+  String get traderRestockCustomTooltip;
+
+  /// No description provided for @traderRestockEditTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Change last merchant activity'**
+  String get traderRestockEditTitle;
 
   /// No description provided for @traderOreHint.
   ///
   /// In en, this message translates to:
   /// **'The in-game figure differs: on load the game adds what accrued since his last trade — he sells surplus goods and restocks from it. This number is the starting point, not what the trade screen shows.'**
   String get traderOreHint;
+
+  /// No description provided for @traderOreHintShort.
+  ///
+  /// In en, this message translates to:
+  /// **'Starting value — the amount in the trade screen can differ.'**
+  String get traderOreHintShort;
+
+  /// No description provided for @traderRestockStatusLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Status'**
+  String get traderRestockStatusLabel;
+
+  /// No description provided for @traderRestockStatusNever.
+  ///
+  /// In en, this message translates to:
+  /// **'No activity'**
+  String get traderRestockStatusNever;
+
+  /// No description provided for @traderRestockStatusWaiting.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for restock'**
+  String get traderRestockStatusWaiting;
+
+  /// No description provided for @traderRestockStatusReady.
+  ///
+  /// In en, this message translates to:
+  /// **'Ready for restock'**
+  String get traderRestockStatusReady;
+
+  /// No description provided for @traderRestockStatusPossiblyReady.
+  ///
+  /// In en, this message translates to:
+  /// **'Possibly ready'**
+  String get traderRestockStatusPossiblyReady;
+
+  /// No description provided for @traderRestockStatusCheckTime.
+  ///
+  /// In en, this message translates to:
+  /// **'Check saved time'**
+  String get traderRestockStatusCheckTime;
+
+  /// No description provided for @traderRestockStatusUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown'**
+  String get traderRestockStatusUnknown;
 
   /// No description provided for @traderPriceWarning.
   ///
@@ -4620,6 +4872,108 @@ abstract class AppLocalizations {
     int failed,
     String playTime,
   );
+
+  /// No description provided for @locksSidebar.
+  ///
+  /// In en, this message translates to:
+  /// **'Locks'**
+  String get locksSidebar;
+
+  /// No description provided for @editorLockListFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Lock list failed: {details}'**
+  String editorLockListFailed(String details);
+
+  /// No description provided for @locksSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Search lock or key'**
+  String get locksSearchHint;
+
+  /// No description provided for @locksAllRegions.
+  ///
+  /// In en, this message translates to:
+  /// **'All regions'**
+  String get locksAllRegions;
+
+  /// No description provided for @locksShownOfTotal.
+  ///
+  /// In en, this message translates to:
+  /// **'{shown} of {total}'**
+  String locksShownOfTotal(int shown, int total);
+
+  /// No description provided for @locksFilterChests.
+  ///
+  /// In en, this message translates to:
+  /// **'Chests'**
+  String get locksFilterChests;
+
+  /// No description provided for @locksFilterDoors.
+  ///
+  /// In en, this message translates to:
+  /// **'Doors'**
+  String get locksFilterDoors;
+
+  /// No description provided for @locksFilterUnlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Unlocked'**
+  String get locksFilterUnlocked;
+
+  /// No description provided for @locksFilterLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Locked'**
+  String get locksFilterLocked;
+
+  /// No description provided for @locksDifficultyLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'Difficulty {bars} of 4 (internal tier {level} of 7)'**
+  String locksDifficultyLevel(int bars, int level);
+
+  /// No description provided for @locksKeyOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Key only'**
+  String get locksKeyOnly;
+
+  /// No description provided for @locksKeyLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Key: {keys}'**
+  String locksKeyLabel(String keys);
+
+  /// No description provided for @locksPermalocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Sealed permanently'**
+  String get locksPermalocked;
+
+  /// No description provided for @locksReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'This save has no editable lock set.'**
+  String get locksReadOnly;
+
+  /// No description provided for @locksUnknownEntry.
+  ///
+  /// In en, this message translates to:
+  /// **'Not in this game version'**
+  String get locksUnknownEntry;
+
+  /// No description provided for @locksDoorLeafHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Locking a door again also shuts the door itself.'**
+  String get locksDoorLeafHint;
+
+  /// No description provided for @locksResetPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard queued lock changes'**
+  String get locksResetPending;
 }
 
 class _AppLocalizationsDelegate

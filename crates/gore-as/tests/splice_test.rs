@@ -427,3 +427,158 @@ fn splice_into_real_cache() {
         out.len()
     );
 }
+
+// ── multi-module minis ───────────────────────────────────────────────────────────────────────────
+
+/// A referenceless mini carrying `modules` plus `static_names` (T6 is unkeyed and needs no
+/// declaration authority, so it is the one non-empty tail a synthetic mini can carry safely).
+fn multi_module_mini(modules: &[(&str, &str)], static_names: &[&str]) -> Vec<u8> {
+    let mut out = empty_modules_cache(modules);
+    out.truncate(out.len() - 7 * 4);
+    for table in 0..7 {
+        if table == 5 {
+            out.extend_from_slice(&(static_names.len() as u32).to_le_bytes());
+            for name in static_names {
+                out.extend_from_slice(&sia(name));
+            }
+        } else {
+            out.extend_from_slice(&0u32.to_le_bytes());
+        }
+    }
+    out
+}
+
+#[test]
+fn splice_appends_every_module_of_a_referenceless_multi_module_mini() {
+    let base = empty_modules_cache(&[("Base.One", "Base.One"), ("Base.Two", "Base.Two")]);
+    let mini = empty_modules_cache(&[("Mod.A", "Mod.A"), ("Mod.B", "Mod.B")]);
+
+    let out = splice(&base, &mini).expect("two referenceless modules splice");
+
+    assert_eq!(module_count(&out), 4);
+    assert_eq!(
+        module_names(&out).unwrap(),
+        ["Base.One", "Base.Two", "Mod.A", "Mod.B"]
+    );
+    let tail = module_region_end(&out).unwrap();
+    assert_eq!(&out[tail..], &[0u8; 7 * 4], "empty tail tables preserved");
+}
+
+#[test]
+fn splice_auto_merges_the_tail_of_a_multi_module_mini_once() {
+    let base = multi_module_mini(&[("Base.One", "Base.One")], &["BaseName"]);
+    let mini = multi_module_mini(&[("Mod.A", "Mod.A"), ("Mod.B", "Mod.B")], &["NameA", "NameB"]);
+
+    let out = splice_auto(&base, &mini).expect("case-a multi-module splice");
+
+    assert_eq!(module_names(&out).unwrap(), ["Base.One", "Mod.A", "Mod.B"]);
+    let tail = module_region_end(&out).unwrap();
+    let tables = parse_tail_tables(&out, tail).unwrap();
+    assert_eq!(tables.end, out.len());
+    assert_eq!(tables.tables[5].count, 3, "StaticNames appended once for the whole mini");
+}
+
+#[test]
+fn splice_rejects_a_multi_module_mini_when_any_module_already_exists() {
+    let base = empty_modules_cache(&[("Base.One", "Base.One"), ("Mod.B", "Mod.B")]);
+    let mini = empty_modules_cache(&[("Mod.A", "Mod.A"), ("Mod.B", "Mod.B")]);
+
+    let err = splice(&base, &mini).unwrap_err();
+    assert!(
+        matches!(&err, SpliceError::NameCollision(name) if name == "Mod.B"),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn splice_rejects_a_mini_without_modules() {
+    let base = empty_modules_cache(&[("Base.One", "Base.One")]);
+    let mini = empty_modules_cache(&[]);
+
+    let err = splice(&base, &mini).unwrap_err();
+    assert!(matches!(err, SpliceError::MiniEmpty), "got {err:?}");
+    let err = splice_auto(&base, &mini).unwrap_err();
+    assert!(matches!(err, SpliceError::MiniEmpty), "got {err:?}");
+}
+
+#[test]
+fn replace_module_keeps_requiring_a_single_module_mini() {
+    let base = empty_modules_cache(&[("Base.One", "Base.One")]);
+    let mini = empty_modules_cache(&[("Mod.A", "Mod.A"), ("Mod.B", "Mod.B")]);
+
+    let err = replace_module(&base, &mini, "Base.One").unwrap_err();
+    assert!(matches!(err, SpliceError::MiniNotSingle(2)), "got {err:?}");
+}
+
+#[test]
+fn sequential_guard_composes_a_multi_module_mini_as_one_add() {
+    let base = multi_module_mini(&[("Base.One", "Base.One")], &["BaseName"]);
+    let mut mini = multi_module_mini(&[("Mod.A", "Mod.A"), ("Mod.B", "Mod.B")], &["NameA"]);
+    mini[..16].copy_from_slice(&base[..16]); // generation-bound to the base GUID
+
+    let mut guard = SequentialMiniGuard::new(&base).unwrap();
+    let out = guard.compose_add(&base, &mini).expect("guarded multi-module add");
+
+    assert_eq!(module_names(&out).unwrap(), ["Base.One", "Mod.A", "Mod.B"]);
+    let tail = module_region_end(&out).unwrap();
+    let tables = parse_tail_tables(&out, tail).unwrap();
+    assert_eq!(tables.tables[5].count, 2);
+}
+
+#[test]
+fn upsert_replaces_existing_modules_in_place_and_appends_new_ones() {
+    use gore_as::cache::splice::upsert_modules;
+    let base = multi_module_mini(
+        &[("Base.One", "Base.One"), ("Shared.Edit", "Shared.Edit"), ("Base.Two", "Base.Two")],
+        &["BaseName"],
+    );
+    let mini = multi_module_mini(
+        &[("Shared.Edit", "Shared.Edit.v2"), ("Mod.New", "Mod.New")],
+        &["NameNew"],
+    );
+
+    let out = upsert_modules(&base, &mini).expect("upsert");
+
+    assert_eq!(module_count(&out), 4);
+    assert_eq!(
+        module_names(&out).unwrap(),
+        ["Base.One", "Shared.Edit", "Base.Two", "Mod.New"]
+    );
+    // The edited entry now carries the mini's bytes (its inner name changed to `.v2`).
+    let ranges = module_ranges(&out).unwrap();
+    let (_, start, end) = &ranges[1];
+    assert!(out[*start..*end]
+        .windows(b"Shared.Edit.v2".len())
+        .any(|w| w == b"Shared.Edit.v2"));
+    let tail = module_region_end(&out).unwrap();
+    let tables = parse_tail_tables(&out, tail).unwrap();
+    assert_eq!(tables.end, out.len());
+    assert_eq!(tables.tables[5].count, 2);
+}
+
+#[test]
+fn extract_modules_keeps_cache_order_and_rejects_bad_requests() {
+    use gore_as::cache::splice::extract_modules;
+    let cache = multi_module_mini(
+        &[("Mod.A", "Mod.A"), ("Mod.B", "Mod.B"), ("Mod.C", "Mod.C")],
+        &["Name"],
+    );
+
+    let mini = extract_modules(&cache, &["Mod.C", "Mod.A"]).expect("extract two");
+    assert_eq!(module_names(&mini).unwrap(), ["Mod.A", "Mod.C"]);
+    let tail = module_region_end(&mini).unwrap();
+    assert_eq!(&mini[tail..], &cache[module_region_end(&cache).unwrap()..]);
+
+    assert!(matches!(
+        extract_modules(&cache, &["Mod.A", "Mod.A"]).unwrap_err(),
+        SpliceError::AmbiguousTarget(_)
+    ));
+    assert!(matches!(
+        extract_modules(&cache, &["Mod.X"]).unwrap_err(),
+        SpliceError::NameNotFound(_)
+    ));
+    assert!(matches!(
+        extract_modules(&cache, &[]).unwrap_err(),
+        SpliceError::MiniEmpty
+    ));
+}

@@ -78,7 +78,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('story-state-info-box')), findsOneWidget);
     expect(
-      find.textContaining('Authoritative catalog of persisted story state'),
+      find.textContaining('The game tracks progress in quests'),
       findsOneWidget,
     );
     expect(tester.widget<IconButton>(infoButton).isSelected, isTrue);
@@ -795,6 +795,192 @@ void main() {
       find.textContaining('Story values remain read-only for this save.'),
       findsNothing,
     );
+  });
+
+  testWidgets('drops the unknown-type filter when the save has no unknown ID', (
+    tester,
+  ) async {
+    final notifier = EditorNotifier(_BenignCore(), saveDir: r'C:\tmp\saves');
+    addTearDown(notifier.dispose);
+    const page = StoryStatePage(
+      values: [
+        StoryStateValue(
+          id: 'AfterCinematic_Nyras',
+          value: 1,
+          stored: true,
+          catalogKnown: true,
+          path: [],
+          semanticType: StorySemanticType.integer,
+          declaredType: 'int32',
+        ),
+      ],
+      total: 1,
+      storedTotal: 1,
+      catalogTotal: 1,
+      writable: true,
+    );
+
+    await _pumpEditableStoryPanel(tester, notifier: notifier, page: page);
+
+    expect(find.textContaining('Unknown source type'), findsNothing);
+    expect(find.text('Integer (1)'), findsOneWidget);
+  });
+
+  testWidgets('counts the chapter inside the integer filter', (tester) async {
+    final notifier = EditorNotifier(_BenignCore(), saveDir: r'C:\tmp\saves');
+    addTearDown(notifier.dispose);
+    const page = StoryStatePage(
+      values: [
+        StoryStateValue(
+          id: 'Chapter',
+          value: 2,
+          stored: true,
+          catalogKnown: true,
+          path: [],
+          semanticType: StorySemanticType.chapter,
+          declaredType: 'int',
+        ),
+        StoryStateValue(
+          id: 'AfterCinematic_Nyras',
+          value: 1,
+          stored: true,
+          catalogKnown: true,
+          path: [],
+          semanticType: StorySemanticType.integer,
+          declaredType: 'int32',
+        ),
+      ],
+      total: 2,
+      storedTotal: 2,
+      catalogTotal: 2,
+      writable: true,
+    );
+
+    await _pumpEditableStoryPanel(tester, notifier: notifier, page: page);
+
+    expect(find.text('Chapter (1)'), findsNothing);
+    expect(find.text('Integer (2)'), findsOneWidget);
+
+    await tester.tap(find.text('Integer (2)'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 of 2 story values'), findsOneWidget);
+    // The chapter keeps its own badge and dedicated editor.
+    expect(find.text('Chapter'), findsNWidgets(2));
+  });
+
+  testWidgets('hides dormant catalog fields until they are asked for', (
+    tester,
+  ) async {
+    final notifier = EditorNotifier(_BenignCore(), saveDir: r'C:\tmp\saves');
+    addTearDown(notifier.dispose);
+    const page = StoryStatePage(
+      values: [
+        StoryStateValue(
+          id: 'KalomDead',
+          value: 1,
+          stored: true,
+          catalogKnown: true,
+          path: [],
+          semanticType: StorySemanticType.integer,
+          declaredType: 'int32',
+        ),
+        StoryStateValue(
+          id: 'FindXardas',
+          value: null,
+          stored: false,
+          catalogKnown: true,
+          path: [],
+          semanticType: StorySemanticType.integer,
+          declaredType: 'int32',
+        ),
+        StoryStateValue(
+          id: 'AfterCinematic_Nyras',
+          value: null,
+          stored: false,
+          catalogKnown: true,
+          path: [],
+          semanticType: StorySemanticType.integer,
+          declaredType: 'int32',
+        ),
+      ],
+      total: 3,
+      storedTotal: 1,
+      catalogTotal: 3,
+      unsetTotal: 2,
+      writable: true,
+    );
+
+    await _pumpEditableStoryPanel(tester, notifier: notifier, page: page);
+    // A dormant field that this save actually stores is never hidden.
+    expect(find.text('Kalom Dead'), findsOneWidget);
+    expect(find.textContaining('Show unused'), findsNothing);
+
+    await tester.tap(find.text('All (3)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Kalom Dead'), findsOneWidget);
+    expect(find.text('After Cinematic Nyras'), findsOneWidget);
+    expect(find.text('Find Xardas'), findsNothing);
+    expect(find.text('2 of 3 story values'), findsOneWidget);
+
+    await tester.tap(find.text('Show unused (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Find Xardas'), findsOneWidget);
+    expect(find.text('3 of 3 story values'), findsOneWidget);
+
+    await tester.tap(find.text('Show unused (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Find Xardas'), findsNothing);
+
+    await tester.enterText(
+      find.byKey(const Key('story-state-search')),
+      'xardas',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Find Xardas'), findsOneWidget);
+
+    await tester.enterText(find.byKey(const Key('story-state-search')), '');
+    await tester.pumpAndSettle();
+    expect(find.text('Find Xardas'), findsNothing);
+  });
+
+  testWidgets('keeps a dormant field visible while an edit is pending', (
+    tester,
+  ) async {
+    final notifier = EditorNotifier(_BenignCore(), saveDir: r'C:\tmp\saves');
+    addTearDown(notifier.dispose);
+    const page = StoryStatePage(
+      values: [
+        StoryStateValue(
+          id: 'FindXardas',
+          value: null,
+          stored: false,
+          catalogKnown: true,
+          path: [],
+          semanticType: StorySemanticType.integer,
+          declaredType: 'int32',
+        ),
+      ],
+      total: 1,
+      storedTotal: 0,
+      catalogTotal: 1,
+      unsetTotal: 1,
+      writable: true,
+    );
+
+    await _pumpEditableStoryPanel(tester, notifier: notifier, page: page);
+    notifier.setStoryStateEdit(
+      const StoryStateEdit(
+        id: 'FindXardas',
+        present: true,
+        rawValue: 1,
+        expectedStored: false,
+        expectedRawValue: null,
+      ),
+    );
+    await tester.tap(find.text('All (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Find Xardas'), findsOneWidget);
+    expect(find.text('Will be stored as 1'), findsOneWidget);
   });
 }
 

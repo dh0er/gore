@@ -5,10 +5,12 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/game_icons.dart';
+import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
 import 'package:goresave/features/editor/domain/item_stats.dart';
 import 'package:goresave/features/editor/domain/trader_models.dart';
 import 'package:goresave/features/editor/ui/add_inventory_item_dialog.dart';
+import 'package:goresave/features/editor/ui/game_time_dialog.dart';
 import 'package:goresave/features/editor/ui/inventory_item_visual.dart';
 import 'package:goresave/features/editor/ui/item_stats_tooltip.dart';
 import 'package:goresave/features/editor/ui/pending_structural_row.dart';
@@ -24,8 +26,8 @@ import '../domain/editor_notifier.dart';
 /// to buy with.
 ///
 /// This is NOT his inventory. A merchant's shop lives in a global array keyed by
-/// his unique name, and it carries two maps — the live stock and the baseline he
-/// restocks toward. His ore sits inside the same map as an ordinary line,
+/// his unique name, and it carries two maps — the live stock and saved runtime
+/// restock input. His ore sits inside the same map as an ordinary line,
 /// because ore is the currency and what he holds is what he can pay with.
 class TraderPanel extends ConsumerStatefulWidget {
   const TraderPanel({
@@ -65,9 +67,18 @@ double _headCap(double available) {
   return cap > 0 ? cap : 0;
 }
 
+String _localizedResourcesLevel(AppLocalizations l10n, String level) =>
+    switch (level) {
+      'Novice' => l10n.presetNovice,
+      'Gothic' => l10n.presetGothic,
+      'Hard' => l10n.presetHard,
+      _ => level,
+    };
+
 class _TraderPanelState extends ConsumerState<TraderPanel> {
   TradersResult? _list;
   TraderDetail? _detail;
+  GameTime? _gameTime;
   String? _error;
 
   /// Several trader records carry this character's name, so none of them may be
@@ -79,14 +90,8 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
   /// epoch may write to the state.
   int _epoch = 0;
 
-  /// Which of the two stock maps is on screen. They hold the same kind of data
-  /// and are edited the same way, so showing both at once only invited the
-  /// question which one the ore field belonged to.
-  TraderStockMap _map = TraderStockMap.current;
-
   /// Which category the sidebar has selected. Null until the first build picks
-  /// one, and reset whenever the selection no longer has any lines — switching
-  /// maps can empty it.
+  /// one, and reset whenever the selection no longer has any lines.
   ItemCategory? _category;
 
   @override
@@ -107,6 +112,7 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
       _loading = true;
       _error = null;
       _detail = null;
+      _gameTime = null;
       _ambiguous = false;
     });
     final list = await widget.notifier.loadTraders();
@@ -133,11 +139,16 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
     }
     final detail = await widget.notifier.loadTraderDetail(row.index);
     if (!mounted || epoch != _epoch) return;
+    final gameTime = widget.inspection.privateDecoded
+        ? await widget.notifier.loadGameTime()
+        : null;
+    if (!mounted || epoch != _epoch) return;
     setState(() {
       _loading = false;
       _list = list;
       _error = detail.error;
       _detail = detail.detail;
+      _gameTime = gameTime;
     });
   }
 
@@ -145,8 +156,9 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
-    // Rebuild when pending edits change so a reverted field drops its badge.
-    ref.watch(editorProvider.select((s) => s.pendingEdits.length));
+    // Rebuild for replacements too: changing an already-pending world clock
+    // keeps the map length stable but must update the restock forecast.
+    ref.watch(editorProvider.select((s) => s.pendingEdits));
 
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
@@ -171,28 +183,44 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
     }
 
     final list = _list;
-    // Per-difficulty stock is not modelled, and the edits reach only m_Items and
-    // m_DefaultItems. A save that carries it would take an edit, report success,
-    // and leave that other stock standing — so nothing here is editable then.
+    // Per-difficulty stock is not modelled. A save that carries it could accept
+    // an edit to m_Items and later replace it from that other stock, so nothing
+    // here is editable then.
     // Two shapes the editor cannot honour: per-difficulty stock it does not
     // model, and a record missing a stock list it cannot create.
     final incomplete = !detail.summary.stockMapsPresent;
     final unsupported = detail.hasItemsByDifficulty || incomplete;
-    final canSet =
+    final coreCanSet =
         widget.editable && !unsupported && (list?.canSetStock ?? false);
-    final canAdd =
+    final coreCanAdd =
         widget.editable && !unsupported && (list?.canAddItem ?? false);
-    final canRemove =
+    final coreCanRemove =
         widget.editable && !unsupported && (list?.canRemoveItem ?? false);
+    const map = TraderStockMap.current;
+    final canSet = coreCanSet;
+    final canAdd = coreCanAdd;
+    final canRemove = coreCanRemove;
+    final resourcesLevel = widget.notifier.activeResourcesLevelForRestock();
+    final restockDays = resourcesLevel == null
+        ? null
+        : traderRestockDays(resourcesLevel);
+    final activitySeconds = _pendingActivitySeconds(detail);
+    final worldSeconds =
+        widget.notifier.pendingGameTimeSeconds() ?? _gameTime?.totalSeconds;
+    final timing = restockDays == null
+        ? null
+        : TraderRestockTiming(
+            activitySeconds: activitySeconds,
+            worldSeconds: worldSeconds,
+            intervalDays: restockDays,
+          );
 
     // The live stock gets the ore its own card, because that number is the
-    // merchant's purchasing power and not just another line. The restock
-    // baseline has no such meaning, so there its ore stays an ordinary row.
-    final showOreCard = _map == TraderStockMap.current;
-    final removals = _pendingRemovals(_map);
+    // merchant's purchasing power and not just another line.
+    final removals = _pendingRemovals(map);
     final rows = [
-      for (final item in detail.stock(_map))
-        if (!(showOreCard && item.isOre) && !removals.contains(item.path)) item,
+      for (final item in detail.items)
+        if (!item.isOre && !removals.contains(item.path)) item,
     ];
 
     // The sub-tab layout every other detail pane uses, documented on
@@ -205,15 +233,11 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
           padding: const EdgeInsets.all(16),
           child: LayoutBuilder(
             builder: (context, pane) {
-              // The pane is under 200px wide at the smallest supported window,
-              // where two labelled segments overflow.
-              final labelled = pane.maxWidth >= _labelledActionsAbove;
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // The notes, the map switch and the ore card scroll among themselves
-                  // once the pane gets short, so they can never squeeze the browser out
-                  // of the column — which they did, by 8px, at 620px tall.
+                  // Notes and summary cards scroll among themselves once the
+                  // pane gets short, so they cannot squeeze out the stock list.
                   ConstrainedBox(
                     constraints: BoxConstraints(
                       maxHeight: _headCap(pane.maxHeight),
@@ -233,16 +257,20 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
                             ),
                             const SizedBox(height: 12),
                           ],
-                          _NoteCard(text: l10n.traderPriceWarning),
+                          _NoteCard(
+                            key: const ValueKey('trader-notes-card'),
+                            text: l10n.traderPriceWarning,
+                            warningText: l10n.traderCurrentStockWarning,
+                          ),
                           // The core drops setStock from `writable` when no shop
                           // holds a line while still offering addItem, so "read only"
                           // has to mean none of the three is available — not merely
                           // that one of them is missing.
                           if (widget.editable &&
                               !unsupported &&
-                              !canSet &&
-                              !canAdd &&
-                              !canRemove) ...[
+                              !coreCanSet &&
+                              !coreCanAdd &&
+                              !coreCanRemove) ...[
                             const SizedBox(height: 12),
                             Text(
                               l10n.traderReadOnlyCore,
@@ -250,58 +278,84 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
                             ),
                           ],
                           const SizedBox(height: 16),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: SegmentedButton<TraderStockMap>(
-                              segments: [
-                                ButtonSegment(
-                                  value: TraderStockMap.current,
-                                  icon: const Icon(Icons.storefront_outlined),
-                                  label: labelled
-                                      ? Text(l10n.traderStockCurrent)
-                                      : null,
-                                  tooltip: labelled
-                                      ? null
-                                      : l10n.traderStockCurrent,
+                          LayoutBuilder(
+                            builder: (context, cards) {
+                              final sideBySide =
+                                  cards.maxWidth >=
+                                  _summaryCardsSideBySideAbove;
+                              final availableWidth = sideBySide
+                                  ? cards.maxWidth - 12
+                                  : cards.maxWidth;
+                              final oreWidth = sideBySide
+                                  ? availableWidth * 0.4
+                                  : availableWidth;
+                              final restockWidth = sideBySide
+                                  ? availableWidth - oreWidth
+                                  : availableWidth;
+                              final oreCard = _OreCard(
+                                detail: detail,
+                                editable: canSet,
+                                canRemove: canRemove,
+                                removalPending: removals.contains(
+                                  kTraderOrePath,
                                 ),
-                                ButtonSegment(
-                                  value: TraderStockMap.base,
-                                  icon: const Icon(Icons.inventory_outlined),
-                                  label: labelled
-                                      ? Text(l10n.traderStockBase)
-                                      : null,
-                                  tooltip: labelled
-                                      ? null
-                                      : l10n.traderStockBase,
+                                stacked: oreWidth - 32 < _oreStackBelow,
+                                onChanged: (value) =>
+                                    _queueSet(map, kTraderOrePath, value),
+                                onRevert: () => _revert(map, kTraderOrePath),
+                                onRemove: () =>
+                                    _queueRemove(map, kTraderOrePath),
+                                pending: _pendingCountFor(map, kTraderOrePath),
+                              );
+                              final restockCard = _RestockCard(
+                                timing: timing,
+                                activitySeconds: activitySeconds,
+                                resourcesLevel: resourcesLevel,
+                                stackFacts: restockWidth - 24 < 340,
+                                stackControls: restockWidth - 24 < 260,
+                                editable:
+                                    widget.editable &&
+                                    !unsupported &&
+                                    detail.totalSecondsPath != null,
+                                pending: _hasPendingActivityTime,
+                                onSetNow: worldSeconds == null
+                                    ? null
+                                    : () => _queueActivityTime(worldSeconds),
+                                onMakeDue:
+                                    timing?.makeDueActivitySeconds == null
+                                    ? null
+                                    : () => _queueActivityTime(
+                                        timing!.makeDueActivitySeconds!,
+                                      ),
+                                onCustom: _editActivityTime,
+                                onRevert: _revertActivityTime,
+                              );
+                              if (!sideBySide) {
+                                return Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    oreCard,
+                                    const SizedBox(height: 12),
+                                    restockCard,
+                                  ],
+                                );
+                              }
+                              // Once they share a row, the taller card sets the
+                              // row height and its neighbour stretches to match.
+                              return IntrinsicHeight(
+                                child: Row(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Expanded(flex: 2, child: oreCard),
+                                    const SizedBox(width: 12),
+                                    Expanded(flex: 3, child: restockCard),
+                                  ],
                                 ),
-                              ],
-                              selected: {_map},
-                              onSelectionChanged: (selection) =>
-                                  setState(() => _map = selection.first),
-                            ),
+                              );
+                            },
                           ),
-                          if (_map == TraderStockMap.base) ...[
-                            const SizedBox(height: 8),
-                            Text(
-                              l10n.traderStockBaseHint,
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          ],
-                          if (showOreCard) ...[
-                            const SizedBox(height: 16),
-                            _OreCard(
-                              detail: detail,
-                              editable: canSet,
-                              canRemove: canRemove,
-                              removalPending: removals.contains(kTraderOrePath),
-                              onChanged: (value) =>
-                                  _queueSet(_map, kTraderOrePath, value),
-                              onRevert: () => _revert(_map, kTraderOrePath),
-                              onRemove: () =>
-                                  _queueRemove(_map, kTraderOrePath),
-                              pending: _pendingCountFor(_map, kTraderOrePath),
-                            ),
-                          ],
                         ],
                       ),
                     ),
@@ -309,12 +363,12 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
                   const SizedBox(height: 16),
                   Expanded(
                     child: _StockSection(
-                      map: _map,
+                      map: map,
                       items: rows,
-                      lineCount: detail.stock(_map).length,
-                      pendingAdds: _pendingAdds(_map),
+                      lineCount: detail.items.length,
+                      pendingAdds: _pendingAdds(map),
                       pendingRemovals: [
-                        for (final item in detail.stock(_map))
+                        for (final item in detail.items)
                           if (removals.contains(item.path)) item,
                       ],
                       canSet: canSet,
@@ -328,7 +382,7 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
                       onRevert: _revert,
                       onRemove: _queueRemove,
                       onRevertAdd: _revertAdd,
-                      onAdd: () => _addItem(_map, detail),
+                      onAdd: () => _addItem(map, detail),
                     ),
                   ),
                 ],
@@ -341,6 +395,80 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
   }
 
   int get _index => _detail!.summary.index;
+
+  String get _activityPendingKey => 'traders:$_index:activityTime';
+
+  TraderActivityTimeEdit? _activityEdit(double seconds) {
+    final path = _detail?.totalSecondsPath;
+    if (path == null) return null;
+    return TraderActivityTimeEdit(
+      index: _index,
+      propertyPath: path,
+      totalSeconds: seconds,
+    );
+  }
+
+  bool get _hasPendingActivityTime =>
+      widget.notifier.pendingEditFor(_activityPendingKey)?.edits.isNotEmpty ??
+      false;
+
+  double _pendingActivitySeconds(TraderDetail detail) {
+    final pending = widget.notifier.pendingEditFor(
+      'traders:${detail.summary.index}:activityTime',
+    );
+    final value = pending?.edits.firstOrNull?['value'];
+    final seconds = value is Map ? value['value'] : null;
+    return seconds is num ? seconds.toDouble() : detail.summary.totalSeconds;
+  }
+
+  void _queueActivityTime(double seconds) {
+    final edit = _activityEdit(seconds);
+    if (edit == null || !seconds.isFinite || seconds < 0) return;
+    final original = _detail!.summary.totalSeconds;
+    if (seconds == original) {
+      _revertActivityTime();
+      return;
+    }
+    widget.notifier.setTraderActivityTimeEdit(edit);
+    setState(() {});
+  }
+
+  void _revertActivityTime() {
+    final edit = _activityEdit(0);
+    if (edit == null) return;
+    widget.notifier.clearTraderActivityTimeEdit(edit);
+    setState(() {});
+  }
+
+  Future<void> _editActivityTime() async {
+    final detail = _detail;
+    if (detail == null) return;
+    final current = _pendingActivitySeconds(detail);
+    final fallback =
+        widget.notifier.pendingGameTimeSeconds() ??
+        _gameTime?.totalSeconds ??
+        0;
+    final initial = GameTimeParts.fromTotalSeconds(
+      current >= 0 ? current : fallback,
+    );
+    final edited = await showDialog<GameTimeParts>(
+      context: context,
+      builder: (_) => GameTimeDialog(
+        initialValue: initial,
+        title: AppLocalizations.of(context).traderRestockEditTitle,
+      ),
+    );
+    if (!mounted || edited == null) return;
+    // The dialog shows whole seconds. Treat an unchanged display value as a
+    // no-op so confirming it cannot discard a stored sub-second fraction (or
+    // replace an existing pending value with its truncated representation).
+    // A never-active merchant is different: its displayed value is the world
+    // time fallback, not the stored sentinel, so confirming must queue it.
+    if (current >= 0 && edited.toTotalSeconds() == initial.toTotalSeconds()) {
+      return;
+    }
+    _queueActivityTime(edited.toTotalSeconds().toDouble());
+  }
 
   TraderStockEdit _edit(
     TraderEditKind kind,
@@ -461,7 +589,10 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
     final result = await showDialog<InventoryItemAdd>(
       context: context,
       // The core refuses a duplicate key, so never offer a line he already has.
-      builder: (_) => AddInventoryItemDialog(excludePaths: held),
+      builder: (_) => AddInventoryItemDialog(
+        excludePaths: held,
+        warningText: AppLocalizations.of(context).traderCurrentStockWarning,
+      ),
     );
     if (result == null) return;
     if (!mounted || widget.notifier.selectedPath != savePath) return;
@@ -481,8 +612,12 @@ const double _oreStackBelow = 320;
 /// the row has to stop using one.
 const double _rowStackBelow = 300;
 
-/// From this pane width the switch and the add action carry their labels; under
-/// it they overflow the row, so they show icons with tooltips instead.
+/// Above this width the ore and restock summaries share one row. Each card
+/// remains wide enough for its own compact layout; below it the Wrap stacks.
+const double _summaryCardsSideBySideAbove = 580;
+
+/// From this pane width compact actions carry their labels; under it they show
+/// icons with tooltips instead.
 const double _labelledActionsAbove = 320;
 
 class _OreCard extends ConsumerWidget {
@@ -491,6 +626,7 @@ class _OreCard extends ConsumerWidget {
     required this.editable,
     required this.canRemove,
     required this.removalPending,
+    required this.stacked,
     required this.onChanged,
     required this.onRevert,
     required this.onRemove,
@@ -504,6 +640,7 @@ class _OreCard extends ConsumerWidget {
   /// state the game itself produces, so the card has to offer it.
   final bool canRemove;
   final bool removalPending;
+  final bool stacked;
   final void Function(int) onChanged;
   final VoidCallback onRevert;
   final VoidCallback onRemove;
@@ -516,10 +653,28 @@ class _OreCard extends ConsumerWidget {
     final ore = detail.summary.ore;
     final label = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text(l10n.traderOre, style: theme.textTheme.titleMedium),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: Text(l10n.traderOre, style: theme.textTheme.titleMedium),
+            ),
+            const SizedBox(width: 6),
+            Tooltip(
+              key: const ValueKey('trader-ore-info'),
+              message: l10n.traderOreHint,
+              child: Icon(
+                Icons.info_outline,
+                size: 17,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
         const SizedBox(height: 4),
-        Text(l10n.traderOreHint, style: theme.textTheme.bodySmall),
+        Text(l10n.traderOreHintShort, style: theme.textTheme.bodySmall),
       ],
     );
     final field = ore == null
@@ -552,49 +707,41 @@ class _OreCard extends ConsumerWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: LayoutBuilder(
-          builder: (context, box) {
-            // Field plus delete button need a fixed ~190px. At the smallest
-            // supported window the character list leaves the detail pane
-            // narrower than that, so there they move under the text.
-            final stacked = box.maxWidth < _oreStackBelow;
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                InventoryItemVisual(
-                  itemId: 'ItMi_Orenugget',
-                  itemPath: kTraderOrePath,
-                  fallbackIcon: Icons.savings_outlined,
-                  fallbackColor: theme.colorScheme.primary,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: stacked
-                      ? Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            InventoryItemVisual(
+              itemId: 'ItMi_Orenugget',
+              itemPath: kTraderOrePath,
+              fallbackIcon: Icons.savings_outlined,
+              fallbackColor: theme.colorScheme.primary,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: stacked
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        label,
+                        const SizedBox(height: 12),
+                        // The field takes what is left rather than a fixed
+                        // width: stacked, there may be very little.
+                        Row(
                           children: [
-                            label,
-                            const SizedBox(height: 12),
-                            // The field takes what is left rather than a fixed
-                            // width: stacked, there may be very little.
-                            Row(
-                              children: [
-                                Expanded(child: field),
-                                ?delete,
-                              ],
-                            ),
+                            Expanded(child: field),
+                            ?delete,
                           ],
-                        )
-                      : label,
-                ),
-                if (!stacked) ...[
-                  const SizedBox(width: 12),
-                  SizedBox(width: 140, child: field),
-                  ?delete,
-                ],
-              ],
-            );
-          },
+                        ),
+                      ],
+                    )
+                  : label,
+            ),
+            if (!stacked) ...[
+              const SizedBox(width: 12),
+              SizedBox(width: 140, child: field),
+              ?delete,
+            ],
+          ],
         ),
       ),
     );
@@ -606,15 +753,46 @@ class _OreCard extends ConsumerWidget {
 enum _NoteTone { info, warning }
 
 class _NoteCard extends StatelessWidget {
-  const _NoteCard({required this.text, this.tone = _NoteTone.info});
+  const _NoteCard({
+    super.key,
+    required this.text,
+    this.warningText,
+    this.tone = _NoteTone.info,
+  });
 
   final String text;
+  final String? warningText;
   final _NoteTone tone;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isWarning = tone == _NoteTone.warning;
+
+    Widget line(String value, {required bool warning}) => Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          warning ? Icons.warning_amber_outlined : Icons.info_outline,
+          size: 18,
+          color: warning
+              ? (isWarning
+                    ? theme.colorScheme.onErrorContainer
+                    : theme.colorScheme.error)
+              : theme.colorScheme.primary,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            value,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: isWarning ? theme.colorScheme.onErrorContainer : null,
+            ),
+          ),
+        ),
+      ],
+    );
+
     // A block ON the sheet, not a second card lying on top of it.
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -625,28 +803,317 @@ class _NoteCard extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.all(12),
-        child: Row(
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              isWarning ? Icons.warning_amber_outlined : Icons.info_outline,
-              size: 18,
-              color: isWarning
-                  ? theme.colorScheme.onErrorContainer
-                  : theme.colorScheme.primary,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                text,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: isWarning ? theme.colorScheme.onErrorContainer : null,
-                ),
+            line(text, warning: isWarning),
+            if (warningText case final warning?) ...[
+              const SizedBox(height: 8),
+              line(warning, warning: true),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RestockCard extends StatelessWidget {
+  const _RestockCard({
+    required this.timing,
+    required this.activitySeconds,
+    required this.resourcesLevel,
+    required this.stackFacts,
+    required this.stackControls,
+    required this.editable,
+    required this.pending,
+    required this.onSetNow,
+    required this.onMakeDue,
+    required this.onCustom,
+    required this.onRevert,
+  });
+
+  final TraderRestockTiming? timing;
+  final double activitySeconds;
+  final String? resourcesLevel;
+  final bool stackFacts;
+  final bool stackControls;
+  final bool editable;
+  final bool pending;
+  final VoidCallback? onSetNow;
+  final VoidCallback? onMakeDue;
+  final VoidCallback onCustom;
+  final VoidCallback onRevert;
+
+  String _clock(AppLocalizations l10n, double seconds) {
+    final parts = GameTimeParts.fromTotalSeconds(seconds);
+    final clock = [
+      parts.hour,
+      parts.minute,
+      parts.second,
+    ].map((value) => value.toString().padLeft(2, '0')).join(':');
+    return '${l10n.gameTimeDay} ${parts.day} · $clock';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final forecast = timing;
+    final activity =
+        activitySeconds > kTraderNeverActiveSeconds &&
+            activitySeconds.isFinite &&
+            activitySeconds >= 0
+        ? _clock(l10n, activitySeconds)
+        : l10n.traderRestockNever;
+    final early = forecast?.calendarBoundarySeconds;
+    final conservative = forecast?.elapsedBoundarySeconds;
+    final window = early == null || conservative == null
+        ? l10n.traderRestockUnavailable
+        : early == conservative
+        ? _clock(l10n, early)
+        : '${_clock(l10n, early)} – ${_clock(l10n, conservative)}';
+    final interval = resourcesLevel == null || forecast == null
+        ? l10n.traderRestockIntervalUnknown
+        : l10n.traderRestockInterval(
+            forecast.intervalDays,
+            _localizedResourcesLevel(l10n, resourcesLevel!),
+          );
+    final forecastState = forecast?.state;
+    final statusText = resourcesLevel == null
+        ? l10n.traderRestockStatusUnknown
+        : switch (forecastState) {
+            TraderRestockForecastState.neverActive =>
+              l10n.traderRestockStatusNever,
+            TraderRestockForecastState.clockAhead =>
+              l10n.traderRestockStatusCheckTime,
+            TraderRestockForecastState.beforeWindow =>
+              l10n.traderRestockStatusWaiting,
+            TraderRestockForecastState.boundaryOnly =>
+              l10n.traderRestockStatusPossiblyReady,
+            TraderRestockForecastState.eligibleBoth =>
+              l10n.traderRestockStatusReady,
+            _ => l10n.traderRestockStatusUnknown,
+          };
+    final statusIcon = switch (forecastState) {
+      TraderRestockForecastState.neverActive => Icons.history_toggle_off,
+      TraderRestockForecastState.clockAhead => Icons.warning_amber_outlined,
+      TraderRestockForecastState.beforeWindow => Icons.hourglass_bottom,
+      TraderRestockForecastState.boundaryOnly => Icons.help_outline,
+      TraderRestockForecastState.eligibleBoth => Icons.check_circle_outline,
+      _ => Icons.help_outline,
+    };
+    final statusColor = switch (forecastState) {
+      TraderRestockForecastState.eligibleBoth => scheme.primary,
+      TraderRestockForecastState.clockAhead ||
+      TraderRestockForecastState.boundaryOnly => scheme.tertiary,
+      _ => scheme.onSurfaceVariant,
+    };
+
+    Widget action({
+      required Key key,
+      required IconData icon,
+      required String label,
+      required String tooltip,
+      required VoidCallback? onPressed,
+    }) {
+      final callback = editable ? onPressed : null;
+      final button = IconButton.outlined(
+        key: key,
+        constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+        padding: EdgeInsets.zero,
+        visualDensity: VisualDensity.compact,
+        onPressed: callback,
+        icon: Icon(icon, size: 19),
+      );
+      return Tooltip(
+        message: tooltip,
+        child: Semantics(label: label, button: true, child: button),
+      );
+    }
+
+    final actionRow = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        action(
+          key: const ValueKey('trader-restock-set-now'),
+          icon: Icons.sync,
+          label: l10n.traderRestockSetNow,
+          tooltip: l10n.traderRestockSetNowTooltip,
+          onPressed: onSetNow,
+        ),
+        const SizedBox(width: 2),
+        action(
+          key: const ValueKey('trader-restock-make-due'),
+          icon: Icons.notification_important_outlined,
+          label: l10n.traderRestockMakeDue,
+          tooltip: l10n.traderRestockMakeDueTooltip,
+          onPressed: onMakeDue,
+        ),
+        const SizedBox(width: 2),
+        action(
+          key: const ValueKey('trader-restock-custom'),
+          icon: Icons.edit_calendar_outlined,
+          label: l10n.traderRestockCustom,
+          tooltip: l10n.traderRestockCustomTooltip,
+          onPressed: onCustom,
+        ),
+      ],
+    );
+    List<Widget> titleChildren() => [
+      const Icon(Icons.update_outlined, size: 20),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Tooltip(
+          message: l10n.traderRestockTitleTooltip,
+          child: Text(
+            l10n.traderRestockTitle,
+            style: theme.textTheme.titleSmall,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ),
+      if (pending)
+        Tooltip(
+          message: l10n.traderRestockRevertTooltip,
+          child: IconButton(
+            key: const ValueKey('trader-restock-revert'),
+            visualDensity: VisualDensity.compact,
+            onPressed: onRevert,
+            icon: const Icon(Icons.undo, size: 18),
+          ),
+        ),
+    ];
+    final header = stackControls
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: titleChildren()),
+              const SizedBox(height: 4),
+              Align(alignment: Alignment.centerRight, child: actionRow),
+            ],
+          )
+        : Row(
+            children: [...titleChildren(), const SizedBox(width: 4), actionRow],
+          );
+
+    return DecoratedBox(
+      key: const ValueKey('trader-restock-card'),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            header,
+            const SizedBox(height: 10),
+            Semantics(
+              key: const ValueKey('trader-restock-status'),
+              label: '${l10n.traderRestockStatusLabel}: $statusText',
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    l10n.traderRestockStatusLabel,
+                    style: theme.textTheme.labelMedium,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Icon(statusIcon, size: 19, color: statusColor),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            statusText,
+                            style: theme.textTheme.bodySmall,
+                            textAlign: TextAlign.end,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
+            ),
+            const SizedBox(height: 8),
+            _RestockFact(
+              label: l10n.traderRestockLastActivity,
+              tooltip: l10n.traderRestockLastActivityTooltip,
+              value: activity,
+              stacked: stackFacts,
+            ),
+            const SizedBox(height: 6),
+            _RestockFact(
+              label: l10n.traderRestockForecastWindow,
+              tooltip: l10n.traderRestockForecastWindowTooltip,
+              value: window,
+              stacked: stackFacts,
+            ),
+            const SizedBox(height: 6),
+            _RestockFact(
+              label: l10n.traderRestockIntervalLabel,
+              tooltip: l10n.traderRestockIntervalTooltip,
+              value: interval,
+              stacked: stackFacts,
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _RestockFact extends StatelessWidget {
+  const _RestockFact({
+    required this.label,
+    required this.tooltip,
+    required this.value,
+    required this.stacked,
+  });
+
+  final String label;
+  final String tooltip;
+  final String value;
+  final bool stacked;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final labelText = Tooltip(
+      message: tooltip,
+      child: Text(label, style: theme.textTheme.labelMedium),
+    );
+    if (stacked) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          labelText,
+          const SizedBox(height: 2),
+          Text(value, style: theme.textTheme.bodySmall),
+        ],
+      );
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(width: 150, child: labelText),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            value,
+            style: theme.textTheme.bodySmall,
+            textAlign: TextAlign.end,
+          ),
+        ),
+      ],
     );
   }
 }

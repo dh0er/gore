@@ -128,6 +128,16 @@ fn detail_resolves_by_index_and_by_unambiguous_name() {
     assert_eq!(by_index, by_name);
     assert_eq!(by_index["uniqueName"], json!(name));
     assert!(!by_index["items"].as_array().unwrap().is_empty());
+    assert_eq!(
+        by_index["totalSecondsPath"],
+        json!([
+            "m_GenericData",
+            "{GameStateDataBase}",
+            "m_Traders",
+            format!("[{index}]"),
+            "m_TotalSeconds"
+        ])
+    );
     // The staging map is empty in every shipped save; if this fires it needs modelling.
     assert_eq!(by_index["hasItemsByDifficulty"], json!(false));
 

@@ -206,6 +206,33 @@ These are enforced, not advisory:
   artifacts and cross-tool ownership are retained and no usable compile result
   is returned.
 
+### Compiling while a script mod is installed
+
+An installed script mod does not have to be undeployed before its next version
+compiles. Every compile route validates the standalone compiler target against
+the deployment-aware pristine cache: while a deployment owns the script cache
+that is the `*.gore-bak` its record authenticates, otherwise the live file (also
+after a game update, when the backup is stale and the updated live cache is the
+new original). The CLI says so when it compiles against the backup. The pinned
+base is checked again after the pin and, for `gore as compile`, at the end of
+the run; if it changed in between, the compile fails closed and asks for a
+retry rather than an undeploy. The installed version is replaced only by the
+next `gore mod deploy` or Manager apply, which rebuild from the same pristine
+backup.
+
+This holds for the standalone compiler. The game compiler regenerates into the
+live cache and restores it from the pinned target afterwards, so it cannot run
+while a script mod is installed: `--backend game` is refused up front, and
+`standalone-then-game` runs the standalone compiler only, saying that the game
+fallback was skipped. Should the standalone compile fail, its own diagnostics
+are what you see, with that note appended.
+
+To pin which original a compile may use, pass `--expect-base <CACHE>` (a file
+the selected original must equal byte for byte, for example a frozen copy of
+the vanilla cache) or `--expect-base-sha256 <HEX>`. Both refuse the compile
+when the selected original differs and print both hashes; neither picks the
+base. The deployment-aware selection stays the only source of truth.
+
 ### Compiler diagnostics
 
 Strict `standalone` returns the bundled compiler's native diagnostics with the
@@ -276,6 +303,7 @@ gore as compile-module --op add --module MyMod.Dialog `
 | `--work-dir <DIR>` | Existing workspace outside the game installation (emitted tree + intermediate cache). |
 | `--allow-new-symbols` | Retain minimal rows for classes/functions/names absent from the pristine cache. |
 | `-o, --out <PATH>` | The remapped 1-module mini-cache. |
+| `--expect-base <CACHE>` / `--expect-base-sha256 <HEX>` | Refuse to compile unless the selected original is this file's bytes / has this SHA-256. Neither selects the base; both exist on `compile` as well. |
 
 The high-level `dialog new-topic` scaffold uses the same compiler command in a
 more specific shape. A new root or direct sub-topic is appended to the
@@ -361,6 +389,36 @@ package and cannot request `--generation-receipt`. The module receipt is a local
 V1 build record produced only after the normal package was authenticated for
 that run; unlike the full-graph V2 receipt, it does not itself carry the product
 catalog identity. Normal users should not set the development overrides.
+
+## Multi-module mini-caches
+
+A mini-cache may carry more than one module. When a mod spans several
+modules — a new provider module plus an edited shipped module that calls it —
+compile them together and let `gore as compile` publish the mini next to the
+complete cache:
+
+```powershell
+gore as compile out_as -o full.Cache --mini MyMod.mini.Cache `
+  --work-dir .gore-as-work --backend standalone --game "$GAME"
+```
+
+The mini holds only the authored Add/Edit modules, remapped to the pristine
+cache like a `compile-module` output, so references between its own modules
+resolve inside the one file. Reference it from a bundle spec with a single
+entry: `op` is `edit` when any module edits a shipped one (existing modules are
+replaced in place, new ones appended, as one unit), `add` when every module is
+new; `module_name` names one of the carried modules. The command prints the
+exact entry. `gore mod build`, `deploy` and the Manager compose such a mini as
+one unit: in a loadout it is shadowed only as a whole, and a later mod that
+re-targets some but not all of its modules is refused rather than partially
+overridden. The low-level `gore as splice` appends by default and refuses a
+mini that edits a shipped module; `gore as splice --upsert` replaces the
+existing modules in place and appends the new ones, like deploy does.
+
+Qualified in game on 2026-09-03: a two-module mini (new provider module plus
+an edited Diego conversation whose new root topic takes its caption from the
+provider) compiled standalone, deployed, showed the provider's text as a
+selectable Diego topic at game start, and ended the conversation cleanly.
 
 ## Low-level splicing
 

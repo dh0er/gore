@@ -31,6 +31,7 @@ class AddInventoryItemDialog extends ConsumerStatefulWidget {
     super.key,
     required this.excludePaths,
     this.catalogOverride,
+    this.warningText,
   });
 
   /// Item asset paths to exclude from the picker — the complete set of
@@ -39,6 +40,11 @@ class AddInventoryItemDialog extends ConsumerStatefulWidget {
   /// inventory list is truncated.
   final Set<String> excludePaths;
   final Future<ItemCatalog>? catalogOverride;
+
+  /// Optional context-specific warning shown before the picker. Trader stock
+  /// uses this to explain that a runtime maintenance pass may remove the new
+  /// line; ordinary inventory adds leave it null.
+  final String? warningText;
 
   @override
   ConsumerState<AddInventoryItemDialog> createState() =>
@@ -175,7 +181,44 @@ class _AddInventoryItemDialogState
     }
 
     return AlertDialog(
-      title: Text(l10n.addItemDialogTitle),
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(l10n.addItemDialogTitle),
+          if (widget.warningText != null) ...[
+            const SizedBox(height: 10),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: theme.colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.warning_amber_outlined,
+                      size: 18,
+                      color: theme.colorScheme.onErrorContainer,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        widget.warningText!,
+                        key: const ValueKey('add-item-warning'),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onErrorContainer,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
       contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
       content: SizedBox(
         width: 720,

@@ -26,7 +26,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      '製品版ゲームスクリプトで宣言された永続ストーリー状態の正式なカタログです。保存済み項目には生の値を表示し、このセーブにないカタログ項目は未設定として示します。ソースで宣言された時刻はゲーム内時刻として表示します。その他の整数は真偽値、カウンター、多段階状態などの場合があります。';
+      'ここにはクエスト、会話、イベントの進行状況が記録されています。「保存済み」はセーブデータ内の値、「未設定」はそれ以外の既知の項目を表示します。数値は項目によって、はい／いいえ、回数、進行段階などを表します。時刻の項目はゲーム内の日付と時刻を表します。';
 
   @override
   String get storyStateReadOnly =>
@@ -55,6 +55,11 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get storyStateUnknown => '不明なソース型';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return '未使用を表示（$count）';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -96,7 +101,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      'すべての項目は、符号付き int32 の全範囲で編集できます。スクリプトに基づくフラグや値の候補は参考情報であり、生の値はいつでも入力できます。ストーリー状態を変更すると、会話、クエスト、ワールドの遷移が飛ばされる場合があります。内容を確認して保存してください。バックアップは自動的に作成されます。';
+      '項目を選ぶと値を変更できます。変更は保存すると反映されます。効果を理解している値だけを変更してください。クエストや会話が意図どおりに進まなくなる場合があります。保存時には自動的にバックアップが作成されます。';
 
   @override
   String get storyStatePending => '保留中';
@@ -440,17 +445,152 @@ class AppLocalizationsJa extends AppLocalizations {
   String get traderNoOre => '鉱石なし';
 
   @override
-  String get traderStockCurrent => '在庫';
+  String get traderStockCurrent => '保存された在庫';
 
   @override
-  String get traderStockBase => '補充の基準';
+  String get traderStockCurrentTooltip =>
+      'この商人について現在保存されている在庫です。追加したアイテムは、ゲームが次に商人を更新したときに消える場合があります。';
 
   @override
-  String get traderStockBaseHint => '商人が補充する基準。ストーリーの進行とともに増えるため、初期状態ではありません。';
+  String get traderStockBase => '参考用の在庫';
+
+  @override
+  String get traderStockBaseTooltip =>
+      'ゲームが商人のルールに従って変更または作り直すことがある、保存済みの在庫です。読み取り専用で、追加したアイテムを永続的には保存しません。';
+
+  @override
+  String get traderStockBaseHint =>
+      '読み取り専用です。この在庫は物語の進行に伴って増え、商人のルールに従って置き換えられる場合があります。ゲーム開始時の在庫ではありません。';
+
+  @override
+  String get traderCurrentStockWarning => '商人の在庫変更は、次の補充までしか残りません。';
+
+  @override
+  String get traderRestockTitle => '補充時期の目安';
+
+  @override
+  String get traderRestockTitleTooltip => '商人の最後の活動、ゲーム内時刻、リソース難易度から求めた目安です。';
+
+  @override
+  String get traderRestockPending => '保留中';
+
+  @override
+  String get traderRestockRevertTooltip => '最後の活動への未保存の変更を元に戻す';
+
+  @override
+  String get traderRestockNever => 'なし';
+
+  @override
+  String get traderRestockUnavailable => '利用不可';
+
+  @override
+  String get traderRestockIntervalUnknown => 'ゲーム内の日数が不明';
+
+  @override
+  String get traderRestockNeverStatus => 'この商人の活動はまだ記録されていません。';
+
+  @override
+  String get traderRestockClockAhead => '商人の最後の活動が、現在のゲーム内時刻より後になっています。';
+
+  @override
+  String traderRestockNotDueYet(String time) {
+    return '$time より前には予定されていません。';
+  }
+
+  @override
+  String get traderRestockPossiblyDue => '目安：在庫はすでに更新可能な時期かもしれません。';
+
+  @override
+  String get traderRestockEligible => '目安では補充時期です。';
+
+  @override
+  String get traderRestockNoWorldTime => '現在のゲーム内時刻がないため、補充時期を見積もれません。';
+
+  @override
+  String get traderRestockLastActivity => '最後の商人活動';
+
+  @override
+  String get traderRestockLastActivityTooltip =>
+      'この保存時刻は、取引後やゲームが在庫を更新したときに変わることがあります。最後の補充時刻とは限りません。';
+
+  @override
+  String get traderRestockForecastWindow => '予想される時期';
+
+  @override
+  String get traderRestockForecastWindowTooltip =>
+      '補充されそうな最も早い時刻と最も遅い時刻を示します。ゲームの正確なルールはセーブに含まれないため、あくまで目安です。';
+
+  @override
+  String get traderRestockIntervalLabel => '補充までのゲーム内日数';
+
+  @override
+  String traderRestockInterval(int days, String level) {
+    return '$days 日 · $level';
+  }
+
+  @override
+  String get traderRestockIntervalTooltip =>
+      'リソース難易度による日数：初心者 2 日、Gothic 3 日、ハード 5 ゲーム内日。';
+
+  @override
+  String get traderRestockAutomationLabel => '自動補充';
+
+  @override
+  String get traderRestockAutomationValue => 'セーブでは無効化できません';
+
+  @override
+  String get traderRestockAutomationTooltip =>
+      '自動補充はセーブでは無効にできません。このゲームのルールを変えるには Mod が必要です。';
+
+  @override
+  String get traderRestockSetNow => 'ゲーム内時刻に設定';
+
+  @override
+  String get traderRestockSetNowTooltip =>
+      '現在のゲーム内時刻（未保存の変更を含む）を、商人の最後の活動として使います。次の補充予想は遅くなります。';
+
+  @override
+  String get traderRestockMakeDue => '補充時期にする';
+
+  @override
+  String get traderRestockMakeDueTooltip => '補充時期になるまで、最後の活動を過去に移します。';
+
+  @override
+  String get traderRestockCustom => '任意の時刻…';
+
+  @override
+  String get traderRestockCustomTooltip => '商人の最後の活動について、ゲーム内の日付と時刻を選びます。';
+
+  @override
+  String get traderRestockEditTitle => '商人の最後の活動';
 
   @override
   String get traderOreHint =>
       'ゲーム内の数値は異なります。読み込み時に、前回の取引以降に生じた分が加算されます（余剰品を売り、その分で補充します）。この数値は開始値であり、取引画面に表示される額ではありません。';
+
+  @override
+  String get traderOreHintShort => '開始値です。取引画面の金額とは異なる場合があります。';
+
+  @override
+  String get traderRestockStatusLabel => '状態';
+
+  @override
+  String get traderRestockStatusNever => '活動なし';
+
+  @override
+  String get traderRestockStatusWaiting => '補充待ち';
+
+  @override
+  String get traderRestockStatusReady => '補充可能';
+
+  @override
+  String get traderRestockStatusPossiblyReady => '補充可能かもしれません';
+
+  @override
+  String get traderRestockStatusCheckTime => '保存時刻を確認';
+
+  @override
+  String get traderRestockStatusUnknown => '不明';
 
   @override
   String get traderPriceWarning =>
@@ -486,7 +626,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String traderStockLineCount(int count) {
-    return '$count 行';
+    return '$count 件';
   }
 
   @override
@@ -3010,4 +3150,63 @@ class AppLocalizationsJa extends AppLocalizations {
   ) {
     return 'レベル$level、$guild、チャプター$chapter。完了クエスト$completed件、失敗$failed件。プレイ時間：$playTime。';
   }
+
+  @override
+  String get locksSidebar => '錠';
+
+  @override
+  String editorLockListFailed(String details) {
+    return '錠の一覧を読み込めませんでした: $details';
+  }
+
+  @override
+  String get locksSearchHint => '錠または鍵を検索';
+
+  @override
+  String get locksAllRegions => 'すべての地域';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$total 件中 $shown 件';
+  }
+
+  @override
+  String get locksFilterChests => '宝箱';
+
+  @override
+  String get locksFilterDoors => '扉';
+
+  @override
+  String get locksFilterUnlocked => '解錠済み';
+
+  @override
+  String get locksFilterLocked => '施錠中';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return '難易度 $bars/4（内部段階 $level/7）';
+  }
+
+  @override
+  String get locksKeyOnly => '鍵のみ';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return '鍵: $keys';
+  }
+
+  @override
+  String get locksPermalocked => '恒久的に封鎖';
+
+  @override
+  String get locksReadOnly => 'このセーブデータには編集できる錠の一覧がありません。';
+
+  @override
+  String get locksUnknownEntry => 'このバージョンには存在しません';
+
+  @override
+  String get locksDoorLeafHint => '扉を再び施錠すると、扉自体も閉まります。';
+
+  @override
+  String get locksResetPending => '保留中の錠の変更を破棄';
 }

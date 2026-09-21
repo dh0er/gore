@@ -6,14 +6,13 @@
 
 ## 🧰 Tools
 
-| <div style="width:150px">Tool</div> | What it does | <div style="width:150px">Status</div> |
+| <div style="width:150px">Tool⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀</div> | What it does | <div style="width:150px">Status⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀</div> |
 |---|---|---|
-| **[CLI](docs/guide/README.md)** | All modding from the terminal: item values, text and dialogs, audio, voice, textures, DataAssets, scripts. Start here. | ⚗️ Experimental use |
-| **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the same engine, for *authoring* one mod. | 🚧 Work in progress |
-| **[Mod Manager](apps/mod-manager/README.md)** | Windows GUI for installing and ordering *many* mods together. | ⚗️ Experimental use |
 | **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing your save files. Never touches the game install. | ✅ Ready to use |
-| **[gore-lua](lua/README.md)** | Small Lua helper library that ships into the game, for hand-written UE4SS mods. | 🚧 Work in progress |
+| **[CLI](docs/guide/README.md)** | All modding from the terminal: item values, text and dialogs, audio, voice, textures, DataAssets, scripts. Start here. | ⚗️ Experimental use |
+| **[Mod Manager](apps/mod-manager/README.md)** | Windows GUI for installing and ordering *many* mods together. | ⚗️ Experimental use |
 | **[Assistant plugin](plugins/gore/README.md)** | The MCP server and the modding skill, installed into Claude Code, Codex or Cursor in one step. | ⚗️ Experimental use |
+| **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the same engine, for *authoring* one mod. | 📋 Planned |
 
 The Flutter GUIs reuse the same Rust engine as the CLI through a `dart:ffi`
 bridge. The CLI is the expert and automation surface; the GUIs package those
@@ -174,19 +173,19 @@ Everything lives in [`docs/`](docs/README.md).
 
 | | |
 |---|---|
-| 🏁 [Getting started](docs/guide/getting-started.md) | Install, configure, first mod, which tool for which job |
-| 🍎 [Item & stat values](docs/guide/items.md) | `overrides.toml` → UE4SS Lua CDO override mod |
-| 💬 [Text & dialogs](docs/guide/text-and-dialogs.md) | Decrypt, edit, re-encrypt the localization `.lcache` |
-| 🌳 [Dialog trees](docs/guide/dialog-trees.md) · ✍️ [Dialog authoring](docs/guide/dialog-authoring.md) | Inspect conversations; edit defaults and behavior; add roots, submenus, multi-level trees and complete conversations |
-| 🔊 [Audio](docs/guide/audio.md) · 🎙️ [Voice-over](docs/guide/voice.md) | FMOD bank samples; voice-over ZIP archives |
-| 🖼️ [Textures](docs/guide/textures.md) · 📦 [DataAssets](docs/guide/dataassets.md) | Additive UE5 IoStore Zen triplets |
-| 📜 [Scripts](docs/guide/scripts.md) | Decompile, recompile, and splice the AngelScript cache |
-| 📦 [Bundling & deploying](docs/guide/bundles.md) | One spec → one mod that deploys as a unit |
-| 🧩 [Running many mods](docs/guide/mod-manager.md) | `gore mgr`: library, load order, conflict evidence, preflight/recovery, Apply and Reset |
-| ⌨️ [CLI reference](docs/guide/cli-reference.md) | Every command, subcommand, and flag |
-| 🤖 [AI assistants](docs/guide/mcp.md) | Install the plugin, or wire the MCP server up by hand; what gets confirmed with you |
-| 🖥️ [Mod Studio](docs/guide/mod-studio.md) | The no-code GUI: NPCs, quests, voice, project backups |
-| 🔧 [Building](docs/development.md) | Toolchain, `build.py`, repo layout, crates, versioning |
+| [Getting started](docs/guide/getting-started.md) | Install, configure, first mod, which tool for which job |
+| [Item & stat values](docs/guide/items.md) | `overrides.toml` → UE4SS Lua CDO override mod |
+| [Text & dialogs](docs/guide/text-and-dialogs.md) | Decrypt, edit, re-encrypt the localization `.lcache` |
+| [Dialog trees](docs/guide/dialog-trees.md) · [Dialog authoring](docs/guide/dialog-authoring.md) | Inspect conversations; edit defaults and behavior; add roots, submenus, multi-level trees and complete conversations |
+| [Audio](docs/guide/audio.md) · [Voice-over](docs/guide/voice.md) | FMOD bank samples; voice-over ZIP archives |
+| [Textures](docs/guide/textures.md) · [DataAssets](docs/guide/dataassets.md) | Additive UE5 IoStore Zen triplets |
+| [Scripts](docs/guide/scripts.md) | Decompile, recompile, and splice the AngelScript cache |
+| [Bundling & deploying](docs/guide/bundles.md) | One spec → one mod that deploys as a unit |
+| [Running many mods](docs/guide/mod-manager.md) | `gore mgr`: library, load order, conflict evidence, preflight/recovery, Apply and Reset |
+| [CLI reference](docs/guide/cli-reference.md) | Every command, subcommand, and flag |
+| [AI assistants](docs/guide/mcp.md) | Install the plugin, or wire the MCP server up by hand; what gets confirmed with you |
+| [Mod Studio](docs/guide/mod-studio.md) | The no-code GUI: NPCs, quests, voice, project backups |
+| [Building](docs/development.md) | Toolchain, `build.py`, repo layout, crates, versioning |
 
 The CLI release zip carries the same guide offline: `docs\guide.html` is one
 browsable file with a collapsible sidebar, and `docs\*.md` is the same content in
@@ -223,6 +222,21 @@ on the exact commit before any product build.
 
 Details, repo layout, and the crate table: [Building](docs/development.md).
 
+## ⚖️ Game content and trademarks
+
+GORE is an independent, unofficial modding toolkit. This repository and its
+release packages do not include game binaries, assets, or decompiled game-script
+output. Any required game data is read or generated locally from a game
+installation supplied by the user.
+
+Game names, trademarks, assets, and other game content remain the property of
+their respective owners. GORE is not affiliated with or endorsed by the game's
+developers or publishers.
+
 ## 📄 License
 
 MIT. See [LICENSE](LICENSE).
+
+The MIT License applies to original GORE source code. Third-party components
+remain subject to their respective licenses; see
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

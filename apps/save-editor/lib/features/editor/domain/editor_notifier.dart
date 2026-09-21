@@ -10,6 +10,7 @@ import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/glossary_models.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
+import 'package:goresave/features/editor/domain/locks_models.dart';
 import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/npc_attributes.dart';
 import 'package:goresave/features/editor/domain/npc_position.dart';
@@ -902,6 +903,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// without reaching into the protected `state`.
   PendingSaveEdit? pendingEditFor(String key) => state.pendingEdits[key];
 
+  /// Unsaved world-clock value, when the Overview clock is being edited.
+  /// Trader "set to world time" actions use this instead of the stale on-disk
+  /// clock so both edits agree when saved together.
+  double? pendingGameTimeSeconds() {
+    final value = state.pendingEdits['gameTime']?.edits.firstOrNull?['value'];
+    final seconds = value is Map ? value['value'] : null;
+    return seconds is num ? seconds.toDouble() : null;
+  }
+
   /// The effective Resources difficulty level for the INSPECTED save, normalized
   /// to 'Novice' | 'Gothic' | 'Hard' — used to pick the inventory-reset
   /// start-save. Falls back to 'Gothic' when nothing resolves.
@@ -918,10 +928,17 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// (Novice/Gothic/Hard) LOCKS every sub-level to its implied tier, so a stale
   /// or disagreeing stored Resources class is ignored — a Hard profile always
   /// resets from the Hard save even if it carries an out-of-date `_Standard`
-  /// resources class. Only a Custom preset — or a profile with no recognized
-  /// preset to imply from — lets the stored Resources sub-level decide (else
-  /// Gothic).
-  String activeResourcesLevel() {
+  /// resources class. Only a Custom preset — or a profile with no preset — lets
+  /// the stored Resources sub-level decide (else Gothic).
+  String activeResourcesLevel() => activeResourcesLevelForRestock() ?? 'Gothic';
+
+  /// Resources level for merchant timing. Unlike [activeResourcesLevel], this
+  /// refuses an unrecognised future/modded difficulty instead of inventing a
+  /// Gothic interval for a countdown the game may not use.
+  ///
+  /// A save with no difficulty data at all still means the shipped default,
+  /// Gothic. Only a present-but-unrecognised setting is unknown.
+  String? activeResourcesLevelForRestock() {
     const known = {'Novice', 'Gothic', 'Hard'};
     // A directory profile's difficulty by id, only when it carries values.
     DifficultySettings? profileDifficulty(int? id) {
@@ -947,17 +964,20 @@ class EditorNotifier extends StateNotifier<EditorState> {
     //    inspected yet).
     difficulty ??= profileDifficulty(state.activeProfileId);
     if (difficulty == null || !difficulty.hasAnyValue) return 'Gothic';
+    final storedResourcesLevel = difficulty.resources == null
+        ? 'Gothic'
+        : known.contains(difficulty.resourcesLabel)
+        ? difficulty.resourcesLabel
+        : null;
     return switch (difficulty.presetLabel) {
       'Novice' => 'Novice',
       'Gothic' => 'Gothic',
       'Hard' => 'Hard',
-      // Custom, or an unrecognized/absent preset: the stored Resources sub-level
-      // is authoritative (a non-Custom preset returned above and locked the
-      // level to its tier).
-      _ =>
-        known.contains(difficulty.resourcesLabel)
-            ? difficulty.resourcesLabel
-            : 'Gothic',
+      // Custom and absent presets let the stored Resources sub-level decide.
+      // An unknown non-Custom preset may imply its own interval, so do not guess.
+      'Custom' => storedResourcesLevel,
+      '-' when difficulty.preset == null => storedResourcesLevel,
+      _ => null,
     };
   }
 
@@ -1178,9 +1198,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// survive.
   void refreshSelectedActorStatus({required String id, required bool isDead}) {
     final selected = state.selectedActor;
-    if (selected.isPlayer ||
-        selected.id != id ||
-        selected.isDead == isDead) {
+    if (selected.isPlayer || selected.id != id || selected.isDead == isDead) {
       return;
     }
     state = state.copyWith(
@@ -1763,6 +1781,25 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(error: _l10n.editorTraderArrayConflict);
       return false;
     }
+    // Lock changes splice the lock set and door arrays; relocking also pairs
+    // message names with structs by index. Splitting a conflicting raw edit
+    // into another write can shift its target or remap a door message, so
+    // reject every affected container before any sub-write reaches the save.
+    final lockEdits = allEdits
+        .where((keyed) => keyed.edit['path'] == 'private.locks.setUnlocked')
+        .toList();
+    if (lockEdits.isNotEmpty) {
+      for (final keyed in allEdits) {
+        final path = _rawTypedEditPath(keyed.edit);
+        if (path != null &&
+            lockEdits.any((lock) => structuredEditRewrites(lock.edit, path))) {
+          state = state.copyWith(
+            error: _l10n.editorConflictingPropertyEdits(path.join(' › ')),
+          );
+          return false;
+        }
+      }
+    }
     final fixedBatch = allEdits
         .where(
           (k) =>
@@ -2243,10 +2280,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
           });
         }
         final rawProfiles = (data?['profiles'] as List?) ?? const [];
-        profiles = rawProfiles
-            .whereType<Map>()
-            .map((m) => ProfileSummary.fromJson(m.cast<String, Object?>()))
-            .toList();
+        profiles =
+            rawProfiles
+                .whereType<Map>()
+                .map((m) => ProfileSummary.fromJson(m.cast<String, Object?>()))
+                .toList()
+              ..sort((left, right) {
+                final displayOrder = left.displayNumber.compareTo(
+                  right.displayNumber,
+                );
+                return displayOrder != 0
+                    ? displayOrder
+                    : left.profileId.compareTo(right.profileId);
+              });
         final profileBySavedSlot = <String, int>{
           for (final profile in profiles)
             for (final slot in profile.savedSlots) slot: profile.profileId,
@@ -2605,8 +2651,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
     final save = state.selectedSave;
     if (save == null) return false;
-    if (!state.profiles.any((profile) => profile.profileId == profileId)) {
-      state = state.copyWith(error: _l10n.editorProfileNotFound(profileId));
+    final targetProfile = state.profiles
+        .where((profile) => profile.profileId == profileId)
+        .firstOrNull;
+    if (targetProfile == null) {
+      state = state.copyWith(
+        error: _l10n.editorProfileNotFound(gameProfileNumber(profileId)),
+      );
       return false;
     }
     if (!save.isExternal && save.persistentProfileId == profileId) return true;
@@ -2666,8 +2717,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
       failureMessage: (details) => _l10n.editorProfileAssignmentFailed(details),
       message: (data) {
         final assigned = save.isExternal
-            ? _l10n.editorSaveImportedAssigned(profileId)
-            : _l10n.editorSaveAssigned(profileId);
+            ? _l10n.editorSaveImportedAssigned(targetProfile.displayNumber)
+            : _l10n.editorSaveAssigned(targetProfile.displayNumber);
         // An import copies the save's undo notes across after the bytes land.
         // If that failed, the imported save can hold a pinned NPC with no
         // record of the routine the pin replaced.
@@ -2714,7 +2765,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
         .where((candidate) => candidate.profileId == profileId)
         .firstOrNull;
     if (profile == null) {
-      state = state.copyWith(error: _l10n.editorProfileNotFound(profileId));
+      state = state.copyWith(
+        error: _l10n.editorProfileNotFound(gameProfileNumber(profileId)),
+      );
       return false;
     }
     final save = state.saves
@@ -2726,7 +2779,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         .firstOrNull;
     if (!profile.savedSlots.contains(slot) && save == null) {
       state = state.copyWith(
-        error: _l10n.editorSaveSlotNotAssigned(slot, profileId),
+        error: _l10n.editorSaveSlotNotAssigned(slot, profile.displayNumber),
       );
       return false;
     }
@@ -2788,7 +2841,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
         .where((candidate) => candidate.profileId == profileId)
         .firstOrNull;
     if (profile == null) {
-      state = state.copyWith(error: _l10n.editorProfileNotFound(profileId));
+      state = state.copyWith(
+        error: _l10n.editorProfileNotFound(gameProfileNumber(profileId)),
+      );
       return false;
     }
     final save = state.saves
@@ -2802,7 +2857,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         .firstOrNull;
     if (save == null || !profile.savedSlots.contains(slot)) {
       state = state.copyWith(
-        error: _l10n.editorSaveSlotNotAssigned(slot, profileId),
+        error: _l10n.editorSaveSlotNotAssigned(slot, profile.displayNumber),
       );
       return false;
     }
@@ -3460,6 +3515,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   /// Drop a queued trader change (the user reverted the field).
   void clearTraderStockEdit(TraderStockEdit edit) =>
+      clearPendingEdit(edit.pendingKey);
+
+  /// Queue or clear the fixed-size activity timestamp of one merchant.
+  void setTraderActivityTimeEdit(TraderActivityTimeEdit edit) {
+    setPendingEdit(edit.pendingKey, PendingSaveEdit(edits: [edit.toEdit()]));
+  }
+
+  void clearTraderActivityTimeEdit(TraderActivityTimeEdit edit) =>
       clearPendingEdit(edit.pendingKey);
 
   /// Run one progression section query. Returns the raw data map, or null
@@ -4244,6 +4307,40 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
   }
 
+  /// Which locks this save records as already opened.
+  ///
+  /// The catalog of locks that EXIST is bundled with the app, not read from the
+  /// save — a fresh game carries an empty set — so the panel loads the two and
+  /// joins them.
+  Future<LocksResult> loadLocks() async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return LocksResult(error: _l10n.editorNoSaveSelected);
+    }
+    try {
+      final response = await _execute(
+        'private.locks.list',
+        payload: {'path': path},
+      );
+      if (response['ok'] != true) {
+        return LocksResult(
+          error: _l10n.editorLockListFailed(_errorDetails(response)),
+        );
+      }
+      return LocksResult.fromJson(
+        (response['data'] as Map).cast<String, Object?>(),
+      );
+    } catch (error) {
+      return LocksResult(error: _l10n.editorLockListFailed('$error'));
+    }
+  }
+
+  /// Pending-edit key of the queued lock changes. One entry holds every toggle:
+  /// `private.locks.setUnlocked` is value-addressed (the core finds the lock by
+  /// name on a fresh parse per edit), so a whole panel of them batches into a
+  /// single `write_save` and needs no place in [splicingPaths].
+  static const pendingLocksKey = 'world.locks';
+
   /// Pending-edit key prefix for a queued faction forgive (`<prefix><guild>`).
   static const _factionForgivePrefix = 'factions.forgive:';
 
@@ -4439,6 +4536,10 @@ String? _structuredEditTarget(Map<String, Object?> edit) {
         foldEditTargetPart(fields['character']),
         foldEditTargetPart(fields['entry']),
       ]);
+    // Two intents for the same lock in one write contradict each other; the
+    // core refuses the pair, so catch it here rather than at save time.
+    case 'private.locks.setUnlocked':
+      return key([foldEditTargetPart(fields['lock'])]);
     case 'private.glossary.setSegment':
       return key([
         _foldAssetName(fields['documentClass']),
@@ -4788,6 +4889,15 @@ bool structuredEditRewrites(
             'CharacterKnowledgeByUniqueName',
             character,
           );
+    case 'private.locks.setUnlocked':
+      return _pathHasName(typedPath, 'm_UnlockedLocks') ||
+          (fields['unlocked'] == false &&
+              const [
+                'm_DoorsOpen',
+                'm_DoorsClosed',
+                'm_SavedDoorsMessagesName',
+                'm_SavedDoorsMessagesStruct',
+              ].any((name) => _pathHasName(typedPath, name)));
     // Claims a whole slot — but only in the inventory it targets; another
     // actor's slots are a different subtree.
     case 'private.inventory.addItem':
@@ -4901,6 +5011,8 @@ bool _mayInvalidateOrdinals(Map<String, Object?> edit) {
     'private.inventory.repairSlots',
     'private.knowledge.addCharacter',
     'private.knowledge.setEntry',
+    // Set-adds or set-removes a name in m_UnlockedLocks.
+    'private.locks.setUnlocked',
     'private.npc.revive',
     'private.npc.setRelationship',
     'private.glossary.setSegment',

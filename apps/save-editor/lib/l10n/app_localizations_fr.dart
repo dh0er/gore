@@ -28,7 +28,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get storyStateDescription =>
-      'Catalogue de référence des états persistants déclarés par les scripts livrés avec le jeu. Les entrées enregistrées affichent leur valeur brute ; les champs du catalogue absents de cette sauvegarde sont marqués comme non définis. Les repères temporels déclarés dans le code sont affichés en temps de jeu ; les autres entiers peuvent être des booléens, compteurs ou états à plusieurs niveaux.';
+      'Le jeu mémorise ici la progression des quêtes, des dialogues et des événements. « Enregistré » affiche les valeurs de ta sauvegarde ; « Non défini », les autres entrées connues. Selon l’entrée, un nombre peut indiquer oui/non, un compteur ou une étape de progression. Les repères temporels indiquent un jour et une heure dans le jeu.';
 
   @override
   String get storyStateReadOnly =>
@@ -57,6 +57,11 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get storyStateUnknown => 'Type source inconnu';
+
+  @override
+  String storyStateShowDormant(int count) {
+    return 'Afficher les inutilisés ($count)';
+  }
 
   @override
   String get storyStateUnknownDetail =>
@@ -104,7 +109,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get storyStateEditingGuidance =>
-      'Chaque entrée reste modifiable sur toute la plage int32 signée. Les indicateurs et suggestions de valeurs issus des scripts sont fournis à titre indicatif ; la saisie brute reste toujours disponible. Les changements d’état de l’histoire peuvent court-circuiter des transitions de dialogue, de quête ou du monde : enregistrez-les avec précaution. Une sauvegarde de sécurité est créée automatiquement.';
+      'Sélectionne une entrée pour modifier sa valeur. Les changements sont appliqués à l’enregistrement. Ne modifie que les valeurs dont tu connais les effets : les quêtes ou les dialogues pourraient sinon ne plus fonctionner comme prévu. Une copie de sauvegarde est créée automatiquement à l’enregistrement.';
 
   @override
   String get storyStatePending => 'En attente';
@@ -450,18 +455,165 @@ class AppLocalizationsFr extends AppLocalizations {
   String get traderNoOre => 'aucun minerai';
 
   @override
-  String get traderStockCurrent => 'Stock';
+  String get traderStockCurrent => 'Stock enregistré';
 
   @override
-  String get traderStockBase => 'Base de réapprovisionnement';
+  String get traderStockCurrentTooltip =>
+      'Le stock actuellement enregistré pour ce marchand. Les objets ajoutés peuvent disparaître la prochaine fois que le jeu met le marchand à jour.';
+
+  @override
+  String get traderStockBase => 'Stock de référence';
+
+  @override
+  String get traderStockBaseTooltip =>
+      'Une copie enregistrée que le jeu peut modifier ou recréer selon ses règles pour ce marchand. Elle est en lecture seule et ne conserve pas durablement les objets ajoutés.';
 
   @override
   String get traderStockBaseHint =>
-      'Ce vers quoi le marchand se réapprovisionne. Cela augmente avec l\'histoire, ce n\'est donc pas un état d\'origine.';
+      'Lecture seule. Ce stock enregistré évolue avec l\'histoire et peut être remplacé selon les règles du marchand. Ce n\'est pas le stock d\'origine du jeu.';
+
+  @override
+  String get traderCurrentStockWarning =>
+      'Les modifications du stock du marchand ne durent que jusqu’au prochain réapprovisionnement.';
+
+  @override
+  String get traderRestockTitle => 'Réapprovisionnement estimé';
+
+  @override
+  String get traderRestockTitleTooltip =>
+      'Estimation fondée sur la dernière activité du marchand, l\'heure du jeu et la difficulté des Ressources.';
+
+  @override
+  String get traderRestockPending => 'en attente';
+
+  @override
+  String get traderRestockRevertTooltip =>
+      'Annuler la modification non enregistrée de la dernière activité';
+
+  @override
+  String get traderRestockNever => 'Jamais';
+
+  @override
+  String get traderRestockUnavailable => 'Indisponible';
+
+  @override
+  String get traderRestockIntervalUnknown => 'Nombre de jours en jeu inconnu';
+
+  @override
+  String get traderRestockNeverStatus =>
+      'Aucune activité de marchand n\'a encore été enregistrée.';
+
+  @override
+  String get traderRestockClockAhead =>
+      'La dernière activité du marchand est postérieure à l\'heure actuelle du jeu.';
+
+  @override
+  String traderRestockNotDueYet(String time) {
+    return 'Pas attendu avant $time.';
+  }
+
+  @override
+  String get traderRestockPossiblyDue =>
+      'Estimation : le stock est peut-être déjà prêt à être mis à jour.';
+
+  @override
+  String get traderRestockEligible =>
+      'Estimation : le réapprovisionnement est attendu.';
+
+  @override
+  String get traderRestockNoWorldTime =>
+      'L\'heure actuelle du jeu n\'est pas disponible ; aucune estimation n\'est possible.';
+
+  @override
+  String get traderRestockLastActivity => 'Dernière activité du marchand';
+
+  @override
+  String get traderRestockLastActivityTooltip =>
+      'Cette heure enregistrée peut changer après un échange ou lorsque le jeu met le stock à jour. Elle ne correspond pas forcément au dernier réapprovisionnement.';
+
+  @override
+  String get traderRestockForecastWindow => 'Période estimée';
+
+  @override
+  String get traderRestockForecastWindowTooltip =>
+      'Indique le moment le plus tôt et le plus tard où le réapprovisionnement semble probable. Les règles exactes du jeu ne figurent pas dans la sauvegarde ; il s\'agit donc d\'une estimation.';
+
+  @override
+  String get traderRestockIntervalLabel =>
+      'Jours entre les réapprovisionnements';
+
+  @override
+  String traderRestockInterval(int days, String level) {
+    return '$days jours · $level';
+  }
+
+  @override
+  String get traderRestockIntervalTooltip =>
+      'Selon la difficulté des Ressources : Novice 2, Gothic 3 et Difficile 5 jours en jeu.';
+
+  @override
+  String get traderRestockAutomationLabel => 'Réapprovisionnement automatique';
+
+  @override
+  String get traderRestockAutomationValue =>
+      'Impossible à désactiver dans la sauvegarde';
+
+  @override
+  String get traderRestockAutomationTooltip =>
+      'Le réapprovisionnement automatique ne peut pas être désactivé dans une sauvegarde. Seul un mod peut changer cette règle du jeu.';
+
+  @override
+  String get traderRestockSetNow => 'Régler sur l\'heure du jeu';
+
+  @override
+  String get traderRestockSetNowTooltip =>
+      'Utiliser l\'heure actuelle du jeu, y compris une modification non enregistrée, comme dernière activité du marchand. Cela repousse le prochain réapprovisionnement estimé.';
+
+  @override
+  String get traderRestockMakeDue => 'Préparer le réapprovisionnement';
+
+  @override
+  String get traderRestockMakeDueTooltip =>
+      'Reculer suffisamment la dernière activité pour que le réapprovisionnement soit attendu.';
+
+  @override
+  String get traderRestockCustom => 'Heure personnalisée…';
+
+  @override
+  String get traderRestockCustomTooltip =>
+      'Choisir le jour et l\'heure en jeu de la dernière activité du marchand.';
+
+  @override
+  String get traderRestockEditTitle => 'Dernière activité du marchand';
 
   @override
   String get traderOreHint =>
       'La valeur en jeu diffère : au chargement, le jeu ajoute ce qui s\'est accumulé depuis son dernier échange — il vend ses surplus et se réapprovisionne. Ce nombre est le point de départ, pas ce qu\'affiche l\'écran de commerce.';
+
+  @override
+  String get traderOreHintShort =>
+      'Valeur de départ — le montant affiché en commerce peut différer.';
+
+  @override
+  String get traderRestockStatusLabel => 'État';
+
+  @override
+  String get traderRestockStatusNever => 'Aucune activité';
+
+  @override
+  String get traderRestockStatusWaiting => 'En attente de réapprovisionnement';
+
+  @override
+  String get traderRestockStatusReady => 'Prêt pour le réapprovisionnement';
+
+  @override
+  String get traderRestockStatusPossiblyReady => 'Peut-être prêt';
+
+  @override
+  String get traderRestockStatusCheckTime => 'Vérifier l\'heure enregistrée';
+
+  @override
+  String get traderRestockStatusUnknown => 'Inconnu';
 
   @override
   String get traderPriceWarning =>
@@ -498,7 +650,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String traderStockLineCount(int count) {
-    return '$count lignes';
+    return '$count articles';
   }
 
   @override
@@ -3122,4 +3274,66 @@ class AppLocalizationsFr extends AppLocalizations {
   ) {
     return 'Niveau $level, $guild, chapitre $chapter. $completed quêtes terminées, $failed échouées. Temps de jeu : $playTime.';
   }
+
+  @override
+  String get locksSidebar => 'Serrures';
+
+  @override
+  String editorLockListFailed(String details) {
+    return 'Échec du chargement de la liste des serrures : $details';
+  }
+
+  @override
+  String get locksSearchHint => 'Rechercher une serrure ou une clé';
+
+  @override
+  String get locksAllRegions => 'Toutes les régions';
+
+  @override
+  String locksShownOfTotal(int shown, int total) {
+    return '$shown sur $total';
+  }
+
+  @override
+  String get locksFilterChests => 'Coffres';
+
+  @override
+  String get locksFilterDoors => 'Portes';
+
+  @override
+  String get locksFilterUnlocked => 'Déverrouillée';
+
+  @override
+  String get locksFilterLocked => 'Verrouillée';
+
+  @override
+  String locksDifficultyLevel(int bars, int level) {
+    return 'Difficulté $bars sur 4 (palier interne $level sur 7)';
+  }
+
+  @override
+  String get locksKeyOnly => 'Clé uniquement';
+
+  @override
+  String locksKeyLabel(String keys) {
+    return 'Clé : $keys';
+  }
+
+  @override
+  String get locksPermalocked => 'Scellée définitivement';
+
+  @override
+  String get locksReadOnly =>
+      'Cette sauvegarde ne contient pas de liste de serrures modifiable.';
+
+  @override
+  String get locksUnknownEntry => 'Absente de cette version du jeu';
+
+  @override
+  String get locksDoorLeafHint =>
+      'Reverrouiller une porte referme aussi le battant.';
+
+  @override
+  String get locksResetPending =>
+      'Abandonner les modifications de serrures en attente';
 }

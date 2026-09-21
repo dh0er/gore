@@ -10,8 +10,107 @@
 // Rows are addressed by ARRAY INDEX, never by name: two shipped rows are named
 // `None` and belong to no NPC at all.
 
+import 'package:goresave/features/editor/domain/game_time.dart';
+
 /// The item class path of ore, which doubles as a merchant's purse.
 const String kTraderOrePath = '/Script/Angelscript.ItMi_Orenugget';
+
+/// The value used by the game before a merchant has any recorded activity.
+const double kTraderNeverActiveSeconds = -1000;
+
+/// The shipped merchant-restock interval for each known Resources difficulty.
+/// Unknown future/modded levels return null rather than showing an invented
+/// Gothic forecast.
+int? traderRestockDays(String resourcesLevel) => switch (resourcesLevel) {
+  'Novice' => 2,
+  'Gothic' => 3,
+  'Hard' => 5,
+  _ => null,
+};
+
+enum TraderRestockForecastState {
+  unavailable,
+  neverActive,
+  clockAhead,
+  beforeWindow,
+  boundaryOnly,
+  eligibleBoth,
+}
+
+/// Save-visible timing around one merchant's lazy restock maintenance.
+///
+/// The supplied saves strongly support a calendar-day comparison, while an
+/// elapsed-duration comparison is also plausible from the persisted data alone.
+/// Exposing both bounds keeps the UI honest: neither one is called the reset
+/// time, because the native game performs maintenance lazily when it next
+/// processes the merchant.
+class TraderRestockTiming {
+  const TraderRestockTiming({
+    required this.activitySeconds,
+    required this.worldSeconds,
+    required this.intervalDays,
+  });
+
+  final double activitySeconds;
+  final double? worldSeconds;
+  final int intervalDays;
+
+  bool get hasRecordedActivity =>
+      activitySeconds.isFinite && activitySeconds > kTraderNeverActiveSeconds;
+
+  bool get isNeverActive =>
+      activitySeconds.isFinite && activitySeconds <= kTraderNeverActiveSeconds;
+
+  bool get hasValidInputs =>
+      activitySeconds.isFinite &&
+      activitySeconds >= 0 &&
+      intervalDays > 0 &&
+      (worldSeconds == null || (worldSeconds!.isFinite && worldSeconds! >= 0));
+
+  bool get isFutureDated =>
+      hasRecordedActivity &&
+      worldSeconds != null &&
+      activitySeconds > worldSeconds!;
+
+  /// Earliest forecast: start of the Nth later calendar day.
+  double? get calendarBoundarySeconds {
+    if (!hasRecordedActivity || !hasValidInputs) return null;
+    final activityDay = activitySeconds.floor() ~/ secondsPerDay;
+    return ((activityDay + intervalDays) * secondsPerDay).toDouble();
+  }
+
+  /// Conservative forecast: a full N × 24 hours after the activity timestamp.
+  double? get elapsedBoundarySeconds => !hasRecordedActivity || !hasValidInputs
+      ? null
+      : activitySeconds + intervalDays * secondsPerDay;
+
+  TraderRestockForecastState get state {
+    if (isNeverActive) return TraderRestockForecastState.neverActive;
+    if (!hasValidInputs || worldSeconds == null) {
+      return TraderRestockForecastState.unavailable;
+    }
+    if (isFutureDated) return TraderRestockForecastState.clockAhead;
+    if (worldSeconds! < calendarBoundarySeconds!) {
+      return TraderRestockForecastState.beforeWindow;
+    }
+    if (worldSeconds! < elapsedBoundarySeconds!) {
+      return TraderRestockForecastState.boundaryOnly;
+    }
+    return TraderRestockForecastState.eligibleBoth;
+  }
+
+  /// Timestamp that makes this merchant eligible on the current calendar day.
+  /// Returns null during the first [intervalDays] days: no non-negative activity
+  /// timestamp can honestly express an already elapsed interval there.
+  double? get makeDueActivitySeconds {
+    final world = worldSeconds;
+    if (world == null || !world.isFinite || world < 0 || intervalDays <= 0) {
+      return null;
+    }
+    final activity = world - intervalDays * secondsPerDay - 1;
+    return activity < 0 ? null : activity;
+  }
+}
 
 /// Which of a trader's two stock maps an edit targets.
 enum TraderStockMap {
@@ -120,6 +219,7 @@ class TraderDetail {
     required this.items,
     required this.defaultItems,
     required this.generatedEvents,
+    required this.totalSecondsPath,
     required this.hasItemsByDifficulty,
   });
 
@@ -139,6 +239,9 @@ class TraderDetail {
               ?.whereType<String>()
               .toList(growable: false) ??
           const [],
+      totalSecondsPath: (json['totalSecondsPath'] as List?)
+          ?.whereType<String>()
+          .toList(growable: false),
       hasItemsByDifficulty: json['hasItemsByDifficulty'] as bool? ?? false,
     );
   }
@@ -148,10 +251,16 @@ class TraderDetail {
   /// Live stock. Note it also contains the ore line.
   final List<TraderItem> items;
 
-  /// Restock baseline. Diverges from [items] in played saves in both values and
-  /// key set, so it is a separate editing surface rather than a mirror.
+  /// Saved input used by the game's runtime maintenance. It diverges from
+  /// [items] in played saves, but it is not a durable custom-stock definition:
+  /// the runtime can rebuild it from its own trader configuration. The editor
+  /// therefore displays this map read-only.
   final List<TraderItem> defaultItems;
   final List<String> generatedEvents;
+
+  /// Exact typed path returned by the core. Null against an older core or when
+  /// this record has no writable DoubleProperty timestamp.
+  final List<String>? totalSecondsPath;
 
   /// The per-difficulty staging map holds entries. Empty in every save observed
   /// so far; if this is ever true the UI must not pretend it edited everything.
@@ -280,3 +389,27 @@ class TraderStockEdit {
 }
 
 enum TraderEditKind { setStock, addItem, removeItem }
+
+/// A queued edit of one merchant's stored activity timestamp.
+///
+/// This is a fixed-size DoubleProperty write. The notifier orders fixed writes
+/// before structural stock additions/removals, so both can safely be saved in
+/// one user operation without resolving this row after a splice.
+class TraderActivityTimeEdit {
+  const TraderActivityTimeEdit({
+    required this.index,
+    required this.propertyPath,
+    required this.totalSeconds,
+  });
+
+  final int index;
+  final List<String> propertyPath;
+  final double totalSeconds;
+
+  String get pendingKey => 'traders:$index:activityTime';
+
+  Map<String, Object?> toEdit() => {
+    'path': 'private.typed.setValue',
+    'value': {'path': propertyPath, 'value': totalSeconds},
+  };
+}

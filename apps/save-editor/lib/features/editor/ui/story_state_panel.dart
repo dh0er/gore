@@ -15,7 +15,9 @@ import '../domain/story_state_models.dart';
 import '../domain/story_state_presentation.dart';
 import '../domain/story_state_semantics.dart';
 
-enum _StoryFilter { all, integer, timeMarker, chapter, unknown }
+/// `Chapter` is serialized as a plain `int` and is a single entry, so it is
+/// filtered as an integer; only its badge and dedicated editor set it apart.
+enum _StoryFilter { all, integer, timeMarker, unknown }
 
 enum _StoryPresence { stored, unset, all }
 
@@ -65,6 +67,7 @@ class _StoryStateDetailState extends ConsumerState<StoryStateDetail> {
   _StoryPresence _presence = _StoryPresence.stored;
   String _query = '';
   bool _showInfo = false;
+  bool _showDormant = false;
   bool _loading = false;
   int _loadEpoch = 0;
 
@@ -89,6 +92,7 @@ class _StoryStateDetailState extends ConsumerState<StoryStateDetail> {
         _filter = _StoryFilter.all;
         _presence = _StoryPresence.stored;
         _showInfo = false;
+        _showDormant = false;
         _page = const StoryStatePage();
       }
       _load();
@@ -186,24 +190,72 @@ class _StoryStateDetailState extends ConsumerState<StoryStateDetail> {
     }
   }
 
+  /// Whether this save carries an ID the bundled catalog does not declare.
+  ///
+  /// Vanilla saves never do, so the unknown filter would otherwise be a chip
+  /// that is permanently zero; a modded or newer-version save brings it back.
+  bool get _hasUnknown =>
+      _page.unknownStoredTotal > 0 ||
+      _page.values.any(
+        (value) => value.semanticType == StorySemanticType.unknown,
+      );
+
+  _StoryFilter get _activeFilter =>
+      _filter == _StoryFilter.unknown && !_hasUnknown
+      ? _StoryFilter.all
+      : _filter;
+
+  /// A field the shipped scripts neither read nor write. 149 of the 419
+  /// declared integers are leftovers of the Gothic 1 symbol-table port, so the
+  /// catalog hides them until they are asked for.
+  bool _isDormant(StoryStateValue value) =>
+      storyIntegerSemantics(value.id)?.kind ==
+      StoryIntegerKind.dormantOrLegacyInteger;
+
+  /// Whether the unused-field toggle governs this row at all. A dormant field
+  /// this save actually stores, or one with a queued edit, stays reachable.
+  bool _dormantGoverned(StoryStateValue value, Set<String> pendingIds) =>
+      _isDormant(value) &&
+      !value.stored &&
+      !pendingIds.contains(normalizeStoryStateId(value.id));
+
+  bool _suppressedAsDormant(StoryStateValue value, Set<String> pendingIds) =>
+      !_showDormant && _dormantGoverned(value, pendingIds);
+
+  /// The rows the presence chips describe, which is also what the type chips
+  /// count. A running search deliberately does not change these counts.
+  List<StoryStateValue> _presenceValues(Set<String> pendingIds) => _page.values
+      .where(
+        (value) =>
+            _matchesPresence(value, _presence) &&
+            !_suppressedAsDormant(value, pendingIds),
+      )
+      .toList(growable: false);
+
   List<StoryStateValue> _visibleValues(
     Map<String, Map<String, String>> locCatalog,
     GameLang lang,
+    Set<String> pendingIds,
   ) {
+    final filter = _activeFilter;
     return _page.values
         .where((value) {
           final presenceMatches = _matchesPresence(value, _presence);
-          final typeMatches = switch (_filter) {
+          final typeMatches = switch (filter) {
             _StoryFilter.all => true,
+            // The chapter rides along with the integers it is stored as.
             _StoryFilter.integer =>
-              value.semanticType == StorySemanticType.integer,
+              value.semanticType == StorySemanticType.integer ||
+                  value.semanticType == StorySemanticType.chapter,
             _StoryFilter.timeMarker =>
               value.semanticType == StorySemanticType.timeMarker,
-            _StoryFilter.chapter =>
-              value.semanticType == StorySemanticType.chapter,
             _StoryFilter.unknown =>
               value.semanticType == StorySemanticType.unknown,
           };
+          // A search reaches the hidden fields; an empty one does not.
+          if (_query.isEmpty && _suppressedAsDormant(value, pendingIds)) {
+            return false;
+          }
           if (!presenceMatches || !typeMatches || _query.isEmpty) {
             return presenceMatches && typeMatches;
           }
@@ -233,11 +285,12 @@ class _StoryStateDetailState extends ConsumerState<StoryStateDetail> {
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
     final lang = ref.watch(currentGameLangProvider);
     final showObjectIds = ref.watch(showObjectIdsProvider);
-    final values = _visibleValues(locCatalog, lang);
     final pendingById = {
       for (final edit in widget.notifier.allStoryStateEdits())
         edit.normalizedId: edit,
     };
+    final pendingIds = pendingById.keys.toSet();
+    final values = _visibleValues(locCatalog, lang, pendingIds);
     // A same-save refresh intentionally keeps the old rows visible while the
     // new inspection loads. Do not let those rows create a draft with the old
     // compare-and-swap snapshot; editing resumes only after the fresh page
@@ -246,9 +299,14 @@ class _StoryStateDetailState extends ConsumerState<StoryStateDetail> {
     final showCodecReadOnly = !widget.editable && _page.error == null;
     final showStructureReadOnly =
         widget.editable && !_loading && !_page.writable && _page.error == null;
-    final presenceValues = _page.values
-        .where((value) => _matchesPresence(value, _presence))
-        .toList(growable: false);
+    final presenceValues = _presenceValues(pendingIds);
+    final dormantCount = _page.values
+        .where(
+          (value) =>
+              _matchesPresence(value, _presence) &&
+              _dormantGoverned(value, pendingIds),
+        )
+        .length;
     final scheme = widget.theme.colorScheme;
     return Card(
       child: Padding(
@@ -280,17 +338,10 @@ class _StoryStateDetailState extends ConsumerState<StoryStateDetail> {
                             ),
                             if (effectiveEditable) ...[
                               const SizedBox(height: 4),
-                              Tooltip(
-                                message: l10n.storyStateEditingGuidance,
-                                child: Text(
-                                  l10n.storyStateEditingGuidance,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: widget.theme.textTheme.bodySmall
-                                      ?.copyWith(
-                                        color: scheme.onSurfaceVariant,
-                                      ),
-                                ),
+                              Text(
+                                l10n.storyStateEditingGuidance,
+                                style: widget.theme.textTheme.bodySmall
+                                    ?.copyWith(color: scheme.onSurfaceVariant),
                               ),
                             ],
                           ],
@@ -377,6 +428,7 @@ class _StoryStateDetailState extends ConsumerState<StoryStateDetail> {
             Wrap(
               spacing: 7,
               runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 for (final presence in _StoryPresence.values)
                   ChoiceChip(
@@ -384,20 +436,31 @@ class _StoryStateDetailState extends ConsumerState<StoryStateDetail> {
                     selected: _presence == presence,
                     onSelected: (_) => setState(() => _presence = presence),
                   ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 7,
-              runSpacing: 6,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
+                const SizedBox(width: 28),
                 for (final filter in _StoryFilter.values)
-                  ChoiceChip(
-                    label: Text(_filterLabel(l10n, filter, presenceValues)),
-                    selected: _filter == filter,
-                    onSelected: (_) => setState(() => _filter = filter),
+                  if (filter != _StoryFilter.all &&
+                      (filter != _StoryFilter.unknown || _hasUnknown))
+                    ChoiceChip(
+                      label: Text(_filterLabel(l10n, filter, presenceValues)),
+                      selected: _activeFilter == filter,
+                      onSelected: (_) => setState(() => _filter = filter),
+                    ),
+                if (dormantCount > 0)
+                  FilterChip(
+                    key: const Key('story-state-dormant'),
+                    avatar: const Icon(Icons.visibility_off_outlined, size: 18),
+                    label: Text(l10n.storyStateShowDormant(dormantCount)),
+                    selected: _showDormant,
+                    onSelected: (selected) =>
+                        setState(() => _showDormant = selected),
                   ),
+                ChoiceChip(
+                  label: Text(
+                    _filterLabel(l10n, _StoryFilter.all, presenceValues),
+                  ),
+                  selected: _activeFilter == _StoryFilter.all,
+                  onSelected: (_) => setState(() => _filter = _StoryFilter.all),
+                ),
                 const SizedBox(width: 4),
                 Text(
                   l10n.storyStateValuesCount(values.length, _page.total),
@@ -1085,19 +1148,17 @@ String _filterLabel(
     _StoryFilter.integer => (
       l10n.storyStateInteger,
       values
-          .where((value) => value.semanticType == StorySemanticType.integer)
+          .where(
+            (value) =>
+                value.semanticType == StorySemanticType.integer ||
+                value.semanticType == StorySemanticType.chapter,
+          )
           .length,
     ),
     _StoryFilter.timeMarker => (
       l10n.storyStateTimeMarker,
       values
           .where((value) => value.semanticType == StorySemanticType.timeMarker)
-          .length,
-    ),
-    _StoryFilter.chapter => (
-      l10n.storyStateChapter,
-      values
-          .where((value) => value.semanticType == StorySemanticType.chapter)
           .length,
     ),
     _StoryFilter.unknown => (

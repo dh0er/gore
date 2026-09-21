@@ -8,6 +8,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Browse and edit chest and door locks under World → Locks, with search and
+  filters. Relocking a door also closes it.
+
+### Changed
+
+- Story states are easier to browse, with clearer filters and help. Unused
+  entries are hidden by default and can be shown when needed.
+
+## [1.4.1] - 2026-09-06
+
+### Added
+
+- The Trade tab now shows a merchant's last activity, expected restock window and
+  current restock status. The timestamp can be set to the current game time,
+  moved back to make restocking due, or entered freely.
+
+### Changed
+
+- Game profiles are now shown and ordered as Profile 1 through Profile 4 using
+  the game's slot numbers, even when their internal ids use a different order.
+- The misleading restock-baseline editor has been removed because the game
+  rebuilds that inventory itself. The tab now focuses on the merchant's current
+  stock and clearly warns that changes last only until the next restock.
+
 ## [1.4.0] - 2026-08-31
 
 ### Added

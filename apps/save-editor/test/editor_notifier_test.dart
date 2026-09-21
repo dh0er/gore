@@ -140,7 +140,7 @@ void main() {
       );
       expect(scan.payload.containsKey('binaryHost'), isFalse);
       expect(scan.payload, {'path': r'C:\tmp\saves'});
-      expect(notifier.state.profiles.single.displayName, 'Profile 0');
+      expect(notifier.state.profiles.single.displayName, 'Profile 1');
       expect(notifier.state.activeProfile?.profileId, 0);
       expect(notifier.state.selectedSave?.screenshot?.byteLength, 6);
     },
@@ -227,6 +227,33 @@ void main() {
         'customResourcesSettings': 'ResourcesDifficultySettings_Easy',
       });
       expect(custom.activeResourcesLevel(), 'Novice');
+
+      // Older partial Custom profiles can omit Resources while still carrying
+      // another difficulty member. Restock keeps the game's Gothic fallback.
+      final customWithoutResources = await build({
+        'difficultyPreset': 'DifficultyPreset_Custom',
+        'customCombatSettings': 'CombatDifficultySettings_Hard',
+      });
+      expect(customWithoutResources.activeResourcesLevelForRestock(), 'Gothic');
+
+      // A present but unknown Resources class remains explicit and must not
+      // silently pick an interval.
+      final customUnknownResources = await build({
+        'difficultyPreset': 'DifficultyPreset_Custom',
+        'customResourcesSettings': 'ResourcesDifficultySettings_Unknown',
+      });
+      expect(customUnknownResources.activeResourcesLevelForRestock(), isNull);
+
+      // An absent preset can still use a stored Resources level, while an
+      // unknown non-Custom preset may imply an interval the editor cannot know.
+      final noPreset = await build({
+        'customResourcesSettings': 'ResourcesDifficultySettings_Easy',
+      });
+      expect(noPreset.activeResourcesLevelForRestock(), 'Novice');
+      final unknownPreset = await build({
+        'difficultyPreset': 'DifficultyPreset_Modded',
+      });
+      expect(unknownPreset.activeResourcesLevelForRestock(), isNull);
 
       // A non-Custom preset LOCKS the level: a stale/disagreeing stored Resources
       // class is ignored (Hard preset + stale '_Standard' resources → 'Hard', NOT
@@ -1350,6 +1377,81 @@ void main() {
       expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
       // Both pending entries survive so the user can resolve the conflict.
       expect(notifier.state.pendingEdits.length, 2);
+    },
+  );
+
+  test(
+    'saveAllPending refuses raw edits a lock change can invalidate',
+    () async {
+      for (final unlocked in [true, false]) {
+        for (final property in [
+          'm_UnlockedLocks',
+          'm_DoorsOpen',
+          'm_DoorsClosed',
+          'm_SavedDoorsMessagesName',
+          'm_SavedDoorsMessagesStruct',
+        ]) {
+          final operations = property == 'm_UnlockedLocks'
+              ? ['setRemove', 'setAdd', 'setValue']
+              : ['arrayRemove', 'arrayDuplicate', 'setValue'];
+          for (final operation in operations) {
+            for (final rawFirst in [true, false]) {
+              final core = _RecordingCoreService();
+              final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+              await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+              notifier.setPendingEdit(
+                rawFirst ? 'a:raw' : 'z:raw',
+                PendingSaveEdit(
+                  edits: [
+                    {
+                      'path': 'private.typed.$operation',
+                      'value': {
+                        'path': [
+                          property,
+                          if (operation == 'setValue') '[0]',
+                          if (operation == 'setValue' &&
+                              property == 'm_SavedDoorsMessagesStruct')
+                            'm_Magnitude',
+                        ],
+                        'index': 0,
+                        'value': property == 'm_SavedDoorsMessagesStruct'
+                            ? 1.0
+                            : 'OtherDoor',
+                      },
+                    },
+                  ],
+                ),
+              );
+              notifier.setPendingEdit(
+                'lock',
+                PendingSaveEdit(
+                  edits: [
+                    {
+                      'path': 'private.locks.setUnlocked',
+                      'value': {'lock': 'CV_Stash_Door', 'unlocked': unlocked},
+                    },
+                  ],
+                ),
+              );
+
+              final canSave = unlocked && property != 'm_UnlockedLocks';
+              expect(await notifier.saveAllPending(), canSave);
+              final writes = core.requests.where(
+                (r) => r.command == 'write_save',
+              );
+              if (canSave) {
+                expect(writes, isNotEmpty);
+                expect(notifier.state.error, isNull);
+              } else {
+                expect(writes, isEmpty);
+                expect(notifier.state.error, contains(property));
+                expect(notifier.state.pendingEdits, hasLength(2));
+              }
+              notifier.dispose();
+            }
+          }
+        }
+      }
     },
   );
 
@@ -3015,6 +3117,25 @@ void main() {
         ),
         isFalse,
       );
+    });
+
+    test('lock edits separate raw lock and door writes', () {
+      for (final unlocked in [true, false]) {
+        final lock = {
+          'path': 'private.locks.setUnlocked',
+          'value': {'lock': 'CV_Stash_Door', 'unlocked': unlocked},
+        };
+        expect(structuredEditRewrites(lock, const ['m_UnlockedLocks']), isTrue);
+        for (final property in [
+          'm_DoorsOpen',
+          'm_DoorsClosed',
+          'm_SavedDoorsMessagesName',
+          'm_SavedDoorsMessagesStruct',
+        ]) {
+          expect(structuredEditRewrites(lock, [property]), !unlocked);
+        }
+        expect(structuredEditRewrites(lock, const ['m_Traders']), isFalse);
+      }
     });
 
     test('addressing a whole map collides with every entry in it', () {
