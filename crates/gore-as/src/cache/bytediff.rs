@@ -13,7 +13,7 @@
 //! SEMANTIC only wastes fix effort (cheap). Every normalizer is provably behavior-preserving; when
 //! in doubt, leave the diff SEMANTIC.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use super::cfg;
 use super::disasm::{disassemble, Instr};
@@ -1217,7 +1217,7 @@ struct CallStorageFacts {
     frames: Vec<CallStorageFrame>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct StackToken {
     instruction: usize,
     width: usize,
@@ -1240,27 +1240,36 @@ fn pop_stack_width(stack: &mut Vec<StackToken>, width: usize) -> Option<Vec<Stac
 }
 
 /// Recover the exact PSF entries in each physical call frame and the subset that the VM writes
-/// as a new object life. The proof is deliberately all-or-nothing: every basic block starts and
-/// ends with an empty operand stack, every call has a complete typed signature, and every hidden
-/// output is the expected pointer-width PSF token. An under-counted native signature or any
-/// unfamiliar variable-stack opcode declines the stronger N2 path.
+/// as a new object life. The proof is deliberately all-or-nothing: stack tokens must agree at
+/// control-flow joins, every call has a complete typed signature, and every hidden output is the
+/// expected pointer-width PSF token. An under-counted native signature or any unfamiliar
+/// variable-stack opcode declines the stronger N2 path.
 fn call_storage_facts(raw: &[Instr], refs: &RefResolver) -> Option<CallStorageFacts> {
     if raw.is_empty() {
         return Some(CallStorageFacts::default());
     }
     let graph = cfg::build(raw);
     let mut covered = vec![false; raw.len()];
-    let mut facts = CallStorageFacts::default();
+    let block_by_offset: HashMap<_, _> = graph
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(i, block)| (block.start_dw, i))
+        .collect();
+    let mut incoming = vec![None::<Vec<StackToken>>; graph.blocks.len()];
+    let mut block_facts = vec![None::<CallStorageFacts>; graph.blocks.len()];
+    incoming[0] = Some(Vec::new());
+    let mut pending = VecDeque::from([0]);
 
-    for block in &graph.blocks {
+    while let Some(block_no) = pending.pop_front() {
+        let block = &graph.blocks[block_no];
         if block.instr_lo >= block.instr_hi || block.instr_hi > raw.len() {
             return None;
         }
-        let mut stack = Vec::<StackToken>::new();
+        let mut stack = incoming[block_no].clone()?;
+        let mut facts = CallStorageFacts::default();
         for at in block.instr_lo..block.instr_hi {
-            if std::mem::replace(&mut covered[at], true) {
-                return None;
-            }
+            covered[at] = true;
             let ins = &raw[at];
             if ins.op.name == "RET" {
                 if !stack.is_empty() {
@@ -1375,11 +1384,51 @@ fn call_storage_facts(raw: &[Instr], refs: &RefResolver) -> Option<CallStorageFa
                     .collect(),
             });
         }
-        if !stack.is_empty() {
+        if block.succs.is_empty() && !stack.is_empty() {
             return None;
         }
+        block_facts[block_no] = Some(facts);
+        for &successor in &block.succs {
+            let target = *block_by_offset.get(&successor)?;
+            let next = match &incoming[target] {
+                None => stack.clone(),
+                Some(previous) => {
+                    if previous.len() != stack.len() {
+                        return None;
+                    }
+                    let mut merged = previous.clone();
+                    for (old, new) in merged.iter_mut().zip(&stack) {
+                        if old.width != new.width || old.psf_slot != new.psf_slot {
+                            return None;
+                        }
+                        if old.psf_slot.is_some() && old.instruction != new.instruction {
+                            return None;
+                        }
+                        if old.psf_slot.is_none() && old.instruction != new.instruction {
+                            // A branch-dependent ordinary pointer/value is safe to carry,
+                            // but it cannot subsequently prove an in-place result receiver.
+                            old.instruction = usize::MAX;
+                        }
+                    }
+                    merged
+                }
+            };
+            if incoming[target].as_ref() != Some(&next) {
+                incoming[target] = Some(next);
+                pending.push_back(target);
+            }
+        }
     }
-    covered.iter().all(|covered| *covered).then_some(facts)
+    if covered.iter().any(|covered| !covered) {
+        return None;
+    }
+    let mut facts = CallStorageFacts::default();
+    for block in block_facts {
+        let block = block?;
+        facts.starts.extend(block.starts);
+        facts.frames.extend(block.frames);
+    }
+    Some(facts)
 }
 
 fn call_storage_facts_equivalent(left: &CallStorageFacts, right: &CallStorageFacts) -> bool {
@@ -3992,6 +4041,25 @@ mod tests {
             &side.refs,
             &side.refs,
         ));
+    }
+
+    #[test]
+    fn n2_call_storage_carries_branch_selected_pointer_into_call() {
+        const OPCAST: i64 = 0x7010;
+        let side = n1_side_with_functions(&[], &[], &[(OPCAST, "opCast")]);
+        let mut code = dw_arg(76, 0x4800_3464u32 as i32); // TYPEID
+        code.extend(rw_arg(4, 5)); // PSF out, shared by both branches
+        code.extend(dw_arg(12, 3)); // JZ -> second pointer
+        code.extend(rw_arg(48, 7)); // first source pointer
+        code.extend(dw_arg(11, 1)); // JMP -> call
+        code.extend(rw_arg(48, 8)); // second source pointer
+        code.extend(qw_arg(61, OPCAST as u64));
+        code.extend(no_arg(10));
+        let raw = disassemble(&code).expect("disasm");
+        let facts = call_storage_facts(&raw, &side.refs).expect("branch-carried call frame");
+        assert_eq!(facts.starts, HashSet::from([(1, 0)]));
+        assert_eq!(facts.frames.len(), 1);
+        assert_eq!(facts.frames[0].psf, vec![(1, 5)]);
     }
 
     #[test]

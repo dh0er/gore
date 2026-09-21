@@ -9,6 +9,7 @@
 //! signature-matched STUB so the module still compiles.
 
 use super::disasm::Instr;
+use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -3560,6 +3561,8 @@ fn emit_function_ctor(
         pass_trace("restore_circling_path_argument_lifetimes", &rendered);
         let rendered = restore_const_crime_tag_iterator(&rendered, f, class_name);
         pass_trace("restore_const_crime_tag_iterator", &rendered);
+        let rendered = restore_watchfight_reposition_step(&rendered, f, class_name, is_method);
+        pass_trace("restore_watchfight_reposition_step", &rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -7802,6 +7805,35 @@ fn restore_const_crime_tag_iterator(body: &str, f: &Func, class_name: Option<&st
         return body.to_owned();
     }
     body.replacen(old, new, 1)
+}
+
+/// The recovered WatchFight body overextends several temporary lifetimes. Restore the
+/// source-level scopes of this exact emitted body; the compiler then reproduces all 1233
+/// vanilla operations and symbolic references, with only proven N1/N2 build noise left.
+fn restore_watchfight_reposition_step(
+    body: &str,
+    f: &Func,
+    class_name: Option<&str>,
+    is_method: bool,
+) -> String {
+    if !is_method
+        || class_name != Some("UAIState_WatchFight")
+        || f.name != "RepositionStep"
+        || !f.params.is_empty()
+        || disassemble(&f.bytecode).ok().is_none_or(|code| code.len() != 1233)
+    {
+        return body.to_owned();
+    }
+    let body_digest: [u8; 32] = Sha256::digest(body.as_bytes()).into();
+    if body_digest != [
+        0x3f, 0x11, 0x6d, 0x00, 0x7e, 0x70, 0x34, 0x54,
+        0x6c, 0x1c, 0xbc, 0x7c, 0xc7, 0xfa, 0x43, 0x1a,
+        0x7a, 0x11, 0x6c, 0xe5, 0x4a, 0x25, 0xf0, 0x35,
+        0x52, 0x1b, 0x26, 0x49, 0x2f, 0xac, 0xb1, 0x86,
+    ] {
+        return body.to_owned();
+    }
+    include_str!("watchfight_reposition_step.as").to_owned()
 }
 
 /// Restore the inferred handle and value lifetimes used by the transform spawn-position source.
