@@ -356,4 +356,31 @@ void main() {
     expect(durationRuns[0].style?.fontFamily, notoSerifScFontFamily);
     expect(durationRuns[1].style?.fontFamily, notoSerifJpFontFamily);
   });
+
+  testWidgets('a fallback item title keeps the interface face', (tester) async {
+    const zh = Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans');
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGoresaveTheme(
+          uiFontFamily: UiFontFamily.notoSerif,
+          locale: const Locale('ja'),
+          gameTextLocale: zh,
+        ),
+        locale: const Locale('ja'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: const Scaffold(
+          body: ItemTooltipCard(
+            gameTextLocale: zh,
+            tooltip: ItemTooltip(title: 'アイテム', titleFromCatalog: false),
+          ),
+        ),
+      ),
+    );
+
+    final rich = tester.widget<RichText>(find.byType(RichText));
+    final span = rich.text;
+    expect(span, isA<TextSpan>());
+    expect((span as TextSpan).style?.fontFamily, notoSerifJpFontFamily);
+  });
 }

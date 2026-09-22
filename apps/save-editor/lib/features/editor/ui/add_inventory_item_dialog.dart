@@ -98,12 +98,22 @@ class _AddInventoryItemDialogState
 
   /// Localized game name for [id] when the loc_catalog has it; falls back to the
   /// derived id-only name (legal posture preserved when no catalog is present).
+  String? _catalogName(
+    Map<String, Map<String, String>> catalog,
+    GameLang lang,
+    String id,
+  ) {
+    final localized = localizedGameName(catalog, lang, id);
+    if (localized == null || localized.trim().isEmpty) return null;
+    return localized;
+  }
+
   String _displayName(
     Map<String, Map<String, String>> catalog,
     GameLang lang,
     String id,
   ) {
-    return localizedGameName(catalog, lang, id) ??
+    return _catalogName(catalog, lang, id) ??
         itemDisplayNameFromId(
           id,
           fallback: AppLocalizations.of(context).fallbackItem,
@@ -343,11 +353,19 @@ class _AddInventoryItemDialogState
                           children: [
                             Text(
                               _displayName(locCatalog, lang, _selected!.id),
-                              style: gameScriptTextStyle(
-                                context,
-                                lang.locale,
-                                style: theme.textTheme.bodyMedium,
-                              ),
+                              style:
+                                  _catalogName(
+                                        locCatalog,
+                                        lang,
+                                        _selected!.id,
+                                      ) ==
+                                      null
+                                  ? theme.textTheme.bodyMedium
+                                  : gameScriptTextStyle(
+                                      context,
+                                      lang.locale,
+                                      style: theme.textTheme.bodyMedium,
+                                    ),
                               overflow: TextOverflow.ellipsis,
                             ),
                             if (showObjectIds)
@@ -484,9 +502,11 @@ class _AddInventoryItemDialogState
     final isSelected = _selected == entry;
     // Same hover block as the inventory, so the item can be judged before it is
     // added rather than after.
+    final catalogName = _catalogName(catalog, lang, entry.id);
     return ItemStatsTooltip(
       itemId: entry.id,
       title: _displayName(catalog, lang, entry.id),
+      titleFromCatalog: catalogName != null,
       // The tile is tappable and brings its own hover colour; a second tint on
       // top of it would only muddy the selected row.
       highlightOnHover: false,
@@ -506,7 +526,9 @@ class _AddInventoryItemDialogState
           _displayName(catalog, lang, entry.id),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: gameScriptTextStyle(context, lang.locale),
+          style: catalogName == null
+              ? null
+              : gameScriptTextStyle(context, lang.locale),
         ),
         subtitle: showObjectIds
             ? Text(entry.id, maxLines: 1, overflow: TextOverflow.ellipsis)

@@ -1196,7 +1196,10 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                         document.displayName(catalog, lang),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: gameScriptTextStyle(context, lang.locale),
+                        style:
+                            document.catalogDisplayName(catalog, lang) == null
+                            ? null
+                            : gameScriptTextStyle(context, lang.locale),
                       ),
                       subtitle: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1282,17 +1285,20 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
   Future<void> _showSegmentTextDialog(
     AppLocalizations l10n,
     String documentName,
-    List<String> paragraphs,
-  ) {
+    List<String> paragraphs, {
+    required bool nameFromCatalog,
+  }) {
     return showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(
           documentName,
-          style: gameScriptTextStyle(
-            context,
-            ref.read(currentGameLangProvider).locale,
-          ),
+          style: nameFromCatalog
+              ? gameScriptTextStyle(
+                  context,
+                  ref.read(currentGameLangProvider).locale,
+                )
+              : null,
         ),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 620, maxHeight: 520),
@@ -1475,6 +1481,12 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                                 l10n,
                                 name,
                                 paragraphs,
+                                nameFromCatalog:
+                                    document.catalogDisplayName(
+                                      catalog,
+                                      lang,
+                                    ) !=
+                                    null,
                               ),
                         icon: const Icon(Icons.open_in_full, size: 17),
                       ),
@@ -1613,22 +1625,33 @@ class _GlossaryDocument {
     return segments.isEmpty ? null : segments.first;
   }
 
-  String displayName(Map<String, Map<String, String>> catalog, GameLang lang) {
+  String? catalogDisplayName(
+    Map<String, Map<String, String>> catalog,
+    GameLang lang,
+  ) {
     if (isNpc) {
       final localized =
           localizedGameName(catalog, lang, uniqueName ?? '') ??
           localizedGameName(catalog, lang, npcCatalogId ?? '');
-      if (localized != null && localized.trim().isNotEmpty) return localized;
+      if (localized == null || localized.trim().isEmpty) return null;
+      return localized;
+    }
+    final localized = localizedGameName(catalog, lang, rawName);
+    if (localized == null || localized.trim().isEmpty) return null;
+    return localized;
+  }
+
+  String displayName(Map<String, Map<String, String>> catalog, GameLang lang) {
+    final localized = catalogDisplayName(catalog, lang);
+    if (localized != null) return localized;
+    if (isNpc) {
       final parts = (npcCatalogId ?? rawName)
           .split('_')
           .where((part) => part.isNotEmpty)
           .toList();
       return _humanize(parts.isEmpty ? rawName : parts.last);
     }
-    final localized = localizedGameName(catalog, lang, rawName);
-    return localized?.trim().isNotEmpty == true
-        ? localized!
-        : _humanize(rawName);
+    return _humanize(rawName);
   }
 }
 
@@ -1736,10 +1759,17 @@ class _AddGlossaryEntryDialogState extends State<_AddGlossaryEntryDialog> {
                           ),
                           title: Text(
                             document.displayName(widget.catalog, widget.lang),
-                            style: gameScriptTextStyle(
-                              context,
-                              widget.lang.locale,
-                            ),
+                            style:
+                                document.catalogDisplayName(
+                                      widget.catalog,
+                                      widget.lang,
+                                    ) ==
+                                    null
+                                ? null
+                                : gameScriptTextStyle(
+                                    context,
+                                    widget.lang.locale,
+                                  ),
                           ),
                           subtitle: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,

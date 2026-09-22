@@ -28,6 +28,7 @@ class ItemStatsTooltip extends ConsumerStatefulWidget {
     required this.itemId,
     required this.title,
     required this.child,
+    this.titleFromCatalog = true,
     this.highlightOnHover = true,
   });
 
@@ -36,6 +37,10 @@ class ItemStatsTooltip extends ConsumerStatefulWidget {
   /// The localized item name, already resolved by the caller (it is the same
   /// name the row prints).
   final String title;
+
+  /// False when [title] is an interface fallback. The card then keeps the
+  /// interface face on that name.
+  final bool titleFromCatalog;
   final Widget child;
 
   /// Whether to tint the row under the pointer. Off for rows that already react
@@ -143,6 +148,7 @@ class _ItemStatsTooltipState extends ConsumerState<ItemStatsTooltip> {
             catalog: ref.watch(locCatalogProvider).value ?? const {},
             lang: lang,
             l10n: AppLocalizations.of(context),
+            titleFromCatalog: widget.titleFromCatalog,
           );
 
     final hadCard = _hasCard;
@@ -284,13 +290,19 @@ class ItemTooltipCard extends StatelessWidget {
               Text(
                 tooltip.title,
                 textAlign: TextAlign.center,
-                style: paint(
-                  theme.textTheme.titleSmall?.copyWith(
-                    color: scheme.onSurface,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.8,
-                  ),
-                ),
+                style: tooltip.titleFromCatalog
+                    ? paint(
+                        theme.textTheme.titleSmall?.copyWith(
+                          color: scheme.onSurface,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.8,
+                        ),
+                      )
+                    : theme.textTheme.titleSmall?.copyWith(
+                        color: scheme.onSurface,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.8,
+                      ),
               ),
               if (tooltip.subtitle.isNotEmpty) ...[
                 const SizedBox(height: 2),

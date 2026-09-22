@@ -654,16 +654,22 @@ class _PrivateInventorySummaryCardState
     // is a few milliseconds off a bundled asset, and queueing a removal in
     // that window would disarm the creature.
     final awaitingStats = itemStatsAsync.isLoading && itemStats == null;
+    String? catalogName(String id) {
+      final localized = localizedGameName(locCatalog, lang, id);
+      if (localized == null || localized.trim().isEmpty) return null;
+      return localized;
+    }
+
+    String readableName(String id) =>
+        catalogName(id) ??
+        itemDisplayNameFromId(id, fallback: l10n.fallbackItem);
     // What the row actually shows (see the ListTile title below): the localized
     // game name, falling back to id/path. Sorting by this keeps the browse list
     // and the flat search list ordered the way the user reads them, not by the
     // raw internal id.
-    String nameOf(PrivateInventoryItem item) =>
-        localizedGameName(locCatalog, lang, item.id) ??
-        itemDisplayNameFromId(
-          item.id.isEmpty ? _itemDisplayFromPath(item.path) : item.id,
-          fallback: l10n.fallbackItem,
-        );
+    String nameOf(PrivateInventoryItem item) => readableName(
+      item.id.isEmpty ? _itemDisplayFromPath(item.path) : item.id,
+    );
     // What the creature actually carries, as far as the editor is concerned. A
     // creature's built-in weapon — its jaw, its claws, its sting — is an item
     // in its weapon slot, but not one anybody can do anything with: the game
@@ -695,8 +701,7 @@ class _PrivateInventorySummaryCardState
     // derived id-only name for items the catalog can actually name.
     String pendingNameOf(String path, {String id = ''}) {
       final classId = id.isEmpty ? _itemDisplayFromPath(path) : id;
-      return localizedGameName(locCatalog, lang, classId) ??
-          itemDisplayNameFromId(classId, fallback: l10n.fallbackItem);
+      return readableName(classId);
     }
 
     final groups = groupInventoryItems(
@@ -1025,7 +1030,10 @@ class _PrivateInventorySummaryCardState
                 tone: PendingTone.add,
                 icon: Icons.add_circle_outline,
                 title: pendingNameOf(add.path),
-                gameTextLocale: lang.locale,
+                gameTextLocale:
+                    catalogName(_itemDisplayFromPath(add.path)) == null
+                    ? null
+                    : lang.locale,
                 subtitle: l10n.pendingAddSubtitle(add.count),
                 technicalId: showObjectIds ? add.path : null,
                 cancelTooltip: l10n.cancelPendingAdd,
@@ -1044,7 +1052,15 @@ class _PrivateInventorySummaryCardState
                   _pendingRemovePath!,
                   id: _pendingRemove!.id,
                 ),
-                gameTextLocale: lang.locale,
+                gameTextLocale:
+                    catalogName(
+                          _pendingRemove!.id.isEmpty
+                              ? _itemDisplayFromPath(_pendingRemovePath!)
+                              : _pendingRemove!.id,
+                        ) ==
+                        null
+                    ? null
+                    : lang.locale,
                 subtitle: l10n.pendingRemovalSubtitle,
                 technicalId: showObjectIds
                     ? (_pendingRemove!.id.isEmpty
@@ -1233,6 +1249,15 @@ class _PrivateInventorySummaryCardState
                                                             )
                                                           : item.id,
                                                       title: nameOf(item),
+                                                      titleFromCatalog:
+                                                          catalogName(
+                                                            item.id.isEmpty
+                                                                ? _itemDisplayFromPath(
+                                                                    item.path,
+                                                                  )
+                                                                : item.id,
+                                                          ) !=
+                                                          null,
                                                       child: ListTile(
                                                         key: ValueKey((
                                                           'inventory-item-row',
@@ -1338,10 +1363,20 @@ class _PrivateInventorySummaryCardState
                                                                     overflow:
                                                                         TextOverflow
                                                                             .ellipsis,
-                                                                    style: gameScriptTextStyle(
-                                                                      context,
-                                                                      lang.locale,
-                                                                    ),
+                                                                    style:
+                                                                        catalogName(
+                                                                              item.id.isEmpty
+                                                                                  ? _itemDisplayFromPath(
+                                                                                      item.path,
+                                                                                    )
+                                                                                  : item.id,
+                                                                            ) ==
+                                                                            null
+                                                                        ? null
+                                                                        : gameScriptTextStyle(
+                                                                            context,
+                                                                            lang.locale,
+                                                                          ),
                                                                   ),
                                                                 ),
                                                                 if (item.equipped &&

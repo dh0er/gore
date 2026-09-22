@@ -32,12 +32,16 @@ class ItemTooltip {
     this.requirementsLabel = '',
     this.protectionLabelFromCatalog = false,
     this.requirementsLabelFromCatalog = false,
+    this.titleFromCatalog = true,
     this.recipeProduct = '',
     this.description = '',
   });
 
   /// Localized item name.
   final String title;
+
+  /// False when [title] is an interface fallback rather than a catalog name.
+  final bool titleFromCatalog;
 
   /// The item type as the game names it — "One-Handed Sword", "Scroll".
   final String subtitle;
@@ -139,6 +143,7 @@ ItemTooltip buildItemTooltip({
   required Map<String, Map<String, String>> catalog,
   required GameLang lang,
   required AppLocalizations l10n,
+  bool titleFromCatalog = true,
 }) {
   if (stats == null || stats.isEmpty) return const ItemTooltip();
   String? game(String key) => resolveGameText(catalog, key, lang);
@@ -343,6 +348,7 @@ ItemTooltip buildItemTooltip({
       : game('ui_inventory_requirements');
   return ItemTooltip(
     title: title,
+    titleFromCatalog: titleFromCatalog,
     subtitle: _itemTypeName(game, stats.itemType) ?? '',
     stats: rows,
     protection: protection,
