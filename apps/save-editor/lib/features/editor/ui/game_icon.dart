@@ -111,6 +111,7 @@ class GameIconLabel extends StatelessWidget {
     this.iconName,
     this.fallbackIcon,
     this.style,
+    this.gameTextLocale,
     this.iconSize = 18,
     this.maxLines,
     this.overflow,
@@ -120,13 +121,16 @@ class GameIconLabel extends StatelessWidget {
   final String? iconName;
   final IconData? fallbackIcon;
   final TextStyle? style;
+
+  /// Set only when [label] is game text. Interface strings keep the theme face.
+  final Locale? gameTextLocale;
   final double iconSize;
   final int? maxLines;
   final TextOverflow? overflow;
 
   @override
   Widget build(BuildContext context) {
-    final game = GameTextScript.maybeOf(context);
+    final game = gameTextLocale;
     final paint = game == null
         ? style
         : gameScriptTextStyle(context, game, style: style);

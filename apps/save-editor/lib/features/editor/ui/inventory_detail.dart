@@ -1104,6 +1104,10 @@ class _PrivateInventorySummaryCardState
                                             tab.label,
                                             tab.items.length,
                                           ),
+                                          style: gameScriptTextStyle(
+                                            context,
+                                            lang.locale,
+                                          ),
                                         ),
                                         selected: tab.category == selected,
                                         onSelected: (_) => setState(() {
@@ -1142,6 +1146,7 @@ class _PrivateInventorySummaryCardState
                                                   SidebarTile(
                                                     icon: tab.fallbackIcon,
                                                     gameIcon: tab.gameIcon,
+                                                    gameTextLocale: lang.locale,
                                                     label: l10n
                                                         .categoryWithCount(
                                                           tab.label,

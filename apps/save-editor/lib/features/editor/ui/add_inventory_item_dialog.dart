@@ -407,6 +407,7 @@ class _AddInventoryItemDialogState
                                       for (final g in groups)
                                         SidebarTile(
                                           icon: iconForItemCategory(g.category),
+                                          gameTextLocale: lang.locale,
                                           gameIcon:
                                               filtersById[g.category]?.icon ??
                                               gameIconForItemCategory(

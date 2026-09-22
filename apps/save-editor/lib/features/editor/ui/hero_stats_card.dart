@@ -622,6 +622,7 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
             label: widget.label,
             iconName: widget.gameIcon,
             style: labelStyle,
+            gameTextLocale: GameTextScript.maybeOf(context),
           );
           final game = GameTextScript.maybeOf(context);
           final font = game == null ? null : gameScriptTextStyle(context, game);

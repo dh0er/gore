@@ -671,6 +671,7 @@ class _NpcAttributeRowState extends State<_NpcAttributeRow> {
             label: widget.label,
             iconName: widget.gameIcon,
             style: Theme.of(context).textTheme.labelLarge,
+            gameTextLocale: GameTextScript.maybeOf(context),
           );
           final game = GameTextScript.maybeOf(context);
           final font = game == null ? null : gameScriptTextStyle(context, game);

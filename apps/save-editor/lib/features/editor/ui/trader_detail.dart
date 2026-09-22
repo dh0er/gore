@@ -1348,6 +1348,7 @@ class _StockSection extends ConsumerWidget {
                                   for (final group in groups)
                                     SidebarTile(
                                       icon: iconForItemCategory(group.category),
+                                      gameTextLocale: lang.locale,
                                       gameIcon:
                                           filtersById[group.category]?.icon ??
                                           gameIconForItemCategory(
