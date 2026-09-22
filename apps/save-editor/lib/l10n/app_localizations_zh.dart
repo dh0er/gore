@@ -7659,7 +7659,7 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String get removeMemoryEventTitle => '移除記憶事件？';
 
   @override
-  String get removeMemoryEventBody => '移除此記憶事件？將先寫入一份備份。';
+  String get removeMemoryEventBody => '將此記憶事件加入移除佇列？存檔只在按下“儲存”後才會變更。';
 
   @override
   String get memoryEventRemovalQueued => '事件移除已加入佇列 — 按“儲存”以應用。';
@@ -7671,7 +7671,7 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String get duplicateMemoryEventTitle => '複製記憶事件？';
 
   @override
-  String get duplicateMemoryEventBody => '複製此記憶事件？將先寫入一份備份。';
+  String get duplicateMemoryEventBody => '將此記憶事件的複本加入佇列？存檔只在按下“儲存”後才會變更。';
 
   @override
   String get memoryEventDuplicationQueued => '事件複製已加入佇列 — 按“儲存”以應用。';
