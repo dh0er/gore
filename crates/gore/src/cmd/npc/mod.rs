@@ -802,6 +802,8 @@ fn author(
     let path = cache_path(cache.clone(), game.clone())?;
     let template_spawn = generate::spawn_class(&request.from);
     let emitted = emit_index(cache, game, Some(&template_spawn))?;
+    let modules = model::parse_modules(&read_module_cache(&path)?)
+        .context("parsing modules for NPC class validation")?;
 
     // Erst prüfen, dann schreiben. Ein halb angelegtes Arbeitsverzeichnis wäre schlimmer als eine
     // Fehlermeldung.
@@ -818,6 +820,13 @@ fn author(
         bail!(
             "{} is already a character in this game. Pick an id nothing ships under",
             request.id
+        );
+    }
+    if let Some(guild) = &request.guild {
+        let guild_class = format!("UCharacterDefinition_Human_{guild}");
+        ensure!(
+            is_valid_id(guild) && module_of_class(&modules, &guild_class).is_some(),
+            "unknown or invalid guild base {guild:?}: {guild_class} is not declared in this cache"
         );
     }
 
@@ -880,11 +889,7 @@ fn author(
     // sagt es deutlicher, als eine Vermutung hier es könnte.
     let visuals_class = format!("UCharacterVisualsDefinition_Human_{}", request.from);
     let mut visuals_classes = emitted.classes.clone();
-    if let Some(index) = model::parse_modules(&read_module_cache(&path)?)
-        .ok()
-        .and_then(|modules| module_of_class(&modules, &visuals_class).map(|i| (modules, i)))
-    {
-        let (modules, i) = index;
+    if let Some(i) = module_of_class(&modules, &visuals_class) {
         if let Some(source) = emit_named_module(&path, &modules[i].name)? {
             for class in defaults::parse_classes(&source) {
                 visuals_classes.insert(class.name.clone(), class);
@@ -1101,6 +1106,14 @@ fn read_manifest(dir: &Path) -> Result<workspace::Manifest> {
 }
 
 fn validate_manifest_modules(manifest: &workspace::Manifest) -> Result<()> {
+    ensure!(
+        manifest.cache_sha256.len() == 64
+            && manifest
+                .cache_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "invalid NPC manifest cache_sha256: expected 64 lowercase hex characters"
+    );
     let safe = |value: &str| {
         let path = Path::new(value);
         path.components().next().is_some()
@@ -1244,14 +1257,19 @@ fn workspace_source_findings(
         .with_context(|| format!("reading {}", pristine_path.display()))?;
     // Ein Checkout aendert Werte im eigenen Modul der Figur; ein Verfassen aendert Spawn-Zeilen
     // in einem fremden Levelskript. Zwei Absichten, zwei Waechter.
-    if manifest.operation == workspace::Operation::Checkout {
-        findings.extend(check::guard_checkout_diff(&pristine, &edited));
-    } else {
-        findings.extend(check::guard_level_diff(&pristine, &edited, &spawn_class));
-        if matches!(
-            manifest.operation,
-            workspace::Operation::New | workspace::Operation::Clone
-        ) {
+    match manifest.operation {
+        workspace::Operation::Checkout => {
+            findings.extend(check::guard_checkout_diff(&pristine, &edited));
+        }
+        workspace::Operation::Suppress => {
+            findings.extend(check::guard_suppressed_spawn(
+                &pristine,
+                &edited,
+                &spawn_class,
+            ));
+        }
+        workspace::Operation::New | workspace::Operation::Clone => {
+            findings.extend(check::guard_level_diff(&pristine, &edited, &spawn_class));
             match manifest.world_points.as_slice() {
                 [world_point] => findings.extend(check::guard_generated_spawn(
                     &pristine,
@@ -1716,10 +1734,13 @@ mod tests {
             modules: vec![authored, level],
             world_points: vec!["UWP_A".to_string()],
             level_module: "LevelScripts.Test".to_string(),
-            cache_sha256: "abc".to_string(),
+            cache_sha256: "a".repeat(64),
             modular_visuals: false,
         };
         assert!(validate_manifest_modules(&manifest).is_ok());
+        manifest.cache_sha256 = "abc".to_string();
+        assert!(validate_manifest_modules(&manifest).is_err());
+        manifest.cache_sha256 = "a".repeat(64);
         manifest.modules.push(manifest.modules[1].clone());
         assert!(validate_manifest_modules(&manifest).is_err());
         manifest.modules.pop();

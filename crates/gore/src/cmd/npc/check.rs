@@ -151,6 +151,19 @@ pub fn guard_generated_spawn(
     ))]
 }
 
+/// A suppression must be exactly the generated removal, including its original world points.
+pub fn guard_suppressed_spawn(pristine: &str, edited: &str, spawn_class: &str) -> Vec<Finding> {
+    if edit::remove_spawn(pristine, spawn_class)
+        .as_deref()
+        .is_ok_and(|expected| expected == edited)
+    {
+        return Vec::new();
+    }
+    vec![Finding::blocking(format!(
+        "the level script must contain exactly the generated removal of {spawn_class}'s spawn calls"
+    ))]
+}
+
 /// Die Klassen des verfassten Moduls gegen die Id prüfen.
 pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
     let classes = defaults::parse_classes(source);
@@ -376,6 +389,27 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(!guard_level_diff(&pristine, &edited, "USpawnAIAgentDefinition_Diego").is_empty());
+    }
+
+    #[test]
+    fn suppression_rejects_a_restored_or_relocated_spawn() {
+        let source = format!(
+            "{PRISTINE}\nclass UWP_B : UWorldPointScript\n{{\n    void OnWorldStart()\n    {{\n        return;\n    }}\n}}\n"
+        );
+        let suppressed = edit::remove_spawn(&source, "USpawnAIAgentDefinition_Diego").unwrap();
+        assert!(
+            guard_suppressed_spawn(&source, &suppressed, "USpawnAIAgentDefinition_Diego")
+                .is_empty()
+        );
+        assert!(
+            !guard_suppressed_spawn(&source, &source, "USpawnAIAgentDefinition_Diego").is_empty()
+        );
+        let relocated =
+            edit::add_spawn(&suppressed, "UWP_B", "USpawnAIAgentDefinition_Diego", None).unwrap();
+        assert!(
+            !guard_suppressed_spawn(&source, &relocated, "USpawnAIAgentDefinition_Diego")
+                .is_empty()
+        );
     }
 
     #[test]
