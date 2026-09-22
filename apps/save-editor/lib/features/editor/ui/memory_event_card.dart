@@ -92,14 +92,7 @@ class MemoryEventCard extends StatelessWidget {
           title: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Expanded(
-                child: Text(
-                  presentation.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: titleStyle,
-                ),
-              ),
+              Expanded(child: _catalogTitle(context, titleStyle)),
               if (editable) ...[
                 const SizedBox(width: 4),
                 if (onUndo != null)
@@ -143,6 +136,7 @@ class MemoryEventCard extends StatelessWidget {
                     label: fact.value,
                     icon: _factIcon(fact.kind),
                     color: scheme.onSurfaceVariant,
+                    fromCatalog: fact.valueFromCatalog,
                   ),
               ],
             ),
@@ -247,35 +241,87 @@ class MemoryEventCard extends StatelessWidget {
       ),
     );
   }
+
+  Widget _catalogTitle(BuildContext context, TextStyle? titleStyle) {
+    final run = presentation.catalogTitleRun;
+    final game = GameTextScript.maybeOf(context);
+    if (run == null || run.isEmpty || game == null) {
+      return Text(
+        presentation.title,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: titleStyle,
+      );
+    }
+    final index = presentation.title.lastIndexOf(run);
+    final painted = gameScriptTextStyle(context, game, style: titleStyle);
+    if (index < 0 || painted == null) {
+      return Text(
+        presentation.title,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: titleStyle,
+      );
+    }
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(
+            text: presentation.title.substring(0, index),
+            style: titleStyle,
+          ),
+          TextSpan(text: run, style: painted),
+          TextSpan(
+            text: presentation.title.substring(index + run.length),
+            style: titleStyle,
+          ),
+        ],
+      ),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+}
+
+TextStyle? _catalogStyle(BuildContext context, TextStyle? style) {
+  final game = GameTextScript.maybeOf(context);
+  if (game == null) return style;
+  return gameScriptTextStyle(context, game, style: style) ?? style;
 }
 
 class _Pill extends StatelessWidget {
-  const _Pill({required this.label, required this.icon, required this.color});
+  const _Pill({
+    required this.label,
+    required this.icon,
+    required this.color,
+    this.fromCatalog = false,
+  });
 
   final String label;
   final IconData icon;
   final Color color;
+  final bool fromCatalog;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-    decoration: BoxDecoration(
-      color: color.withValues(alpha: 0.09),
-      borderRadius: BorderRadius.circular(999),
-      border: Border.all(color: color.withValues(alpha: 0.22)),
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 13, color: color),
-        const SizedBox(width: 4),
-        Text(
-          label,
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
-        ),
-      ],
-    ),
-  );
+  Widget build(BuildContext context) {
+    final base = Theme.of(context).textTheme.labelSmall?.copyWith(color: color);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 4),
+          Text(label, style: fromCatalog ? _catalogStyle(context, base) : base),
+        ],
+      ),
+    );
+  }
 }
 
 class _FactRow extends StatelessWidget {
@@ -309,7 +355,12 @@ class _FactRow extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 1),
-                SelectableText(fact.value, style: theme.textTheme.bodyMedium),
+                SelectableText(
+                  fact.value,
+                  style: fact.valueFromCatalog
+                      ? _catalogStyle(context, theme.textTheme.bodyMedium)
+                      : theme.textTheme.bodyMedium,
+                ),
               ],
             ),
           ),

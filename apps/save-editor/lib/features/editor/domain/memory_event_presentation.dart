@@ -73,12 +73,16 @@ class MemoryEventFact {
     required this.label,
     required this.value,
     this.technicalValue,
+    this.valueFromCatalog = false,
   });
 
   final MemoryEventFactKind kind;
   final String label;
   final String value;
   final String? technicalValue;
+
+  /// True when [value] came from the game catalog. Interface fallbacks stay false.
+  final bool valueFromCatalog;
 }
 
 /// Localized semantic view of a raw [MemoryEvent].
@@ -92,6 +96,7 @@ class MemoryEventPresentation {
     required this.tags,
     this.subject,
     this.subjectId,
+    this.catalogTitleRun,
   });
 
   final MemoryEventKind kind;
@@ -100,6 +105,10 @@ class MemoryEventPresentation {
   final String title;
   final String? subject;
   final String? subjectId;
+
+  /// Catalog slice inside [title], when the subject came from the game catalog.
+  /// The action words around it stay interface text.
+  final String? catalogTitleRun;
   final List<MemoryEventFact> facts;
   final List<String> tags;
 }
@@ -170,6 +179,7 @@ class MemoryEventPresenter {
       title: title,
       subject: subject?.value,
       subjectId: subject?.technicalValue,
+      catalogTitleRun: subject?.catalogRun,
       facts: List.unmodifiable(_facts(event, kind)),
       tags: List.unmodifiable(event.tags),
     );
@@ -209,7 +219,12 @@ class MemoryEventPresenter {
       if (raw == null) continue;
       final display = _actor(raw);
       facts.add(
-        _fact(pair.$1, display, technicalValue: display == raw ? null : raw),
+        _fact(
+          pair.$1,
+          display.value,
+          technicalValue: display.value == raw ? null : raw,
+          valueFromCatalog: display.fromCatalog,
+        ),
       );
     }
 
@@ -253,6 +268,7 @@ class MemoryEventPresenter {
             MemoryEventFactKind.segmentText,
             paragraphs.join('\n\n'),
             technicalValue: textIds.join(', '),
+            valueFromCatalog: true,
           ),
         );
       }
@@ -266,7 +282,12 @@ class MemoryEventPresenter {
       if (raw == null) continue;
       final display = _object(raw);
       facts.add(
-        _fact(pair.$1, display, technicalValue: display == raw ? null : raw),
+        _fact(
+          pair.$1,
+          display.value,
+          technicalValue: display.value == raw ? null : raw,
+          valueFromCatalog: display.fromCatalog,
+        ),
       );
     }
     return facts;
@@ -276,6 +297,7 @@ class MemoryEventPresenter {
     MemoryEventFactKind kind,
     String value, {
     String? technicalValue,
+    bool valueFromCatalog = false,
   }) => MemoryEventFact(
     kind: kind,
     label: l10n.memoryEventFact(
@@ -284,6 +306,7 @@ class MemoryEventPresenter {
     ),
     value: value,
     technicalValue: technicalValue,
+    valueFromCatalog: valueFromCatalog,
   );
 
   _ResolvedSubject? _subject(MemoryEvent event, MemoryEventKind kind) {
@@ -336,7 +359,9 @@ class MemoryEventPresenter {
       final id = _classId(raw);
       if (!id.toLowerCase().contains('quest')) continue;
       final localized = localizedQuestName(locCatalog, lang, id);
-      if (localized != null) return _ResolvedSubject(localized, raw);
+      if (localized != null) {
+        return _ResolvedSubject(localized, raw, catalogRun: localized);
+      }
       fallback ??= _ResolvedSubject(
         _humanizeIdentifier(id, prefixes: const ['Quest']),
         raw,
@@ -347,10 +372,11 @@ class MemoryEventPresenter {
       final questAt = tag.toLowerCase().indexOf('quest_');
       if (questAt < 0) continue;
       final id = tag.substring(questAt);
+      final localized = localizedQuestName(locCatalog, lang, id);
       return _ResolvedSubject(
-        localizedQuestName(locCatalog, lang, id) ??
-            _humanizeIdentifier(id, prefixes: const ['Quest']),
+        localized ?? _humanizeIdentifier(id, prefixes: const ['Quest']),
         id,
+        catalogRun: localized,
       );
     }
     return null;
@@ -392,22 +418,24 @@ class MemoryEventPresenter {
         );
         final label = l10n.glossaryCatalogSegmentLabel(segment.id, fallback);
         return _ResolvedSubject(
-          '$npcName — $label',
+          '${npcName.value} — $label',
           segmentRaw ?? segment.segmentClass,
+          catalogRun: npcName.fromCatalog ? npcName.value : null,
         );
       }
-      return _ResolvedSubject(npcName, documentRaw ?? npc.documentClass);
+      return _fromText(npcName, documentRaw ?? npc.documentClass);
     }
 
     if (documentRaw == null) return null;
     final document = _object(documentRaw);
     if (includeSegment && segmentRaw != null) {
       return _ResolvedSubject(
-        '$document — ${_documentSegmentName(segmentRaw, documentRaw)}',
+        '${document.value} — ${_documentSegmentName(segmentRaw, documentRaw)}',
         '$documentRaw | $segmentRaw',
+        catalogRun: document.fromCatalog ? document.value : null,
       );
     }
-    return _ResolvedSubject(document, documentRaw);
+    return _fromText(document, documentRaw);
   }
 
   _ResolvedSubject? _chapterSubject(MemoryEvent event) {
@@ -426,7 +454,7 @@ class MemoryEventPresenter {
     for (final raw in _objectCandidates(event)) {
       final id = _classId(raw);
       if (id.toLowerCase() == 'storyg1r') continue;
-      return _ResolvedSubject(_object(raw), raw);
+      return _fromText(_object(raw), raw);
     }
     final chapter = _chapterNumber(event);
     if (chapter != null) {
@@ -456,7 +484,7 @@ class MemoryEventPresenter {
     for (final tag in event.tags) {
       final lower = tag.toLowerCase();
       if (!lower.contains('area') || _isAreaActionTag(lower)) continue;
-      return _ResolvedSubject(_gameplayTagSubject(tag), tag);
+      return _fromText(_gameplayTagSubject(tag), tag);
     }
     return _firstObjectSubject(event);
   }
@@ -469,7 +497,7 @@ class MemoryEventPresenter {
     }
     for (final raw in [event.affected, event.instigator]) {
       if (raw != null && !_isHero(raw)) {
-        return _ResolvedSubject(_actor(raw), raw);
+        return _fromText(_actor(raw), raw);
       }
     }
     final object = _firstObjectSubject(event);
@@ -482,7 +510,7 @@ class MemoryEventPresenter {
       final lower = tag.toLowerCase();
       if ((lower.startsWith('species.') || lower.contains('.creature.')) &&
           !lower.startsWith('memory.character.defeated')) {
-        return _ResolvedSubject(_gameplayTagSubject(tag), tag);
+        return _fromText(_gameplayTagSubject(tag), tag);
       }
     }
     return null;
@@ -490,7 +518,7 @@ class MemoryEventPresenter {
 
   _ResolvedSubject? _firstObjectSubject(MemoryEvent event) {
     final raw = _objectCandidates(event).firstOrNull;
-    return raw == null ? null : _ResolvedSubject(_object(raw), raw);
+    return raw == null ? null : _fromText(_object(raw), raw);
   }
 
   _ResolvedSubject? _skillSubject(MemoryEvent event) {
@@ -529,14 +557,19 @@ class MemoryEventPresenter {
       ..._objectCandidates(event),
     ]) {
       final normalized = raw.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
-      final name = switch (normalized) {
-        final value when value.contains('oldcamp') => l10n.factionGuildOldCamp,
-        final value when value.contains('newcamp') => l10n.factionGuildNewCamp,
-        final value when value.contains('swampcamp') =>
+      final named = switch (normalized) {
+        final value when value.contains('oldcamp') => _Text(
+          l10n.factionGuildOldCamp,
+        ),
+        final value when value.contains('newcamp') => _Text(
+          l10n.factionGuildNewCamp,
+        ),
+        final value when value.contains('swampcamp') => _Text(
           l10n.factionGuildSwampCamp,
+        ),
         _ => _gameplayTagSubject(raw),
       };
-      return _ResolvedSubject(name, raw);
+      return _fromText(named, raw);
     }
     return null;
   }
@@ -566,26 +599,28 @@ class MemoryEventPresenter {
     final payloadEventName = event.payload?.valueFor('EventName');
     if (payloadEventName is String && payloadEventName.trim().isNotEmpty) {
       final raw = payloadEventName.trim();
+      final localized = _localizedName(raw);
       return _ResolvedSubject(
-        _localizedName(raw) ?? _humanizeIdentifier(raw),
+        localized ?? _humanizeIdentifier(raw),
         raw,
+        catalogRun: localized,
       );
     }
     for (final raw in [event.affected, event.instigator]) {
       if (raw != null && !_isHero(raw)) {
-        return _ResolvedSubject(_actor(raw), raw);
+        return _fromText(_actor(raw), raw);
       }
     }
     for (final raw in _objectCandidates(event)) {
       if (_classId(raw).toLowerCase() != 'storyg1r') {
-        return _ResolvedSubject(_object(raw), raw);
+        return _fromText(_object(raw), raw);
       }
     }
     for (final tag in event.tags) {
       final lower = tag.toLowerCase();
       if (lower.startsWith('memory.storyevent.') ||
           lower.startsWith('memory.story.event.')) {
-        return _ResolvedSubject(_gameplayTagSubject(tag), tag);
+        return _fromText(_gameplayTagSubject(tag), tag);
       }
     }
     return null;
@@ -594,50 +629,57 @@ class MemoryEventPresenter {
   _ResolvedSubject? _fallbackSubject(MemoryEvent event) {
     for (final raw in [event.affected, event.instigator]) {
       if (raw != null && !_isHero(raw)) {
-        return _ResolvedSubject(_actor(raw), raw);
+        return _fromText(_actor(raw), raw);
       }
     }
     return _firstObjectSubject(event);
   }
 
-  String _object(String raw) {
+  _Text _object(String raw) {
     final item = _lookup(_itemsByReference, raw);
     final npc = _lookup(_npcsByReference, raw);
     if (npc != null) return _npcName(npc);
     final id = item?.id ?? _classId(raw);
     final localized = _localizedName(id);
-    if (localized != null) return localized;
-    return _humanizeIdentifier(
-      id,
-      prefixes: const [
-        'ItFo',
-        'ItMi',
-        'ItMw',
-        'ItRw',
-        'ItAr',
-        'ItAm',
-        'ItRi',
-        'ReFo',
-        'Recipe',
-        'Document',
-        'BP',
-        'GE',
-      ],
+    if (localized != null) return _Text(localized, fromCatalog: true);
+    return _Text(
+      _humanizeIdentifier(
+        id,
+        prefixes: const [
+          'ItFo',
+          'ItMi',
+          'ItMw',
+          'ItRw',
+          'ItAr',
+          'ItAm',
+          'ItRi',
+          'ReFo',
+          'Recipe',
+          'Document',
+          'BP',
+          'GE',
+        ],
+      ),
     );
   }
 
-  String _actor(String raw) {
-    if (_isHero(raw)) return l10n.memoryEventHero;
+  _Text _actor(String raw) {
+    if (_isHero(raw)) return _Text(l10n.memoryEventHero);
     final npc = _lookup(_npcsByReference, raw);
     if (npc != null) return _npcName(npc);
     final compact = _actorId(raw);
-    return _localizedName(compact) ?? _humanizeActor(compact);
+    final localized = _localizedName(compact);
+    if (localized != null) return _Text(localized, fromCatalog: true);
+    return _Text(_humanizeActor(compact));
   }
 
-  String _npcName(NpcGlossaryCatalogEntry entry) =>
-      _localizedName(entry.uniqueName) ??
-      _localizedName(entry.id) ??
-      _humanizeActor(entry.id);
+  _Text _npcName(NpcGlossaryCatalogEntry entry) {
+    final unique = _localizedName(entry.uniqueName);
+    if (unique != null) return _Text(unique, fromCatalog: true);
+    final id = _localizedName(entry.id);
+    if (id != null) return _Text(id, fromCatalog: true);
+    return _Text(_humanizeActor(entry.id));
+  }
 
   String? _localizedName(String raw) {
     for (final candidate in _localizedIdCandidates(raw)) {
@@ -772,7 +814,7 @@ class MemoryEventPresenter {
     );
   }
 
-  String _gameplayTagSubject(String raw) {
+  _Text _gameplayTagSubject(String raw) {
     final pieces = raw.split('.');
     final meaningful = pieces
         .where(
@@ -791,7 +833,9 @@ class MemoryEventPresenter {
         )
         .toList(growable: false);
     final candidate = meaningful.isEmpty ? pieces.last : meaningful.last;
-    return _localizedName(candidate) ?? _humanizeIdentifier(candidate);
+    final localized = _localizedName(candidate);
+    if (localized != null) return _Text(localized, fromCatalog: true);
+    return _Text(_humanizeIdentifier(candidate));
   }
 
   String _formatDuration(double seconds) {
@@ -822,11 +866,27 @@ class MemoryEventPresenter {
 }
 
 class _ResolvedSubject {
-  const _ResolvedSubject(this.value, this.technicalValue);
+  const _ResolvedSubject(this.value, this.technicalValue, {this.catalogRun});
 
   final String value;
   final String technicalValue;
+
+  /// Catalog slice of [value]. Null when the subject is interface text.
+  final String? catalogRun;
 }
+
+class _Text {
+  const _Text(this.value, {this.fromCatalog = false});
+
+  final String value;
+  final bool fromCatalog;
+}
+
+_ResolvedSubject _fromText(_Text text, String technical) => _ResolvedSubject(
+  text.value,
+  technical,
+  catalogRun: text.fromCatalog ? text.value : null,
+);
 
 class _NpcSegmentMatch {
   const _NpcSegmentMatch(this.entry, this.segment);
