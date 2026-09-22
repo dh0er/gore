@@ -829,13 +829,14 @@ class _EllipsisTooltip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final font = gameTextLocale == null
+        ? null
+        : gameScriptTextStyle(context, gameTextLocale!);
     final label = Text(
       text,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
-      style: gameTextLocale == null
-          ? null
-          : gameScriptTextStyle(context, gameTextLocale!),
+      style: font,
     );
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -851,7 +852,12 @@ class _EllipsisTooltip extends StatelessWidget {
         )..layout(maxWidth: constraints.maxWidth);
         final truncated = painter.didExceedMaxLines;
         painter.dispose();
-        return truncated ? Tooltip(message: text, child: label) : label;
+        if (!truncated) return label;
+        if (font == null) return Tooltip(message: text, child: label);
+        return Tooltip(
+          richMessage: TextSpan(text: text, style: font),
+          child: label,
+        );
       },
     );
   }
