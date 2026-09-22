@@ -548,93 +548,60 @@ class _LockList extends StatelessWidget {
     _StateFilter.locked => l10n.locksFilterLocked,
   };
 
-  String _keyName(String id) {
-    final name = localizedKeyName(locCatalog, lang, id);
-    return showObjectIds && name != id ? '$name ($id)' : name;
-  }
-
-  /// The line under a lock's name: what it takes to open it.
-  String? _subtitleText(_LockRow row) {
+  /// The line under a lock's name. App-owned sentences stay on the interface
+  /// face. Each catalog key name is its own span, so a later name cannot match
+  /// inside an earlier technical id or generated fallback.
+  Widget? _subtitleLine(BuildContext context, _LockRow row) {
     final entry = row.entry;
-    if (entry == null) return l10n.locksUnknownEntry;
+    if (entry == null) {
+      return Text(l10n.locksUnknownEntry, overflow: TextOverflow.ellipsis);
+    }
     // `Permalocked` is a sentinel key that matches no item in the game — the
     // lock is meant never to open, so say that instead of naming a key the
     // player can never hold.
     if (entry.keys.length == 1 && entry.keys.first == 'Permalocked') {
-      return l10n.locksPermalocked;
+      return Text(l10n.locksPermalocked, overflow: TextOverflow.ellipsis);
     }
-    final parts = <String>[];
-    // A lock with no pickable difficulty at all only ever opens with its key.
-    if (entry.difficulty == null && entry.keys.isNotEmpty) {
-      parts.add(l10n.locksKeyOnly);
-    }
-    if (entry.keys.isNotEmpty) {
-      parts.add(l10n.locksKeyLabel(entry.keys.map(_keyName).join(', ')));
-    }
-    return parts.isEmpty ? null : parts.join(' · ');
-  }
+    if (entry.keys.isEmpty) return null;
 
-  /// The line under a lock's name. App-owned sentences stay on the interface
-  /// face. Each catalog key name uses the game-text face; a generated fallback
-  /// and a trailing technical id stay on the interface face.
-  Widget _subtitleLine(
-    BuildContext context,
-    String text, {
-    List<String> catalogRuns = const [],
-  }) {
     final game = gameScriptTextStyle(context, lang.locale);
-    if (game == null || catalogRuns.isEmpty) {
-      return Text(text, overflow: TextOverflow.ellipsis);
-    }
-    final spans = <InlineSpan>[];
-    var cursor = 0;
-    for (final run in catalogRuns) {
-      if (run.isEmpty) continue;
-      final index = text.indexOf(run, cursor);
-      if (index < 0) continue;
-      if (index > cursor) {
-        spans.add(TextSpan(text: text.substring(cursor, index)));
+    // A character no localization string contains, so the wrapper split cannot
+    // land inside a key name.
+    const marker = '\uE000';
+    final wrapped = l10n.locksKeyLabel(marker).split(marker);
+    final spans = <InlineSpan>[
+      if (entry.difficulty == null) TextSpan(text: '${l10n.locksKeyOnly} · '),
+      if (wrapped.isNotEmpty && wrapped.first.isNotEmpty)
+        TextSpan(text: wrapped.first),
+    ];
+    for (var index = 0; index < entry.keys.length; index++) {
+      if (index > 0) spans.add(const TextSpan(text: ', '));
+      final id = entry.keys[index];
+      final localized = localizedGameName(locCatalog, lang, id);
+      final fromCatalog = localized != null && localized.trim().isNotEmpty;
+      final name = fromCatalog
+          ? localized
+          : itemDisplayNameFromId(id, fallback: id);
+      spans.add(TextSpan(text: name, style: fromCatalog ? game : null));
+      if (showObjectIds && name != id) {
+        spans.add(TextSpan(text: ' ($id)'));
       }
-      spans.add(TextSpan(text: run, style: game));
-      cursor = index + run.length;
     }
-    if (cursor < text.length) {
-      spans.add(TextSpan(text: text.substring(cursor)));
+    if (wrapped.length > 1 && wrapped.last.isNotEmpty) {
+      spans.add(TextSpan(text: wrapped.last));
     }
-    if (spans.isEmpty) return Text(text, overflow: TextOverflow.ellipsis);
     return Text.rich(
       TextSpan(children: spans),
       overflow: TextOverflow.ellipsis,
     );
   }
 
-  /// Catalog names only, in the order they appear in the key list. A missing
-  /// translation is omitted so the generated name and any shown id keep the
-  /// interface face.
-  List<String> _catalogKeyRuns(_LockRow row) {
-    final entry = row.entry;
-    if (entry == null || entry.keys.isEmpty) return const [];
-    if (entry.keys.length == 1 && entry.keys.first == 'Permalocked') {
-      return const [];
-    }
-    final runs = <String>[];
-    for (final id in entry.keys) {
-      final localized = localizedGameName(locCatalog, lang, id);
-      if (localized == null || localized.trim().isEmpty) continue;
-      runs.add(localized);
-    }
-    return runs;
-  }
-
   /// The line under a lock's name: the game's own difficulty pips, then what it
   /// takes to open it.
   Widget? _subtitle(BuildContext context, _LockRow row) {
-    final text = _subtitleText(row);
     final difficulty = row.entry?.difficulty;
-    if (text == null && difficulty == null) return null;
-    final line = text == null
-        ? null
-        : _subtitleLine(context, text, catalogRuns: _catalogKeyRuns(row));
+    final line = _subtitleLine(context, row);
+    if (line == null && difficulty == null) return null;
     if (difficulty == null) return line;
     return Row(
       children: [
