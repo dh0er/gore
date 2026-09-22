@@ -575,38 +575,55 @@ class _LockList extends StatelessWidget {
   }
 
   /// The line under a lock's name. App-owned sentences stay on the interface
-  /// face. A key list keeps that face on the "Key:" wrapper and uses the
-  /// game-text face only for the names themselves.
+  /// face. Each catalog key name uses the game-text face; a generated fallback
+  /// and a trailing technical id stay on the interface face.
   Widget _subtitleLine(
     BuildContext context,
     String text, {
-    String? catalogRun,
+    List<String> catalogRuns = const [],
   }) {
     final game = gameScriptTextStyle(context, lang.locale);
-    final run = catalogRun ?? '';
-    final index = run.isEmpty ? -1 : text.lastIndexOf(run);
-    if (game == null || index < 0) {
+    if (game == null || catalogRuns.isEmpty) {
       return Text(text, overflow: TextOverflow.ellipsis);
     }
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    for (final run in catalogRuns) {
+      if (run.isEmpty) continue;
+      final index = text.indexOf(run, cursor);
+      if (index < 0) continue;
+      if (index > cursor) {
+        spans.add(TextSpan(text: text.substring(cursor, index)));
+      }
+      spans.add(TextSpan(text: run, style: game));
+      cursor = index + run.length;
+    }
+    if (cursor < text.length) {
+      spans.add(TextSpan(text: text.substring(cursor)));
+    }
+    if (spans.isEmpty) return Text(text, overflow: TextOverflow.ellipsis);
     return Text.rich(
-      TextSpan(
-        children: [
-          TextSpan(text: text.substring(0, index)),
-          TextSpan(text: run, style: game),
-          TextSpan(text: text.substring(index + run.length)),
-        ],
-      ),
+      TextSpan(children: spans),
       overflow: TextOverflow.ellipsis,
     );
   }
 
-  String? _catalogKeyRun(_LockRow row) {
+  /// Catalog names only, in the order they appear in the key list. A missing
+  /// translation is omitted so the generated name and any shown id keep the
+  /// interface face.
+  List<String> _catalogKeyRuns(_LockRow row) {
     final entry = row.entry;
-    if (entry == null || entry.keys.isEmpty) return null;
+    if (entry == null || entry.keys.isEmpty) return const [];
     if (entry.keys.length == 1 && entry.keys.first == 'Permalocked') {
-      return null;
+      return const [];
     }
-    return entry.keys.map(_keyName).join(', ');
+    final runs = <String>[];
+    for (final id in entry.keys) {
+      final localized = localizedGameName(locCatalog, lang, id);
+      if (localized == null || localized.trim().isEmpty) continue;
+      runs.add(localized);
+    }
+    return runs;
   }
 
   /// The line under a lock's name: the game's own difficulty pips, then what it
@@ -617,7 +634,7 @@ class _LockList extends StatelessWidget {
     if (text == null && difficulty == null) return null;
     final line = text == null
         ? null
-        : _subtitleLine(context, text, catalogRun: _catalogKeyRun(row));
+        : _subtitleLine(context, text, catalogRuns: _catalogKeyRuns(row));
     if (difficulty == null) return line;
     return Row(
       children: [
