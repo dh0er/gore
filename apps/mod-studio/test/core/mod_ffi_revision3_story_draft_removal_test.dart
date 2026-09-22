@@ -19,7 +19,7 @@ const _lineId = '66666666666666666666666666666666';
       ),
       AuthoringStoryDraftKind.questDraft => (
         id: 'gore-authoring.draft-quest-skeleton',
-        version: 5,
+        version: 6,
       ),
     };
 
