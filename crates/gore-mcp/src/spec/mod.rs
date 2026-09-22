@@ -501,7 +501,7 @@ pub enum JsonSupport {
 /// One leaf command.
 #[derive(Clone, Copy, Debug)]
 pub struct CommandSpec {
-    /// The clap subcommand spelling.
+    /// The clap subcommand path, space separated for deeper leaves such as `routine set`.
     pub sub: &'static str,
     /// First line of the clap doc comment.
     pub summary: &'static str,
@@ -637,7 +637,7 @@ impl CommandSpec {
 /// Whether a group corresponds to a real CLI subcommand or is a synthetic bundle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupShape {
-    /// `gore <cli> <sub> …`
+    /// `gore <cli> <sub-path> …`
     Nested,
     /// `gore <sub> …` — the group exists only to keep the tool list navigable.
     Flat,
@@ -657,6 +657,16 @@ pub struct GroupSpec {
 }
 
 impl GroupSpec {
+    /// Literal CLI tokens for a table-owned subcommand path. Argument values are never split.
+    pub fn command_path<'a>(&self, sub: &'a str) -> Vec<&'a str> {
+        let mut path = Vec::new();
+        if self.shape == GroupShape::Nested {
+            path.push(self.cli);
+        }
+        path.extend(sub.split_whitespace());
+        path
+    }
+
     pub fn command(&self, sub: &str) -> Option<&'static CommandSpec> {
         self.commands.iter().find(|command| command.sub == sub)
     }
@@ -741,7 +751,7 @@ pub const GROUPS: &[GroupSpec] = &[
 ///
 /// A literal, not a computed value: it is a claim about the CLI, and the integration test compares
 /// it against what clap actually exposes. Changing it should be a deliberate act.
-pub const EXPECTED_LEAF_COUNT: usize = 110;
+pub const EXPECTED_LEAF_COUNT: usize = 114;
 
 pub fn group(tool: &str) -> Option<&'static GroupSpec> {
     GROUPS.iter().find(|group| group.tool == tool)

@@ -33,10 +33,7 @@ fn help(argv: &[&str]) -> String {
 
 /// The command path a leaf lives at, e.g. `["config", "set"]` or `["dump"]`.
 fn path<'a>(group: &'a GroupSpec, sub: &'a str) -> Vec<&'a str> {
-    match group.shape {
-        GroupShape::Nested => vec![group.cli, sub],
-        GroupShape::Flat => vec![sub],
-    }
+    group.command_path(sub)
 }
 
 /// Long flags **declared** by clap, as opposed to merely mentioned in help prose.
@@ -396,24 +393,31 @@ fn no_subcommand_of_an_exposed_family_is_missing_from_the_table() {
     // than one tool (`gore as` across `gore_as`, `gore_as_compile` and `gore_as_compile_module`,
     // `gore mod` and `gore mgr` across their plain and their direct-argument tools), so asking any
     // single group to cover a whole family would be wrong.
-    let mut covered: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut covered: BTreeMap<Vec<&str>, BTreeSet<&str>> = BTreeMap::new();
     for group in spec::GROUPS {
         if !matches!(group.shape, GroupShape::Nested) || group.cli.is_empty() {
             continue;
         }
-        covered
-            .entry(group.cli)
-            .or_default()
-            .extend(group.commands.iter().map(|command| command.sub));
+        for command in group.commands {
+            let path = group.command_path(command.sub);
+            // Every intermediate parent is checked, including e.g. `npc routine`, so a new
+            // unlisted leaf cannot hide behind an already-covered top-level family.
+            for index in 1..path.len() {
+                covered
+                    .entry(path[..index].to_vec())
+                    .or_default()
+                    .insert(path[index]);
+            }
+        }
     }
 
     let mut missing: Vec<String> = Vec::new();
-    for (cli, subs) in &covered {
-        for name in help_subcommands(&help(&[cli])) {
+    for (path, subs) in &covered {
+        for name in help_subcommands(&help(path)) {
             if UNEXPOSED_SUBCOMMANDS.contains(&name.as_str()) || subs.contains(name.as_str()) {
                 continue;
             }
-            missing.push(format!("`gore {cli} {name}`"));
+            missing.push(format!("`gore {} {name}`", path.join(" ")));
         }
     }
     assert!(

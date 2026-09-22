@@ -10,6 +10,9 @@ pub mod defaults;
 pub mod edit;
 pub mod generate;
 pub mod render;
+pub mod routine;
+pub mod routine_plan;
+pub mod routine_spots;
 pub mod sites;
 pub mod stage;
 pub mod workspace;
@@ -29,6 +32,11 @@ use sites::Site;
 
 #[derive(Subcommand)]
 pub enum NpcAction {
+    /// Edit and inspect a new NPC's daily schedule
+    Routine {
+        #[command(subcommand)]
+        action: routine::RoutineAction,
+    },
     /// List the characters the game ships
     List {
         /// Keep only entries whose id or class contains this text
@@ -220,6 +228,7 @@ pub enum NpcAction {
 
 pub fn run(action: NpcAction) -> Result<()> {
     match action {
+        NpcAction::Routine { action } => routine::run(action),
         NpcAction::List {
             filter,
             category,
@@ -1094,6 +1103,7 @@ fn read_manifest(dir: &Path) -> Result<workspace::Manifest> {
 /// `gore npc check` — das Arbeitsverzeichnis gegen den Vertrag prüfen.
 fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
     let manifest = read_manifest(dir)?;
+    routine::check_managed(dir, &manifest, game.clone())?;
     let spawn_class = generate::spawn_class(&manifest.npc_id);
     let emitted = emit_index(cache, game, Some(&spawn_class))?;
 
@@ -1279,6 +1289,7 @@ fn stage_workspace(
 ) -> Result<()> {
     gore_mod::validate_mod_name(mod_name).context("invalid --mod-name")?;
     let manifest = read_manifest(dir)?;
+    routine::check_managed(dir, &manifest, game.clone())?;
     let path = cache_path(cache, game.clone())?;
     let route = stage::route_of(&manifest);
     let game = match route {

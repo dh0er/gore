@@ -250,6 +250,59 @@ at that spot. Choose a reachable target near the spawn. `check` looks that
 waypoint up in the bundled location catalog, because the game ignores an unknown
 one without a word; catalog membership does not prove a navigable route.
 
+### Editing a daily schedule
+
+`npc routine` adds multiple phases to a workspace from `npc new` or `npc clone`:
+
+```powershell
+gore npc routine spots --activity guard --area OC
+gore npc routine spots --activity sit --area OC
+gore npc routine set work/my-npc --time 08:00 --activity guard --spot BreadcrumbActor_OC_NIGHTWATCH_GUARD10_5
+gore npc routine set work/my-npc --time 18:00 --activity sit --spot IO_OC_CHAIR_81
+gore npc routine show work/my-npc
+gore npc routine remove work/my-npc --time 18:00
+```
+
+Times use `HH:MM`, from `00:00` to `23:59`. Each phase lasts until the next;
+the last wraps to the following day. A single phase lasts all day. Setting an
+existing time replaces that entry. Removing an entry extends the previous
+phase; removing the last entry is refused. If the workspace already has the
+original `--waypoint` routine, its `00:00 stand` phase is retained on the first
+edit. Replace or remove that phase explicitly if it is not wanted.
+
+Activities are `stand`, `read`, `drink`, `sit`, `sleep`, `guard` and `alchemy`.
+The generated schedule has zero random time offsets and teleport mode `Never`:
+the character walks between reachable targets. Stand/read/drink navigate to a
+known location directly; reading and drinking repeat the tested short actions
+with a two-second pause. The other four activities use the shipped object/guard
+states. `routine spots` checks their advertised action tags and restrictions in
+the installed `G1R/Script/Map/MainMap/InteractionSpots.json`. Use `--game` or the
+configured game path. Restricted, ambiguous or unsupported objects are refused
+rather than guessed from names. Direct activities need only the bundled location
+catalog. Both lookup modes offer `--area`, `--prefix`, `--max` and `--json`.
+Known action compatibility does not prove that a route is navigable or an object
+is free at runtime. Pick nearby places in the same accessible area.
+
+The CLI keeps its plan and generated script together in a marked block inside
+the NPC's authored module, and wires the level's existing spawn call to it.
+Other source stays intact. Handwritten routines and manual changes inside that
+block are refused by the editor; arbitrary AngelScript remains editable directly.
+This convenience path does not rewrite routines spread across a shipped NPC's
+checkout modules. `npc check` and `npc stage` validate managed blocks and their
+spots before the usual compile/build/deploy steps.
+
+Already-spawned NPCs retain their saved AI state. Editing or deploying the source
+does not automatically replace it. The generated `GoreApplyRoutine_MY_NPC()`
+helper resolves the NPC and calls `ExchangeDailyRoutineToClass` without moving
+the actor or changing the clock; it returns `false` if the NPC does not exist.
+Call it explicitly from your test dialog or setup script **after** spawning the
+NPC. Reapplying the helper starts the new routine again. Do the change before
+ending the topic, and avoid switching the conversation owner's AI in the middle
+of effects that still need to run. `routine show` prints the exact helper name;
+`--json` exposes the phases for tools. Quest-dependent alternate schedules remain
+handwritten. The activities reuse the campaign's runtime-tested paths; a newly
+generated combination still needs its own in-game route/save-load check.
+
 ### Trader stock uses the global shop record
 
 `npc new --trader` supplies an empty config, not goods. Define stock in its

@@ -11,6 +11,179 @@ fn gore() -> Command {
     Command::cargo_bin("gore").expect("built binary")
 }
 
+fn routine_workspace(legacy: bool) -> TempDir {
+    let dir = TempDir::new().unwrap();
+    let routine = if legacy {
+        "UDailyRoutine_MY_NPC_Start()"
+    } else {
+        "nullptr"
+    };
+    let mut source =
+        "// keep my custom code\nclass UCharacterDefinition_Human_MY_NPC {}\n".to_string();
+    if legacy {
+        source.push_str("class UDailyRoutine_MY_NPC_Start : UAIState_DailyRoutine_Human\n{\n    default Schedule(0, 0, UAIState_Stand(), n\"FP_XT_WAIT_OUTSIDE\", 1000.0f, TSubclassOf<UNavArea>(nullptr), nullptr);\n    default TeleportToCurrentTaskWhen = EDailyRoutineTeleportMode::WhenOutOfBounds;\n}\n");
+    }
+    std::fs::write(dir.path().join("MY_NPC.as"), source.replace('\n', "\r\n")).unwrap();
+    std::fs::write(dir.path().join("Level.as"), format!("// leave this alone\r\n    this.SpawnAIAgent(TSubclassOf<USpawnAIAgentDefinition>(USpawnAIAgentDefinition_MY_NPC::StaticClass()), {routine});\r\n// unrelated footer\r\n")).unwrap();
+    std::fs::write(dir.path().join("gore-npc-edit.json"), serde_json::to_vec(&serde_json::json!({
+        "operation":"new", "npc_id":"MY_NPC", "derived_from":"OC_STT_Diego",
+        "modules":[
+            {"module":"AI.MY_NPC","relative_path":"AI/MY_NPC.as","source_file":"MY_NPC.as","pristine_file":null,"op":"add"},
+            {"module":"Level","relative_path":"Level.as","source_file":"Level.as","pristine_file":"pristine/Level.as","op":"edit"}
+        ],
+        "world_points":["UWP_TEST"],"level_module":"Level","cache_sha256":"a".repeat(64),"modular_visuals":false
+    })).unwrap()).unwrap();
+    dir
+}
+
+fn routine_set(
+    dir: &TempDir,
+    time: &str,
+    activity: &str,
+    spot: &str,
+) -> assert_cmd::assert::Assert {
+    gore()
+        .args(["npc", "routine", "set"])
+        .arg(dir.path())
+        .args(["--time", time, "--activity", activity, "--spot", spot])
+        .assert()
+}
+
+fn routine_show(dir: &TempDir) -> serde_json::Value {
+    let output = gore()
+        .args(["npc", "routine", "show"])
+        .arg(dir.path())
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&output).unwrap()
+}
+
+#[test]
+fn routine_upserts_sorts_wires_spawn_and_preserves_unrelated_source() {
+    let dir = routine_workspace(false);
+    // Preserve manual code with LF even when the generated file started as CRLF.
+    let source_path = dir.path().join("MY_NPC.as");
+    let before = std::fs::read_to_string(&source_path).unwrap() + "// mixed ending\n";
+    std::fs::write(&source_path, &before).unwrap();
+    routine_set(&dir, "18:00", "drink", "FP_XT_WAIT_OUTSIDE").success();
+    routine_set(&dir, "08:00", "read", "FP_NavigationSupport393").success();
+    routine_set(&dir, "18:00", "stand", "FP_XT_WAIT_OUTSIDE").success();
+    let shown = routine_show(&dir);
+    assert_eq!(shown["activation_function"], "GoreApplyRoutine_MY_NPC");
+    assert_eq!(shown["phases"].as_array().unwrap().len(), 2);
+    assert_eq!(shown["phases"][0]["time"], "08:00");
+    assert_eq!(shown["phases"][1]["activity"], "stand");
+    let source = std::fs::read_to_string(dir.path().join("MY_NPC.as")).unwrap();
+    assert!(source.starts_with(&before));
+    assert!(source
+        .starts_with("// keep my custom code\r\nclass UCharacterDefinition_Human_MY_NPC {}\r\n"));
+    assert!(source.contains("EDailyRoutineTeleportMode::Never"));
+    assert!(!source.contains("UAIState_GoreRoutine_MY_NPC_Drink"));
+    let level = std::fs::read_to_string(dir.path().join("Level.as")).unwrap();
+    assert_eq!(level, "// leave this alone\r\n    this.SpawnAIAgent(TSubclassOf<USpawnAIAgentDefinition>(USpawnAIAgentDefinition_MY_NPC::StaticClass()), UDailyRoutine_MY_NPC_Start());\r\n// unrelated footer\r\n");
+}
+
+#[test]
+fn routine_legacy_migration_keeps_midnight_and_removal_extends_other_phase() {
+    let dir = routine_workspace(true);
+    assert_eq!(routine_show(&dir)["managed"], false);
+    routine_set(&dir, "12:00", "drink", "FP_NavigationSupport393").success();
+    let shown = routine_show(&dir);
+    assert_eq!(shown["phases"][0]["time"], "00:00");
+    assert_eq!(shown["phases"][0]["spot"], "FP_XT_WAIT_OUTSIDE");
+    gore()
+        .args(["npc", "routine", "remove"])
+        .arg(dir.path())
+        .args(["--time", "00:00"])
+        .assert()
+        .success();
+    assert_eq!(routine_show(&dir)["phases"].as_array().unwrap().len(), 1);
+    let before = std::fs::read(dir.path().join("MY_NPC.as")).unwrap();
+    for time in ["12:00", "01:00"] {
+        gore()
+            .args(["npc", "routine", "remove"])
+            .arg(dir.path())
+            .args(["--time", time])
+            .assert()
+            .failure();
+        assert_eq!(std::fs::read(dir.path().join("MY_NPC.as")).unwrap(), before);
+    }
+}
+
+#[test]
+fn routine_invalid_input_never_changes_either_file() {
+    let dir = routine_workspace(false);
+    let source = std::fs::read(dir.path().join("MY_NPC.as")).unwrap();
+    let level = std::fs::read(dir.path().join("Level.as")).unwrap();
+    routine_set(&dir, "24:00", "stand", "FP_XT_WAIT_OUTSIDE").failure();
+    routine_set(&dir, "9:00", "stand", "FP_XT_WAIT_OUTSIDE").failure();
+    routine_set(&dir, "09:00", "stand", "NO_SUCH_ROUTINE_SPOT")
+        .failure()
+        .stderr(contains("unknown routine spot"));
+    assert_eq!(std::fs::read(dir.path().join("MY_NPC.as")).unwrap(), source);
+    assert_eq!(std::fs::read(dir.path().join("Level.as")).unwrap(), level);
+}
+
+#[test]
+fn routine_manual_block_and_spawn_changes_are_not_overwritten() {
+    let dir = routine_workspace(false);
+    routine_set(&dir, "08:00", "read", "FP_XT_WAIT_OUTSIDE").success();
+    let path = dir.path().join("MY_NPC.as");
+    let source = std::fs::read_to_string(&path).unwrap();
+    let modified = source.replace("this.WaitSeconds(2.0f)", "this.WaitSeconds(4.0f)");
+    assert_ne!(modified, source);
+    std::fs::write(&path, &modified).unwrap();
+    routine_set(&dir, "12:00", "stand", "FP_XT_WAIT_OUTSIDE")
+        .failure()
+        .stderr(contains("manually changed"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), modified);
+    std::fs::write(&path, &source).unwrap();
+    let level = dir.path().join("Level.as");
+    let modified = std::fs::read_to_string(&level)
+        .unwrap()
+        .replace("UDailyRoutine_MY_NPC_Start()", "MyHandwrittenRoutine()");
+    std::fs::write(&level, &modified).unwrap();
+    routine_set(&dir, "12:00", "stand", "FP_XT_WAIT_OUTSIDE")
+        .failure()
+        .stderr(contains("spawn line was manually changed"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+    assert_eq!(std::fs::read_to_string(&level).unwrap(), modified);
+}
+
+#[test]
+fn routine_spots_direct_activity_is_offline_and_filters_before_truncation() {
+    let output = gore()
+        .args([
+            "npc",
+            "routine",
+            "spots",
+            "--activity",
+            "read",
+            "--prefix",
+            "FP_XT",
+            "--max",
+            "1",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let doc: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(doc["matched_count"].as_u64().unwrap() > 1);
+    assert_eq!(doc["listed_count"], 1);
+    assert_eq!(doc["truncated"], true);
+    assert!(doc["spots"][0]["name"]
+        .as_str()
+        .unwrap()
+        .starts_with("FP_XT"));
+}
+
 #[test]
 fn list_finds_diego_by_substring() {
     gore()

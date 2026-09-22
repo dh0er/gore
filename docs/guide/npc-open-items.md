@@ -285,9 +285,13 @@ Voice publication uses Vorbis; line-specific lip sync is excluded by the user.
 
 ## Follow-up improvements
 
-- [ ] CLI convenience for multiple schedule phases and activity selection. Today
-  the CLI builds/deploys authored AngelScript; `--waypoint` generates one all-day
-  task rather than a multi-phase routine. Add convenience only around proven paths.
+- [x] CLI convenience for multiple schedule phases and activity selection:
+  `npc routine set/show/remove/spots` edits new/clone workspaces, validates times
+  and object action restrictions, and generates an explicit saved-NPC routine
+  replacement helper. Seven activities reuse the tested paths; see
+  [daily schedules](npc-authoring.md#editing-a-daily-schedule). Arbitrary newly
+  selected routes still require an in-game check. Quest-dependent alternate
+  schedules remain handwritten.
 - [ ] Optional longer, more natural activity animations. The current test repeats
   short reading/drinking actions with a two-second pause; this is expected.
 

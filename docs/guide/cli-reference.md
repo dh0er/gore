@@ -225,7 +225,7 @@ what the cache declares rather than what a given save would show. Full detail in
 
 ## `npc`
 
-`gore npc <list|show|sites|new|clone|checkout|delete|check|stage|text> [OPTIONS]`
+`gore npc <list|show|sites|new|clone|checkout|delete|check|stage|text|routine> [OPTIONS]`
 
 | Subcommand | Flags | Meaning |
 |---|---|---|
@@ -238,6 +238,10 @@ what the cache declares rather than what a given save would show. Full detail in
 | `check` | `<DIR>` · `--cache` · `--game` | Diff the edited level script against its pristine copy and block on every change that is not a spawn line of the character being authored, naming the line. Also blocks on a cache that no longer matches the workspace, an id the game already ships, and a script that did not change; an unknown routine waypoint is a warning. Offline; no compile. |
 | `stage` | `<DIR>` · `--tree <DIR>` · `--mod-name <NAME>` · `--cache` · `--game` | Write `spec.json` into the workspace and print the compile and build commands. A new character needs `--tree`: its new module and the shipped level script must compile together, which is the complete-tree `gore as compile --mini` route, and that tree costs about 19 minutes once per game version before it is stamped and reused. A suppression touches one module and gets the far quicker `gore as compile-module`. `stage` runs neither. |
 | `text` | `<ID>` · `--name <NAME>` · `--english <NAME>` · `--out <FILE>` | The character's display name as a `gore loc import --edits` document, keyed by the id in lowercase. Both German columns are written, because `german_new` beats `german` wherever it exists; `--english` fills the three English ones. Reads nothing at all. `<FILE>` must not exist. |
+| `routine set` | `<DIR>` · `--time HH:MM` · `--activity <NAME>` · `--spot <NAME>` · `--game` | Insert or replace one daily phase in an existing new/clone workspace; validate the spot and wire the spawn. Activities: stand/read/drink/sit/sleep/guard/alchemy. |
+| `routine show` | `<DIR>` · `--json` | Show phases, daily wraparound and the explicit script helper for replacing an already-spawned NPC's saved routine. |
+| `routine remove` | `<DIR>` · `--time HH:MM` · `--game` | Remove a phase, extending its predecessor. Refuses the last phase and unknown times. |
+| `routine spots` | `--activity <NAME>` · `--area` · `--prefix` · `--max` · `--game` · `--json` | List known navigation targets or compatible objects using installed action/restriction metadata. Object activities require the game files; direct stand/read/drink work offline. |
 
 A character is not a data record in this game but a chain of AngelScript
 classes: a spawn definition names an AI agent config, which names a character
@@ -247,7 +251,7 @@ again — a `SpawnAIAgent` call in one of the level scripts — and that is what
 `sites` reads, in both the ordinary `TSubclassOf<>(…::StaticClass())` form and
 the 14 bare class references the shipped scripts also use.
 
-Every subcommand except `list` and `text` takes `--cache <PATH>` to read an
+Every subcommand except `list`, `text` and `routine` takes `--cache <PATH>` to read an
 exact script cache and `--game <ROOT>` to pick the install; without either, the
 configured game path is used, then Steam auto-detect. `list` answers from the
 bundled catalog and `text` from its own arguments, so neither reads an install.
@@ -268,11 +272,12 @@ game build; it is an absence of evidence, not reassurance.
 
 **Read-only apart from the files it is asked to write.** The authoring
 commands write a workspace, a spec and an edits document where they are pointed;
-nothing is compiled, packaged, deployed or launched here. And nothing on this
-path has been through the game: that an authored character appears, keeps its
-routine or survives a save is unproven, which is what `check` and `stage` say in
-the lines they end with. Editing an existing character is a separate thing again
-and has no command here. Full detail in [Characters](npc-authoring.md).
+`routine set/remove` update that workspace in place. Nothing is compiled,
+packaged, deployed or launched here. The NPC campaign records specific runtime
+passes; commands alone do not prove a new character, route or save-load case.
+Managed routines are also checked by `check` and `stage`; unknown spots or
+incompatible object actions block them. Full detail and existing-save activation
+in [Characters](npc-authoring.md#editing-a-daily-schedule).
 
 ## `gen`
 

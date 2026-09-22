@@ -1324,6 +1324,82 @@ const NPC_TEXT_ARGS: &[ArgSpec] = &[
     ),
 ];
 
+const NPC_ROUTINE_ACTIVITIES: &[&str] =
+    &["stand", "read", "drink", "sit", "sleep", "guard", "alchemy"];
+
+const NPC_ROUTINE_DIR: ArgSpec = ArgSpec::new(
+    "dir",
+    Positional { order: 0 },
+    Path,
+    "The existing workspace from npc new or clone",
+    true,
+);
+
+const NPC_ROUTINE_TIME: ArgSpec = ArgSpec::new(
+    "time",
+    Long("time"),
+    Str,
+    "Exact 24-hour time, HH:MM. The phase lasts until the next entry",
+    true,
+);
+
+const NPC_ROUTINE_ACTIVITY: ArgSpec = ArgSpec::new(
+    "activity",
+    Long("activity"),
+    Enum(NPC_ROUTINE_ACTIVITIES),
+    "The scheduled activity; object activities require a compatible interaction spot",
+    true,
+);
+
+const NPC_ROUTINE_GAME: ArgSpec = ArgSpec::new(
+    "game",
+    Long("game"),
+    Path,
+    "Game install for checking object actions (sit/sleep/guard/alchemy)",
+    false,
+);
+
+const NPC_ROUTINE_SET_ARGS: &[ArgSpec] = &[
+    NPC_ROUTINE_DIR,
+    NPC_ROUTINE_TIME,
+    NPC_ROUTINE_ACTIVITY,
+    ArgSpec::new(
+        "spot",
+        Long("spot"),
+        Str,
+        "A named location; use routine spots to find compatible targets",
+        true,
+    ),
+    NPC_ROUTINE_GAME,
+];
+
+const NPC_ROUTINE_SHOW_ARGS: &[ArgSpec] = &[NPC_ROUTINE_DIR];
+const NPC_ROUTINE_REMOVE_ARGS: &[ArgSpec] = &[NPC_ROUTINE_DIR, NPC_ROUTINE_TIME, NPC_ROUTINE_GAME];
+
+const NPC_ROUTINE_SPOTS_ARGS: &[ArgSpec] = &[
+    NPC_ROUTINE_ACTIVITY,
+    ArgSpec::new("area", Long("area"), Str, "Filter by area", false),
+    ArgSpec::new(
+        "prefix",
+        Long("prefix"),
+        Str,
+        "Filter by spot name prefix",
+        false,
+    ),
+    ArgSpec::new(
+        "max",
+        Long("max"),
+        Int {
+            min: Some(0),
+            max: None,
+        },
+        "Max rows to print",
+        false,
+    )
+    .with_default("50"),
+    NPC_ROUTINE_GAME,
+];
+
 const NPC_COMMANDS: &[CommandSpec] = &[
     // Answered from the catalog compiled into this binary, like `find`, so it needs no install.
     CommandSpec::new(
@@ -1422,6 +1498,42 @@ const NPC_COMMANDS: &[CommandSpec] = &[
         T_FAST,
     )
     .guide("npc-authoring"),
+    CommandSpec::new(
+        "routine set",
+        "Insert or replace a daily phase in a workspace from npc new/clone",
+        NPC_ROUTINE_SET_ARGS,
+        Safety::mutate(),
+        T_FAST,
+    )
+    .gated_because("rewrites the generated routine and spawn wiring in the existing NPC workspace")
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "routine show",
+        "Show the daily phases and the explicit helper for an already-spawned NPC",
+        NPC_ROUTINE_SHOW_ARGS,
+        Safety::read(),
+        T_FAST,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "routine remove",
+        "Remove a phase; its predecessor then lasts until the next remaining phase",
+        NPC_ROUTINE_REMOVE_ARGS,
+        Safety::mutate(),
+        T_FAST,
+    )
+    .gated_because("rewrites the generated daily schedule in the existing NPC workspace")
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "routine spots",
+        "Find named locations compatible with an activity",
+        NPC_ROUTINE_SPOTS_ARGS,
+        Safety::read(),
+        T_FAST,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("npc-authoring"),
 ];
 
 /// The character surface. A character is not a record in this game but a chain of AngelScript
@@ -1439,7 +1551,9 @@ pub const NPC: GroupSpec = GroupSpec {
               and which world points the level scripts spawn it from — then author a new one, or \
               stop a shipped one from being placed. `list` answers from the catalog bundled in \
               this binary and needs no installation, `text` writes a localization document from \
-              its arguments alone, and everything else reads the script cache. Authoring produces \
+              its arguments alone. `routine set/show/remove` edit or inspect an authored workspace; \
+              `routine spots` finds compatible targets, using installed interaction evidence for \
+              object activities. The other commands read the script cache. Authoring produces \
               a workspace and a build spec: compiling, packaging, deploying, and any evidence that \
               the character actually appears in game are separate steps this group does not take.",
     shape: GroupShape::Nested,

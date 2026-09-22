@@ -104,6 +104,20 @@ const TEXTURE_REPLACE_ARGS: &[ArgSpec] = &[
         "Output mod dir; rewritten cooked files land under <mod_dir>/G1R/Content/…",
         true,
     ),
+    ArgSpec::new(
+        "as_asset",
+        Long("as-asset"),
+        Str,
+        "Create a separate Texture2D package at this new /Game path; do not override the source",
+        false,
+    ),
+    ArgSpec::new(
+        "fit_original",
+        Switch("fit-original"),
+        Bool,
+        "Resample the input atlas to the original top-mip dimensions before encoding (required for differently sized VT input)",
+        false,
+    ),
 ];
 
 const TEXTURE_PACK_ARGS: &[ArgSpec] = &[
