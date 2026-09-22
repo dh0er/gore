@@ -94,9 +94,10 @@ String defaultGameTextCode(String? uiCode) => uiLangByCode(uiCode).gameTextCode;
 /// Best-supported interface language for the device's preferred
 /// [deviceLocales] (highest priority first). Returns `'en'` when none match.
 ///
-/// Chinese is matched on script, then region: Hant / TW / HK / MO resolve to
-/// Traditional Chinese, every other `zh` to Simplified. Any `pt` resolves to
-/// `pt-BR`, the only Portuguese variant shipped.
+/// An explicit Chinese script wins. Region is used only when the script is
+/// absent: TW / HK / MO resolve to Traditional Chinese, every other `zh` to
+/// Simplified. Any `pt` resolves to `pt-BR`, the only Portuguese variant
+/// shipped.
 String deviceUiLanguageCode(Iterable<Locale> deviceLocales) {
   for (final device in deviceLocales) {
     final code = _uiCodeForDeviceLocale(device);
@@ -108,9 +109,13 @@ String deviceUiLanguageCode(Iterable<Locale> deviceLocales) {
 String? _uiCodeForDeviceLocale(Locale device) {
   switch (device.languageCode) {
     case 'zh':
-      final traditional =
-          device.scriptCode == 'Hant' ||
-          const {'TW', 'HK', 'MO'}.contains(device.countryCode?.toUpperCase());
+      if (device.scriptCode == 'Hans') return 'zh-Hans';
+      if (device.scriptCode == 'Hant') return 'zh-Hant';
+      final traditional = const {
+        'TW',
+        'HK',
+        'MO',
+      }.contains(device.countryCode?.toUpperCase());
       return traditional ? 'zh-Hant' : 'zh-Hans';
     case 'pt':
       return 'pt-BR';

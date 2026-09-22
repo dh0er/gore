@@ -21,7 +21,7 @@ void main() {
     }
 
     expect(segmentsById, hasLength(187));
-    expect(AppLocalizations.supportedLocales, hasLength(12));
+    expect(AppLocalizations.supportedLocales, hasLength(18));
 
     const sentinel = '__missing_glossary_segment_translation__';
     for (final locale in AppLocalizations.supportedLocales) {

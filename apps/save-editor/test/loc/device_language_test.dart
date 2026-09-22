@@ -44,6 +44,26 @@ void main() {
       'zh-Hant',
     );
     expect(deviceUiLanguageCode([const Locale('zh', 'TW')]), 'zh-Hant');
+    expect(
+      deviceUiLanguageCode([
+        const Locale.fromSubtags(
+          languageCode: 'zh',
+          scriptCode: 'Hans',
+          countryCode: 'TW',
+        ),
+      ]),
+      'zh-Hans',
+    );
+    expect(
+      deviceUiLanguageCode([
+        const Locale.fromSubtags(
+          languageCode: 'zh',
+          scriptCode: 'Hant',
+          countryCode: 'CN',
+        ),
+      ]),
+      'zh-Hant',
+    );
     expect(deviceUiLanguageCode([const Locale('zh', 'HK')]), 'zh-Hant');
     expect(deviceUiLanguageCode([const Locale('zh', 'MO')]), 'zh-Hant');
   });
