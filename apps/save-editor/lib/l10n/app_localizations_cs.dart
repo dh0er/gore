@@ -2989,7 +2989,7 @@ class AppLocalizationsCs extends AppLocalizations {
       'Introduction_Trader': 'Úvod — obchodník',
       'Invocation': 'Invokace',
       'JoinSC': 'Připojit se k táboru v bažinách',
-      'Joint': 'Společný',
+      'Joint': 'Joint z bahenní trávy',
       'KalomCamp': 'Tábor Kaloma',
       'Leader': 'Vůdce',
       'Learning': 'Učení',
