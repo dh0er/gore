@@ -1222,12 +1222,13 @@ class _StockSection extends ConsumerWidget {
       for (final filter in itemStats?.filters ?? const <InventoryFilter>[])
         ?itemCategoryFromFilterId(filter.id): filter,
     };
-    String categoryLabel(ItemCategory category) {
+    (String text, bool fromCatalog) categoryLabel(ItemCategory category) {
       final key = filtersById[category]?.nameKey ?? '';
       final fromGame = key.isEmpty
           ? null
           : resolveGameText(locCatalog, key, lang);
-      return fromGame ?? localizedItemCategoryLabel(l10n, category);
+      if (fromGame != null) return (fromGame, true);
+      return (localizedItemCategoryLabel(l10n, category), false);
     }
 
     // The compact pane has no sidebar, so it lists every line at once. The core
@@ -1348,14 +1349,17 @@ class _StockSection extends ConsumerWidget {
                                   for (final group in groups)
                                     SidebarTile(
                                       icon: iconForItemCategory(group.category),
-                                      gameTextLocale: lang.locale,
+                                      gameTextLocale:
+                                          categoryLabel(group.category).$2
+                                          ? lang.locale
+                                          : null,
                                       gameIcon:
                                           filtersById[group.category]?.icon ??
                                           gameIconForItemCategory(
                                             group.category,
                                           ),
                                       label: l10n.categoryWithCount(
-                                        categoryLabel(group.category),
+                                        categoryLabel(group.category).$1,
                                         group.items.length,
                                       ),
                                       selected: group.category == selected,

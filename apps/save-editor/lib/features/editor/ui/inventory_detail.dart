@@ -363,6 +363,7 @@ class _InventoryTab {
   const _InventoryTab({
     required this.category,
     required this.label,
+    required this.catalogLabel,
     required this.gameIcon,
     required this.fallbackIcon,
     required this.items,
@@ -371,6 +372,7 @@ class _InventoryTab {
   /// Null for "All", which is no category and collects everything.
   final ItemCategory? category;
   final String label;
+  final bool catalogLabel;
   final String? gameIcon;
   final IconData fallbackIcon;
   final List<PrivateInventoryItem> items;
@@ -710,12 +712,13 @@ class _PrivateInventorySummaryCardState
       for (final filter in itemStats?.filters ?? const <InventoryFilter>[])
         ?itemCategoryFromFilterId(filter.id): filter,
     };
-    String categoryLabel(ItemCategory category) {
+    (String text, bool fromCatalog) categoryLabel(ItemCategory category) {
       final key = filtersById[category]?.nameKey ?? '';
       final fromGame = key.isEmpty
           ? null
           : resolveGameText(locCatalog, key, lang);
-      return fromGame ?? localizedItemCategoryLabel(l10n, category);
+      if (fromGame != null) return (fromGame, true);
+      return (localizedItemCategoryLabel(l10n, category), false);
     }
 
     String? categoryGameIcon(ItemCategory category) =>
@@ -732,27 +735,32 @@ class _PrivateInventorySummaryCardState
     final allFilter = itemStats?.filters
         .where((filter) => filter.isAll)
         .firstOrNull;
+    final allFromGame = allFilter == null
+        ? null
+        : resolveGameText(locCatalog, allFilter.nameKey, lang);
     final tabs = <_InventoryTab>[
       _InventoryTab(
         category: null,
-        label:
-            (allFilter == null
-                ? null
-                : resolveGameText(locCatalog, allFilter.nameKey, lang)) ??
-            l10n.itemCategoryAll,
+        label: allFromGame ?? l10n.itemCategoryAll,
+        catalogLabel: allFromGame != null,
         gameIcon: allFilter?.icon ?? 'T_Icon_AllItems',
         fallbackIcon: Icons.all_inclusive,
         items: allItems,
       ),
-      for (final group in groups)
+    ];
+    for (final group in groups) {
+      final named = categoryLabel(group.category);
+      tabs.add(
         _InventoryTab(
           category: group.category,
-          label: categoryLabel(group.category),
+          label: named.$1,
+          catalogLabel: named.$2,
           gameIcon: categoryGameIcon(group.category),
           fallbackIcon: iconForItemCategory(group.category),
           items: group.items,
         ),
-    ];
+      );
+    }
 
     // Keep the current category selected while it still has items; a group that
     // emptied out falls back to "All" rather than to whatever sorts first.
@@ -1104,10 +1112,12 @@ class _PrivateInventorySummaryCardState
                                             tab.label,
                                             tab.items.length,
                                           ),
-                                          style: gameScriptTextStyle(
-                                            context,
-                                            lang.locale,
-                                          ),
+                                          style: tab.catalogLabel
+                                              ? gameScriptTextStyle(
+                                                  context,
+                                                  lang.locale,
+                                                )
+                                              : null,
                                         ),
                                         selected: tab.category == selected,
                                         onSelected: (_) => setState(() {
@@ -1146,7 +1156,10 @@ class _PrivateInventorySummaryCardState
                                                   SidebarTile(
                                                     icon: tab.fallbackIcon,
                                                     gameIcon: tab.gameIcon,
-                                                    gameTextLocale: lang.locale,
+                                                    gameTextLocale:
+                                                        tab.catalogLabel
+                                                        ? lang.locale
+                                                        : null,
                                                     label: l10n
                                                         .categoryWithCount(
                                                           tab.label,

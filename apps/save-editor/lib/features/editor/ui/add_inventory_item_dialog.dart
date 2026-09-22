@@ -172,12 +172,13 @@ class _AddInventoryItemDialogState
       for (final filter in itemStats?.filters ?? const <InventoryFilter>[])
         ?itemCategoryFromFilterId(filter.id): filter,
     };
-    String categoryLabel(ItemCategory category) {
+    (String text, bool fromCatalog) categoryLabel(ItemCategory category) {
       final key = filtersById[category]?.nameKey ?? '';
       final fromGame = key.isEmpty
           ? null
           : resolveGameText(locCatalog, key, lang);
-      return fromGame ?? localizedItemCategoryLabel(l10n, category);
+      if (fromGame != null) return (fromGame, true);
+      return (localizedItemCategoryLabel(l10n, category), false);
     }
 
     return AlertDialog(
@@ -407,14 +408,17 @@ class _AddInventoryItemDialogState
                                       for (final g in groups)
                                         SidebarTile(
                                           icon: iconForItemCategory(g.category),
-                                          gameTextLocale: lang.locale,
+                                          gameTextLocale:
+                                              categoryLabel(g.category).$2
+                                              ? lang.locale
+                                              : null,
                                           gameIcon:
                                               filtersById[g.category]?.icon ??
                                               gameIconForItemCategory(
                                                 g.category,
                                               ),
                                           label: l10n.categoryWithCount(
-                                            categoryLabel(g.category),
+                                            categoryLabel(g.category).$1,
                                             g.entries.length,
                                           ),
                                           selected:

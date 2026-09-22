@@ -449,7 +449,11 @@ class _RegionRail extends StatelessWidget {
             selected: selected == area,
             onTap: () => onSelected(area),
             theme: theme,
-            gameTextLocale: lang.locale,
+            gameTextLocale:
+                locations != null &&
+                    catalogAreaLabel(area, locations!, locCatalog, lang) != null
+                ? lang.locale
+                : null,
           ),
       ],
     );

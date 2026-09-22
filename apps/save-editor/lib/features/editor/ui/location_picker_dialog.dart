@@ -284,7 +284,16 @@ class _LocationPickerDialogState extends ConsumerState<_LocationPickerDialog> {
                             icon: group.areaId.isEmpty
                                 ? Icons.help_outline
                                 : Icons.place_outlined,
-                            gameTextLocale: lang.locale,
+                            gameTextLocale:
+                                catalogAreaLabel(
+                                      group.areaId,
+                                      catalog,
+                                      locCatalog,
+                                      lang,
+                                    ) ==
+                                    null
+                                ? null
+                                : lang.locale,
                             label: l10n.categoryWithCount(
                               _areaLabel(
                                 group.areaId,
@@ -408,7 +417,9 @@ class _LocationPickerDialogState extends ConsumerState<_LocationPickerDialog> {
         _areaLabel(spot.area, catalog, locCatalog, lang, l10n),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: gameScriptTextStyle(context, lang.locale),
+        style: catalogAreaLabel(spot.area, catalog, locCatalog, lang) == null
+            ? null
+            : gameScriptTextStyle(context, lang.locale),
       ),
       onTap: () => Navigator.of(
         context,
