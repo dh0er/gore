@@ -816,7 +816,7 @@ fn author(
         );
     }
     let new_spawn = generate::spawn_class(&request.id);
-    if emitted.classes.contains_key(&new_spawn) {
+    if module_of_class(&modules, &new_spawn).is_some() {
         bail!(
             "{} is already a character in this game. Pick an id nothing ships under",
             request.id
