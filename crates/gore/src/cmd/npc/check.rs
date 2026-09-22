@@ -296,7 +296,7 @@ pub fn guard_checkout_diff(pristine: &str, edited: &str) -> Vec<Finding> {
         }
     }
 
-    if before == after {
+    if pristine == edited {
         findings.push(Finding::blocking(
             "the module is unchanged, so there is nothing to build",
         ));
@@ -539,6 +539,14 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
     fn a_changed_value_in_a_checked_out_module_passes() {
         let edited = AUTHORED.replace("1000.0f", "500.0f");
         assert!(guard_checkout_diff(AUTHORED, &edited).is_empty());
+    }
+
+    #[test]
+    fn a_changed_method_body_in_a_checked_out_module_passes() {
+        let pristine = "class UX : UY\n{\n    void Run()\n    {\n        Before();\n    }\n}\n";
+        let edited = pristine.replace("Before();", "After();");
+        assert_eq!(defaults::parse_classes(pristine), defaults::parse_classes(&edited));
+        assert!(guard_checkout_diff(pristine, &edited).is_empty());
     }
 
     #[test]

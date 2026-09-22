@@ -828,8 +828,11 @@ fn author(
     if let Some(guild) = &request.guild {
         let guild_class = format!("UCharacterDefinition_Human_{guild}");
         ensure!(
-            is_valid_id(guild) && module_of_class(&modules, &guild_class).is_some(),
-            "unknown or invalid guild base {guild:?}: {guild_class} is not declared in this cache"
+            is_valid_id(guild)
+                && module_of_class(&modules, &guild_class).is_some()
+                && is_derivable_base(&emitted.subclass_counts, &guild_class),
+            "unknown, invalid, or final guild base {guild:?}: {guild_class} must be a declared \
+             class with at least one subclass in this cache"
         );
     }
 
@@ -1720,9 +1723,29 @@ fn derivable_parent(
     (current, collected)
 }
 
+fn is_derivable_base(subclass_counts: &BTreeMap<String, usize>, class_name: &str) -> bool {
+    subclass_counts.get(class_name).copied().unwrap_or(0) > 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_non_final_character_definition_classes_are_derivable_guild_bases() {
+        let counts = BTreeMap::from([
+            ("UCharacterDefinition_Human_OldCamp_Guard".to_string(), 4),
+            ("UCharacterDefinition_Human_OC_STT_Diego".to_string(), 0),
+        ]);
+        assert!(is_derivable_base(
+            &counts,
+            "UCharacterDefinition_Human_OldCamp_Guard"
+        ));
+        assert!(!is_derivable_base(
+            &counts,
+            "UCharacterDefinition_Human_OC_STT_Diego"
+        ));
+    }
 
     #[test]
     fn author_rejects_waypoints_that_cannot_be_embedded_in_a_name_literal() {
