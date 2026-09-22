@@ -8,12 +8,12 @@ import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 // The area-name table moved to area_labels.dart so the locks panel can group by
 // the same codes. Re-exported: `appAreaLabel` is part of this file's tested
 // surface.
-export 'package:goresave/features/editor/ui/area_labels.dart'
-    show appAreaLabel;
+export 'package:goresave/features/editor/ui/area_labels.dart' show appAreaLabel;
 
 /// The result of [showLocationPickerDialog]: the chosen [spot] plus whether the
 /// user asked for its orientation to be applied as well.
@@ -121,15 +121,17 @@ class _LocationPickerDialogState extends ConsumerState<_LocationPickerDialog> {
     for (final spot in catalog.spots) {
       byArea.putIfAbsent(spot.area, () => []).add(spot);
     }
-    final groups = [
-      for (final entry in byArea.entries)
-        (areaId: entry.key, spots: entry.value),
-    ]..sort((a, b) {
-      // The unlabelled bucket is last, never sorted by size.
-      if (a.areaId.isEmpty != b.areaId.isEmpty) return a.areaId.isEmpty ? 1 : -1;
-      final byCount = b.spots.length.compareTo(a.spots.length);
-      return byCount != 0 ? byCount : a.areaId.compareTo(b.areaId);
-    });
+    final groups =
+        [
+          for (final entry in byArea.entries)
+            (areaId: entry.key, spots: entry.value),
+        ]..sort((a, b) {
+          // The unlabelled bucket is last, never sorted by size.
+          if (a.areaId.isEmpty != b.areaId.isEmpty)
+            return a.areaId.isEmpty ? 1 : -1;
+          final byCount = b.spots.length.compareTo(a.spots.length);
+          return byCount != 0 ? byCount : a.areaId.compareTo(b.areaId);
+        });
     _groupedFor = catalog;
     _groups = groups;
     return groups;
@@ -282,6 +284,7 @@ class _LocationPickerDialogState extends ConsumerState<_LocationPickerDialog> {
                             icon: group.areaId.isEmpty
                                 ? Icons.help_outline
                                 : Icons.place_outlined,
+                            gameTextLocale: lang.locale,
                             label: l10n.categoryWithCount(
                               _areaLabel(
                                 group.areaId,
@@ -341,8 +344,7 @@ class _LocationPickerDialogState extends ConsumerState<_LocationPickerDialog> {
           contentPadding: EdgeInsets.zero,
           controlAffinity: ListTileControlAffinity.leading,
           value: _applyRotation,
-          onChanged: (value) =>
-              setState(() => _applyRotation = value ?? false),
+          onChanged: (value) => setState(() => _applyRotation = value ?? false),
           title: Text(l10n.applySpotRotation),
         ),
       ],
@@ -406,6 +408,7 @@ class _LocationPickerDialogState extends ConsumerState<_LocationPickerDialog> {
         _areaLabel(spot.area, catalog, locCatalog, lang, l10n),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
+        style: gameScriptTextStyle(context, lang.locale),
       ),
       onTap: () => Navigator.of(
         context,

@@ -5,6 +5,7 @@ const podkovaFontFamily = 'Podkova';
 const notoSerifFontFamily = 'NotoSerif';
 const notoSerifJpFontFamily = 'NotoSerifJP';
 const notoSerifScFontFamily = 'NotoSerifSC';
+const notoSerifTcFontFamily = 'NotoSerifTC';
 
 /// Fallback faces for glyphs the primary face does not have.
 ///
@@ -80,15 +81,20 @@ String uiFontFamilyName(UiFontFamily font, Locale locale) => switch (font) {
   UiFontFamily.podkova => podkovaFontFamily,
   UiFontFamily.notoSerif when locale.languageCode == 'ja' =>
     notoSerifJpFontFamily,
+  UiFontFamily.notoSerif
+      when locale.languageCode == 'zh' && locale.scriptCode == 'Hant' =>
+    notoSerifTcFontFamily,
   UiFontFamily.notoSerif when locale.languageCode == 'zh' =>
     notoSerifScFontFamily,
   UiFontFamily.notoSerif => notoSerifFontFamily,
 };
 
 /// Bundled face that covers [locale]'s script. Latin, Cyrillic and Greek stay
-/// on Noto Serif; Japanese and both Chinese scripts use the CJK faces.
+/// on Noto Serif. Japanese, Simplified Chinese, and Traditional Chinese each
+/// use their own CJK face so shared Han code points keep the regional form.
 String scriptCoverageFont(Locale locale) => switch (locale.languageCode) {
   'ja' => notoSerifJpFontFamily,
+  'zh' when locale.scriptCode == 'Hant' => notoSerifTcFontFamily,
   'zh' => notoSerifScFontFamily,
   _ => notoSerifFontFamily,
 };

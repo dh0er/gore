@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:goresave/features/editor/domain/item_categories.dart';
 import 'package:goresave/features/editor/ui/game_icon.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 /// A selectable left-sidebar row, matching the Player/Progression tab style.
 class SidebarTile extends StatelessWidget {
@@ -12,6 +13,7 @@ class SidebarTile extends StatelessWidget {
     required this.selected,
     required this.onTap,
     this.gameIcon,
+    this.gameTextLocale,
   });
 
   final IconData icon;
@@ -22,6 +24,9 @@ class SidebarTile extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
+
+  /// When set, [label] is game text and uses that script's face.
+  final Locale? gameTextLocale;
 
   /// The label, ellipsized to one line, wrapped in a [Tooltip] ONLY when it
   /// actually does not fit. A tooltip that repeats text the user can already
@@ -44,7 +49,14 @@ class SidebarTile extends StatelessWidget {
           textScaler: MediaQuery.textScalerOf(context),
         )..layout(maxWidth: constraints.maxWidth);
         if (!painter.didExceedMaxLines) return text;
-        return Tooltip(message: label, child: text);
+        final font = gameTextLocale == null
+            ? null
+            : gameScriptTextStyle(context, gameTextLocale!);
+        if (font == null) return Tooltip(message: label, child: text);
+        return Tooltip(
+          richMessage: TextSpan(text: label, style: font),
+          child: text,
+        );
       },
     );
   }
@@ -74,9 +86,13 @@ class SidebarTile extends StatelessWidget {
                 Expanded(
                   child: _label(
                     context,
-                    Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: selected ? scheme.primary : scheme.onSurface,
-                      fontWeight: selected ? FontWeight.w600 : null,
+                    gameScriptTextStyle(
+                      context,
+                      gameTextLocale ?? Localizations.localeOf(context),
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: selected ? scheme.primary : scheme.onSurface,
+                        fontWeight: selected ? FontWeight.w600 : null,
+                      ),
                     ),
                   ),
                 ),

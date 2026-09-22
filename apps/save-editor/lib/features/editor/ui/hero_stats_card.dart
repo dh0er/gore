@@ -624,19 +624,13 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
             style: labelStyle,
           );
           final game = GameTextScript.maybeOf(context);
+          final font = game == null ? null : gameScriptTextStyle(context, game);
           final Widget rowLabel = widget.tooltip.isEmpty
               ? labelText
-              : game == null
+              : font == null
               ? Tooltip(message: widget.tooltip, child: labelText)
               : Tooltip(
-                  richMessage: TextSpan(
-                    text: widget.tooltip,
-                    style: gameScriptTextStyle(
-                      context,
-                      game,
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ),
+                  richMessage: TextSpan(text: widget.tooltip, style: font),
                   child: labelText,
                 );
           if (compact) {

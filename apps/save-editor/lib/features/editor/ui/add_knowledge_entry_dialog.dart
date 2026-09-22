@@ -7,6 +7,7 @@ import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/loc/progression_loc.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 /// Shows a picker dialog over [catalog] that lets the user choose a knowledge
 /// entry to add.
@@ -244,7 +245,12 @@ class _AddKnowledgeEntryDialogState
     return ListTile(
       dense: true,
       leading: Icon(_iconForKnowledgeCategory(entry.category)),
-      title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      title: Text(
+        name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: gameScriptTextStyle(context, lang.locale),
+      ),
       subtitle: showObjectIds
           ? Text(entry.id, maxLines: 1, overflow: TextOverflow.ellipsis)
           : null,

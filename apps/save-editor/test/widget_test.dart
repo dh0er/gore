@@ -110,6 +110,16 @@ void main() {
     },
   );
 
+  test('Traditional Chinese uses its own Noto face', () {
+    const hant = Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant');
+    expect(scriptCoverageFont(hant), notoSerifTcFontFamily);
+    expect(
+      uiFontFamilyName(UiFontFamily.notoSerif, hant),
+      notoSerifTcFontFamily,
+    );
+    expect(scriptCoverageFont(const Locale('zh')), notoSerifScFontFamily);
+  });
+
   testWidgets('title progress is centered in the available title-bar space', (
     tester,
   ) async {

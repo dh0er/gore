@@ -538,16 +538,10 @@ class _PrivatePlayerAttributeRowState
             : gameScriptTextStyle(context, game, style: labelStyle),
       );
       if (widget.tooltip.isEmpty) return text;
-      if (game == null) return Tooltip(message: widget.tooltip, child: text);
+      final font = game == null ? null : gameScriptTextStyle(context, game);
+      if (font == null) return Tooltip(message: widget.tooltip, child: text);
       return Tooltip(
-        richMessage: TextSpan(
-          text: widget.tooltip,
-          style: gameScriptTextStyle(
-            context,
-            game,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ),
+        richMessage: TextSpan(text: widget.tooltip, style: font),
         child: text,
       );
     }
