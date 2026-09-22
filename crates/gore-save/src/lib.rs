@@ -5350,13 +5350,29 @@ fn refresh_persistent_slot_metadata(
         .iter()
         .position(|(key, _)| map_key_string(key) == Some(slot))
         .ok_or_else(|| CoreError::Validation(format!("public data for {slot} was not found")))?;
-    let props = struct_properties_of_element(&entries[index].1).ok_or_else(|| {
-        CoreError::Validation("cached public data is not a property list".to_string())
-    })?;
     let layout = properties::map_layout(data, map)?;
     let range = layout.entry_ranges[index].clone();
     let key = properties::encode_fstring_value(slot);
-    let mut fields = raw_public_properties(data, props, range.start + key.len())?;
+    let key_end = range.start + key.len();
+    let (props, property_start, instanced_size_offset) = match &entries[index].1 {
+        properties::PropertyValue::Struct(properties::StructValue::Properties(props)) => {
+            (props.as_slice(), key_end, None)
+        }
+        properties::PropertyValue::Struct(properties::StructValue::Instanced(Some(body))) => (
+            body.properties.as_slice(),
+            body.data_size_offset + 4,
+            Some(body.data_size_offset),
+        ),
+        _ => {
+            return Err(CoreError::Validation(
+                "cached public data is not a property list".to_string(),
+            ))
+        }
+    };
+    let wrapper = data.get(key_end..property_start).ok_or_else(|| {
+        CoreError::Parse("cached public-data wrapper is out of bounds".to_string())
+    })?;
+    let mut fields = raw_public_properties(data, props, property_start)?;
     for field in incoming {
         if let Some(existing) = fields.iter_mut().find(|(name, _)| name == &field.0) {
             *existing = field;
@@ -5365,10 +5381,27 @@ fn refresh_persistent_slot_metadata(
         }
     }
     let mut entry = key;
+    entry.extend_from_slice(wrapper);
     for (_, bytes) in fields {
         entry.extend(bytes);
     }
     entry.extend(properties::encode_fstring_value("None"));
+    if let Some(size_offset) = instanced_size_offset {
+        let relative = size_offset.checked_sub(range.start).ok_or_else(|| {
+            CoreError::Parse("cached public-data size offset is out of bounds".to_string())
+        })?;
+        let body_start = relative + 4;
+        let body_size = entry.len().checked_sub(body_start).ok_or_else(|| {
+            CoreError::Parse("cached public-data body is out of bounds".to_string())
+        })?;
+        let body_size = u32::try_from(body_size).map_err(|_| {
+            CoreError::Parse("cached public-data body is too large".to_string())
+        })?;
+        let size_bytes = entry.get_mut(relative..body_start).ok_or_else(|| {
+            CoreError::Parse("cached public-data size field is out of bounds".to_string())
+        })?;
+        size_bytes.copy_from_slice(&body_size.to_le_bytes());
+    }
     let mut map_body = data[map.value_offset..map.value_offset + map.value_size].to_vec();
     map_body.splice(
         range.start - map.value_offset..range.end - map.value_offset,
@@ -5408,6 +5441,35 @@ fn set_save_public_profile_id(data: &mut Vec<u8>, profile_id: i32) -> Result<boo
             target,
             properties::ScalarValue::Int(profile_id),
         )?;
+    }
+    let changed = public_payload != before;
+    *data = build_gsav(version, &public_payload, &compressed_stream, &trailer);
+    Ok(changed)
+}
+
+fn set_save_public_flags(data: &mut Vec<u8>, quick: bool, auto: bool) -> Result<bool, CoreError> {
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "public edits are only available for GSAV save files".to_string(),
+        ));
+    }
+    let parts = split_gsav(data)?;
+    let version = parts.version;
+    let mut public_payload = parts.public_payload.to_vec();
+    let compressed_stream = parts.compressed_stream.to_vec();
+    let trailer = parts.trailer.to_vec();
+    let root = properties::parse_property_list_root_at(&public_payload, 0)?;
+    let before = public_payload.clone();
+    for (name, value) in [("m_QuickSave", quick), ("m_AutoSave", auto)] {
+        for path in public_field_paths(&root, name) {
+            let segments = properties::parse_path(&path)?;
+            let target = properties::resolve(&root.properties, &segments)?;
+            properties::patch_scalar(
+                &mut public_payload,
+                target,
+                properties::ScalarValue::Bool(value),
+            )?;
+        }
     }
     let changed = public_payload != before;
     *data = build_gsav(version, &public_payload, &compressed_stream, &trailer);
@@ -5560,6 +5622,7 @@ where
         replace_public_fstring(&mut save_edited, "m_PlayerSaveName", &player_save_name)?;
     }
     let public_profile_updated = set_save_public_profile_id(&mut save_edited, profile_id)?;
+    let _ = set_save_public_flags(&mut save_edited, quick_member, auto_member)?;
 
     let mut persistent_edited = persistent_original.clone();
     if !registered {
@@ -5646,6 +5709,15 @@ where
         return Err(CoreError::Validation(
             "save did not retain its public m_ProfileId".to_string(),
         ));
+    }
+    for (field, member) in [("m_QuickSave", quick_member), ("m_AutoSave", auto_member)] {
+        if read_public_bool_property(edited_parts.public_payload, field)?
+            .is_some_and(|value| value != member)
+        {
+            return Err(CoreError::Validation(format!(
+                "save did not retain its public {field}"
+            )));
+        }
     }
 
     let bytes_changed =
@@ -18087,6 +18159,22 @@ mod tests {
         profile0_values: &[&str],
         profile1_values: &[&str],
     ) -> Vec<u8> {
+        assignment_persistent_data_list_with_public_shape(
+            slot,
+            registered_profile,
+            profile0_values,
+            profile1_values,
+            false,
+        )
+    }
+
+    fn assignment_persistent_data_list_with_public_shape(
+        slot: &str,
+        registered_profile: Option<i32>,
+        profile0_values: &[&str],
+        profile1_values: &[&str],
+        instanced_public_data: bool,
+    ) -> Vec<u8> {
         let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
         map_body.extend_from_slice(
             &(if registered_profile.is_some() {
@@ -18103,18 +18191,30 @@ mod tests {
             slot_value.extend_from_slice(&double_property("m_TimeLoaded", 1710.3161790370941));
             slot_value.extend_from_slice(&fstring("None"));
             map_body.extend_from_slice(&fstring(slot));
+            if instanced_public_data {
+                map_body.extend_from_slice(&fstring("/Script/G1R.SaveGamePublicData"));
+                map_body.extend_from_slice(&(slot_value.len() as u32).to_le_bytes());
+            }
             map_body.extend_from_slice(&slot_value);
         }
         let mut map_descriptor = 2u32.to_le_bytes().to_vec();
         map_descriptor.extend_from_slice(&fstring("StrProperty"));
         map_descriptor.extend_from_slice(&0u32.to_le_bytes()); // key flags
         map_descriptor.extend_from_slice(&fstring("StructProperty"));
-        map_descriptor.extend_from_slice(&inv_struct_descriptor("SaveGamePublicData"));
+        map_descriptor.extend_from_slice(&inv_struct_descriptor(if instanced_public_data {
+            "InstancedStruct"
+        } else {
+            "SaveGamePublicData"
+        }));
         let public_data = inv_tagged(
             "m_SavedGamesPublicData",
             "MapProperty",
             &map_descriptor,
-            0,
+            if instanced_public_data {
+                properties::TAG_FLAG_NATIVE_SERIALIZE
+            } else {
+                0
+            },
             &map_body,
         );
 
@@ -18515,6 +18615,106 @@ mod tests {
         assert!(profile_array_contains(&root, 1, "m_AutoSaveName", "G1R-007").unwrap());
         for (field, value) in [("m_QuickSave", false), ("m_AutoSave", true)] {
             let path = persistent_slot_property_path(&root, "G1R-007", field)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                properties::resolve(&root.properties, &path).unwrap().value,
+                properties::PropertyValue::Bool(value)
+            );
+        }
+    }
+
+    #[test]
+    fn assign_save_profile_preserves_instanced_cached_public_data() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        fs::write(
+            &save_path,
+            build_gsav(
+                2,
+                &dual_public_payload_with_flags(slot, "Instanced metadata refresh", 0, true, false),
+                &minimal_stream(),
+                &[1, 2, 3, 4],
+            ),
+        )
+        .unwrap();
+        fs::write(
+            &persistent_path,
+            assignment_persistent_data_list_with_public_shape(
+                slot,
+                Some(0),
+                &[slot],
+                &[],
+                true,
+            ),
+        )
+        .unwrap();
+
+        assign_save_profile(&save_path, None, &persistent_path, 1, true).unwrap();
+
+        let persistent = fs::read(&persistent_path).unwrap();
+        let root = parse_profile_file(&persistent).unwrap();
+        let (_, map) = properties::find_property_by_name(&root, "m_SavedGamesPublicData").unwrap();
+        let properties::PropertyValue::Map { entries, .. } = &map.value else {
+            panic!("expected public-data map")
+        };
+        let properties::PropertyValue::Struct(properties::StructValue::Instanced(Some(body))) =
+            &entries[0].1
+        else {
+            panic!("expected cached InstancedStruct")
+        };
+        assert_eq!(body.actual_type, "/Script/G1R.SaveGamePublicData");
+        assert!(body.properties.iter().any(|property| {
+            property.name == "m_PlayerSaveName"
+                && property.value
+                    == properties::PropertyValue::Str("Instanced metadata refresh".into())
+        }));
+    }
+
+    #[test]
+    fn assign_save_profile_normalizes_registered_public_flags_from_arrays() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-007";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        fs::write(
+            &save_path,
+            build_gsav(
+                2,
+                &dual_public_payload_with_flags(slot, "Normalize flags", 1, false, true),
+                &minimal_stream(),
+                &[1, 2, 3, 4],
+            ),
+        )
+        .unwrap();
+        fs::write(
+            &persistent_path,
+            assignment_persistent_data_list(slot, 1),
+        )
+        .unwrap();
+
+        assign_save_profile(&save_path, None, &persistent_path, 1, true).unwrap();
+
+        let written = fs::read(&save_path).unwrap();
+        let parts = split_gsav(&written).unwrap();
+        for class in ["SaveDataPayload", "SaveGamePublicData"] {
+            assert_eq!(
+                public_branch_field(parts.public_payload, class, "m_QuickSave"),
+                properties::PropertyValue::Bool(true)
+            );
+            assert_eq!(
+                public_branch_field(parts.public_payload, class, "m_AutoSave"),
+                properties::PropertyValue::Bool(false)
+            );
+        }
+        let persistent = fs::read(&persistent_path).unwrap();
+        let root = parse_profile_file(&persistent).unwrap();
+        assert!(profile_array_contains(&root, 1, "m_QuickSaveName", slot).unwrap());
+        assert!(!profile_array_contains(&root, 1, "m_AutoSaveName", slot).unwrap());
+        for (field, value) in [("m_QuickSave", true), ("m_AutoSave", false)] {
+            let path = persistent_slot_property_path(&root, slot, field)
                 .unwrap()
                 .unwrap();
             assert_eq!(
