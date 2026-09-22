@@ -41,6 +41,32 @@ void main() {
     expect(tooltip.requirementsLabel, 'Requirements:');
     expect(tooltip.requirements.single.label, 'Strength');
     expect(tooltip.requirements.single.value, '14');
+    expect(tooltip.requirements.single.catalogLabel, isTrue);
+    expect(tooltip.requirementsLabelFromCatalog, isTrue);
+  });
+
+  test('a missing attribute name stays an interface string', () {
+    const stats = ItemStats(
+      value: 4,
+      onConsume: [
+        ItemConsumeEffect(effect: 'Heal_Insta', params: {'Heal': 5}),
+      ],
+      onEquip: {'Strength': 2, 'Resistance_Edge': 10},
+      requires: {'Dexterity': 10},
+    );
+    final tooltip = buildItemTooltip(
+      title: 'Ring',
+      stats: stats,
+      catalog: const {},
+      lang: lang,
+      l10n: l10n,
+    );
+
+    expect(tooltip.stats.map((row) => row.catalogLabel), everyElement(isFalse));
+    expect(tooltip.protection.single.catalogLabel, isFalse);
+    expect(tooltip.requirements.single.catalogLabel, isFalse);
+    expect(tooltip.protectionLabelFromCatalog, isFalse);
+    expect(tooltip.requirementsLabelFromCatalog, isFalse);
   });
 
   test('an unnamed type tag falls back to its named parent', () {

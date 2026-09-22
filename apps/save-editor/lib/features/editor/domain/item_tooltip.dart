@@ -211,16 +211,13 @@ ItemTooltip buildItemTooltip({
         : '$amount · ${l10n.memoryEventSecondsValue(_number(duration))}';
     void add(String attribute, String amount, {String? setClass}) {
       rows.add(
-        ItemTooltipRow(
-          localizedAttributeName(
-            catalog,
-            lang,
-            attribute,
-            setClass: setClass,
-            l10n: l10n,
-          ),
+        _attributeRow(
+          catalog,
+          lang,
+          l10n,
+          attribute,
           withDuration(amount),
-          iconName: gameIconForAttribute(attribute, setClass),
+          setClass: setClass,
         ),
       );
     }
@@ -249,16 +246,13 @@ ItemTooltip buildItemTooltip({
   for (final entry in stats.onEquip.entries) {
     final isProtection = entry.key.startsWith('Resistance_');
     final setClass = isProtection ? 'AttributeSet_Armor' : null;
-    final row = ItemTooltipRow(
-      localizedAttributeName(
-        catalog,
-        lang,
-        entry.key,
-        setClass: setClass,
-        l10n: l10n,
-      ),
+    final row = _attributeRow(
+      catalog,
+      lang,
+      l10n,
+      entry.key,
       _signed(entry.value),
-      iconName: gameIconForAttribute(entry.key, setClass),
+      setClass: setClass,
     );
     (isProtection ? protection : rows).add(row);
   }
@@ -280,11 +274,7 @@ ItemTooltip buildItemTooltip({
 
   final requirements = [
     for (final entry in stats.requires.entries)
-      ItemTooltipRow(
-        localizedAttributeName(catalog, lang, entry.key, l10n: l10n),
-        _number(entry.value),
-        iconName: gameIconForAttribute(entry.key),
-      ),
+      _attributeRow(catalog, lang, l10n, entry.key, _number(entry.value)),
   ];
 
   String itemName(String id) => localizedGameName(catalog, lang, id) ?? id;
@@ -375,6 +365,28 @@ ItemTooltip buildItemTooltip({
         ) ??
         '',
     writing: written,
+  );
+}
+
+ItemTooltipRow _attributeRow(
+  Map<String, Map<String, String>> catalog,
+  GameLang lang,
+  AppLocalizations l10n,
+  String attribute,
+  String amount, {
+  String? setClass,
+}) {
+  final fromCatalog = catalogAttributeName(
+    catalog,
+    lang,
+    attribute,
+    setClass: setClass,
+  );
+  return ItemTooltipRow(
+    fromCatalog ?? readableAttributeName(attribute, l10n, setClass),
+    amount,
+    iconName: gameIconForAttribute(attribute, setClass),
+    catalogLabel: fromCatalog != null,
   );
 }
 
