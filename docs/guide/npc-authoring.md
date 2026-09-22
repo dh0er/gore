@@ -284,6 +284,14 @@ in `UTraderConfigBase` can change quantities; this fixture fixes the relevant
 ore/arrow multipliers to1 for reproducible counts. Preserve the shipped helper
 bytecode rather than recompiling a semantically unqualified decompilation.
 
+The [late-stock follow-up](../../scripts/fixtures/npc-batch-tests/roles/restock/README.md)
+registers initial and later batches together, initializes a clean shop, then
+dispatches the late event through `UWorldPointManager::CallGlobalEvent`.
+It separately checks repeated dispatch, a purchase and two full restarts.
+This is a prepared test, not yet a qualified late-stock recipe. Inspect both
+stock maps before and after loading; an empty initial baseline has not been
+established as the sole cause of the earlier duplication.
+
 ### `npc delete` — stop a shipped character being placed
 
 ```
@@ -631,6 +639,12 @@ the completed quest, fixture knowledge, relationship, identities, inventories
 and attributes. Audible playback and the restart are user observations, not
 inferences from those saved topic markers. Lip sync was excluded; natural
 combat/routine triggers and other voice profiles were not qualified by this test.
+
+The later natural-voice0.1.2 campaign qualifies B/C greetings and everyday speech,
+including B speaking once while walking and continuation after full restart.
+The user explicitly confirms the audible B/Diego and C/Lares identities
+on2026-09-22. See the [voice result](../../scripts/fixtures/npc-batch-tests/voice/runtime-result-0.1.2.json).
+Two briefly flashing speech bubbles remain an observation of unknown cause.
 
 A later natural reaction was observed on invented B during the sitting/watch
 campaign0.1.11: B warned Hero to leave another camp member's hut, without a

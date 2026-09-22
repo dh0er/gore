@@ -14,7 +14,10 @@ between combat cases.
 
 ## Economy / teacher
 
-Completed as `NpcEconomyRolesTest 0.1.3` on2026-09-12; now disabled for field tests.
+Completed as `NpcEconomyRolesTest 0.1.3` on2026-09-12; now disabled.
+The separate [late-restock follow-up](restock/README.md) is active as0.1.0
+on2026-09-22, with one clean noon START067. Its [checklist](restock/FIELD-TEST.md)
+does not repeat teacher tests; late-event persistence remains pending.
 The [runtime result](economy-runtime-0.1.3.json) confirms both reloads preserve
 the traded stock and Hero inventory. The [reload correction](economy-reload-0.1.3.json) records the focused rebuild.
 The [0.1.0 deployment report](economy-deployment.json) remains historical.

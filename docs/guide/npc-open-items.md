@@ -1,6 +1,6 @@
 # NPC modding: open work
 
-Updated 2026-09-21. The user sets this order: **heads, objects, voice triggers,
+Updated 2026-09-22. The user sets this order: **heads, objects, voice triggers,
 NPC roles**. Game tests are performed by the user. Complete each focused change,
 then batch offline checks and provide a short game checklist. An untested behavior
 is not automatically a missing CLI capability.
@@ -105,8 +105,8 @@ them before the conversation ends, using the tested head-setup order. On
 2026-09-12 the user confirms that B and C both greet and independently mumble,
 and B follows his routine path. B also spoke once while walking; the short path
 does not promise a line on every trip. The user also confirms the full-restart
-check without repeating setup. An explicit audible comparison of the two
-configured profiles has not been reported.
+check without repeating setup. On2026-09-22 the user additionally confirms
+the audible identities: B sounds like Diego and C like Lares.
 See the [setup correction](../../scripts/fixtures/npc-batch-tests/voice/setup-fix.json).
 The [0.1.2 runtime report](../../scripts/fixtures/npc-batch-tests/voice/runtime-result-0.1.2.json)
 separates the observed behavior from remaining checks.
@@ -119,8 +119,8 @@ separates the observed behavior from remaining checks.
 - [x] Preserve escalation after save/load: raising fists again after loading the second-warning save makes B attack immediately.
 - [x] Demonstrate equipped-sword escalation and B's spoken combat-start line.
 - [x] Verify greetings/everyday speech after a full restart without repeating setup.
-- [ ] Explicitly confirm an audible distinction between B's Diego and C's Lares
-  profiles.
+- [x] Audible distinction between B's Diego and C's Lares profiles, explicitly
+  confirmed by the user on2026-09-22; no repeated voice test is needed.
 - [ ] Investigate two briefly flashing everyday speech bubbles if reproducible.
   Speaker, wording and whether audio also stopped were not reported. No cause
   is established; neither vanilla correctness nor a mod defect is assumed.
@@ -195,6 +195,9 @@ The earlier NPC-container readback was not shop-stock proof.
 - [x] Trader with actual stock and working buying/selling/cancel, tested0.1.2.
 - [x] Initial trader stock and transaction changes survive full restart and repeated loading (0.1.3).
 - [ ] Qualify persistent late stock-event grants;0.1.2 duplicated a batch on first reload despite a retained event ledger.
+  The [focused restock follow-up](../../scripts/fixtures/npc-batch-tests/roles/restock/README.md)
+  is prepared on25168047: clean noon START067, initial3/10/100, later2/5/20,
+  repeated dispatch and two restarts. Runtime result remains pending.
 - [x] Teacher with separate LP/ore requirements, exact cost, no duplicate charge
   and persistent learned result after full restart.
 - [x] Companion/following behavior, including stopping, resuming and reload.

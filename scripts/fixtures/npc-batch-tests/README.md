@@ -1,6 +1,6 @@
 # NPC-Testpakete: restliche Faelle
 
-Stand 2026-09-21: **Die Spieltests aller fuenf Pakete sind abgeschlossen.** Der Kopf-/Barttest
+Stand 2026-09-22: **Die Spieltests der ersten fuenf Pakete sind abgeschlossen.** Der Kopf-/Barttest
 ist bestanden. Beim Sprachtest sind Begruessungen, Alltagszeilen von B/C und Bs
 Routine sowie der vollstaendige Neustart ohne erneuten Aufbau bestaetigt.
 Die Lehrerpruefungen einschliesslich Neustart sowie Kaufen/Verkaufen/Abbrechen
@@ -24,12 +24,16 @@ die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
 Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
-**Aktiv ist NpcQuestCallbacksTest 0.1.2**; Manager-Status `in_sync`.
-Alle anderen Testpakete und Barttexturen sind deaktiviert. Die aktuelle
-[Aktivierung](quest/hotfix-0.1.2.json) verwendet die neue Spielbasis 25168047 und
-den aktuellen Decompiler von main. Questinhalt und Start071 bleiben unveraendert;
+**Aktiv ist NpcTraderRestockTest 0.1.0**; Manager-Status `in_sync`.
+Profil4 enthaelt nur067 **„NPC 06 Nachschub - START“**, um12:00 Uhr.
+Die [deutsche Nachschub-Testliste](roles/restock/FIELD-TEST.md) prueft eine
+spaetere Lieferung, erneutes Melden derselben Lieferung, Kauf und zwei Neustarts.
+Dieser Nachtest ist vorbereitet; das Spielergebnis steht noch aus.
+Alle anderen Testpakete und Barttexturen sind deaktiviert. Die
+[vorherige Quest-Aktivierung](quest/hotfix-0.1.2.json) verwendete bereits die neue Spielbasis25168047 und
+den aktuellen Decompiler von main. Questinhalt und Start071 blieben unveraendert;
 0.1.1 hatte bereits die Ereignisbindungen des Quest-Builds korrigiert.
-Nur das Questpaket wurde fuer diesen Hotfix neu gebaut. Die bisherigen
+Quest- und Nachschubpaket wurden fuer diesen Hotfix gebaut. Die bisherigen
 Spielbestaetigungen der anderen vier Pakete beziehen sich auf die vorige Spielversion.
 In0.1.0 blieb As Dialogmenue aus; neue Dialog-, Quest- und Journalmethoden waren
 nicht als native Ereignisse registriert. **[Deutsche Testliste fuer Paket5](quest/FIELD-TEST.md)**.
@@ -58,10 +62,11 @@ den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
 | Reihenfolge | Paket | Startstaende in Profil 4 | Abdeckung |
 |---|---|---|---|
 | 1 | NpcHeadPaletteTest | 065: NPC 01 Koepfe - START (archiviert) | Bestanden: Gesicht, Haare, Haarfarbe, Bartvarianten, Originale und Neustart |
-| 2 | NpcNaturalVoiceTest | 066: NPC 02 Voice - START (archiviert) | Begruessung/Alltagsstimme B und C, Routine und Neustart bestanden; kurze Sprechblase und hoerbarer Profilvergleich offen |
+| 2 | NpcNaturalVoiceTest | 066: NPC 02 Voice - START (archiviert) | Begruessung/Alltagsstimme B und C, Routine, Neustart und hoerbare Diego-/Lares-Zuordnung bestanden; kurze Sprechblase offen |
 | 3 | NpcEconomyRolesTest | Starts/Ergebnisse archiviert | Lehrer, Handel und Bestand nach wiederholtem Laden bestanden |
 | 4 | NpcFieldRolesTest | Starts070/072 und Ergebnisse archiviert | Folgen/Warten, Feindschaft/Gilde, Flucht, Niederlage/Tod und Wiederbelebung bestanden; Waffenwahl-Ursache offen |
 | 5 | NpcQuestCallbacksTest | Start071 und Ergebnisse archiviert | Bestanden: eigenes Journal, zwei automatische Ziele, Abgabe, einmalige Belohnung, Erfolg/Abbruch und Neustarts |
+| 6 | NpcTraderRestockTest | 067: NPC 06 Nachschub - START | Bereit zum Testen: spaeterer Nachschub, doppelte Ausloesung, Kauf und zwei Neustarts |
 
 ## 1. Koepfe
 
@@ -80,8 +85,8 @@ Der [Spielbericht zu 0.1.2](voice/runtime-result-0.1.2.json) bestaetigt B/Cs
 Begruessungen und wiederholte Alltagszeilen sowie Bs Weg mit einer gesprochenen
 Zeile unterwegs. Zweimal sehr kurz sichtbare Sprechblasen bleiben als
 Auffaelligkeit unbekannter Ursache offen. Der Neustart ohne erneuten Aufbau
-ist ebenfalls bestaetigt; ein ausdruecklicher hoerbarer Profilvergleich wurde
-nicht berichtet.
+ist ebenfalls bestaetigt. Am2026-09-22 bestaetigt der Benutzer zudem die
+hoerbaren Stimmen: B wie Diego, C wie Lares. Dafuer ist kein Nachtest erforderlich.
 
 Alle acht START-Saves stehen jetzt auf 12:00 Uhr; der [Tageslichtbericht](daylight-starts.json)
 haelt die Aenderung mit Backups fest. Kopf- und Sprach-Aufbau setzen ebenfalls

@@ -12,11 +12,12 @@
     "C_periodic_everyday_lines": true,
     "B_routine_walk": true,
     "B_everyday_line_during_walk_observed_once": true,
-    "full_restart_without_repeating_setup": true
+    "full_restart_without_repeating_setup": true,
+    "B_audibly_Diego": true,
+    "C_audibly_Lares": true
   },
   "limits": [
     "The very short routine path does not guarantee speech on each traversal.",
-    "Diego/Lares assignments have source evidence; the user has not explicitly compared their audible identities.",
     "No timings, exact voice lines, or audio recordings were supplied in this report."
   ],
   "open_observation": {
@@ -108,5 +109,12 @@
     "date": "2026-09-12",
     "user_report": "neustart hat funktioniert. mach nächstes paket jetzt."
   },
-  "save_archive_report": "../profile-cleanup-after-voice.json"
+  "save_archive_report": "../profile-cleanup-after-voice.json",
+  "audible_identity_confirmation": {
+    "date": "2026-09-22",
+    "user_quote": "hm, hatte ich nicht schon gesagt dass sich B wie diego und C wie lares anhört? kannst mal im transkript dieser session nachgreppen wenn du dir nicht sicher bist",
+    "applies_to": "User clarification of the completed voice test, not a new game run.",
+    "transcript_review": "Current session UUID01a07599-d23b-7093-8dc2-e0ebcb08e1d9 searched in full. Earlier user pass on2026-09-12 covers both greetings/everyday speech; current clarification explicitly supplies the audible Diego/Lares identities.",
+    "retest_needed": false
+  }
 }
