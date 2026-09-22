@@ -243,19 +243,19 @@ class MemoryEventCard extends StatelessWidget {
   }
 
   Widget _catalogTitle(BuildContext context, TextStyle? titleStyle) {
+    final lead = presentation.catalogTitleLead;
     final run = presentation.catalogTitleRun;
+    final tail = presentation.catalogTitleTail;
     final game = GameTextScript.maybeOf(context);
-    if (run == null || run.isEmpty || game == null) {
-      return Text(
-        presentation.title,
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-        style: titleStyle,
-      );
-    }
-    final index = presentation.title.lastIndexOf(run);
-    final painted = gameScriptTextStyle(context, game, style: titleStyle);
-    if (index < 0 || painted == null) {
+    final painted = game == null
+        ? null
+        : gameScriptTextStyle(context, game, style: titleStyle);
+    if (lead == null ||
+        run == null ||
+        run.isEmpty ||
+        tail == null ||
+        painted == null ||
+        '$lead$run$tail' != presentation.title) {
       return Text(
         presentation.title,
         maxLines: 2,
@@ -266,15 +266,9 @@ class MemoryEventCard extends StatelessWidget {
     return Text.rich(
       TextSpan(
         children: [
-          TextSpan(
-            text: presentation.title.substring(0, index),
-            style: titleStyle,
-          ),
+          TextSpan(text: lead, style: titleStyle),
           TextSpan(text: run, style: painted),
-          TextSpan(
-            text: presentation.title.substring(index + run.length),
-            style: titleStyle,
-          ),
+          if (tail.isNotEmpty) TextSpan(text: tail, style: titleStyle),
         ],
       ),
       maxLines: 2,

@@ -193,8 +193,51 @@ void main() {
       );
 
       expect(result.title, 'Eintrag entdeckt: Diego — Begegnung / Porträt');
+      expect(result.catalogTitleLead, 'Eintrag entdeckt: ');
+      expect(result.catalogTitleRun, 'Diego');
+      expect(result.catalogTitleTail, ' — Begegnung / Porträt');
       expect(result.category, MemoryEventCategory.document);
     });
+
+    test(
+      'keeps a repeated catalog name inside the segment on the interface side',
+      () {
+        final presenter = MemoryEventPresenter(
+          l10n: AppLocalizationsEn(),
+          locCatalog: const {
+            'oc_stt_diego': {'english_newer': 'Diego'},
+          },
+          npcGlossaryCatalog: const [
+            NpcGlossaryCatalogEntry(
+              id: 'OC_STT_Diego',
+              uniqueName: 'OC_STT_Diego',
+              documentClass: 'Document_Diego',
+              camp: NpcGlossaryCamp.oldCamp,
+              segments: [
+                NpcGlossaryCatalogSegment(
+                  id: 'DiegoNotes',
+                  segmentClass: 'Glossary_Diego_Notes',
+                  label: 'Diego notes',
+                ),
+              ],
+            ),
+          ],
+        );
+        final result = presenter.present(
+          const MemoryEvent(
+            index: 31,
+            tags: ['Memory.Document.SegmentUnlocked'],
+            optionalClass1: '/Script/Angelscript.Document_Diego',
+            optionalClass2: '/Script/Angelscript.Glossary_Diego_Notes',
+          ),
+        );
+
+        expect(result.title, 'Entry discovered: Diego — Diego Notes');
+        expect(result.catalogTitleLead, 'Entry discovered: ');
+        expect(result.catalogTitleRun, 'Diego');
+        expect(result.catalogTitleTail, ' — Diego Notes');
+      },
+    );
 
     test(
       'turns actor ids, skill tags, guilds and crimes into useful subjects',

@@ -96,7 +96,9 @@ class MemoryEventPresentation {
     required this.tags,
     this.subject,
     this.subjectId,
+    this.catalogTitleLead,
     this.catalogTitleRun,
+    this.catalogTitleTail,
   });
 
   final MemoryEventKind kind;
@@ -106,9 +108,17 @@ class MemoryEventPresentation {
   final String? subject;
   final String? subjectId;
 
+  /// Interface text before [catalogTitleRun] inside [title].
+  final String? catalogTitleLead;
+
   /// Catalog slice inside [title], when the subject came from the game catalog.
-  /// The action words around it stay interface text.
+  /// The action words around it stay interface text. The slice is the leading
+  /// catalog name, never a later copy of that name inside an interface label.
   final String? catalogTitleRun;
+
+  /// Interface text after [catalogTitleRun], including a segment label that
+  /// may repeat the catalog name.
+  final String? catalogTitleTail;
   final List<MemoryEventFact> facts;
   final List<String> tags;
 }
@@ -171,6 +181,7 @@ class MemoryEventPresenter {
     final title = subject == null
         ? action
         : l10n.memoryEventTitleWithSubject(action, subject.value);
+    final catalogTitle = _catalogTitleParts(action, title, subject);
 
     return MemoryEventPresentation(
       kind: kind,
@@ -179,10 +190,40 @@ class MemoryEventPresenter {
       title: title,
       subject: subject?.value,
       subjectId: subject?.technicalValue,
-      catalogTitleRun: subject?.catalogRun,
+      catalogTitleLead: catalogTitle?.lead,
+      catalogTitleRun: catalogTitle?.run,
+      catalogTitleTail: catalogTitle?.tail,
       facts: List.unmodifiable(_facts(event, kind)),
       tags: List.unmodifiable(event.tags),
     );
+  }
+
+  /// Splits [title] on the template, not by searching for the catalog name.
+  /// A later interface label may repeat that name; the catalog face stays on
+  /// the leading run.
+  ({String lead, String run, String tail})? _catalogTitleParts(
+    String action,
+    String title,
+    _ResolvedSubject? subject,
+  ) {
+    final run = subject?.catalogRun;
+    if (subject == null ||
+        run == null ||
+        run.isEmpty ||
+        !subject.value.startsWith(run)) {
+      return null;
+    }
+    const actionMark = '\uE000';
+    const subjectMark = '\uE001';
+    final probe = l10n.memoryEventTitleWithSubject(actionMark, subjectMark);
+    final actionAt = probe.indexOf(actionMark);
+    final subjectAt = probe.indexOf(subjectMark);
+    if (actionAt < 0 || subjectAt <= actionAt) return null;
+    final lead = '$action${probe.substring(actionAt + 1, subjectAt)}';
+    final tail =
+        '${subject.value.substring(run.length)}${probe.substring(subjectAt + 1)}';
+    if (title != '$lead$run$tail') return null;
+    return (lead: lead, run: run, tail: tail);
   }
 
   List<MemoryEventFact> _facts(MemoryEvent event, MemoryEventKind kind) {
