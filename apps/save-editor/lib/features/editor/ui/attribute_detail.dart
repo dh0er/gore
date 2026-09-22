@@ -116,6 +116,11 @@ class AttributeDetail extends ConsumerWidget {
       catalog: locCatalog,
       lang: lang,
     );
+    bool attributeFromCatalog(String id, String? setClass) =>
+        catalogAttributeName(locCatalog, lang, id, setClass: setClass) != null;
+    bool tooltipFromCatalog(String id, String? setClass) =>
+        gameAttributeDescription(locCatalog, lang, id, setClass: setClass) !=
+        null;
 
     if (selected.isPlayer) {
       final body = _PrivatePanel(
@@ -128,6 +133,8 @@ class AttributeDetail extends ConsumerWidget {
         lockedBody: l10n.playerLockedBody,
         attributeLabel: attributeLabel,
         attributeTooltip: attributeTooltipFor,
+        attributeFromCatalog: attributeFromCatalog,
+        tooltipFromCatalog: tooltipFromCatalog,
       );
       if (!showActorHeader) return body;
       // Player → a shared header ("Player", no GlobalId) above the EXISTING
@@ -204,6 +211,8 @@ class AttributeDetail extends ConsumerWidget {
             ),
             attributeLabel: attributeLabel,
             attributeTooltip: attributeTooltipFor,
+            attributeFromCatalog: attributeFromCatalog,
+            tooltipFromCatalog: tooltipFromCatalog,
             initialPending: () => _npcAttributeDraftsFromPending(
               notifier.pendingEditFor(pendingKey),
             ),
@@ -261,6 +270,8 @@ class _PrivatePanel extends StatelessWidget {
     required this.lockedBody,
     required this.attributeLabel,
     required this.attributeTooltip,
+    this.attributeFromCatalog,
+    this.tooltipFromCatalog,
   });
 
   final IconData icon;
@@ -272,6 +283,8 @@ class _PrivatePanel extends StatelessWidget {
   final String lockedBody;
   final AttributeLabelResolver attributeLabel;
   final AttributeLabelResolver attributeTooltip;
+  final bool Function(String id, String? setClass)? attributeFromCatalog;
+  final bool Function(String id, String? setClass)? tooltipFromCatalog;
 
   /// The legacy attributes editor, flattened: the whole tab body sits inside
   /// ONE main card now, so the section renders bare (no inner Card).
@@ -283,6 +296,8 @@ class _PrivatePanel extends StatelessWidget {
       reloadKey: inspection,
       attributeLabel: attributeLabel,
       attributeTooltip: attributeTooltip,
+      attributeFromCatalog: attributeFromCatalog,
+      tooltipFromCatalog: tooltipFromCatalog,
     );
   }
 
@@ -348,6 +363,8 @@ class _PrivatePanel extends StatelessWidget {
             ),
             attributeLabel: attributeLabel,
             attributeTooltip: attributeTooltip,
+            attributeFromCatalog: attributeFromCatalog,
+            tooltipFromCatalog: tooltipFromCatalog,
           ),
         );
       }
@@ -380,6 +397,8 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
     required this.notifier,
     required this.attributeLabel,
     required this.attributeTooltip,
+    this.attributeFromCatalog,
+    this.tooltipFromCatalog,
     this.editable = true,
     this.reloadKey,
   });
@@ -388,6 +407,8 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
   final EditorNotifier notifier;
   final AttributeLabelResolver attributeLabel;
   final AttributeLabelResolver attributeTooltip;
+  final bool Function(String id, String? setClass)? attributeFromCatalog;
+  final bool Function(String id, String? setClass)? tooltipFromCatalog;
   final bool editable;
   final Object? reloadKey;
 
@@ -426,6 +447,11 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
                     (attribute) => _PrivatePlayerAttributeRow(
                       attribute: attribute,
                       label: attributeLabel(attribute.id, null),
+                      labelFromCatalog:
+                          attributeFromCatalog?.call(attribute.id, null) ??
+                          false,
+                      tooltipFromCatalog:
+                          tooltipFromCatalog?.call(attribute.id, null) ?? false,
                       tooltip: attributeTooltip(attribute.id, null),
                       notifier: notifier,
                       editable: editable,
@@ -446,6 +472,8 @@ class _PrivatePlayerAttributeRow extends StatefulWidget {
   const _PrivatePlayerAttributeRow({
     required this.attribute,
     required this.label,
+    this.labelFromCatalog = false,
+    this.tooltipFromCatalog = false,
     this.tooltip = '',
     required this.notifier,
     required this.editable,
@@ -455,6 +483,8 @@ class _PrivatePlayerAttributeRow extends StatefulWidget {
 
   final PrivatePlayerAttribute attribute;
   final String label;
+  final bool labelFromCatalog;
+  final bool tooltipFromCatalog;
 
   /// One sentence on what this value does in the game. Empty = no tooltip.
   final String tooltip;
@@ -529,16 +559,23 @@ class _PrivatePlayerAttributeRowState
     final name = widget.label;
     // Same affordance as the typed rows: the label explains what the value does.
     Widget named() {
-      final game = GameTextScript.maybeOf(context);
+      final labelGame = widget.labelFromCatalog
+          ? GameTextScript.maybeOf(context)
+          : null;
+      final tooltipGame = widget.tooltipFromCatalog
+          ? GameTextScript.maybeOf(context)
+          : null;
       final labelStyle = Theme.of(context).textTheme.labelLarge;
       final text = Text(
         name,
-        style: game == null
+        style: labelGame == null
             ? labelStyle
-            : gameScriptTextStyle(context, game, style: labelStyle),
+            : gameScriptTextStyle(context, labelGame, style: labelStyle),
       );
       if (widget.tooltip.isEmpty) return text;
-      final font = game == null ? null : gameScriptTextStyle(context, game);
+      final font = tooltipGame == null
+          ? null
+          : gameScriptTextStyle(context, tooltipGame);
       if (font == null) return Tooltip(message: widget.tooltip, child: text);
       return Tooltip(
         richMessage: TextSpan(text: widget.tooltip, style: font),
