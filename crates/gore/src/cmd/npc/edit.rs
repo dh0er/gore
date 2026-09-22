@@ -39,10 +39,15 @@ pub fn is_spawn_line_for(line: &str, spawn_class: &str) -> bool {
     let Some(argument) = line.trim().strip_prefix("this.SpawnAIAgent(") else {
         return false;
     };
+    let argument = argument.trim_start();
     let argument = argument
         .strip_prefix("TSubclassOf<USpawnAIAgentDefinition>(")
-        .unwrap_or(argument);
-    argument.starts_with(&format!("{spawn_class}::StaticClass()"))
+        .unwrap_or(argument)
+        .trim_start();
+    let Some(tail) = argument.strip_prefix(spawn_class) else {
+        return false;
+    };
+    tail.starts_with("::StaticClass()") || tail.starts_with(',') || tail.starts_with(')')
 }
 
 /// Die Einrückung einer Zeile — alles vor dem ersten Nicht-Leerzeichen.
@@ -296,6 +301,17 @@ class UWP_B : UWorldPointScript
         assert!(!edited.contains("USpawnAIAgentDefinition_Diego::StaticClass()), nullptr"));
         assert!(edited.contains("USpawnAIAgentDefinition_Diego_Prime::StaticClass()"));
         assert!(edited.contains("// this.SpawnAIAgent(USpawnAIAgentDefinition_Diego"));
+    }
+
+    #[test]
+    fn suppressing_a_bare_class_reference_keeps_a_longer_name() {
+        let source = SOURCE.replace(
+            "        return;",
+            "        this.SpawnAIAgent(USpawnAIAgentDefinition_Diego, nullptr);\n        this.SpawnAIAgent(USpawnAIAgentDefinition_Diego_Prime, nullptr);\n        return;",
+        );
+        let edited = remove_spawn(&source, "USpawnAIAgentDefinition_Diego").unwrap();
+        assert!(!edited.contains("this.SpawnAIAgent(USpawnAIAgentDefinition_Diego, nullptr)"));
+        assert!(edited.contains("this.SpawnAIAgent(USpawnAIAgentDefinition_Diego_Prime, nullptr)"));
     }
 
     #[test]
