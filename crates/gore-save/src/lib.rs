@@ -5489,6 +5489,21 @@ where
     let save_original = fs::read(save_path)?;
     let save_parts = split_gsav(&save_original)?;
     let public_summary = summarize_public_payload(save_parts.public_payload);
+    let public_refs = scan_fstrings(save_parts.public_payload, 0);
+    let incoming_quick = read_bool_property_in_range(
+        save_parts.public_payload,
+        &public_refs,
+        0,
+        public_refs.len(),
+        "m_QuickSave",
+    );
+    let incoming_auto = read_bool_property_in_range(
+        save_parts.public_payload,
+        &public_refs,
+        0,
+        public_refs.len(),
+        "m_AutoSave",
+    );
     let player_save_name = public_summary
         .player_save_name
         .clone()
@@ -5513,14 +5528,20 @@ where
     let ids = profile_ids(&root)?;
     // Preserve whether the slot participated in the quick/auto ring arrays.
     // `m_SavedSlotsNames` always receives it in the destination profile.
-    let quick_member = registered
-        && ids.iter().try_fold(false, |found, &id| {
+    let quick_member = if registered {
+        ids.iter().try_fold(false, |found, &id| {
             Ok::<_, CoreError>(found || profile_array_contains(&root, id, "m_QuickSaveName", slot)?)
-        })?;
-    let auto_member = registered
-        && ids.iter().try_fold(false, |found, &id| {
+        })?
+    } else {
+        incoming_quick.unwrap_or(false)
+    };
+    let auto_member = if registered {
+        ids.iter().try_fold(false, |found, &id| {
             Ok::<_, CoreError>(found || profile_array_contains(&root, id, "m_AutoSaveName", slot)?)
-        })?;
+        })?
+    } else {
+        incoming_auto.unwrap_or(false)
+    };
     drop(root);
 
     let mut save_edited = save_original.clone();
@@ -5549,6 +5570,14 @@ where
         slot,
         split_gsav(&save_edited)?.public_payload,
     )?;
+    for (field, member) in [("m_QuickSave", quick_member), ("m_AutoSave", auto_member)] {
+        let _ = patch_persistent_slot_scalar_if_present(
+            &mut persistent_edited,
+            slot,
+            field,
+            properties::ScalarValue::Bool(member),
+        )?;
+    }
     register_global_save_slot(&mut persistent_edited, slot)?;
     for array_name in ["m_SavedSlotsNames", "m_QuickSaveName", "m_AutoSaveName"] {
         remove_slot_from_all_profile_arrays(&mut persistent_edited, &ids, array_name, slot)?;
@@ -5587,6 +5616,17 @@ where
             return Err(CoreError::Validation(format!(
                 "slot {slot} membership is inconsistent for profile {id}"
             )));
+        }
+        for (array, member) in [
+            ("m_QuickSaveName", quick_member),
+            ("m_AutoSaveName", auto_member),
+        ] {
+            let should_contain = id == profile_id && member;
+            if profile_array_contains(&edited_root, id, array, slot)? != should_contain {
+                return Err(CoreError::Validation(format!(
+                    "slot {slot} membership is inconsistent for {array} in profile {id}"
+                )));
+            }
         }
     }
     inspect_bytes(&save_edited, None, false)?;
@@ -18137,14 +18177,24 @@ mod tests {
     }
 
     fn dual_public_payload(slot: &str, name: &str, profile_id: i32) -> Vec<u8> {
+        dual_public_payload_with_flags(slot, name, profile_id, false, false)
+    }
+
+    fn dual_public_payload_with_flags(
+        slot: &str,
+        name: &str,
+        profile_id: i32,
+        quick_save: bool,
+        auto_save: bool,
+    ) -> Vec<u8> {
         let mut map_body = [0u32.to_le_bytes(), 3u32.to_le_bytes()].concat();
         for class in ["SaveDataPayload", "SaveGamePublicData", "UnrelatedPayload"] {
             let mut body = [
                 str_property("m_SlotName", slot),
                 str_property("m_PlayerSaveName", name),
                 int_property("m_ProfileId", profile_id),
-                bool_property("m_QuickSave", false),
-                bool_property("m_AutoSave", false),
+                bool_property("m_QuickSave", quick_save),
+                bool_property("m_AutoSave", auto_save),
             ]
             .concat();
             if class == "SaveGamePublicData" {
@@ -18358,11 +18408,49 @@ mod tests {
     }
 
     #[test]
+    fn assign_save_profile_import_keeps_quick_and_auto_flags_aligned_with_arrays() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("detached.sav");
+        let target = dir.path().join("G1R-007.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let original = build_gsav(
+            2,
+            &dual_public_payload_with_flags("G1R-054", "Imported", 0, true, true),
+            &minimal_stream(),
+            &[1, 2, 3, 4],
+        );
+        fs::write(&source, original).unwrap();
+        fs::write(
+            &persistent_path,
+            assignment_persistent_data_list("G1R-006", 0),
+        )
+        .unwrap();
+
+        assign_save_profile(&source, Some(&target), &persistent_path, 1, true).unwrap();
+
+        let cached = fs::read(&persistent_path).unwrap();
+        let root = parse_profile_file(&cached).unwrap();
+        for (array, field) in [
+            ("m_QuickSaveName", "m_QuickSave"),
+            ("m_AutoSaveName", "m_AutoSave"),
+        ] {
+            assert!(profile_array_contains(&root, 1, array, "G1R-007").unwrap());
+            let path = persistent_slot_property_path(&root, "G1R-007", field)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                properties::resolve(&root.properties, &path).unwrap().value,
+                properties::PropertyValue::Bool(true)
+            );
+        }
+    }
+
+    #[test]
     fn assign_save_profile_repairs_registered_slot_with_stale_second_payload() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-007.sav");
         let persistent_path = dir.path().join("PersistentDataList.sav");
-        let mut payload = dual_public_payload("G1R-054", "Original", 0);
+        let mut payload = dual_public_payload_with_flags("G1R-054", "Original", 0, true, false);
         // Reproduce the old writer: only its first public copy has been updated.
         for (field, value) in [("m_SlotName", "G1R-007"), ("m_PlayerSaveName", "Repaired")] {
             let root = properties::parse_property_list_root_at(&payload, 0).unwrap();

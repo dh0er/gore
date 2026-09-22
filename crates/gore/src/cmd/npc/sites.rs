@@ -63,23 +63,27 @@ impl WorldPoint {
 /// den Klassen aus und findet deshalb auch die 2729 leeren.
 pub fn parse_world_points(module: &str, source: &str) -> Vec<WorldPoint> {
     let mut out: Vec<WorldPoint> = Vec::new();
+    let mut current = None;
     for line in source.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("class ") {
-            match rest.split_once(':') {
-                Some((name, base)) if base.trim() == WORLD_POINT_BASE => out.push(WorldPoint {
-                    name: name.trim().to_string(),
-                    module: module.to_string(),
-                    occupants: Vec::new(),
-                }),
-                _ => {}
-            }
+            current = match rest.split_once(':') {
+                Some((name, base)) if base.trim() == WORLD_POINT_BASE => {
+                    out.push(WorldPoint {
+                        name: name.trim().to_string(),
+                        module: module.to_string(),
+                        occupants: Vec::new(),
+                    });
+                    Some(out.len() - 1)
+                }
+                _ => None,
+            };
             continue;
         }
         if !trimmed.contains("SpawnAIAgent(") {
             continue;
         }
-        let Some(point) = out.last_mut() else {
+        let Some(point) = current.and_then(|index| out.get_mut(index)) else {
             continue;
         };
         if let Some(definition) = spawn_definition_in(trimmed) {
@@ -249,6 +253,17 @@ class UNotAWorldPoint : USomethingElse
     fn a_class_that_is_not_a_world_point_is_no_point_at_all() {
         let points = parse_world_points("LevelScripts.Demo", SOURCE);
         assert!(points.iter().all(|p| p.name != "UNotAWorldPoint"));
+    }
+
+    #[test]
+    fn a_spawn_in_a_later_non_world_point_does_not_occupy_the_previous_point() {
+        let source = format!(
+            "{SOURCE}\nclass UHelper : UObject\n{{\n    void Go()\n    {{\n        this.SpawnAIAgent(USpawnAIAgentDefinition_WRONG, nullptr);\n    }}\n}}\n"
+        );
+        let points = parse_world_points("LevelScripts.Demo", &source);
+        assert!(points
+            .iter()
+            .all(|point| !point.occupants.iter().any(|npc| npc.ends_with("_WRONG"))));
     }
 
     #[test]
