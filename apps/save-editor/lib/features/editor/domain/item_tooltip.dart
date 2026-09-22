@@ -173,12 +173,24 @@ ItemTooltip buildItemTooltip({
           .map((level) => _number(level[tag]))
           .where((value) => value.isNotEmpty);
       if (values.isEmpty) continue;
-      rows.add(ItemTooltipRow(_damageLabel(game, tag), values.join('/')));
+      final damage = _damageLabel(game, tag);
+      rows.add(
+        ItemTooltipRow(
+          damage.label,
+          values.join('/'),
+          catalogLabel: damage.fromCatalog,
+        ),
+      );
     }
   } else {
     for (final entry in stats.damage.entries) {
+      final damage = _damageLabel(game, entry.key);
       rows.add(
-        ItemTooltipRow(_damageLabel(game, entry.key), _number(entry.value)),
+        ItemTooltipRow(
+          damage.label,
+          _number(entry.value),
+          catalogLabel: damage.fromCatalog,
+        ),
       );
     }
   }
@@ -466,8 +478,16 @@ String? _itemTypeName(String? Function(String) game, String itemType) {
   return null;
 }
 
-String _damageLabel(String? Function(String) game, String tag) =>
-    game(tag.toLowerCase()) ?? tag;
+({String label, bool fromCatalog}) _damageLabel(
+  String? Function(String) game,
+  String tag,
+) {
+  final text = game(tag.toLowerCase());
+  if (text == null || text.trim().isEmpty) {
+    return (label: tag, fromCatalog: false);
+  }
+  return (label: text, fromCatalog: true);
+}
 
 /// The game's own mark for the bench a recipe step is worked at.
 String? _stationIcon(String station) => switch (station) {

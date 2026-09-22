@@ -38,11 +38,26 @@ void main() {
     expect(tooltip.subtitle, 'One-Handed Sword');
     expect(tooltip.stats.first.label, 'Edge Dmg');
     expect(tooltip.stats.first.value, '17');
+    expect(tooltip.stats.first.catalogLabel, isTrue);
     expect(tooltip.requirementsLabel, 'Requirements:');
     expect(tooltip.requirements.single.label, 'Strength');
     expect(tooltip.requirements.single.value, '14');
     expect(tooltip.requirements.single.catalogLabel, isTrue);
     expect(tooltip.requirementsLabelFromCatalog, isTrue);
+  });
+
+  test('a missing damage name stays an interface tag', () {
+    const stats = ItemStats(damage: {'Item_Damage_Physical_Edge': 17});
+    final tooltip = buildItemTooltip(
+      title: 'Blade',
+      stats: stats,
+      catalog: const {},
+      lang: lang,
+      l10n: l10n,
+    );
+
+    expect(tooltip.stats.single.label, 'Item_Damage_Physical_Edge');
+    expect(tooltip.stats.single.catalogLabel, isFalse);
   });
 
   test('a missing attribute name stays an interface string', () {
