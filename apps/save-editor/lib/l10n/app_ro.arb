@@ -212,7 +212,7 @@
   "openSaveFile": "Deschide fișier",
   "externalSave": "Salvare deschisă din exterior",
   "saveProfileTitle": "Profil de salvare",
-  "saveProfileDescription": "Atribuie această salvare unui alt profil de joc. Salvarea și indexul profilului sunt rezervate împreună.",
+  "saveProfileDescription": "Atribuie această salvare unui alt profil de joc. Salvarea și indexul profilului primesc împreună o copie de rezervă.",
   "saveProfileExternalHint": "Selectează un profil ca să imporți acest fișier în folderul de salvări al jocului și să-l înregistrezi acolo. Fișierul original rămâne neschimbat.",
   "saveProfileNoProfiles": "Nu s-au găsit profile de joc editabile în PersistentDataList.sav.",
   "saveProfileSelect": "Selectează profilul",

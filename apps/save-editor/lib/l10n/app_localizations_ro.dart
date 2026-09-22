@@ -739,7 +739,7 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get saveProfileDescription =>
-      'Atribuie această salvare unui alt profil de joc. Salvarea și indexul profilului sunt rezervate împreună.';
+      'Atribuie această salvare unui alt profil de joc. Salvarea și indexul profilului primesc împreună o copie de rezervă.';
 
   @override
   String get saveProfileExternalHint =>
