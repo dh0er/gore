@@ -399,7 +399,7 @@ class AppLocalizationsUk extends AppLocalizations {
   String get skillNameBreakSwampsharkTeeth => 'Витягнути ікла болотного акули';
 
   @override
-  String get skillNameTakeFireTongue => 'Зняти мову вогню';
+  String get skillNameTakeFireTongue => 'Зняти язик вогню';
 
   @override
   String get skillNameTakeTrollHorn => 'Зняти ріг (Troll)';
