@@ -5327,6 +5327,38 @@ fn read_public_bool_property(payload: &[u8], name: &str) -> Result<Option<bool>,
     Ok(None)
 }
 
+fn read_public_string_property(payload: &[u8], name: &str) -> Result<Option<String>, CoreError> {
+    let root = properties::parse_property_list_root_at(payload, 0)?;
+    for path in public_field_paths(&root, name) {
+        let property = properties::resolve(&root.properties, &properties::parse_path(&path)?)?;
+        match &property.value {
+            properties::PropertyValue::Str(value) => return Ok(Some(value.clone())),
+            _ => {
+                return Err(CoreError::Validation(format!(
+                    "public field {name} is not a StrProperty"
+                )))
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn read_public_int_property(payload: &[u8], name: &str) -> Result<Option<i32>, CoreError> {
+    let root = properties::parse_property_list_root_at(payload, 0)?;
+    for path in public_field_paths(&root, name) {
+        let property = properties::resolve(&root.properties, &properties::parse_path(&path)?)?;
+        match &property.value {
+            properties::PropertyValue::Int(value) => return Ok(Some(*value)),
+            _ => {
+                return Err(CoreError::Validation(format!(
+                    "public field {name} is not an IntProperty"
+                )))
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// Refresh only the selected cached row, including when it was registered by an
 /// older importer. Keep the map's order and all unrelated entry bytes intact.
 fn refresh_persistent_slot_metadata(
@@ -5568,11 +5600,13 @@ where
 
     let save_original = fs::read(save_path)?;
     let save_parts = split_gsav(&save_original)?;
-    let public_summary = summarize_public_payload(save_parts.public_payload);
+    let incoming_slot_name =
+        read_public_string_property(save_parts.public_payload, "m_SlotName")?;
+    let incoming_player_save_name =
+        read_public_string_property(save_parts.public_payload, "m_PlayerSaveName")?;
     let incoming_quick = read_public_bool_property(save_parts.public_payload, "m_QuickSave")?;
     let incoming_auto = read_public_bool_property(save_parts.public_payload, "m_AutoSave")?;
-    let player_save_name = public_summary
-        .player_save_name
+    let player_save_name = incoming_player_save_name
         .clone()
         .unwrap_or_else(|| slot.to_string());
     let persistent_original = fs::read(persistent_path)?;
@@ -5614,11 +5648,11 @@ where
     let mut save_edited = save_original.clone();
     // Normalize every public identity copy, even when the first copy already
     // matches (the old importer could leave the second copy stale).
-    if public_summary.slot_name.is_some() {
+    if incoming_slot_name.is_some() {
         replace_public_fstring(&mut save_edited, "m_SlotName", slot)?;
     }
     let public_slot_updated = save_edited != save_original;
-    if public_summary.player_save_name.is_some() {
+    if incoming_player_save_name.is_some() {
         replace_public_fstring(&mut save_edited, "m_PlayerSaveName", &player_save_name)?;
     }
     let public_profile_updated = set_save_public_profile_id(&mut save_edited, profile_id)?;
@@ -5699,13 +5733,18 @@ where
     }
     inspect_bytes(&save_edited, None, false)?;
     let edited_parts = split_gsav(&save_edited)?;
-    let edited_public = summarize_public_payload(edited_parts.public_payload);
-    if public_slot_updated && edited_public.slot_name.as_deref() != Some(slot) {
+    if public_slot_updated
+        && read_public_string_property(edited_parts.public_payload, "m_SlotName")?.as_deref()
+            != Some(slot)
+    {
         return Err(CoreError::Validation(
             "save did not retain its public m_SlotName".to_string(),
         ));
     }
-    if public_profile_updated && edited_public.profile_id != Some(profile_id) {
+    if public_profile_updated
+        && read_public_int_property(edited_parts.public_payload, "m_ProfileId")?
+            != Some(profile_id)
+    {
         return Err(CoreError::Validation(
             "save did not retain its public m_ProfileId".to_string(),
         ));
@@ -18292,38 +18331,45 @@ mod tests {
         quick_save: bool,
         auto_save: bool,
     ) -> Vec<u8> {
-        dual_public_payload_with_decoy_flags(
+        dual_public_payload_with_decoys(
             slot,
             name,
             profile_id,
             quick_save,
             auto_save,
             None,
+            None,
         )
     }
 
-    fn dual_public_payload_with_decoy_flags(
+    fn dual_public_payload_with_decoys(
         slot: &str,
         name: &str,
         profile_id: i32,
         quick_save: bool,
         auto_save: bool,
         decoy_flags: Option<(bool, bool)>,
+        decoy_player_save_name: Option<&str>,
     ) -> Vec<u8> {
         let mut map_body = [0u32.to_le_bytes(), 3u32.to_le_bytes()].concat();
-        let classes = if decoy_flags.is_some() {
+        let classes = if decoy_flags.is_some() || decoy_player_save_name.is_some() {
             ["UnrelatedPayload", "SaveDataPayload", "SaveGamePublicData"]
         } else {
             ["SaveDataPayload", "SaveGamePublicData", "UnrelatedPayload"]
         };
         for class in classes {
-            let mut body = if class == "UnrelatedPayload" && decoy_flags.is_some() {
-                let (decoy_quick, decoy_auto) = decoy_flags.unwrap();
-                [
-                    bool_property("m_QuickSave", decoy_quick),
-                    bool_property("m_AutoSave", decoy_auto),
-                ]
-                .concat()
+            let mut body = if class == "UnrelatedPayload"
+                && (decoy_flags.is_some() || decoy_player_save_name.is_some())
+            {
+                let mut decoy = Vec::new();
+                if let Some(decoy_name) = decoy_player_save_name {
+                    decoy.extend(str_property("m_PlayerSaveName", decoy_name));
+                }
+                if let Some((decoy_quick, decoy_auto)) = decoy_flags {
+                    decoy.extend(bool_property("m_QuickSave", decoy_quick));
+                    decoy.extend(bool_property("m_AutoSave", decoy_auto));
+                }
+                decoy
             } else {
                 [
                     str_property("m_SlotName", slot),
@@ -18588,13 +18634,14 @@ mod tests {
         let source = dir.path().join("detached.sav");
         let target = dir.path().join("G1R-007.sav");
         let persistent_path = dir.path().join("PersistentDataList.sav");
-        let payload = dual_public_payload_with_decoy_flags(
+        let payload = dual_public_payload_with_decoys(
             "G1R-054",
             "Imported",
             0,
             false,
             true,
             Some((true, false)),
+            None,
         );
         fs::write(
             &source,
@@ -18622,6 +18669,53 @@ mod tests {
                 properties::PropertyValue::Bool(value)
             );
         }
+    }
+
+    #[test]
+    fn assign_save_profile_import_ignores_unrelated_player_save_name() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("detached.sav");
+        let target = dir.path().join("G1R-007.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let payload = dual_public_payload_with_decoys(
+            "G1R-054",
+            "Imported",
+            0,
+            false,
+            false,
+            None,
+            Some("Unrelated decoy"),
+        );
+        fs::write(
+            &source,
+            build_gsav(2, &payload, &minimal_stream(), &[1, 2, 3, 4]),
+        )
+        .unwrap();
+        fs::write(
+            &persistent_path,
+            assignment_persistent_data_list("G1R-006", 0),
+        )
+        .unwrap();
+
+        assign_save_profile(&source, Some(&target), &persistent_path, 1, true).unwrap();
+
+        let written = fs::read(&target).unwrap();
+        let parts = split_gsav(&written).unwrap();
+        for class in ["SaveDataPayload", "SaveGamePublicData"] {
+            assert_eq!(
+                public_branch_field(parts.public_payload, class, "m_PlayerSaveName"),
+                properties::PropertyValue::Str("Imported".into())
+            );
+        }
+        let persistent = fs::read(&persistent_path).unwrap();
+        let root = parse_profile_file(&persistent).unwrap();
+        let path = persistent_slot_property_path(&root, "G1R-007", "m_PlayerSaveName")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            properties::resolve(&root.properties, &path).unwrap().value,
+            properties::PropertyValue::Str("Imported".into())
+        );
     }
 
     #[test]
