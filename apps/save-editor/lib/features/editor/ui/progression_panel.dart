@@ -641,7 +641,7 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
     final title = SelectableText(
       node.label,
       maxLines: 1,
-      style: gameScriptTextStyle(context, gameLocale),
+      style: node.localized ? gameScriptTextStyle(context, gameLocale) : null,
     );
     final subtitle = _buildQuestSubtitle(context, node, showObjectIds);
     if (node.children.isEmpty) {

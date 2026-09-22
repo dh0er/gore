@@ -738,10 +738,7 @@ class _LockList extends StatelessWidget {
                         },
                         color: effective ? scheme.primary : scheme.outline,
                       ),
-                      title: Text(
-                        row.name,
-                        style: gameScriptTextStyle(context, lang.locale),
-                      ),
+                      title: Text(row.name),
                       subtitle: draft != null
                           ? Text(l10n.glossaryPending)
                           : subtitle,
