@@ -22,7 +22,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use clap::Subcommand;
 use gore_as::cache::{emit_all::PreparedEmit, faithfulness, model, refs::RefResolver};
 
@@ -1100,9 +1100,63 @@ fn read_manifest(dir: &Path) -> Result<workspace::Manifest> {
     serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
+fn validate_manifest_modules(manifest: &workspace::Manifest) -> Result<()> {
+    let safe = |value: &str| {
+        let path = Path::new(value);
+        path.components().next().is_some()
+            && path
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_)))
+    };
+    for edit in &manifest.modules {
+        ensure!(
+            safe(&edit.relative_path),
+            "unsafe NPC module path: {}",
+            edit.relative_path
+        );
+        ensure!(
+            safe(&edit.source_file),
+            "unsafe NPC source path: {}",
+            edit.source_file
+        );
+        if let Some(pristine) = &edit.pristine_file {
+            ensure!(safe(pristine), "unsafe NPC pristine path: {pristine}");
+        }
+    }
+
+    let level = manifest
+        .level_edit()
+        .context("the manifest names no edited level script")?;
+    let level_path = format!("{}.as", manifest.level_module.replace('.', "/"));
+    ensure!(
+        level.op == "edit" && level.relative_path == level_path && level.pristine_file.is_some(),
+        "the NPC level module entry does not match its generated path and edit operation"
+    );
+    match manifest.operation {
+        workspace::Operation::New | workspace::Operation::Clone => {
+            let authored = manifest
+                .authored_module()
+                .context("the manifest names no authored NPC module")?;
+            ensure!(
+                manifest.modules.len() == 2
+                    && authored.module == generate::module_name(&manifest.npc_id)
+                    && authored.relative_path == generate::relative_path(&manifest.npc_id)
+                    && authored.pristine_file.is_none(),
+                "a new NPC workspace must contain only its generated module and level edit"
+            );
+        }
+        workspace::Operation::Checkout | workspace::Operation::Suppress => ensure!(
+            manifest.modules.len() == 1,
+            "a checkout or suppression must contain only its edited module"
+        ),
+    }
+    Ok(())
+}
+
 /// `gore npc check` — das Arbeitsverzeichnis gegen den Vertrag prüfen.
 fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
     let manifest = read_manifest(dir)?;
+    validate_manifest_modules(&manifest)?;
     routine::check_managed(dir, &manifest, game.clone())?;
     let spawn_class = generate::spawn_class(&manifest.npc_id);
     let emitted = emit_index(cache, game, Some(&spawn_class))?;
@@ -1303,10 +1357,25 @@ fn ensure_tree(tree: &Path, cache_sha256: &str, path: &Path) -> Result<()> {
 
 /// Die verfassten Dateien an ihre Stellen im Baum kopieren.
 fn overlay_authored(dir: &Path, tree: &Path, manifest: &workspace::Manifest) -> Result<()> {
+    let root = fs::canonicalize(tree).with_context(|| format!("resolving {}", tree.display()))?;
     for edit in &manifest.modules {
         let target = tree.join(&edit.relative_path);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+            let resolved = fs::canonicalize(parent)?;
+            ensure!(
+                resolved.starts_with(&root),
+                "NPC overlay escapes the staging tree"
+            );
+        }
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) => ensure!(
+                !metadata.file_type().is_symlink(),
+                "NPC overlay target is a link: {}",
+                target.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
         let source = dir.join(&edit.source_file);
         fs::copy(&source, &target)
@@ -1377,6 +1446,7 @@ fn stage_workspace(
 ) -> Result<()> {
     gore_mod::validate_mod_name(mod_name).context("invalid --mod-name")?;
     let manifest = read_manifest(dir)?;
+    validate_manifest_modules(&manifest)?;
     routine::check_managed(dir, &manifest, game.clone())?;
     let findings = workspace_source_findings(dir, &manifest)?;
     let blocking: Vec<_> = findings
@@ -1622,6 +1692,40 @@ fn derivable_parent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manifest_rejects_extra_modules_and_escape_paths() {
+        let level = workspace::ModuleEdit {
+            module: "LevelScripts.Test".to_string(),
+            relative_path: "LevelScripts/Test.as".to_string(),
+            source_file: "Test.as".to_string(),
+            pristine_file: Some("pristine/Test.as".to_string()),
+            op: "edit".to_string(),
+        };
+        let authored = workspace::ModuleEdit {
+            module: generate::module_name("MINE"),
+            relative_path: generate::relative_path("MINE"),
+            source_file: "MINE.as".to_string(),
+            pristine_file: None,
+            op: "add".to_string(),
+        };
+        let mut manifest = workspace::Manifest {
+            operation: workspace::Operation::New,
+            npc_id: "MINE".to_string(),
+            derived_from: None,
+            modules: vec![authored, level],
+            world_points: vec!["UWP_A".to_string()],
+            level_module: "LevelScripts.Test".to_string(),
+            cache_sha256: "abc".to_string(),
+            modular_visuals: false,
+        };
+        assert!(validate_manifest_modules(&manifest).is_ok());
+        manifest.modules.push(manifest.modules[1].clone());
+        assert!(validate_manifest_modules(&manifest).is_err());
+        manifest.modules.pop();
+        manifest.modules[1].relative_path = "../outside.as".to_string();
+        assert!(validate_manifest_modules(&manifest).is_err());
+    }
 
     #[test]
     fn staging_two_workspaces_does_not_carry_the_first_overlay() {

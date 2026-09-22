@@ -34,6 +34,17 @@ pub fn spawn_line(indent: &str, spawn_class: &str, routine_class: Option<&str>) 
     )
 }
 
+/// Match the definition passed as the first spawn argument, not a class-name prefix or comment.
+pub fn is_spawn_line_for(line: &str, spawn_class: &str) -> bool {
+    let Some(argument) = line.trim().strip_prefix("this.SpawnAIAgent(") else {
+        return false;
+    };
+    let argument = argument
+        .strip_prefix("TSubclassOf<USpawnAIAgentDefinition>(")
+        .unwrap_or(argument);
+    argument.starts_with(&format!("{spawn_class}::StaticClass()"))
+}
+
 /// Die Einrückung einer Zeile — alles vor dem ersten Nicht-Leerzeichen.
 fn indent_of(line: &str) -> &str {
     &line[..line.len() - line.trim_start().len()]
@@ -122,7 +133,7 @@ pub fn add_spawn(
 /// Die Weltpunkt-Klassen selbst bleiben stehen; nur ihre Zeile verschwindet. Ein leerer
 /// `OnWorldStart`-Rumpf ist gültig und setzt schlicht niemanden mehr.
 pub fn remove_spawn(source: &str, spawn_class: &str) -> Result<String, EditError> {
-    let matches = |line: &str| line.contains("SpawnAIAgent(") && line.contains(spawn_class);
+    let matches = |line: &str| is_spawn_line_for(line, spawn_class);
     if !source.lines().any(matches) {
         return Err(EditError::NotSpawnedHere(spawn_class.to_string()));
     }
@@ -273,6 +284,18 @@ class UWP_B : UWorldPointScript
         assert!(out.contains("class UWP_A : UWorldPointScript"));
         assert!(out.contains("void OnWorldStart()"));
         assert_eq!(out.lines().count(), SOURCE.lines().count() - 1);
+    }
+
+    #[test]
+    fn suppressing_a_name_does_not_remove_a_longer_name_or_a_comment() {
+        let source = SOURCE.replace(
+            "        return;",
+            "        this.SpawnAIAgent(TSubclassOf<USpawnAIAgentDefinition>(USpawnAIAgentDefinition_Diego_Prime::StaticClass()), nullptr);\n        // this.SpawnAIAgent(USpawnAIAgentDefinition_Diego::StaticClass());\n        return;",
+        );
+        let edited = remove_spawn(&source, "USpawnAIAgentDefinition_Diego").unwrap();
+        assert!(!edited.contains("USpawnAIAgentDefinition_Diego::StaticClass()), nullptr"));
+        assert!(edited.contains("USpawnAIAgentDefinition_Diego_Prime::StaticClass()"));
+        assert!(edited.contains("// this.SpawnAIAgent(USpawnAIAgentDefinition_Diego"));
     }
 
     #[test]

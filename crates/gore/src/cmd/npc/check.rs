@@ -98,7 +98,7 @@ pub fn line_changes(pristine: &str, edited: &str) -> Vec<LineChange> {
 
 /// Ist diese Zeile eine Spawn-Zeile für `spawn_class`?
 fn is_spawn_line_for(text: &str, spawn_class: &str) -> bool {
-    text.contains("SpawnAIAgent(") && text.contains(spawn_class)
+    edit::is_spawn_line_for(text, spawn_class)
 }
 
 /// Der Diff-Wächter: nur die beabsichtigten Spawn-Zeilen dürfen sich bewegt haben.
@@ -359,6 +359,23 @@ mod tests {
             .join("\n");
         let findings = guard_level_diff(PRISTINE, &edited, "USpawnAIAgentDefinition_Diego");
         assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn removing_a_prefixed_other_character_is_not_an_allowed_level_edit() {
+        let pristine = PRISTINE.replace(
+            "        return;",
+            "        this.SpawnAIAgent(TSubclassOf<USpawnAIAgentDefinition>(USpawnAIAgentDefinition_Diego_Prime::StaticClass()), nullptr);\n        return;",
+        );
+        let edited = pristine
+            .lines()
+            .filter(|line| {
+                !line.contains("USpawnAIAgentDefinition_Diego::StaticClass()")
+                    && !line.contains("USpawnAIAgentDefinition_Diego_Prime::StaticClass()")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!guard_level_diff(&pristine, &edited, "USpawnAIAgentDefinition_Diego").is_empty());
     }
 
     #[test]
