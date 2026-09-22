@@ -798,6 +798,9 @@ fn author(
             request.id
         );
     }
+    if let Some(waypoint) = &request.waypoint {
+        routine_plan::validate_name_literal(waypoint, "waypoint")?;
+    }
 
     let path = cache_path(cache.clone(), game.clone())?;
     let template_spawn = generate::spawn_class(&request.from);
@@ -1720,6 +1723,31 @@ fn derivable_parent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn author_rejects_waypoints_that_cannot_be_embedded_in_a_name_literal() {
+        for waypoint in ["FP_BAD\"", "FP_BAD\\PATH", "FP_BAD\nINJECTED"] {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let out = tmp.path().join("workspace");
+            let error = author(
+                &NewRequest {
+                    id: "MY_NPC".to_string(),
+                    from: "OC_STT_Diego".to_string(),
+                    guild: None,
+                    at: "UWP_TEST".to_string(),
+                    waypoint: Some(waypoint.to_string()),
+                    trader: false,
+                    modular_visuals: false,
+                },
+                None,
+                None,
+                &out,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("safe ASCII text"));
+            assert!(!out.exists());
+        }
+    }
 
     #[test]
     fn manifest_rejects_extra_modules_and_escape_paths() {

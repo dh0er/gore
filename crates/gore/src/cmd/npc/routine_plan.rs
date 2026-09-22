@@ -97,7 +97,7 @@ pub(super) fn validate_identifier(value: &str, what: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_name_literal(value: &str, what: &str) -> Result<()> {
+pub(super) fn validate_name_literal(value: &str, what: &str) -> Result<()> {
     ensure!(
         !value.is_empty()
             && value
