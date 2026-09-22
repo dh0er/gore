@@ -539,7 +539,7 @@ $ gore npc stage work/npc --tree work/tree --mod-name GoreTestNpc
 reusing the source tree in work/tree (7317 modules)
 wrote work/npc/spec.json
 now run:
-  gore as compile "work/tree" -o "work/npc/full.Cache" --mini "work/npc/GoreTestNpc.mini.Cache" --work-dir "work/npc.work" --backend standalone
+  gore as compile "work/npc/.gore-npc-staged-tree" -o "work/npc/full.Cache" --mini "work/npc/GoreTestNpc.mini.Cache" --work-dir "work/npc.work" --backend standalone --game "<resolved game path>"
   gore mod build --spec "work/npc/spec.json" -o "work/npc/build"
 then: gore mod deploy --bundle work/npc/build/GoreTestNpc
 ```
@@ -564,8 +564,11 @@ That is why `--tree` is required for a new character and pointless for a
 suppression. Emitting all 7317 modules takes around 19 minutes, nearly all of it
 one module (`Map.MainMap.WorldPointManagerConfig_MainMap`). The tree is
 therefore written once per game version, stamped with the cache it came from,
-and reused — which is what the `reusing` line reports. A tree stamped with a
-different cache is refused rather than quietly mixed with a newer one.
+and reused — which is what the `reusing` line reports. `stage` checks the
+selected and installed caches against the workspace, then copies that pristine
+tree into the workspace before applying its edits. This keeps later NPC
+workspaces from inheriting those edits. A tree stamped with a different cache
+or an older format is refused rather than quietly mixed with a newer one.
 
 `stage` runs neither command itself. A quarter of an hour is not something a
 tool should start without being asked.

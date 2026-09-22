@@ -21,6 +21,9 @@ use super::workspace::Manifest;
 /// Der Stempel neben einem vorgehaltenen Quellbaum.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TreeStamp {
+    /// Legacy trees may already contain overlays from earlier staging runs.
+    #[serde(default)]
+    pub format_version: u32,
     /// Die Cache, aus der der Baum emittiert wurde.
     pub cache_sha256: String,
     /// Wie viele Dateien geschrieben wurden — eine grobe Vollständigkeitsprobe.
@@ -29,6 +32,7 @@ pub struct TreeStamp {
 
 /// Der Dateiname des Stempels im Baumverzeichnis.
 pub const TREE_STAMP_NAME: &str = ".gore-npc-tree.json";
+pub const TREE_STAMP_VERSION: u32 = 2;
 
 /// Welchen Weg diese Arbeit nimmt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,7 +56,7 @@ pub fn route_of(manifest: &Manifest) -> Route {
     }
 }
 
-/// `compile-module` reads the resolved installation, so both it and the selected cache must
+/// Both compiler routes read the resolved installation. Its cache and the selected cache must
 /// match the workspace base before staging can print a command for that installation.
 pub fn compiler_game_for(
     manifest: &Manifest,
@@ -64,7 +68,7 @@ pub fn compiler_game_for(
     for path in [cache, script_cache.as_path()] {
         let bytes = fs::read(path).with_context(|| {
             format!(
-                "reading compiler base cache {}. `compile-module` requires a matching game installation",
+                "reading compiler base cache {}. Compilation requires a matching game installation",
                 path.display()
             )
         })?;
@@ -272,6 +276,7 @@ mod tests {
     #[test]
     fn a_tree_stamp_round_trips() {
         let stamp = TreeStamp {
+            format_version: TREE_STAMP_VERSION,
             cache_sha256: "abc".to_string(),
             modules: 7317,
         };

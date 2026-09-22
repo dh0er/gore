@@ -1122,55 +1122,17 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
         });
     }
 
-    let Some(level) = manifest.level_edit() else {
-        bail!("the manifest names no edited level script");
-    };
-    let edited = fs::read_to_string(dir.join(&level.source_file))
-        .with_context(|| format!("reading {}", level.source_file))?;
-    let pristine_rel = level
-        .pristine_file
-        .as_deref()
-        .unwrap_or("pristine/missing.as");
-    let pristine = fs::read_to_string(dir.join(pristine_rel))
-        .with_context(|| format!("reading {pristine_rel}"))?;
-    // Ein Checkout aendert Werte im eigenen Modul der Figur; ein Verfassen aendert Spawn-Zeilen
-    // in einem fremden Levelskript. Zwei Absichten, zwei Waechter.
-    if manifest.operation == workspace::Operation::Checkout {
-        findings.extend(check::guard_checkout_diff(&pristine, &edited));
-    } else {
-        findings.extend(check::guard_level_diff(&pristine, &edited, &spawn_class));
-    }
+    findings.extend(workspace_source_findings(dir, &manifest)?);
 
-    if let Some(authored) = manifest.authored_module() {
-        let source = fs::read_to_string(dir.join(&authored.source_file))
-            .with_context(|| format!("reading {}", authored.source_file))?;
-        findings.extend(check::guard_authored_module(&source, &manifest.npc_id));
-
-        if emitted.classes.contains_key(&spawn_class) {
-            findings.push(check::Finding {
-                severity: check::Severity::Blocking,
-                message: format!(
-                    "{} is already a character in this game. The authored module would collide \
-                     with the shipped one",
-                    manifest.npc_id
-                ),
-            });
-        }
-
-        let spots = gore_catalog::location::LocationCatalog::bundled()
-            .context("reading the bundled location catalog")?;
-        for waypoint in check::scheduled_waypoints(&source) {
-            if spots.resolve(&waypoint).is_none() {
-                findings.push(check::Finding {
-                    severity: check::Severity::Warning,
-                    message: format!(
-                        "the routine sends the character to {waypoint:?}, which is not a known \
-                         spot. The game ignores an unknown waypoint without a word, so the \
-                         character would simply never go there"
-                    ),
-                });
-            }
-        }
+    if manifest.authored_module().is_some() && emitted.classes.contains_key(&spawn_class) {
+        findings.push(check::Finding {
+            severity: check::Severity::Blocking,
+            message: format!(
+                "{} is already a character in this game. The authored module would collide \
+                 with the shipped one",
+                manifest.npc_id
+            ),
+        });
     }
 
     println!(
@@ -1206,6 +1168,59 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
     Ok(())
 }
 
+/// Read the authored files again at staging time: a successful earlier `check` is not a lock.
+fn workspace_source_findings(
+    dir: &Path,
+    manifest: &workspace::Manifest,
+) -> Result<Vec<check::Finding>> {
+    let spawn_class = generate::spawn_class(&manifest.npc_id);
+    let mut findings = Vec::new();
+    let Some(level) = manifest.level_edit() else {
+        bail!("the manifest names no edited level script");
+    };
+    let edited_path = dir.join(&level.source_file);
+    let edited = fs::read_to_string(&edited_path)
+        .with_context(|| format!("reading {}", edited_path.display()))?;
+    let pristine_rel = level
+        .pristine_file
+        .as_deref()
+        .unwrap_or("pristine/missing.as");
+    let pristine_path = dir.join(pristine_rel);
+    let pristine = fs::read_to_string(&pristine_path)
+        .with_context(|| format!("reading {}", pristine_path.display()))?;
+    // Ein Checkout aendert Werte im eigenen Modul der Figur; ein Verfassen aendert Spawn-Zeilen
+    // in einem fremden Levelskript. Zwei Absichten, zwei Waechter.
+    if manifest.operation == workspace::Operation::Checkout {
+        findings.extend(check::guard_checkout_diff(&pristine, &edited));
+    } else {
+        findings.extend(check::guard_level_diff(&pristine, &edited, &spawn_class));
+    }
+
+    if let Some(authored) = manifest.authored_module() {
+        let source_path = dir.join(&authored.source_file);
+        let source = fs::read_to_string(&source_path)
+            .with_context(|| format!("reading {}", source_path.display()))?;
+        findings.extend(check::guard_authored_module(&source, &manifest.npc_id));
+
+        let spots = gore_catalog::location::LocationCatalog::bundled()
+            .context("reading the bundled location catalog")?;
+        for waypoint in check::scheduled_waypoints(&source) {
+            if spots.resolve(&waypoint).is_none() {
+                findings.push(check::Finding {
+                    severity: check::Severity::Warning,
+                    message: format!(
+                        "the routine sends the character to {waypoint:?}, which is not a known \
+                         spot. The game ignores an unknown waypoint without a word, so the \
+                         character would simply never go there"
+                    ),
+                });
+            }
+        }
+    }
+
+    Ok(findings)
+}
+
 /// Den Quellbaum vorhalten: einmal emittieren, danach an der Cache-Kennung wiedererkennen.
 ///
 /// Der Lauf kostet rund 19 Minuten, davon das meiste ein einziges Modul
@@ -1215,7 +1230,9 @@ fn ensure_tree(tree: &Path, cache_sha256: &str, path: &Path) -> Result<()> {
     let stamp_path = tree.join(stage::TREE_STAMP_NAME);
     if let Ok(text) = fs::read_to_string(&stamp_path) {
         if let Ok(stamp) = serde_json::from_str::<stage::TreeStamp>(&text) {
-            if stamp.cache_sha256 == cache_sha256 {
+            if stamp.format_version == stage::TREE_STAMP_VERSION
+                && stamp.cache_sha256 == cache_sha256
+            {
                 println!(
                     "reusing the source tree in {} ({} modules)",
                     tree.display(),
@@ -1225,8 +1242,8 @@ fn ensure_tree(tree: &Path, cache_sha256: &str, path: &Path) -> Result<()> {
             }
         }
         bail!(
-            "the source tree in {} was emitted from a different script cache. Delete it and let \
-             this command write a fresh one",
+            "the source tree in {} has an old format or a different script cache. Delete it and \
+             let this command write a fresh, pristine one",
             tree.display()
         );
     }
@@ -1253,6 +1270,7 @@ fn ensure_tree(tree: &Path, cache_sha256: &str, path: &Path) -> Result<()> {
         .emit_tree(tree)
         .with_context(|| format!("emitting the tree into {}", tree.display()))?;
     let stamp = stage::TreeStamp {
+        format_version: stage::TREE_STAMP_VERSION,
         cache_sha256: cache_sha256.to_string(),
         modules: modules.len(),
     };
@@ -1279,6 +1297,54 @@ fn overlay_authored(dir: &Path, tree: &Path, manifest: &workspace::Manifest) -> 
     Ok(())
 }
 
+const STAGED_TREE_DIR: &str = ".gore-npc-staged-tree";
+const STAGED_TREE_MARKER: &str = ".gore-npc-staged-tree.marker";
+
+/// Keep the reusable emitted tree untouched; only the workspace's private copy gets overlays.
+fn copy_tree_contents(source: &Path, target: &Path) -> Result<()> {
+    for entry in fs::read_dir(source).with_context(|| format!("reading {}", source.display()))? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let destination = target.join(entry.file_name());
+        if kind.is_dir() {
+            fs::create_dir(&destination)?;
+            copy_tree_contents(&entry.path(), &destination)?;
+        } else if kind.is_file() {
+            fs::copy(entry.path(), &destination)?;
+        } else {
+            bail!(
+                "the source tree contains a link or special file at {}",
+                entry.path().display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn stage_tree_copy(tree: &Path, dir: &Path) -> Result<PathBuf> {
+    let source = fs::canonicalize(tree).with_context(|| format!("resolving {}", tree.display()))?;
+    let workspace =
+        fs::canonicalize(dir).with_context(|| format!("resolving {}", dir.display()))?;
+    if workspace.starts_with(&source) {
+        bail!("the reusable --tree must not contain the NPC workspace");
+    }
+    let staged = workspace.join(STAGED_TREE_DIR);
+    if source.starts_with(&staged) {
+        bail!("the reusable --tree must not be the NPC staging copy");
+    }
+    if staged.exists() {
+        let kind = fs::symlink_metadata(&staged)?.file_type();
+        if !kind.is_dir() || kind.is_symlink() || !staged.join(STAGED_TREE_MARKER).is_file() {
+            bail!("{} is not a disposable NPC staging tree", staged.display());
+        }
+        fs::remove_dir_all(&staged).with_context(|| format!("clearing {}", staged.display()))?;
+    }
+    fs::create_dir(&staged)?;
+    fs::write(staged.join(STAGED_TREE_MARKER), b"NPC staging copy\n")?;
+    copy_tree_contents(&source, &staged)?;
+    Ok(dir.join(STAGED_TREE_DIR))
+}
+
 /// `gore npc stage` — Baum herrichten, Spec schreiben, Bau-Kommandos drucken.
 fn stage_workspace(
     dir: &Path,
@@ -1290,19 +1356,20 @@ fn stage_workspace(
     gore_mod::validate_mod_name(mod_name).context("invalid --mod-name")?;
     let manifest = read_manifest(dir)?;
     routine::check_managed(dir, &manifest, game.clone())?;
+    let findings = workspace_source_findings(dir, &manifest)?;
+    let blocking: Vec<_> = findings
+        .iter()
+        .filter(|finding| finding.severity == check::Severity::Blocking)
+        .collect();
+    if !blocking.is_empty() {
+        for finding in blocking {
+            eprintln!("  [blocking] {}", finding.message);
+        }
+        bail!("workspace source failed the NPC guards; run `gore npc check` for details");
+    }
     let path = cache_path(cache, game.clone())?;
     let route = stage::route_of(&manifest);
-    let game = match route {
-        stage::Route::SingleModule => {
-            let edit = manifest
-                .level_edit()
-                .context("the manifest names no edited module")?;
-            let source = dir.join(&edit.source_file);
-            fs::read_to_string(&source).with_context(|| format!("reading {}", source.display()))?;
-            Some(stage::compiler_game_for(&manifest, &path, game)?)
-        }
-        stage::Route::FullTree => game,
-    };
+    let game = Some(stage::compiler_game_for(&manifest, &path, game)?);
 
     let tree_display = match (route, tree) {
         (stage::Route::FullTree, None) => {
@@ -1314,8 +1381,9 @@ fn stage_workspace(
         }
         (stage::Route::FullTree, Some(tree)) => {
             ensure_tree(tree, &manifest.cache_sha256, &path)?;
-            overlay_authored(dir, tree, &manifest)?;
-            tree.display().to_string()
+            let staged = stage_tree_copy(tree, dir)?;
+            overlay_authored(dir, &staged, &manifest)?;
+            staged.display().to_string()
         }
         // Der Ein-Modul-Weg overlayt die Quelle selbst; ein Baum waere verschenkte Zeit.
         (stage::Route::SingleModule, _) => "(not needed)".to_string(),
@@ -1532,6 +1600,31 @@ fn derivable_parent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staging_two_workspaces_does_not_carry_the_first_overlay() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tree = tmp.path().join("base");
+        fs::create_dir(&tree).unwrap();
+        fs::write(tree.join("Level.as"), "pristine").unwrap();
+        let first = tmp.path().join("first");
+        let second = tmp.path().join("second");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+
+        let first_copy = stage_tree_copy(&tree, &first).unwrap();
+        fs::write(first_copy.join("Level.as"), "first overlay").unwrap();
+        let second_copy = stage_tree_copy(&tree, &second).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(tree.join("Level.as")).unwrap(),
+            "pristine"
+        );
+        assert_eq!(
+            fs::read_to_string(second_copy.join("Level.as")).unwrap(),
+            "pristine"
+        );
+    }
 
     fn entry(domain: &'static str, id: &str, category: &str, class: Option<&str>) -> CatalogEntry {
         CatalogEntry {

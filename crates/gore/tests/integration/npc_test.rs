@@ -301,6 +301,7 @@ fn stage_binds_single_module_commands_to_the_selected_and_configured_cache() {
                 "module": "LevelScripts.XardasTower_AI",
                 "relative_path": "LevelScripts/XardasTower_AI.as",
                 "source_file": "XardasTower_AI.as",
+                "pristine_file": "pristine/XardasTower_AI.as",
                 "op": "edit"
             }],
             "world_points": [],
@@ -335,7 +336,22 @@ fn stage_binds_single_module_commands_to_the_selected_and_configured_cache() {
         std::fs::remove_dir(&source).unwrap();
         assert!(!dir.join("spec.json").exists());
         assert!(!tmp.path().join(format!("{operation}.work")).exists());
-        std::fs::write(&source, "// authored source\n").unwrap();
+        let pristine = if operation == "checkout" {
+            "class UTest : UObject\n{\n    default Value = 1;\n}\n"
+        } else {
+            "class UWP : UWorldPointScript\n{\n    this.SpawnAIAgent(USpawnAIAgentDefinition_OC_STT_Diego::StaticClass());\n}\n"
+        };
+        let edited = if operation == "checkout" {
+            pristine.replace("Value = 1", "Value = 2")
+        } else {
+            pristine.replace(
+                "    this.SpawnAIAgent(USpawnAIAgentDefinition_OC_STT_Diego::StaticClass());\n",
+                "",
+            )
+        };
+        std::fs::create_dir(dir.join("pristine")).unwrap();
+        std::fs::write(dir.join("pristine/XardasTower_AI.as"), pristine).unwrap();
+        std::fs::write(&source, &edited).unwrap();
 
         std::fs::write(&cache, b"different installed cache").unwrap();
         stage().assert().failure().stderr(contains("not the cache"));
@@ -353,5 +369,12 @@ fn stage_binds_single_module_commands_to_the_selected_and_configured_cache() {
             .stdout(contains("gore as compile-module"))
             .stdout(contains(format!("--game \"{}\"", game.display())));
         assert!(dir.join("spec.json").is_file());
+        if operation == "checkout" {
+            std::fs::write(&source, edited.replace("class UTest", "class UOther")).unwrap();
+            stage()
+                .assert()
+                .failure()
+                .stderr(contains("workspace source failed the NPC guards"));
+        }
     }
 }
