@@ -97,6 +97,17 @@ pub(super) fn validate_identifier(value: &str, what: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_name_literal(value: &str, what: &str) -> Result<()> {
+    ensure!(
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| (0x20..=0x7e).contains(&byte) && byte != b'"' && byte != b'\\'),
+        "{what} must be safe ASCII text for an n\"...\" literal: {value:?}"
+    );
+    Ok(())
+}
+
 /// Name of the explicit, non-teleporting helper emitted by [`Plan::render`].
 pub fn activation_function(npc_id: &str) -> String {
     format!("GoreApplyRoutine_{npc_id}")
@@ -112,7 +123,7 @@ impl Plan {
         for phase in &self.phases {
             let time = parse_time(&phase.time)?;
             ensure!(times.insert(time), "duplicate routine time: {}", phase.time);
-            validate_identifier(&phase.spot, "routine spot")?;
+            validate_name_literal(&phase.spot, "routine spot")?;
         }
         Ok(())
     }
@@ -310,6 +321,22 @@ mod tests {
         let before = plan.clone();
         assert!(plan.remove("18:00").is_err());
         assert_eq!(plan, before);
+    }
+
+    #[test]
+    fn catalog_style_spot_names_with_spaces_are_safe_literals() {
+        let mut plan = Plan::default();
+        plan.set(phase("12:00", Activity::Stand, "FP_ST_CREATURE ROAMING"))
+            .unwrap();
+        let source = plan.render("TEST_A").unwrap();
+        assert!(source.contains("n\"FP_ST_CREATURE ROAMING\""));
+        for unsafe_name in ["", "bad\\spot", "bad\"spot", "bad\nspot"] {
+            assert!(Plan {
+                phases: vec![phase("12:00", Activity::Stand, unsafe_name)]
+            }
+            .validate()
+            .is_err());
+        }
     }
 
     #[test]
