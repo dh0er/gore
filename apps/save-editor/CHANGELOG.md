@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-22
+
 ### Added
 
 - The interface language and the game-text language are separate. Choosing an
