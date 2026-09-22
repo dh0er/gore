@@ -22,7 +22,7 @@
 | [Dialog authoring](docs/guide/dialog-authoring.md) | Full | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | ⠀⠀⠀⠀⠀ |
 | [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | ⠀⠀⠀⠀⠀ |
 | [Voice](docs/guide/voice.md) | Mostly | Replace spoken lines and add voice to authored new lines | Other formats than Vorbis; Lip sync |
-| [Textures](docs/guide/textures.md) | Mostly | Replace supported cooked `Texture2D` assets; bundle loose images and cursor PNGs | Some pixel formats and virtual-texture layouts cannot yet be rewritten; cursor PNGs require `pak_files` rather than `texture replace` |
+| [Textures](docs/guide/textures.md) | Mostly | Replace supported cooked `Texture2D` assets; bundle loose images and cursor PNGs | Some pixel formats and virtual-texture layouts cannot yet be rewritten |
 | [DataAssets](docs/guide/dataassets.md) | Partly | Edit cooked game data | Only assets the engine describes natively; Blueprint ones are refused |
 | [Scripts](docs/guide/scripts.md) | Full | Read the game's script code, change it, add your own | ⠀⠀⠀⠀⠀ |
 | [Mod managing](docs/guide/bundles.md) | Mostly | Ship all of the above as one mod, run many together, install third-party mods — plain zips, pak files, UE4SS mod folders | Mods have not yet been tested after game patches |
