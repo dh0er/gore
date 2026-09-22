@@ -774,7 +774,7 @@
   "renameBackupTooltip": "為此備份命名",
   "renameBackupTitle": "備份名稱",
   "renameBackupLabel": "名稱",
-  "renameBackupHelp": "顯示在文件名 {fileName} 之外。留空則移除名稱；文件本身不會被重命名。",
+  "renameBackupHelp": "顯示時取代文件名 {fileName}。留空則移除名稱；文件本身不會被重命名。",
   "deleteBackupTooltip": "刪除此備份",
   "deleteBackupTitle": "刪除備份",
   "deleteBackupBody": "刪除“{name}”（{fileName}）？文件將從磁碟移除且無法恢復。",

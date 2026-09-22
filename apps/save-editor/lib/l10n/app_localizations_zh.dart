@@ -9348,7 +9348,7 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String renameBackupHelp(String fileName) {
-    return '顯示在文件名 $fileName 之外。留空則移除名稱；文件本身不會被重命名。';
+    return '顯示時取代文件名 $fileName。留空則移除名稱；文件本身不會被重命名。';
   }
 
   @override
