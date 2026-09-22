@@ -2910,7 +2910,7 @@ class AppLocalizationsTr extends AppLocalizations {
       'CampDivided': 'Bölünmüş kamp',
       'CareOfMessengers': 'Habercilerin gözetimi',
       'ChangeOpinion': 'Fikir değişikliği',
-      'ChargeUriziel': 'Uriziel\'i suçla',
+      'ChargeUriziel': 'Uriziel\'i şarj et',
       'Chosen': 'Seçilmiş',
       'Contact': 'Temas',
       'Courier': 'Kurye',
