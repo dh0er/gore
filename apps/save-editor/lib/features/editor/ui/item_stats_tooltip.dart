@@ -244,9 +244,10 @@ class ItemTooltipCard extends StatelessWidget {
 
   final ItemTooltip tooltip;
 
-  /// Game-text language. When its script face differs from the interface face,
-  /// every string on the card uses that face. Omitted in tests that only check
-  /// layout, which then keep the theme font.
+  /// Game-text language. Catalog strings use its face when that face differs
+  /// from the interface; interface strings on the same card keep the interface
+  /// face. Omitted in tests that only check layout, which then keep the theme
+  /// font.
   final Locale? gameTextLocale;
 
   @override
@@ -311,6 +312,7 @@ class ItemTooltipCard extends StatelessWidget {
               if (tooltip.protection.isNotEmpty)
                 _Block(
                   label: tooltip.protectionLabel,
+                  labelFromCatalog: tooltip.protectionLabelFromCatalog,
                   rows: tooltip.protection,
                   accent: accent,
                   gameTextLocale: game,
@@ -318,6 +320,7 @@ class ItemTooltipCard extends StatelessWidget {
               if (tooltip.requirements.isNotEmpty)
                 _Block(
                   label: tooltip.requirementsLabel,
+                  labelFromCatalog: tooltip.requirementsLabelFromCatalog,
                   rows: tooltip.requirements,
                   accent: accent,
                   gameTextLocale: game,
@@ -325,6 +328,7 @@ class ItemTooltipCard extends StatelessWidget {
               if (tooltip.recipe.isNotEmpty)
                 _Block(
                   label: tooltip.recipeLabel,
+                  catalogRun: tooltip.recipeProduct,
                   rows: tooltip.recipe,
                   accent: accent,
                   gameTextLocale: game,
@@ -417,6 +421,8 @@ class _Block extends StatelessWidget {
     required this.rows,
     required this.accent,
     required this.gameTextLocale,
+    this.labelFromCatalog = false,
+    this.catalogRun = '',
   });
 
   final String label;
@@ -424,9 +430,22 @@ class _Block extends StatelessWidget {
   final Color accent;
   final Locale? gameTextLocale;
 
+  /// The whole heading came from the game catalog.
+  final bool labelFromCatalog;
+
+  /// A catalog name embedded in an otherwise interface heading.
+  final String catalogRun;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final base = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    final game = gameTextLocale;
+    final TextStyle? gameStyle = game == null
+        ? base
+        : gameScriptTextStyle(context, game, style: base);
     return Container(
       margin: const EdgeInsets.only(top: 8),
       padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
@@ -438,25 +457,25 @@ class _Block extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (label.isNotEmpty)
-            Text(
-              label,
-              style: gameTextLocale == null
-                  ? theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    )
-                  : gameScriptTextStyle(
-                      context,
-                      gameTextLocale!,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-            ),
+          if (label.isNotEmpty) Text.rich(_heading(label, base, gameStyle)),
           for (final row in rows)
             _Row(row: row, accent: accent, gameTextLocale: gameTextLocale),
         ],
       ),
+    );
+  }
+
+  InlineSpan _heading(String label, TextStyle? uiStyle, TextStyle? gameStyle) {
+    if (labelFromCatalog) return TextSpan(text: label, style: gameStyle);
+    final run = catalogRun;
+    final index = run.isEmpty ? -1 : label.lastIndexOf(run);
+    if (index < 0) return TextSpan(text: label, style: uiStyle);
+    return TextSpan(
+      children: [
+        TextSpan(text: label.substring(0, index), style: uiStyle),
+        TextSpan(text: run, style: gameStyle),
+        TextSpan(text: label.substring(index + run.length), style: uiStyle),
+      ],
     );
   }
 }
@@ -489,11 +508,15 @@ class _Row extends StatelessWidget {
           Expanded(
             child: Text(
               row.label,
-              style: paint(
-                theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurface,
-                ),
-              ),
+              style: row.catalogLabel
+                  ? paint(
+                      theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    )
+                  : theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface,
+                    ),
             ),
           ),
           if (row.value.isNotEmpty) ...[

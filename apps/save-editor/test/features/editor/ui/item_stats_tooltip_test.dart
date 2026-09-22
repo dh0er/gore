@@ -3,11 +3,13 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/item_stats.dart';
 import 'package:goresave/features/editor/domain/item_tooltip.dart';
 import 'package:goresave/features/editor/ui/item_stats_tooltip.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/providers/data_providers.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 import '../../../support/l10n_test_app.dart';
 
@@ -259,5 +261,80 @@ void main() {
       await hover(tester, find.text('row'));
       expect(rowTint(tester), Colors.transparent);
     });
+  });
+
+  testWidgets('interface labels keep the interface face', (tester) async {
+    const zh = Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans');
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGoresaveTheme(
+          uiFontFamily: UiFontFamily.notoSerif,
+          locale: const Locale('ja'),
+          gameTextLocale: zh,
+        ),
+        locale: const Locale('ja'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: const Scaffold(
+          body: ItemTooltipCard(
+            gameTextLocale: zh,
+            tooltip: ItemTooltip(
+              title: '长剑',
+              stats: [
+                ItemTooltipRow('斬撃', '10'),
+                ItemTooltipRow('価値', '31', catalogLabel: false),
+              ],
+              recipe: [ItemTooltipRow('鉄', '')],
+              recipeLabel: 'レシピ: 长剑',
+              recipeProduct: '长剑',
+              ingredientFor: [ItemTooltipRow('長剣', '')],
+              ingredientForLabel: '材料',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    String? familyOf(String text) {
+      final rich = tester.widget<RichText>(
+        find.byWidgetPredicate(
+          (widget) => widget is RichText && widget.text.toPlainText() == text,
+        ),
+      );
+      TextSpan? leaf;
+      void walk(InlineSpan span) {
+        if (span is! TextSpan) return;
+        if (span.text == text) leaf = span;
+        span.children?.forEach(walk);
+      }
+
+      walk(rich.text);
+      return leaf?.style?.fontFamily;
+    }
+
+    expect(familyOf('长剑'), notoSerifScFontFamily);
+    expect(familyOf('斬撃'), notoSerifScFontFamily);
+    expect(familyOf('価値'), notoSerifJpFontFamily);
+    expect(familyOf('材料'), notoSerifJpFontFamily);
+    expect(familyOf('鉄'), notoSerifScFontFamily);
+    expect(familyOf('長剣'), notoSerifScFontFamily);
+
+    final recipe = tester.widget<RichText>(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is RichText && widget.text.toPlainText() == 'レシピ: 长剑',
+      ),
+    );
+    final runs = <TextSpan>[];
+    void walkRecipe(InlineSpan span) {
+      if (span is! TextSpan) return;
+      if (span.text != null && span.text!.isNotEmpty) runs.add(span);
+      span.children?.forEach(walkRecipe);
+    }
+
+    walkRecipe(recipe.text);
+    expect(runs.map((span) => span.text), ['レシピ: ', '长剑']);
+    expect(runs[0].style?.fontFamily, notoSerifJpFontFamily);
+    expect(runs[1].style?.fontFamily, notoSerifScFontFamily);
   });
 }

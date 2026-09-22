@@ -30,6 +30,9 @@ class ItemTooltip {
     this.writing = const [],
     this.requirements = const [],
     this.requirementsLabel = '',
+    this.protectionLabelFromCatalog = false,
+    this.requirementsLabelFromCatalog = false,
+    this.recipeProduct = '',
     this.description = '',
   });
 
@@ -46,10 +49,17 @@ class ItemTooltip {
   final List<ItemTooltipRow> protection;
   final String protectionLabel;
 
+  /// True when [protectionLabel] came from the game catalog.
+  final bool protectionLabelFromCatalog;
+
   /// The crafting chain a blueprint teaches, one row per step: what it takes on
   /// the left, what it yields on the right.
   final List<ItemTooltipRow> recipe;
   final String recipeLabel;
+
+  /// Catalog item name inside [recipeLabel]. The words around it are interface
+  /// text.
+  final String recipeProduct;
 
   /// What can be made from this item, under [ingredientForLabel].
   final List<ItemTooltipRow> ingredientFor;
@@ -61,6 +71,9 @@ class ItemTooltip {
   /// What the hero needs to use the item, under [requirementsLabel].
   final List<ItemTooltipRow> requirements;
   final String requirementsLabel;
+
+  /// True when [requirementsLabel] came from the game catalog.
+  final bool requirementsLabelFromCatalog;
 
   /// The item's flavour text.
   final String description;
@@ -90,13 +103,22 @@ class ItemTooltipParagraph {
 /// One line of the card: an optional game glyph, a label, and the value the
 /// game right-aligns against it.
 class ItemTooltipRow {
-  const ItemTooltipRow(this.label, this.value, {this.iconName});
+  const ItemTooltipRow(
+    this.label,
+    this.value, {
+    this.iconName,
+    this.catalogLabel = true,
+  });
 
   final String label;
   final String value;
 
   /// Shared game glyph in front of the label, or null for the game's ◆ bullet.
   final String? iconName;
+
+  /// False when [label] is an interface string. Those keep the interface face
+  /// when the card paints catalog text in the game-text face.
+  final bool catalogLabel;
 }
 
 /// Build the hover card for one item. Returns an empty tooltip when the
@@ -150,26 +172,29 @@ ItemTooltip buildItemTooltip({
         .where((value) => value.isNotEmpty)
         .join('/');
     if (initial.isNotEmpty) {
+      final mana = game(
+        upkeep.isEmpty
+            ? 'ui_stat_manacost_text'
+            : 'ui_stat_initialmanacost_text',
+      );
       rows.add(
         ItemTooltipRow(
-          game(
-                upkeep.isEmpty
-                    ? 'ui_stat_manacost_text'
-                    : 'ui_stat_initialmanacost_text',
-              ) ??
-              l10n.itemTooltipManaCost,
+          mana ?? l10n.itemTooltipManaCost,
           initial,
           iconName: 'T_Icon_Mana',
+          catalogLabel: mana != null,
         ),
       );
     }
     if (upkeep.isNotEmpty) {
       final perSecond = game('ui_stat_duration_measurement') ?? '/s';
+      final upkeepLabel = game('ui_stat_manaupkeep_text');
       rows.add(
         ItemTooltipRow(
-          game('ui_stat_manaupkeep_text') ?? l10n.itemTooltipManaUpkeep,
+          upkeepLabel ?? l10n.itemTooltipManaUpkeep,
           '$upkeep$perSecond',
           iconName: 'T_Icon_Mana',
+          catalogLabel: upkeepLabel != null,
         ),
       );
     }
@@ -244,7 +269,13 @@ ItemTooltip buildItemTooltip({
   // editor does not enforce it — a count of 999 on a 99-stack item loads fine —
   // and more than half the catalog declares 1 or nothing at all.
   if (stats.value != null) {
-    rows.add(ItemTooltipRow(l10n.itemTooltipValue, _number(stats.value)));
+    rows.add(
+      ItemTooltipRow(
+        l10n.itemTooltipValue,
+        _number(stats.value),
+        catalogLabel: false,
+      ),
+    );
   }
 
   final requirements = [
@@ -290,7 +321,11 @@ ItemTooltip buildItemTooltip({
     for (final name in ingredientFor.take(_maxIngredientRows))
       ItemTooltipRow(name, ''),
     if (ingredientFor.length > _maxIngredientRows)
-      ItemTooltipRow('+ ${ingredientFor.length - _maxIngredientRows}', ''),
+      ItemTooltipRow(
+        '+ ${ingredientFor.length - _maxIngredientRows}',
+        '',
+        catalogLabel: false,
+      ),
   ];
 
   // A writing's own text, where it has one. Most carry no description at all —
@@ -302,6 +337,12 @@ ItemTooltip buildItemTooltip({
     written.add(ItemTooltipParagraph(text.trim(), isHeading: part.isHeading));
   }
 
+  final protectionName = protection.isEmpty
+      ? null
+      : game('ui_protection_protection');
+  final requirementsName = requirements.isEmpty
+      ? null
+      : game('ui_inventory_requirements');
   return ItemTooltip(
     title: title,
     subtitle: _itemTypeName(game, stats.itemType) ?? '',
@@ -309,9 +350,11 @@ ItemTooltip buildItemTooltip({
     protection: protection,
     protectionLabel: protection.isEmpty
         ? ''
-        : (game('ui_protection_protection') ?? l10n.itemTooltipProtection),
+        : (protectionName ?? l10n.itemTooltipProtection),
+    protectionLabelFromCatalog: protectionName != null,
     recipe: recipe,
     recipeLabel: recipe.isEmpty ? '' : l10n.itemTooltipTeaches(product),
+    recipeProduct: product,
     ingredientFor: ingredientRows,
     ingredientForLabel: ingredientRows.isEmpty
         ? ''
@@ -319,7 +362,8 @@ ItemTooltip buildItemTooltip({
     requirements: requirements,
     requirementsLabel: requirements.isEmpty
         ? ''
-        : (game('ui_inventory_requirements') ?? l10n.itemTooltipRequirements),
+        : (requirementsName ?? l10n.itemTooltipRequirements),
+    requirementsLabelFromCatalog: requirementsName != null,
     // Some items name no description class-side although the game ships one
     // under their own id — the permanent potions, above all.
     description:

@@ -2096,10 +2096,6 @@ class _FactionsDetailState extends ConsumerState<FactionsDetail> {
                                 child: Text(
                                   _localizedGuildLabel(l10n, g.guild, g.label),
                                   overflow: TextOverflow.ellipsis,
-                                  style: gameScriptTextStyle(
-                                    context,
-                                    ref.read(currentGameLangProvider).locale,
-                                  ),
                                 ),
                               ),
                               const SizedBox(width: 12),
