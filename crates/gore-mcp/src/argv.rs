@@ -879,6 +879,11 @@ fn derived_target(
             }
         }
         Derived::Extension(extension) => DerivedTarget::At(base.with_extension(extension)),
+        Derived::Suffix(suffix) => {
+            let mut path = base.as_os_str().to_os_string();
+            path.push(suffix);
+            DerivedTarget::At(path.into())
+        }
         Derived::Child(child) => DerivedTarget::At(base.join(child)),
     }
 }
@@ -2016,6 +2021,18 @@ mod tests {
         }
     }
 
+    /// Create a directory symlink, reporting whether the platform and user allow it.
+    fn symlink_directory(target: &std::path::Path, link: &std::path::Path) -> bool {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(target, link).is_ok()
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+    }
+
     #[test]
     fn a_relative_output_is_resolved_before_the_game_tree_is_judged() {
         // The child resolves a relative path against this process's working directory, so judging
@@ -2635,6 +2652,31 @@ mod tests {
         let args = json!({
             "dir": work.to_string_lossy(),
             "tree": game.join("npc-tree").to_string_lossy(),
+            "game": game.to_string_lossy()
+        });
+        assert!(asks_about_a_write(question(
+            "gore_npc",
+            "stage",
+            args,
+            &options()
+        )));
+    }
+
+    #[test]
+    fn npc_stage_classifies_the_lexical_work_sibling_of_a_linked_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let game = temp.path().join("G1R");
+        let outside = temp.path().join("outside-workspace");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let workspace_link = game.join("npc-work");
+        if !symlink_directory(&outside, &workspace_link) {
+            eprintln!("skipping: this platform/user cannot create directory symlinks");
+            return;
+        }
+        let args = json!({
+            "dir": workspace_link.to_string_lossy(),
+            "tree": outside.join("tree").to_string_lossy(),
             "game": game.to_string_lossy()
         });
         assert!(asks_about_a_write(question(

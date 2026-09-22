@@ -273,11 +273,12 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
         }
     }
 
-    if let Some(settings) = classes
+    let settings = classes
         .iter()
-        .find(|class| class.super_class.as_deref() == Some("UConversationCharacterSettings"))
-    {
-        match assigned(settings, "ForCharacter").as_slice() {
+        .filter(|class| class.super_class.as_deref() == Some("UConversationCharacterSettings"))
+        .collect::<Vec<_>>();
+    match settings.as_slice() {
+        [settings] => match assigned(settings, "ForCharacter").as_slice() {
             [name] if name == npc_id => {}
             [name] => findings.push(Finding::blocking(format!(
                 "ForCharacter is {name:?} but the character is {npc_id:?}. The game binds \
@@ -292,6 +293,13 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
                  have exactly one value",
                 values.len()
             ))),
+        },
+        settings => {
+            findings.push(Finding::blocking(format!(
+                "the authored module declares {} direct UConversationCharacterSettings classes; \
+                 exactly one voice/dialog anchor is required",
+                settings.len()
+            )))
         }
     }
 
@@ -664,6 +672,30 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
         assert!(findings
             .iter()
             .any(|f| f.severity == Severity::Blocking && f.message.contains("ForCharacter")));
+    }
+
+    #[test]
+    fn an_authored_module_requires_one_conversation_anchor() {
+        let missing = AUTHORED.replace(
+            "UConversationCharacterSettings_Ambient_MINE : UConversationCharacterSettings",
+            "UConversationCharacterSettings_Ambient_MINE : UMissingSettingsBase",
+        );
+        let findings = guard_authored_module(&missing, "MINE");
+        assert!(findings.iter().any(|finding| {
+            finding.severity == Severity::Blocking
+                && finding.message.contains("0 direct")
+                && finding.message.contains("exactly one")
+        }));
+
+        let duplicate = format!(
+            "{AUTHORED}\nclass UExtraSettings : UConversationCharacterSettings\n{{\n    default ForCharacter = n\"MINE\";\n}}\n"
+        );
+        let findings = guard_authored_module(&duplicate, "MINE");
+        assert!(findings.iter().any(|finding| {
+            finding.severity == Severity::Blocking
+                && finding.message.contains("2 direct")
+                && finding.message.contains("exactly one")
+        }));
     }
 
     #[test]

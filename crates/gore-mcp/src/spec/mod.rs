@@ -196,6 +196,8 @@ impl Class {
 pub enum Derived {
     /// `Path::with_extension(_)` — `texture extract` writes `out` and `out` + `.png.json`.
     Extension(&'static str),
+    /// Append a literal to the whole path — `npc stage` writes `<dir>.work` beside its workspace.
+    Suffix(&'static str),
     /// `Path::join(_)` — `dump-mod` writes the `gore-dump/` folder inside the directory it is given.
     Child(&'static str),
     /// `Path::join(<value of the named argument>)` — `scaffold` writes `<out>/<mod_name>/`.
@@ -1338,7 +1340,14 @@ mod tests {
                     },
                 )],
             ),
-            ("gore_npc", "stage", &[("dir", Derived::Child("spec.json"))]),
+            (
+                "gore_npc",
+                "stage",
+                &[
+                    ("dir", Derived::Child("spec.json")),
+                    ("dir", Derived::Suffix(".work")),
+                ],
+            ),
             (
                 "gore_project",
                 "scaffold",

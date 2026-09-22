@@ -1483,7 +1483,10 @@ const NPC_COMMANDS: &[CommandSpec] = &[
         "Build the source tree and print the commands that compile an authored character",
         NPC_STAGE_ARGS,
         Safety::write()
-            .also_writes(&[("dir", Derived::Child("spec.json"))])
+            .also_writes(&[
+                ("dir", Derived::Child("spec.json")),
+                ("dir", Derived::Suffix(".work")),
+            ])
             .writes_into(&["dir", "tree"]),
         T_LONG,
     )
