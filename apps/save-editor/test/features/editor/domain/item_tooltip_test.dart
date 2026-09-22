@@ -444,6 +444,43 @@ void main() {
     expect(tooltip.ingredientForLabel, isNotEmpty);
   });
 
+  test('a missing recipe or ingredient name stays an interface id', () {
+    const stats = ItemStats(
+      itemType: 'Item_Writing',
+      teaches: [
+        ItemRecipeStep(
+          station: 'forge',
+          needs: {'ItMi_Missing': 2},
+          makes: {'ItMi_Smith_Iron': 1},
+        ),
+      ],
+      ingredientFor: ['ItMi_Smith_Iron', 'ItMi_Missing'],
+    );
+    final tooltip = buildItemTooltip(
+      title: 'Schematic',
+      stats: stats,
+      catalog: _catalog({'itmi_smith_iron': 'Iron'}),
+      lang: lang,
+      l10n: l10n,
+    );
+
+    expect(tooltip.recipe.single.label, '2× ItMi_Missing  →  Iron');
+    expect(
+      tooltip.recipe.single.labelRuns.map((run) => (run.text, run.fromCatalog)),
+      [
+        ('2× ', false),
+        ('ItMi_Missing', false),
+        ('  →  ', false),
+        ('Iron', true),
+      ],
+    );
+    expect(tooltip.recipeProduct, 'Iron');
+    expect(tooltip.ingredientFor.map((row) => (row.label, row.catalogLabel)), [
+      ('Iron', true),
+      ('ItMi_Missing', false),
+    ]);
+  });
+
   test('a writing shows its own text, and an item its own description key', () {
     const stats = ItemStats(
       itemType: 'Item_Writing',

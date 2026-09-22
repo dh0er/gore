@@ -383,4 +383,69 @@ void main() {
     expect(span, isA<TextSpan>());
     expect((span as TextSpan).style?.fontFamily, notoSerifJpFontFamily);
   });
+
+  testWidgets('a fallback recipe id keeps the interface face', (tester) async {
+    const zh = Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans');
+    const label = '2× ItMi_Missing  →  铁';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGoresaveTheme(
+          uiFontFamily: UiFontFamily.notoSerif,
+          locale: const Locale('ja'),
+          gameTextLocale: zh,
+        ),
+        locale: const Locale('ja'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: const Scaffold(
+          body: ItemTooltipCard(
+            gameTextLocale: zh,
+            tooltip: ItemTooltip(
+              title: '図面',
+              titleFromCatalog: false,
+              recipe: [
+                ItemTooltipRow(
+                  label,
+                  '',
+                  catalogLabel: false,
+                  labelRuns: [
+                    ItemTooltipLabelRun('2× ', fromCatalog: false),
+                    ItemTooltipLabelRun('ItMi_Missing', fromCatalog: false),
+                    ItemTooltipLabelRun('  →  ', fromCatalog: false),
+                    ItemTooltipLabelRun('铁', fromCatalog: true),
+                  ],
+                ),
+              ],
+              recipeLabel: '習得: 铁',
+              recipeProduct: '铁',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final rich = tester.widget<RichText>(
+      find.byWidgetPredicate(
+        (widget) => widget is RichText && widget.text.toPlainText() == label,
+      ),
+    );
+    final runs = <TextSpan>[];
+    void walk(InlineSpan span) {
+      if (span is! TextSpan) return;
+      if (span.text != null && span.text!.isNotEmpty) runs.add(span);
+      span.children?.forEach(walk);
+    }
+
+    walk(rich.text);
+    expect(runs.map((span) => span.text), [
+      '2× ',
+      'ItMi_Missing',
+      '  →  ',
+      '铁',
+    ]);
+    expect(runs[0].style?.fontFamily, notoSerifJpFontFamily);
+    expect(runs[1].style?.fontFamily, notoSerifJpFontFamily);
+    expect(runs[2].style?.fontFamily, notoSerifJpFontFamily);
+    expect(runs[3].style?.fontFamily, notoSerifScFontFamily);
+  });
 }

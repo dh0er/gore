@@ -517,20 +517,7 @@ class _Row extends StatelessWidget {
         children: [
           GameIcon(name: row.iconName, size: 14, color: accent),
           const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              row.label,
-              style: row.catalogLabel
-                  ? paint(
-                      theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurface,
-                      ),
-                    )
-                  : theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurface,
-                    ),
-            ),
-          ),
+          Expanded(child: _labelText(row, paint, theme)),
           if (row.value.isNotEmpty) ...[
             const SizedBox(width: 12),
             _valueText(
@@ -549,6 +536,31 @@ class _Row extends StatelessWidget {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _labelText(
+    ItemTooltipRow row,
+    TextStyle? Function(TextStyle?) paint,
+    ThemeData theme,
+  ) {
+    final base = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurface,
+    );
+    if (row.labelRuns.isEmpty) {
+      return Text(row.label, style: row.catalogLabel ? paint(base) : base);
+    }
+    return Text.rich(
+      TextSpan(
+        children: [
+          for (final run in row.labelRuns)
+            if (run.text.isNotEmpty)
+              TextSpan(
+                text: run.text,
+                style: run.fromCatalog ? paint(base) : base,
+              ),
         ],
       ),
     );

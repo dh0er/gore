@@ -113,6 +113,7 @@ class ItemTooltipRow {
     this.iconName,
     this.catalogLabel = true,
     this.interfaceValueRun,
+    this.labelRuns = const [],
   });
 
   final String label;
@@ -128,6 +129,19 @@ class ItemTooltipRow {
   /// A slice of [value] that came from interface text, such as the localized
   /// duration suffix. The rest of the value keeps the game-text face.
   final String? interfaceValueRun;
+
+  /// Ordered pieces of [label]. Empty means the whole label follows
+  /// [catalogLabel]. A recipe line uses this so a fallback id and the
+  /// count or arrow stay on the interface face while a catalog name does not.
+  final List<ItemTooltipLabelRun> labelRuns;
+}
+
+/// One piece of an [ItemTooltipRow] label.
+class ItemTooltipLabelRun {
+  const ItemTooltipLabelRun(this.text, {required this.fromCatalog});
+
+  final String text;
+  final bool fromCatalog;
 }
 
 /// Build the hover card for one item. Returns an empty tooltip when the
@@ -290,10 +304,28 @@ ItemTooltip buildItemTooltip({
       _attributeRow(catalog, lang, l10n, entry.key, _number(entry.value)),
   ];
 
-  String itemName(String id) => localizedGameName(catalog, lang, id) ?? id;
-  String counted(MapEntry<String, int> entry) => entry.value == 1
-      ? itemName(entry.key)
-      : '${entry.value}× ${itemName(entry.key)}';
+  ({String name, bool fromCatalog}) named(String id) {
+    final name = localizedGameName(catalog, lang, id);
+    if (name == null || name.trim().isEmpty) {
+      return (name: id, fromCatalog: false);
+    }
+    return (name: name, fromCatalog: true);
+  }
+
+  List<ItemTooltipLabelRun> pieceRuns(Map<String, int> items) {
+    final runs = <ItemTooltipLabelRun>[];
+    for (final entry in items.entries) {
+      if (runs.isNotEmpty) {
+        runs.add(const ItemTooltipLabelRun(' + ', fromCatalog: false));
+      }
+      if (entry.value != 1) {
+        runs.add(ItemTooltipLabelRun('${entry.value}× ', fromCatalog: false));
+      }
+      final item = named(entry.key);
+      runs.add(ItemTooltipLabelRun(item.name, fromCatalog: item.fromCatalog));
+    }
+    return runs;
+  }
 
   // A blueprint has no numbers of its own; what is worth knowing is the chain
   // it unlocks. Each step reads as one line — what goes in, what comes out —
@@ -301,28 +333,41 @@ ItemTooltip buildItemTooltip({
   // which belonged to which.
   final recipe = <ItemTooltipRow>[];
   for (final step in stats.teaches) {
-    final makes = step.makes.entries.map(counted).join(' + ');
-    final needs = step.needs.entries.map(counted).join(' + ');
+    final needs = pieceRuns(step.needs);
+    final makes = pieceRuns(step.makes);
+    final runs = <ItemTooltipLabelRun>[
+      ...needs,
+      if (needs.isNotEmpty)
+        const ItemTooltipLabelRun('  →  ', fromCatalog: false),
+      ...makes,
+    ];
     recipe.add(
       ItemTooltipRow(
-        needs.isEmpty ? makes : '$needs  →  $makes',
+        runs.map((run) => run.text).join(),
         '',
         iconName: _stationIcon(step.station),
+        catalogLabel: false,
+        labelRuns: runs,
       ),
     );
   }
   // The last step yields what the blueprint is actually for; the ones before it
-  // are the parts on the way there.
-  final product = stats.teaches.isEmpty
-      ? ''
-      : stats.teaches.last.makes.keys.map(itemName).join(' + ');
+  // are the parts on the way there. A fallback id in that yield is not a
+  // catalog run, so the heading keeps the interface face.
+  final products = stats.teaches.isEmpty
+      ? const <({String name, bool fromCatalog})>[]
+      : [for (final id in stats.teaches.last.makes.keys) named(id)];
+  final product = products.map((item) => item.name).join(' + ');
+  final productFromCatalog =
+      products.isNotEmpty && products.every((item) => item.fromCatalog);
 
   // What a raw material is for. Long lists are cut: the point is what it makes,
   // not an inventory of every recipe in the game.
-  final ingredientFor = stats.ingredientFor.map(itemName).toList()..sort();
+  final ingredientFor = [for (final id in stats.ingredientFor) named(id)]
+    ..sort((a, b) => a.name.compareTo(b.name));
   final ingredientRows = <ItemTooltipRow>[
-    for (final name in ingredientFor.take(_maxIngredientRows))
-      ItemTooltipRow(name, ''),
+    for (final item in ingredientFor.take(_maxIngredientRows))
+      ItemTooltipRow(item.name, '', catalogLabel: item.fromCatalog),
     if (ingredientFor.length > _maxIngredientRows)
       ItemTooltipRow(
         '+ ${ingredientFor.length - _maxIngredientRows}',
@@ -358,7 +403,7 @@ ItemTooltip buildItemTooltip({
     protectionLabelFromCatalog: protectionName != null,
     recipe: recipe,
     recipeLabel: recipe.isEmpty ? '' : l10n.itemTooltipTeaches(product),
-    recipeProduct: product,
+    recipeProduct: productFromCatalog ? product : '',
     ingredientFor: ingredientRows,
     ingredientForLabel: ingredientRows.isEmpty
         ? ''
