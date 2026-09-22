@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 /// A shared UI glyph extracted from the user's own game — the icon the game
 /// itself draws in front of that label.
@@ -125,6 +126,10 @@ class GameIconLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final game = GameTextScript.maybeOf(context);
+    final paint = game == null
+        ? style
+        : gameScriptTextStyle(context, game, style: style);
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -139,7 +144,7 @@ class GameIconLabel extends StatelessWidget {
         Flexible(
           child: Text(
             label,
-            style: style,
+            style: paint,
             maxLines: maxLines,
             overflow: overflow,
           ),

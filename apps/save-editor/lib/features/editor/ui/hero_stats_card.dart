@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 import '../domain/hero_attributes.dart';
 import 'grouped_attribute_sidebar.dart';
@@ -622,9 +623,22 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
             iconName: widget.gameIcon,
             style: labelStyle,
           );
+          final game = GameTextScript.maybeOf(context);
           final Widget rowLabel = widget.tooltip.isEmpty
               ? labelText
-              : Tooltip(message: widget.tooltip, child: labelText);
+              : game == null
+              ? Tooltip(message: widget.tooltip, child: labelText)
+              : Tooltip(
+                  richMessage: TextSpan(
+                    text: widget.tooltip,
+                    style: gameScriptTextStyle(
+                      context,
+                      game,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                  child: labelText,
+                );
           if (compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

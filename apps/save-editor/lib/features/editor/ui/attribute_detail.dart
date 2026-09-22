@@ -12,6 +12,7 @@ import 'package:goresave/features/editor/ui/skills_panel.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/attribute_loc.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import '../domain/editor_notifier.dart';
@@ -528,10 +529,27 @@ class _PrivatePlayerAttributeRowState
     final name = widget.label;
     // Same affordance as the typed rows: the label explains what the value does.
     Widget named() {
-      final text = Text(name, style: Theme.of(context).textTheme.labelLarge);
-      return widget.tooltip.isEmpty
-          ? text
-          : Tooltip(message: widget.tooltip, child: text);
+      final game = GameTextScript.maybeOf(context);
+      final labelStyle = Theme.of(context).textTheme.labelLarge;
+      final text = Text(
+        name,
+        style: game == null
+            ? labelStyle
+            : gameScriptTextStyle(context, game, style: labelStyle),
+      );
+      if (widget.tooltip.isEmpty) return text;
+      if (game == null) return Tooltip(message: widget.tooltip, child: text);
+      return Tooltip(
+        richMessage: TextSpan(
+          text: widget.tooltip,
+          style: gameScriptTextStyle(
+            context,
+            game,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ),
+        child: text,
+      );
     }
 
     final baseField = TextField(

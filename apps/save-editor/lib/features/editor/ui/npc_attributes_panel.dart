@@ -14,6 +14,7 @@ import 'package:goresave/features/editor/ui/grouped_attribute_sidebar.dart';
 import 'package:goresave/features/editor/ui/hero_stats_card.dart'
     show formatHeroValue;
 import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 /// Optional NPC status wiring for [NpcAttributesPanel]. When supplied, a Status
 /// row (`Status: <lebend|tot>` + a Revive action + HP readout) is rendered as
@@ -671,9 +672,22 @@ class _NpcAttributeRowState extends State<_NpcAttributeRow> {
             iconName: widget.gameIcon,
             style: Theme.of(context).textTheme.labelLarge,
           );
+          final game = GameTextScript.maybeOf(context);
           final Widget rowLabel = widget.tooltip.isEmpty
               ? labelText
-              : Tooltip(message: widget.tooltip, child: labelText);
+              : game == null
+              ? Tooltip(message: widget.tooltip, child: labelText)
+              : Tooltip(
+                  richMessage: TextSpan(
+                    text: widget.tooltip,
+                    style: gameScriptTextStyle(
+                      context,
+                      game,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                  child: labelText,
+                );
           if (compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

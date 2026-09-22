@@ -1196,6 +1196,7 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                         document.displayName(catalog, lang),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
+                        style: gameScriptTextStyle(context, lang.locale),
                       ),
                       subtitle: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1261,11 +1262,20 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
     if (paragraphs.isEmpty) return Text(_segmentLabel(l10n, segment));
 
     final fullText = paragraphs.join('\n\n');
+    final script = gameScriptTextStyle(
+      context,
+      ref.read(currentGameLangProvider).locale,
+    );
     return Tooltip(
       message: fullText,
       waitDuration: const Duration(milliseconds: 450),
       constraints: const BoxConstraints(maxWidth: 520),
-      child: Text(fullText, maxLines: 2, overflow: TextOverflow.ellipsis),
+      child: Text(
+        fullText,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: script,
+      ),
     );
   }
 
@@ -1277,7 +1287,13 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
     return showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(documentName),
+        title: Text(
+          documentName,
+          style: gameScriptTextStyle(
+            context,
+            ref.read(currentGameLangProvider).locale,
+          ),
+        ),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 620, maxHeight: 520),
           child: SingleChildScrollView(
@@ -1288,7 +1304,11 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                   for (var index = 0; index < paragraphs.length; index++) ...[
                     Text(
                       paragraphs[index],
-                      style: widget.theme.textTheme.bodyLarge,
+                      style: gameScriptTextStyle(
+                        context,
+                        ref.read(currentGameLangProvider).locale,
+                        style: widget.theme.textTheme.bodyLarge,
+                      ),
                     ),
                     if (index + 1 < paragraphs.length)
                       const SizedBox(height: 14),
@@ -1716,6 +1736,10 @@ class _AddGlossaryEntryDialogState extends State<_AddGlossaryEntryDialog> {
                           ),
                           title: Text(
                             document.displayName(widget.catalog, widget.lang),
+                            style: gameScriptTextStyle(
+                              context,
+                              widget.lang.locale,
+                            ),
                           ),
                           subtitle: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,

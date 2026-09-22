@@ -13,6 +13,7 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/loc/progression_loc.dart';
 
@@ -636,7 +637,12 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
     required bool showObjectIds,
   }) {
     final trailing = _buildQuestStateControl(l10n, node.quest);
-    final title = SelectableText(node.label, maxLines: 1);
+    final gameLocale = ref.read(currentGameLangProvider).locale;
+    final title = SelectableText(
+      node.label,
+      maxLines: 1,
+      style: gameScriptTextStyle(context, gameLocale),
+    );
     final subtitle = _buildQuestSubtitle(context, node, showObjectIds);
     if (node.children.isEmpty) {
       return ListTile(
@@ -687,7 +693,15 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (node.description case final description?)
-          Text(description, maxLines: 2, overflow: TextOverflow.ellipsis),
+          Text(
+            description,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: gameScriptTextStyle(
+              context,
+              ref.read(currentGameLangProvider).locale,
+            ),
+          ),
         if (showObjectIds)
           SelectableText(node.quest.id, maxLines: 1, style: muted),
       ],
@@ -1227,8 +1241,12 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                                 entry: entry,
                                 catalogCategory: meta?.category,
                                 title: title,
-                                titleStyle: TextStyle(
-                                  color: scheme.onTertiaryContainer,
+                                titleStyle: gameScriptTextStyle(
+                                  context,
+                                  lang.locale,
+                                  style: TextStyle(
+                                    color: scheme.onTertiaryContainer,
+                                  ),
                                 ),
                               ),
                               subtitle: showObjectIds
@@ -1287,12 +1305,16 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                                     entry: entry,
                                     catalogCategory: meta?.category,
                                     title: title,
-                                    titleStyle: isRemoved
-                                        ? const TextStyle(
-                                            decoration:
-                                                TextDecoration.lineThrough,
-                                          )
-                                        : null,
+                                    titleStyle: gameScriptTextStyle(
+                                      context,
+                                      lang.locale,
+                                      style: isRemoved
+                                          ? const TextStyle(
+                                              decoration:
+                                                  TextDecoration.lineThrough,
+                                            )
+                                          : null,
+                                    ),
                                   ),
                                   // Raw entry id is opt-in through Advanced
                                   // settings, independent of text resolution.
@@ -2074,6 +2096,10 @@ class _FactionsDetailState extends ConsumerState<FactionsDetail> {
                                 child: Text(
                                   _localizedGuildLabel(l10n, g.guild, g.label),
                                   overflow: TextOverflow.ellipsis,
+                                  style: gameScriptTextStyle(
+                                    context,
+                                    ref.read(currentGameLangProvider).locale,
+                                  ),
                                 ),
                               ),
                               const SizedBox(width: 12),

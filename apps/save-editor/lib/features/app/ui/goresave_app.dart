@@ -43,8 +43,10 @@ class GoresaveApp extends ConsumerWidget {
         GlobalCupertinoLocalizations.delegate,
       ],
       supportedLocales: AppLocalizations.supportedLocales,
-      builder: (context, child) =>
-          UiScaleRoot(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) => GameTextScript(
+        locale: gameLang.locale,
+        child: UiScaleRoot(child: child ?? const SizedBox.shrink()),
+      ),
       routerConfig: router,
     );
   }

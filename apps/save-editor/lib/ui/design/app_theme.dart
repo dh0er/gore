@@ -6,11 +6,13 @@ const notoSerifFontFamily = 'NotoSerif';
 const notoSerifJpFontFamily = 'NotoSerifJP';
 const notoSerifScFontFamily = 'NotoSerifSC';
 
-/// Fallback faces so interface text and game text can use different scripts.
+/// Fallback faces for glyphs the primary face does not have.
 ///
-/// The system font links CJK through the Windows UI faces. Bundled fonts add
-/// the Noto face for the game-text script, and Noto Serif itself whenever the
-/// primary face does not cover Latin and Cyrillic.
+/// The system font links missing CJK through the Windows UI faces. Bundled
+/// fonts add the other Noto face, and Noto Serif itself whenever the primary
+/// face does not cover Latin and Cyrillic. Noto Serif JP and Noto Serif SC
+/// both draw Han, and the Windows UI faces do too, so this list never selects
+/// the other CJK face. Game-text widgets use [gameScriptTextStyle] for that.
 List<String>? uiFontFamilyFallback(
   UiFontFamily font,
   Locale uiLocale, {
@@ -90,6 +92,47 @@ String scriptCoverageFont(Locale locale) => switch (locale.languageCode) {
   'zh' => notoSerifScFontFamily,
   _ => notoSerifFontFamily,
 };
+
+/// Game-text language for widgets that do not receive it as a parameter.
+///
+/// Absent in widget tests that pump a panel on its own. Those keep the theme
+/// face. The running app provides it from the selected game-text language.
+class GameTextScript extends InheritedWidget {
+  const GameTextScript({super.key, required this.locale, required super.child});
+
+  final Locale locale;
+
+  static Locale? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<GameTextScript>()?.locale;
+
+  @override
+  bool updateShouldNotify(GameTextScript oldWidget) =>
+      oldWidget.locale != locale;
+}
+
+/// Style for a game-text run when its script face is not the interface face.
+///
+/// Merge the result onto the text's own style. A null result means the scripts
+/// share a face, so Podkova, Segoe, and that shared CJK face stay as the theme
+/// set them. When [style] is set and the faces differ, [style] is returned with
+/// the game-text family as the primary face.
+TextStyle? gameScriptTextStyle(
+  BuildContext context,
+  Locale gameLocale, {
+  TextStyle? style,
+}) {
+  final gameFont = scriptCoverageFont(gameLocale);
+  final uiFont = scriptCoverageFont(Localizations.localeOf(context));
+  if (gameFont == uiFont) return style;
+  final override = TextStyle(
+    fontFamily: gameFont,
+    fontFamilyFallback: [
+      uiFont,
+      notoSerifFontFamily,
+    ].where((font) => font != gameFont).toList(),
+  );
+  return (style ?? const TextStyle()).merge(override);
+}
 
 ThemeData buildGoresaveTheme({
   UiFontFamily uiFontFamily = UiFontFamily.system,

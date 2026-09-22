@@ -18,6 +18,7 @@ import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import '../domain/editor_notifier.dart';
@@ -1484,6 +1485,7 @@ class _PendingLineRow extends ConsumerWidget {
       tone: tone,
       icon: isAdd ? Icons.add_circle_outline : Icons.delete_outline,
       title: localizedGameName(locCatalog, lang, item.id) ?? item.id,
+      gameTextLocale: lang.locale,
       subtitle: isAdd
           ? l10n.pendingAddSubtitle(item.count)
           : l10n.pendingRemovalSubtitle,
@@ -1563,7 +1565,7 @@ class _StockRow extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(label),
+        Text(label, style: gameScriptTextStyle(context, lang.locale)),
         if (subtitle.isNotEmpty)
           Text(subtitle, style: theme.textTheme.bodySmall),
       ],
@@ -1593,7 +1595,10 @@ class _StockRow extends ConsumerWidget {
               contentPadding: const EdgeInsets.symmetric(horizontal: 8),
               horizontalTitleGap: 8,
               leading: icon,
-              title: Text(label),
+              title: Text(
+                label,
+                style: gameScriptTextStyle(context, lang.locale),
+              ),
               subtitle: subtitle.isEmpty
                   ? null
                   : Text(subtitle, style: theme.textTheme.bodySmall),

@@ -342,7 +342,11 @@ class _AddInventoryItemDialogState
                           children: [
                             Text(
                               _displayName(locCatalog, lang, _selected!.id),
-                              style: theme.textTheme.bodyMedium,
+                              style: gameScriptTextStyle(
+                                context,
+                                lang.locale,
+                                style: theme.textTheme.bodyMedium,
+                              ),
                               overflow: TextOverflow.ellipsis,
                             ),
                             if (showObjectIds)
@@ -497,6 +501,7 @@ class _AddInventoryItemDialogState
           _displayName(catalog, lang, entry.id),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
+          style: gameScriptTextStyle(context, lang.locale),
         ),
         subtitle: showObjectIds
             ? Text(entry.id, maxLines: 1, overflow: TextOverflow.ellipsis)

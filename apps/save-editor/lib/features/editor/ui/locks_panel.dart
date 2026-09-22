@@ -9,6 +9,7 @@ import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import '../domain/editor_models.dart';
@@ -448,6 +449,7 @@ class _RegionRail extends StatelessWidget {
             selected: selected == area,
             onTap: () => onSelected(area),
             theme: theme,
+            gameTextLocale: lang.locale,
           ),
       ],
     );
@@ -461,6 +463,7 @@ class _RegionTile extends StatelessWidget {
     required this.selected,
     required this.onTap,
     required this.theme,
+    this.gameTextLocale,
   });
 
   final String label;
@@ -468,6 +471,7 @@ class _RegionTile extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   final ThemeData theme;
+  final Locale? gameTextLocale;
 
   @override
   Widget build(BuildContext context) {
@@ -476,7 +480,7 @@ class _RegionTile extends StatelessWidget {
       dense: true,
       selected: selected,
       selectedTileColor: theme.colorScheme.primaryContainer,
-      title: _EllipsisTooltip(text: label),
+      title: _EllipsisTooltip(text: label, gameTextLocale: gameTextLocale),
       trailing: Text(
         '$count',
         style: theme.textTheme.bodySmall?.copyWith(
@@ -568,16 +572,26 @@ class _LockList extends StatelessWidget {
 
   /// The line under a lock's name: the game's own difficulty pips, then what it
   /// takes to open it.
-  Widget? _subtitle(_LockRow row) {
+  Widget? _subtitle(BuildContext context, _LockRow row) {
     final text = _subtitleText(row);
     final difficulty = row.entry?.difficulty;
-    if (difficulty == null) return text == null ? null : Text(text);
+    if (difficulty == null) {
+      return text == null
+          ? null
+          : Text(text, style: gameScriptTextStyle(context, lang.locale));
+    }
     return Row(
       children: [
         _DifficultyBars(difficulty: difficulty, theme: theme, l10n: l10n),
         if (text != null) ...[
           const SizedBox(width: 8),
-          Flexible(child: Text(text, overflow: TextOverflow.ellipsis)),
+          Flexible(
+            child: Text(
+              text,
+              overflow: TextOverflow.ellipsis,
+              style: gameScriptTextStyle(context, lang.locale),
+            ),
+          ),
         ],
       ],
     );
@@ -675,7 +689,7 @@ class _LockList extends StatelessWidget {
                     final row = rows[index];
                     final draft = pending[row.name];
                     final effective = draft?.unlocked ?? row.unlocked;
-                    final subtitle = _subtitle(row);
+                    final subtitle = _subtitle(context, row);
                     return ListTile(
                       key: ValueKey('lock-${row.name}'),
                       dense: true,
@@ -694,7 +708,10 @@ class _LockList extends StatelessWidget {
                         },
                         color: effective ? scheme.primary : scheme.outline,
                       ),
-                      title: Text(row.name),
+                      title: Text(
+                        row.name,
+                        style: gameScriptTextStyle(context, lang.locale),
+                      ),
                       subtitle: draft != null
                           ? Text(l10n.glossaryPending)
                           : subtitle,
@@ -794,20 +811,27 @@ class _DifficultyBars extends StatelessWidget {
 /// something they cannot already see. The region rail is where this bites —
 /// "Illegale Sumpfkrautmischer" does not fit a 220px rail in any language.
 class _EllipsisTooltip extends StatelessWidget {
-  const _EllipsisTooltip({required this.text});
+  const _EllipsisTooltip({required this.text, this.gameTextLocale});
 
   final String text;
+  final Locale? gameTextLocale;
 
   @override
   Widget build(BuildContext context) {
-    final label = Text(text, maxLines: 1, overflow: TextOverflow.ellipsis);
+    final label = Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: gameTextLocale == null
+          ? null
+          : gameScriptTextStyle(context, gameTextLocale!),
+    );
     return LayoutBuilder(
       builder: (context, constraints) {
         if (!constraints.hasBoundedWidth) return label;
-        // The enclosing DefaultTextStyle is the one the row actually paints
-        // with (ListTile installs its own), so measuring against it matches
-        // what the reader sees.
-        final effective = DefaultTextStyle.of(context).style;
+        // ListTile installs the style the row paints with. A game-text face
+        // overrides only the family, so measure the merge the Text widget uses.
+        final effective = DefaultTextStyle.of(context).style.merge(label.style);
         final painter = TextPainter(
           text: TextSpan(text: text, style: effective),
           maxLines: 1,

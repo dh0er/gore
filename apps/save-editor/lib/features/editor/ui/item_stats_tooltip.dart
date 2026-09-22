@@ -5,6 +5,7 @@ import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 const _cardWidth = 320.0;
 const _cardGap = 12.0;
@@ -132,6 +133,7 @@ class _ItemStatsTooltipState extends ConsumerState<ItemStatsTooltip> {
         .watch(itemStatsCatalogProvider)
         .value
         ?.statsFor(widget.itemId);
+    final lang = ref.watch(currentGameLangProvider);
     final tooltip = stats == null
         ? const ItemTooltip()
         : buildItemTooltip(
@@ -139,7 +141,7 @@ class _ItemStatsTooltipState extends ConsumerState<ItemStatsTooltip> {
             itemId: widget.itemId,
             stats: stats,
             catalog: ref.watch(locCatalogProvider).value ?? const {},
-            lang: ref.watch(currentGameLangProvider),
+            lang: lang,
             l10n: AppLocalizations.of(context),
           );
 
@@ -171,7 +173,10 @@ class _ItemStatsTooltipState extends ConsumerState<ItemStatsTooltip> {
                       delegate: _BesideAnchor(anchor),
                       child: card,
                     ),
-                    child: ItemTooltipCard(tooltip: tooltip),
+                    child: ItemTooltipCard(
+                      tooltip: tooltip,
+                      gameTextLocale: lang.locale,
+                    ),
                   ),
                 ),
               ),
@@ -231,9 +236,18 @@ class _BesideAnchor extends SingleChildLayoutDelegate {
 /// The card itself, in the game's own arrangement. Split out from the hover
 /// plumbing so it can be laid out and read in a widget test directly.
 class ItemTooltipCard extends StatelessWidget {
-  const ItemTooltipCard({super.key, required this.tooltip});
+  const ItemTooltipCard({
+    super.key,
+    required this.tooltip,
+    this.gameTextLocale,
+  });
 
   final ItemTooltip tooltip;
+
+  /// Game-text language. When its script face differs from the interface face,
+  /// every string on the card uses that face. Omitted in tests that only check
+  /// layout, which then keep the theme font.
+  final Locale? gameTextLocale;
 
   @override
   Widget build(BuildContext context) {
@@ -241,6 +255,9 @@ class ItemTooltipCard extends StatelessWidget {
     final scheme = theme.colorScheme;
     final accent = scheme.primary;
     final muted = scheme.onSurfaceVariant;
+    final game = gameTextLocale;
+    TextStyle? paint(TextStyle? style) =>
+        game == null ? style : gameScriptTextStyle(context, game, style: style);
 
     return Material(
       type: MaterialType.transparency,
@@ -266,10 +283,12 @@ class ItemTooltipCard extends StatelessWidget {
               Text(
                 tooltip.title,
                 textAlign: TextAlign.center,
-                style: theme.textTheme.titleSmall?.copyWith(
-                  color: scheme.onSurface,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.8,
+                style: paint(
+                  theme.textTheme.titleSmall?.copyWith(
+                    color: scheme.onSurface,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.8,
+                  ),
                 ),
               ),
               if (tooltip.subtitle.isNotEmpty) ...[
@@ -277,7 +296,9 @@ class ItemTooltipCard extends StatelessWidget {
                 Text(
                   tooltip.subtitle,
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.bodySmall?.copyWith(color: muted),
+                  style: paint(
+                    theme.textTheme.bodySmall?.copyWith(color: muted),
+                  ),
                 ),
               ],
               if (tooltip.stats.isNotEmpty ||
@@ -285,30 +306,35 @@ class ItemTooltipCard extends StatelessWidget {
                   tooltip.requirements.isNotEmpty ||
                   tooltip.description.isNotEmpty)
                 _DiamondDivider(color: accent.withValues(alpha: 0.5)),
-              for (final row in tooltip.stats) _Row(row: row, accent: accent),
+              for (final row in tooltip.stats)
+                _Row(row: row, accent: accent, gameTextLocale: game),
               if (tooltip.protection.isNotEmpty)
                 _Block(
                   label: tooltip.protectionLabel,
                   rows: tooltip.protection,
                   accent: accent,
+                  gameTextLocale: game,
                 ),
               if (tooltip.requirements.isNotEmpty)
                 _Block(
                   label: tooltip.requirementsLabel,
                   rows: tooltip.requirements,
                   accent: accent,
+                  gameTextLocale: game,
                 ),
               if (tooltip.recipe.isNotEmpty)
                 _Block(
                   label: tooltip.recipeLabel,
                   rows: tooltip.recipe,
                   accent: accent,
+                  gameTextLocale: game,
                 ),
               if (tooltip.ingredientFor.isNotEmpty)
                 _Block(
                   label: tooltip.ingredientForLabel,
                   rows: tooltip.ingredientFor,
                   accent: accent,
+                  gameTextLocale: game,
                 ),
               // A writing's own text, set like the flavour line below it but
               // paragraph by paragraph. A chapter heading keeps its rank: the
@@ -318,13 +344,15 @@ class ItemTooltipCard extends StatelessWidget {
                 const SizedBox(height: 8),
                 Text(
                   paragraph.text,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: paragraph.isHeading ? accent : muted,
-                    fontStyle: paragraph.isHeading
-                        ? FontStyle.normal
-                        : FontStyle.italic,
-                    fontWeight: paragraph.isHeading ? FontWeight.w600 : null,
-                    height: 1.35,
+                  style: paint(
+                    theme.textTheme.bodySmall?.copyWith(
+                      color: paragraph.isHeading ? accent : muted,
+                      fontStyle: paragraph.isHeading
+                          ? FontStyle.normal
+                          : FontStyle.italic,
+                      fontWeight: paragraph.isHeading ? FontWeight.w600 : null,
+                      height: 1.35,
+                    ),
                   ),
                 ),
               ],
@@ -332,10 +360,12 @@ class ItemTooltipCard extends StatelessWidget {
                 const SizedBox(height: 8),
                 Text(
                   tooltip.description,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: muted,
-                    fontStyle: FontStyle.italic,
-                    height: 1.35,
+                  style: paint(
+                    theme.textTheme.bodySmall?.copyWith(
+                      color: muted,
+                      fontStyle: FontStyle.italic,
+                      height: 1.35,
+                    ),
                   ),
                 ),
               ],
@@ -382,11 +412,17 @@ class _DiamondDivider extends StatelessWidget {
 /// A labelled, boxed group — the game frames its protection and requirement
 /// lists this way, set off from the plain numbers above them.
 class _Block extends StatelessWidget {
-  const _Block({required this.label, required this.rows, required this.accent});
+  const _Block({
+    required this.label,
+    required this.rows,
+    required this.accent,
+    required this.gameTextLocale,
+  });
 
   final String label;
   final List<ItemTooltipRow> rows;
   final Color accent;
+  final Locale? gameTextLocale;
 
   @override
   Widget build(BuildContext context) {
@@ -405,11 +441,20 @@ class _Block extends StatelessWidget {
           if (label.isNotEmpty)
             Text(
               label,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
+              style: gameTextLocale == null
+                  ? theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    )
+                  : gameScriptTextStyle(
+                      context,
+                      gameTextLocale!,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
             ),
-          for (final row in rows) _Row(row: row, accent: accent),
+          for (final row in rows)
+            _Row(row: row, accent: accent, gameTextLocale: gameTextLocale),
         ],
       ),
     );
@@ -418,14 +463,22 @@ class _Block extends StatelessWidget {
 
 /// One line: glyph, label, and the value the game right-aligns against it.
 class _Row extends StatelessWidget {
-  const _Row({required this.row, required this.accent});
+  const _Row({
+    required this.row,
+    required this.accent,
+    required this.gameTextLocale,
+  });
 
   final ItemTooltipRow row;
   final Color accent;
+  final Locale? gameTextLocale;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final game = gameTextLocale;
+    TextStyle? paint(TextStyle? style) =>
+        game == null ? style : gameScriptTextStyle(context, game, style: style);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
@@ -436,8 +489,10 @@ class _Row extends StatelessWidget {
           Expanded(
             child: Text(
               row.label,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurface,
+              style: paint(
+                theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurface,
+                ),
               ),
             ),
           ),
@@ -445,10 +500,12 @@ class _Row extends StatelessWidget {
             const SizedBox(width: 12),
             Text(
               row.value,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: accent,
-                fontWeight: FontWeight.w600,
-                fontFeatures: const [FontFeature.tabularFigures()],
+              style: paint(
+                theme.textTheme.bodySmall?.copyWith(
+                  color: accent,
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
               ),
             ),
           ],

@@ -135,7 +135,13 @@ class ActorDetailHeader extends StatelessWidget {
                   children: [
                     Text(
                       name,
-                      style: theme.textTheme.titleMedium,
+                      style: isPlayer
+                          ? theme.textTheme.titleMedium
+                          : gameScriptTextStyle(
+                              context,
+                              lang.locale,
+                              style: theme.textTheme.titleMedium,
+                            ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),

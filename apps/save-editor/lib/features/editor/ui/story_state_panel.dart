@@ -586,7 +586,7 @@ class _StoryValueTile extends StatelessWidget {
       tilePadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       leading: Icon(_semanticIcon(value.semanticType), size: 22),
-      title: Text(title),
+      title: Text(title, style: gameScriptTextStyle(context, lang.locale)),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -735,7 +735,10 @@ class _StoryValueTile extends StatelessWidget {
                   for (final paragraph in paragraphs)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 4),
-                      child: Text(paragraph),
+                      child: Text(
+                        paragraph,
+                        style: gameScriptTextStyle(context, lang.locale),
+                      ),
                     ),
                 ],
                 if (value.path.isNotEmpty) ...[

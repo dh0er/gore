@@ -10,6 +10,7 @@ import 'package:goresave/features/editor/domain/character_index.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 /// Localized NPC display name for a GlobalId. The loc catalog is keyed by the
 /// character key — the GlobalId prefix before the first `-`, lowercased (the
@@ -534,7 +535,12 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
       // A one-line row would otherwise hang its text from the top of a leading
       // taller than itself.
       titleAlignment: ListTileTitleAlignment.center,
-      title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      title: Text(
+        name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: gameScriptTextStyle(context, widget.lang.locale),
+      ),
       subtitle: widget.showObjectIds
           ? Text(
               row.globalId ?? '',
@@ -580,6 +586,7 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
           '${group.name} (${group.members.length})',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
+          style: gameScriptTextStyle(context, widget.lang.locale),
         ),
         trailing: Icon(open ? Icons.expand_less : Icons.expand_more, size: 20),
         // Highlighted while it holds the selection, so a collapsed group still

@@ -16,6 +16,7 @@ import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import '../domain/editor_notifier.dart';
@@ -1016,6 +1017,7 @@ class _PrivateInventorySummaryCardState
                 tone: PendingTone.add,
                 icon: Icons.add_circle_outline,
                 title: pendingNameOf(add.path),
+                gameTextLocale: lang.locale,
                 subtitle: l10n.pendingAddSubtitle(add.count),
                 technicalId: showObjectIds ? add.path : null,
                 cancelTooltip: l10n.cancelPendingAdd,
@@ -1034,6 +1036,7 @@ class _PrivateInventorySummaryCardState
                   _pendingRemovePath!,
                   id: _pendingRemove!.id,
                 ),
+                gameTextLocale: lang.locale,
                 subtitle: l10n.pendingRemovalSubtitle,
                 technicalId: showObjectIds
                     ? (_pendingRemove!.id.isEmpty
@@ -1317,6 +1320,10 @@ class _PrivateInventorySummaryCardState
                                                                     overflow:
                                                                         TextOverflow
                                                                             .ellipsis,
+                                                                    style: gameScriptTextStyle(
+                                                                      context,
+                                                                      lang.locale,
+                                                                    ),
                                                                   ),
                                                                 ),
                                                                 if (item.equipped &&

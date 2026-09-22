@@ -51,6 +51,65 @@ void main() {
     );
   });
 
+  testWidgets(
+    'game text uses its own CJK face when the interface face already has those glyphs',
+    (tester) async {
+      const zh = Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans');
+      TextStyle? fromJapanese;
+      TextStyle? sameScript;
+      TextStyle? latin;
+
+      Future<void> pump(Locale ui, void Function(BuildContext) read) {
+        return tester.pumpWidget(
+          MaterialApp(
+            locale: ui,
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Builder(
+              builder: (context) {
+                read(context);
+                return const SizedBox();
+              },
+            ),
+          ),
+        );
+      }
+
+      await pump(const Locale('ja'), (context) {
+        fromJapanese = gameScriptTextStyle(
+          context,
+          zh,
+          style: const TextStyle(
+            fontSize: 16,
+            fontFamily: notoSerifJpFontFamily,
+          ),
+        );
+      });
+      expect(fromJapanese?.fontFamily, notoSerifScFontFamily);
+      expect(fromJapanese?.fontSize, 16);
+      expect(fromJapanese?.fontFamilyFallback, contains(notoSerifJpFontFamily));
+
+      await pump(const Locale('ja'), (context) {
+        sameScript = gameScriptTextStyle(
+          context,
+          const Locale('ja'),
+          style: const TextStyle(fontFamily: notoSerifJpFontFamily),
+        );
+      });
+      expect(sameScript?.fontFamily, notoSerifJpFontFamily);
+
+      await pump(const Locale('de'), (context) {
+        latin = gameScriptTextStyle(
+          context,
+          const Locale('pl'),
+          style: const TextStyle(fontFamily: podkovaFontFamily, fontSize: 14),
+        );
+      });
+      expect(latin?.fontFamily, podkovaFontFamily);
+      expect(latin?.fontSize, 14);
+    },
+  );
+
   testWidgets('title progress is centered in the available title-bar space', (
     tester,
   ) async {
