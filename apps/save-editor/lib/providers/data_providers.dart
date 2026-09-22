@@ -28,7 +28,7 @@ final editorSettingsStoreProvider = Provider<EditorSettingsStore>((ref) {
 /// survive locale changes should pass a closure that reads this provider at
 /// message time instead of watching it and rebuilding long-lived controllers.
 final appLocalizationsProvider = Provider<AppLocalizations>((ref) {
-  final locale = gameLangByCode(ref.watch(localeProvider)).locale;
+  final locale = uiLangByCode(ref.watch(localeProvider)).locale;
   return lookupAppLocalizations(locale);
 });
 

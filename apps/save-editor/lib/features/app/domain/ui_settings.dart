@@ -10,12 +10,12 @@ import 'package:path/path.dart' as p;
 
 enum UiFontFamily { system, podkova, notoSerif }
 
-bool uiFontFamilySupportedFor(UiFontFamily font, GameLang lang) =>
+bool uiFontFamilySupportedFor(UiFontFamily font, Locale locale) =>
     font != UiFontFamily.podkova ||
-    (lang.locale.languageCode != 'ja' && lang.locale.languageCode != 'zh');
+    (locale.languageCode != 'ja' && locale.languageCode != 'zh');
 
-UiFontFamily effectiveUiFontFamily(UiFontFamily font, GameLang lang) =>
-    uiFontFamilySupportedFor(font, lang) ? font : UiFontFamily.notoSerif;
+UiFontFamily effectiveUiFontFamily(UiFontFamily font, Locale locale) =>
+    uiFontFamilySupportedFor(font, locale) ? font : UiFontFamily.notoSerif;
 
 class UiSettings {
   const UiSettings({
@@ -28,6 +28,7 @@ class UiSettings {
     this.gameDataSourceNoticeShown = false,
     this.showObjectIds = false,
     this.appLocale,
+    this.gameTextLocale,
   });
 
   factory UiSettings.fromJson(Map<String, Object?> json) {
@@ -52,7 +53,13 @@ class UiSettings {
       appLocale: switch (json['appLocale']) {
         // A missing or blank value stays null ("never chosen") so the app
         // follows the device language until the user picks one; a stored code
-        // is trimmed so " de " still matches kGameLangs.
+        // is trimmed so " de " still matches kUiLangs.
+        final String code when code.trim().isNotEmpty => code.trim(),
+        _ => null,
+      },
+      gameTextLocale: switch (json['gameTextLocale']) {
+        // Absent on settings written before game text was its own choice.
+        // Callers then derive it from the interface language.
         final String code when code.trim().isNotEmpty => code.trim(),
         _ => null,
       },
@@ -97,11 +104,14 @@ class UiSettings {
   /// labels; individual panels consume [showObjectIdsProvider] when rendering.
   final bool showObjectIds;
 
-  /// Selected UI + game-text language code (one of [kGameLangs]). Drives both
-  /// the MaterialApp locale and which extracted game-text names (items, NPCs,
-  /// knowledge) are shown. Null means "never chosen" — the app then follows the
+  /// Selected interface language code (one of [kUiLangs]). Drives the
+  /// MaterialApp locale. Null means "never chosen" — the app then follows the
   /// device language.
   final String? appLocale;
+
+  /// Selected game-text language code (one of [kGameLangs]). Null means
+  /// "follow the interface language": use [defaultGameTextCode] of [appLocale].
+  final String? gameTextLocale;
 
   UiSettings copyWith({
     ThemeMode? themeMode,
@@ -113,6 +123,7 @@ class UiSettings {
     bool? gameDataSourceNoticeShown,
     bool? showObjectIds,
     String? appLocale,
+    String? gameTextLocale,
   }) {
     return UiSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -125,6 +136,7 @@ class UiSettings {
           gameDataSourceNoticeShown ?? this.gameDataSourceNoticeShown,
       showObjectIds: showObjectIds ?? this.showObjectIds,
       appLocale: appLocale ?? this.appLocale,
+      gameTextLocale: gameTextLocale ?? this.gameTextLocale,
     );
   }
 
@@ -145,6 +157,7 @@ class UiSettings {
     'gameDataSourceNoticeShown': gameDataSourceNoticeShown,
     'showObjectIds': showObjectIds,
     'appLocale': ?appLocale,
+    'gameTextLocale': ?gameTextLocale,
   };
 }
 
@@ -259,21 +272,15 @@ class UiFontFamilyNotifier extends StateNotifier<UiFontFamily> {
   }
 }
 
-/// Selected language code (one of [kGameLangs]). Persisted through the shared
-/// Ui settings store, mirroring [themeModeProvider]. Drives both the app UI
-/// locale and which extracted game-text names are shown.
+/// Selected interface language code (one of [kUiLangs]). Persisted through the
+/// shared UI settings store. Drives the app UI locale only; game text is
+/// [gameTextLocaleProvider].
 final localeProvider = StateNotifierProvider<LocaleNotifier, String>((ref) {
   return LocaleNotifier(ref.watch(uiSettingsStoreProvider));
 });
 
 class LocaleNotifier extends StateNotifier<String> {
-  LocaleNotifier(this._store)
-    : super(
-        _store.read().appLocale ??
-            deviceLanguageCode(
-              WidgetsBinding.instance.platformDispatcher.locales,
-            ),
-      );
+  LocaleNotifier(this._store) : super(_initialUiCode(_store));
 
   final UiSettingsStore _store;
 
@@ -281,6 +288,47 @@ class LocaleNotifier extends StateNotifier<String> {
     state = code;
     _store.write(_store.read().copyWith(appLocale: code));
   }
+}
+
+/// Selected game-text language code (one of [kGameLangs]).
+final gameTextLocaleProvider =
+    StateNotifierProvider<GameTextLocaleNotifier, String>((ref) {
+      return GameTextLocaleNotifier(ref.watch(uiSettingsStoreProvider));
+    });
+
+class GameTextLocaleNotifier extends StateNotifier<String> {
+  GameTextLocaleNotifier(this._store) : super(_initialGameTextCode(_store));
+
+  final UiSettingsStore _store;
+
+  void setGameTextLocale(String code) {
+    final normalized = gameLangByCode(code).code;
+    state = normalized;
+    _store.write(_store.read().copyWith(gameTextLocale: normalized));
+  }
+}
+
+String _initialUiCode(UiSettingsStore store) {
+  return store.read().appLocale ??
+      deviceUiLanguageCode(WidgetsBinding.instance.platformDispatcher.locales);
+}
+
+String _initialGameTextCode(UiSettingsStore store) {
+  final settings = store.read();
+  if (settings.gameTextLocale case final code?) {
+    return gameLangByCode(code).code;
+  }
+  return defaultGameTextCode(_initialUiCode(store));
+}
+
+/// Sets the interface language and the matching game-text language together.
+/// A later [GameTextLocaleNotifier.setGameTextLocale] keeps the interface
+/// language and replaces only the game text.
+void selectUiLanguage(WidgetRef ref, String uiCode) {
+  ref.read(localeProvider.notifier).setLocale(uiCode);
+  ref
+      .read(gameTextLocaleProvider.notifier)
+      .setGameTextLocale(defaultGameTextCode(uiCode));
 }
 
 final autoUpdateCheckProvider =

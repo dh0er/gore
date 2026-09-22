@@ -16,20 +16,26 @@ class GoresaveApp extends ConsumerWidget {
     final router = ref.watch(routerProvider).router;
     final themeMode = ref.watch(themeModeProvider);
     final selectedUiFont = ref.watch(uiFontFamilyProvider);
-    final lang = gameLangByCode(ref.watch(localeProvider));
-    final uiFont = effectiveUiFontFamily(selectedUiFont, lang);
+    final uiLang = uiLangByCode(ref.watch(localeProvider));
+    final gameLang = gameLangByCode(ref.watch(gameTextLocaleProvider));
+    final uiFont = effectiveUiFontFamily(selectedUiFont, uiLang.locale);
     return MaterialApp.router(
       // Window/OS title is language-independent on purpose — always the
       // product name, never the localized UI string.
       title: 'GORE Save Editor',
       debugShowCheckedModeBanner: false,
-      theme: buildGoresaveTheme(uiFontFamily: uiFont, locale: lang.locale),
+      theme: buildGoresaveTheme(
+        uiFontFamily: uiFont,
+        locale: uiLang.locale,
+        gameTextLocale: gameLang.locale,
+      ),
       darkTheme: buildGoresaveDarkTheme(
         uiFontFamily: uiFont,
-        locale: lang.locale,
+        locale: uiLang.locale,
+        gameTextLocale: gameLang.locale,
       ),
       themeMode: themeMode,
-      locale: lang.locale,
+      locale: uiLang.locale,
       localizationsDelegates: const [
         AppLocalizations.delegate,
         GlobalMaterialLocalizations.delegate,

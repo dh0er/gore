@@ -24,13 +24,30 @@ void main() {
       buildGoresaveTheme(
         locale: const Locale('ja'),
       ).textTheme.bodyMedium?.fontFamilyFallback,
-      ['Yu Gothic UI', 'Microsoft YaHei UI'],
+      ['Yu Gothic UI', 'Microsoft YaHei UI', 'Microsoft JhengHei UI'],
     );
     expect(
       buildGoresaveTheme(
         locale: const Locale('zh'),
       ).textTheme.bodyMedium?.fontFamilyFallback,
-      ['Microsoft YaHei UI', 'Yu Gothic UI'],
+      ['Microsoft YaHei UI', 'Microsoft JhengHei UI', 'Yu Gothic UI'],
+    );
+    expect(
+      buildGoresaveTheme(
+        locale: const Locale.fromSubtags(
+          languageCode: 'zh',
+          scriptCode: 'Hant',
+        ),
+      ).textTheme.bodyMedium?.fontFamilyFallback,
+      ['Microsoft JhengHei UI', 'Microsoft YaHei UI', 'Yu Gothic UI'],
+    );
+    expect(
+      buildGoresaveTheme(
+        uiFontFamily: UiFontFamily.notoSerif,
+        locale: const Locale('cs'),
+        gameTextLocale: const Locale('ja'),
+      ).textTheme.bodyMedium?.fontFamilyFallback,
+      [notoSerifJpFontFamily],
     );
   });
 
@@ -661,7 +678,7 @@ void main() {
       'JSON', (tester) async {
     // Tall surface so all Settings cards (including the debug section) lay out
     // without scrolling.
-    await tester.binding.setSurfaceSize(const Size(1400, 1600));
+    await tester.binding.setSurfaceSize(const Size(1400, 1800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final core = _FakeCoreService();
     await tester.pumpWidget(
@@ -713,7 +730,7 @@ void main() {
     final fontDropdown = find.byKey(const ValueKey('ui-font-family-dropdown'));
     expect(
       tester.getTopLeft(fontDropdown).dy,
-      greaterThan(tester.getTopLeft(find.text('Language')).dy),
+      greaterThan(tester.getTopLeft(find.text('Interface')).dy),
     );
     expect(
       tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).value,

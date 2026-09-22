@@ -6,6 +6,57 @@ const notoSerifFontFamily = 'NotoSerif';
 const notoSerifJpFontFamily = 'NotoSerifJP';
 const notoSerifScFontFamily = 'NotoSerifSC';
 
+/// Fallback faces so interface text and game text can use different scripts.
+///
+/// The system font links CJK through the Windows UI faces. Bundled fonts add
+/// the Noto face for the game-text script, and Noto Serif itself whenever the
+/// primary face does not cover Latin and Cyrillic.
+List<String>? uiFontFamilyFallback(
+  UiFontFamily font,
+  Locale uiLocale, {
+  Locale? gameTextLocale,
+}) {
+  if (font == UiFontFamily.system) {
+    return _systemFontFallback(uiLocale, gameTextLocale);
+  }
+  final primary = uiFontFamilyName(font, uiLocale);
+  final fallback = <String>[];
+  void add(String name) {
+    if (name == primary || fallback.contains(name)) return;
+    fallback.add(name);
+  }
+
+  add(scriptCoverageFont(uiLocale));
+  if (gameTextLocale != null) add(scriptCoverageFont(gameTextLocale));
+  add(notoSerifFontFamily);
+  return fallback.isEmpty ? null : fallback;
+}
+
+List<String> _systemFontFallback(Locale uiLocale, Locale? gameTextLocale) {
+  const ja = 'Yu Gothic UI';
+  const hans = 'Microsoft YaHei UI';
+  const hant = 'Microsoft JhengHei UI';
+
+  String? face(Locale locale) => switch (locale.languageCode) {
+    'ja' => ja,
+    'zh' when locale.scriptCode == 'Hant' => hant,
+    'zh' => hans,
+    _ => null,
+  };
+
+  final ordered = <String>[];
+  void add(String? name) {
+    if (name != null && !ordered.contains(name)) ordered.add(name);
+  }
+
+  add(face(uiLocale));
+  if (gameTextLocale != null) add(face(gameTextLocale));
+  add(hans);
+  add(hant);
+  add(ja);
+  return ordered;
+}
+
 /// Keeps technical values monospaced for the system font, while honoring a
 /// bundled font when the user applies it to the entire interface.
 String uiAwareMonospaceFontFamily(
@@ -32,20 +83,41 @@ String uiFontFamilyName(UiFontFamily font, Locale locale) => switch (font) {
   UiFontFamily.notoSerif => notoSerifFontFamily,
 };
 
+/// Bundled face that covers [locale]'s script. Latin, Cyrillic and Greek stay
+/// on Noto Serif; Japanese and both Chinese scripts use the CJK faces.
+String scriptCoverageFont(Locale locale) => switch (locale.languageCode) {
+  'ja' => notoSerifJpFontFamily,
+  'zh' => notoSerifScFontFamily,
+  _ => notoSerifFontFamily,
+};
+
 ThemeData buildGoresaveTheme({
   UiFontFamily uiFontFamily = UiFontFamily.system,
   Locale locale = const Locale('en'),
-}) => _buildTheme(Brightness.light, uiFontFamily: uiFontFamily, locale: locale);
+  Locale? gameTextLocale,
+}) => _buildTheme(
+  Brightness.light,
+  uiFontFamily: uiFontFamily,
+  locale: locale,
+  gameTextLocale: gameTextLocale,
+);
 
 ThemeData buildGoresaveDarkTheme({
   UiFontFamily uiFontFamily = UiFontFamily.system,
   Locale locale = const Locale('en'),
-}) => _buildTheme(Brightness.dark, uiFontFamily: uiFontFamily, locale: locale);
+  Locale? gameTextLocale,
+}) => _buildTheme(
+  Brightness.dark,
+  uiFontFamily: uiFontFamily,
+  locale: locale,
+  gameTextLocale: gameTextLocale,
+);
 
 ThemeData _buildTheme(
   Brightness brightness, {
   required UiFontFamily uiFontFamily,
   required Locale locale,
+  Locale? gameTextLocale,
 }) {
   const teal = Color(0xFF0F766E);
   const gold = Color(0xFFB7791F);
@@ -102,11 +174,11 @@ ThemeData _buildTheme(
     colorScheme: scheme,
     scaffoldBackgroundColor: scheme.surface,
     fontFamily: uiFontFamilyName(uiFontFamily, locale),
-    fontFamilyFallback: uiFontFamily == UiFontFamily.system
-        ? locale.languageCode == 'ja'
-              ? const ['Yu Gothic UI', 'Microsoft YaHei UI']
-              : const ['Microsoft YaHei UI', 'Yu Gothic UI']
-        : null,
+    fontFamilyFallback: uiFontFamilyFallback(
+      uiFontFamily,
+      locale,
+      gameTextLocale: gameTextLocale,
+    ),
     appBarTheme: AppBarTheme(
       backgroundColor: scheme.surfaceContainerLowest,
       foregroundColor: scheme.onSurface,
