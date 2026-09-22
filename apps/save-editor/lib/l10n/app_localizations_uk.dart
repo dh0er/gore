@@ -2202,7 +2202,7 @@ class AppLocalizationsUk extends AppLocalizations {
   String get tutorialGateCrime => 'Злочини та наслідки';
 
   @override
-  String get tutorialGateDrugs => 'Расходники та ефекти';
+  String get tutorialGateDrugs => 'Витратні матеріали та ефекти';
 
   @override
   String get tutorialGateLockpicking => 'Замки';
