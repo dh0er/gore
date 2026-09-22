@@ -521,6 +521,66 @@ fn emit_named_module(path: &std::path::Path, module_name: &str) -> Result<Option
     ))
 }
 
+/// Resolve the shipped module that owns the selected NPC's character definition.
+///
+/// Checkout manifests are editable input, so their module name cannot be the authority for which
+/// character is being changed. Follow the selected NPC's exact cache-backed class chain instead.
+fn checkout_target_module(path: &Path, npc_id: &str) -> Result<(String, String)> {
+    let bytes = read_module_cache(path)?;
+    let mut resolver = RefResolver::build(&bytes).context("building the reference resolver")?;
+    let modules = model::parse_modules(&bytes).context("parsing modules")?;
+    let loaded = load_native_api_with_proof(path);
+    let prepared = PreparedEmit::new(&modules, &mut resolver, loaded.map(|loaded| loaded.native))
+        .context("preparing the emitted modules")?
+        .with_class_defaults(true);
+
+    let spawn_class = generate::spawn_class(npc_id);
+    let mut classes = BTreeMap::new();
+    let mut wanted = Some(spawn_class.clone());
+    for _ in 0..CHAIN_HOPS {
+        let class_name = wanted.take().with_context(|| {
+            format!("the class chain for {npc_id} ends before its character definition")
+        })?;
+        let index = module_of_class(&modules, &class_name)
+            .with_context(|| format!("no module declares {class_name}"))?;
+        let source = prepared
+            .emit_module(index)
+            .with_context(|| format!("emitting {}", modules[index].name))?;
+        for class in defaults::parse_classes(&source) {
+            classes.insert(class.name.clone(), class);
+        }
+        wanted = classes
+            .get(&class_name)
+            .and_then(|class| {
+                chain::assigned(class, chain::SPAWN_AI_FIELD)
+                    .or_else(|| chain::assigned(class, chain::AI_CHARACTER_FIELD))
+            })
+            .and_then(defaults::static_class_target)
+            .map(str::to_string);
+    }
+
+    let definition = chain::resolve(&classes, &spawn_class)
+        .character_definition
+        .with_context(|| format!("the class chain for {npc_id} has no character definition"))?;
+    let index = module_of_class(&modules, &definition)
+        .with_context(|| format!("no module declares {definition}"))?;
+    Ok((definition, modules[index].name.clone()))
+}
+
+fn checkout_module_binding_finding(
+    edit: &workspace::ModuleEdit,
+    definition: &str,
+    expected_module: &str,
+) -> Option<check::Finding> {
+    (edit.module != expected_module).then(|| check::Finding {
+        severity: check::Severity::Blocking,
+        message: format!(
+            "checkout for {definition} must edit its declaring module {expected_module}, not {}",
+            edit.module
+        ),
+    })
+}
+
 /// Every bundled NPC row, narrowed by `filter` and `category`.
 pub fn select<'a>(
     entries: &'a [CatalogEntry],
@@ -1273,6 +1333,12 @@ fn workspace_source_findings(
     // in einem fremden Levelskript. Zwei Absichten, zwei Waechter.
     match manifest.operation {
         workspace::Operation::Checkout => {
+            let (definition, expected_module) = checkout_target_module(cache, &manifest.npc_id)?;
+            if let Some(finding) =
+                checkout_module_binding_finding(level, &definition, &expected_module)
+            {
+                findings.push(finding);
+            }
             findings.extend(check::guard_checkout_diff(&pristine, &edited));
         }
         workspace::Operation::Suppress => {
@@ -1807,6 +1873,28 @@ mod tests {
         manifest.modules.pop();
         manifest.modules[1].relative_path = "../outside.as".to_string();
         assert!(validate_manifest_modules(&manifest).is_err());
+    }
+
+    #[test]
+    fn checkout_binding_accepts_only_the_resolved_definition_module() {
+        let edit = workspace::ModuleEdit {
+            module: "AI.AIAgent.Human.Config.OC_STT_Diego.OC_STT_Diego".to_string(),
+            relative_path: "AI/AIAgent/Human/Config/OC_STT_Diego/OC_STT_Diego.as".to_string(),
+            source_file: "OC_STT_Diego.as".to_string(),
+            pristine_file: Some("pristine/OC_STT_Diego.as".to_string()),
+            op: "edit".to_string(),
+        };
+        let definition = "UCharacterDefinition_Human_OC_STT_Diego";
+        let expected = "AI.AIAgent.Human.Config.OC_STT_Diego.OC_STT_Diego";
+
+        assert!(checkout_module_binding_finding(&edit, definition, expected).is_none());
+        let mut retargeted = edit;
+        retargeted.module = "AI.AIAgent.Human.Config.OTHER.OTHER".to_string();
+        let finding = checkout_module_binding_finding(&retargeted, definition, expected)
+            .expect("retargeting must be blocked");
+        assert_eq!(finding.severity, check::Severity::Blocking);
+        assert!(finding.message.contains("OC_STT_Diego"));
+        assert!(finding.message.contains("OTHER"));
     }
 
     #[test]

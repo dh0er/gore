@@ -5,6 +5,7 @@ use gore_authoring::{
     DraftQuestSkeletonInput, DraftQuestTransitionStatus, EntityId, GameGenerationAnchor,
     QuestTransitionPlanV1, Sha256Digest, DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION,
     MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES, MAX_DRAFT_QUEST_DESCRIPTION_BYTES,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 
 const MODULE: &str = "GoreMods.Probe.AsghanMiniQuest";
@@ -229,6 +230,11 @@ fn capability_is_always_offline_and_runtime_unqualified() {
     let generated = DraftQuestSkeleton::new(input()).unwrap().generate();
     assert_eq!(generated.generator_id, DRAFT_QUEST_GENERATOR_ID);
     assert_eq!(DRAFT_QUEST_GENERATOR_VERSION, 6);
+    assert_eq!(DRAFT_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_ID);
+    assert_eq!(
+        DRAFT_QUEST_GENERATOR_VERSION,
+        REVISION3_QUEST_GENERATOR_VERSION
+    );
     assert_eq!(generated.generator_version, DRAFT_QUEST_GENERATOR_VERSION);
     assert_eq!(
         generated.status.authoring,
