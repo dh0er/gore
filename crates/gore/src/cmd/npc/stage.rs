@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use gore_as::cache::faithfulness;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::workspace::Manifest;
 
@@ -28,11 +29,57 @@ pub struct TreeStamp {
     pub cache_sha256: String,
     /// Wie viele Dateien geschrieben wurden — eine grobe Vollständigkeitsprobe.
     pub modules: usize,
+    /// SHA-256 over every relative path and file body except this stamp.
+    #[serde(default)]
+    pub tree_sha256: String,
 }
 
 /// Der Dateiname des Stempels im Baumverzeichnis.
 pub const TREE_STAMP_NAME: &str = ".gore-npc-tree.json";
-pub const TREE_STAMP_VERSION: u32 = 2;
+pub const TREE_STAMP_VERSION: u32 = 3;
+
+/// Authenticate a reusable emitted tree independently of its cache-id stamp.
+pub fn tree_sha256(root: &Path) -> Result<String> {
+    fn collect(root: &Path, dir: &Path, files: &mut Vec<(String, PathBuf)>) -> Result<()> {
+        for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                bail!(
+                    "the reusable source tree contains a link: {}",
+                    path.display()
+                );
+            }
+            if metadata.is_dir() {
+                collect(root, &path, files)?;
+            } else if metadata.is_file()
+                && path.file_name().and_then(|name| name.to_str()) != Some(TREE_STAMP_NAME)
+            {
+                let relative = path
+                    .strip_prefix(root)
+                    .expect("walked path stays under its root")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                files.push((relative, path));
+            }
+        }
+        Ok(())
+    }
+
+    let mut files = Vec::new();
+    collect(root, root, &mut files)?;
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut hash = Sha256::new();
+    for (relative, path) in files {
+        let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        hash.update(&(relative.len() as u64).to_le_bytes());
+        hash.update(relative.as_bytes());
+        hash.update(&(bytes.len() as u64).to_le_bytes());
+        hash.update(&bytes);
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
 
 /// Welchen Weg diese Arbeit nimmt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -324,11 +371,24 @@ mod tests {
             format_version: TREE_STAMP_VERSION,
             cache_sha256: "abc".to_string(),
             modules: 7317,
+            tree_sha256: "def".to_string(),
         };
         let json = serde_json::to_string(&stamp).expect("serialize");
         assert_eq!(
             serde_json::from_str::<TreeStamp>(&json).expect("deserialize"),
             stamp
         );
+    }
+
+    #[test]
+    fn the_tree_digest_changes_with_paths_or_contents_and_ignores_its_stamp() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join("nested")).unwrap();
+        fs::write(tmp.path().join("nested/A.as"), "one").unwrap();
+        let original = tree_sha256(tmp.path()).unwrap();
+        fs::write(tmp.path().join(TREE_STAMP_NAME), "metadata").unwrap();
+        assert_eq!(tree_sha256(tmp.path()).unwrap(), original);
+        fs::write(tmp.path().join("nested/A.as"), "two").unwrap();
+        assert_ne!(tree_sha256(tmp.path()).unwrap(), original);
     }
 }

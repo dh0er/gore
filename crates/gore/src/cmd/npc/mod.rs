@@ -1330,6 +1330,7 @@ fn ensure_tree(tree: &Path, cache_sha256: &str, path: &Path) -> Result<()> {
         if let Ok(stamp) = serde_json::from_str::<stage::TreeStamp>(&text) {
             if stamp.format_version == stage::TREE_STAMP_VERSION
                 && stamp.cache_sha256 == cache_sha256
+                && stamp.tree_sha256 == stage::tree_sha256(tree)?
             {
                 println!(
                     "reusing the source tree in {} ({} modules)",
@@ -1371,6 +1372,7 @@ fn ensure_tree(tree: &Path, cache_sha256: &str, path: &Path) -> Result<()> {
         format_version: stage::TREE_STAMP_VERSION,
         cache_sha256: cache_sha256.to_string(),
         modules: modules.len(),
+        tree_sha256: stage::tree_sha256(tree)?,
     };
     fs::write(
         &stamp_path,

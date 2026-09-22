@@ -96,7 +96,7 @@ pub fn add_spawn(
     for (index, line) in lines[start..end].iter().enumerate() {
         let index = start + index;
         if line.contains("SpawnAIAgent(") {
-            if line.contains(spawn_class) {
+            if is_spawn_line_for(line, spawn_class) {
                 return Err(EditError::AlreadySpawns(
                     world_point.to_string(),
                     spawn_class.to_string(),
@@ -278,6 +278,17 @@ class UWP_B : UWorldPointScript
             add_spawn(&once, "UWP_A", "USpawnAIAgentDefinition_MY_NPC", None),
             Err(EditError::AlreadySpawns(_, _))
         ));
+    }
+
+    #[test]
+    fn adding_a_prefixed_name_beside_a_longer_name_is_allowed() {
+        let source = SOURCE.replace(
+            "USpawnAIAgentDefinition_Diego::StaticClass()",
+            "USpawnAIAgentDefinition_Diego_Prime::StaticClass()",
+        );
+        let edited = add_spawn(&source, "UWP_A", "USpawnAIAgentDefinition_Diego", None).unwrap();
+        assert!(edited.contains("USpawnAIAgentDefinition_Diego::StaticClass()"));
+        assert!(edited.contains("USpawnAIAgentDefinition_Diego_Prime::StaticClass()"));
     }
 
     #[test]
