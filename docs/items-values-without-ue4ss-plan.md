@@ -11,6 +11,12 @@ item, NPC, and ability defaults; add explicit support for existing weapon damage
 tag entries. The same native path must serve the CLI and Mod Studio. Existing
 save instances can retain their serialized values, as with today's CDO edits.
 
+The design starts from a typed native item patch and the game's own class
+defaults. The old TOML/JSON syntax is a compatibility input to that model, not
+the architecture. Reuse the existing module compiler and deployment path;
+keep the fixed-byte `patch-default` commands as narrow expert tools rather than
+creating a second general item backend.
+
 Importing third-party UE4SS mods may remain an optional Mod Manager feature. It
 must not be a prerequisite for any GORE-authored item/value workflow.
 
@@ -22,7 +28,7 @@ must not be a prerequisite for any GORE-authored item/value workflow.
 | Offline editing | `gore as patch-default` edits one proven scalar initializer; `patch-tag-map` edits one existing damage-map value. | No typed, declarative batch; unsupported strings, computed defaults, absent assignments/keys and other shapes; no bundle/manager integration (`docs/guide/angelscript-defaults.md`). |
 | Native script route | `gore as emit` reconstructs class defaults, and module compilation/splicing can ship edits without UE4SS. The pristine BuildID 25168047 corpus had zero semantic differences in its whole-tree round trip. | No safe `overrides` → targeted default statements → compiled module pipeline; current checks must be rerun for each game generation (`docs/guide/scripts.md`, `crates/gore-as/DECOMPILER_STATUS.md`). |
 | Discovery and typing | Shipping script cache and `Binds.Cache` provide much of the class/default schema. | `--model`, catalogs and some native-ancestry patch proofs still rely on UE4SS dumps or a `.usmap` found below `ue4ss`; replace that dependency for the native workflow (`docs/guide/catalogs-and-models.md`, `docs/guide/angelscript-defaults.md`). |
-| Deployment and conflicts | Bundles already compose script mini-caches against the pristine cache and restore backups. | `overrides` still become `Ue4ssLua`; separate edits in one module need field-level composition instead of whole-module last-wins. An explicit conflict is needed when an authored script also changes the same default (`crates/gore-mod/src/lib.rs`). |
+| Deployment and conflicts | Bundles already compose script mini-caches against the pristine cache and restore backups. | `overrides` still become `Ue4ssLua`; native item edits need a compiled mini-cache and clear module/target conflicts so one mod cannot silently erase another (`crates/gore-mod/src/lib.rs`). |
 | Studio and docs | Mod Studio can stage typed `ItemPatch` entities. | ItemPatch build/deploy is blocked; README, getting-started, items and bundle guides still present UE4SS as necessary (`apps/mod-studio/README.md`). |
 
 The old override schema also accepts a non-default `module` such as `G1R` for
@@ -53,20 +59,21 @@ the entire old runtime-override feature set.
    ambiguous targets before writing a bundle.
 2. **Build one native lowering path.** Convert validated declarations into
    targeted class-scope AngelScript `default` edits, grouped by module. Use the
-   emitted source and existing standalone compiler, preserving every unrelated
-   class/default in that module. Match class, field owner and type semantically;
-   do not use byte offsets or free-form text replacement. Encode the four
-   existing value kinds and damage-tag entries with exact type/range checks.
+   emitted source and existing standalone compiler at build time, preserving
+   every unrelated class/default in that module. Match class, field owner and
+   type semantically; do not use byte offsets or free-form text replacement.
+   Encode the four existing value kinds and damage-tag entries with exact
+   type/range checks.
    Reinspect the compiled mini-cache to prove the requested defaults changed
    and unrelated defaults/functions remained semantically equivalent. Fail
    closed when a class or expression cannot be represented.
-3. **Make the bundle and manager own the result.** Store declarative item edits
-   as a native bundle component. At apply, resolve all enabled item edits in
-   load order, report same-class/field conflicts, then compile each affected
-   module once from the pristine base. Detect overlap with `scripts` edits;
-   compose only when target identity can be proven, otherwise report a hard
-   conflict. Reuse the existing script-cache backup/recovery and undeploy
-   transaction. No generated UE4SS folder for native item bundles.
+3. **Make the bundle and manager own the result.** Carry the compiled mini-cache
+   and its declared item targets in the bundle, then use the existing script
+   splice, backup/recovery and undeploy transaction. Initially report a hard
+   conflict when two enabled mods edit the same module, including overlap with
+   a hand-authored `scripts` edit. This is conservative but avoids silent
+   last-wins loss; field-level composition can follow if users need it. No
+   generated UE4SS folder for native item bundles.
 4. **Expose the workflow and remove mandatory dump inputs.** Keep the TOML/JSON
    authoring shape, add a CLI inspect/build path that shows current values,
    supported type, provenance and a precise refusal reason. Generate its schema
@@ -77,9 +84,9 @@ the entire old runtime-override feature set.
    if backward compatibility warrants it; never select it implicitly.
 5. **Verify once the slice is complete, then update claims.** Test compile and
    deployment on a clean install with no `ue4ss` directory; representative
-   integer/float/bool/string and damage-map edits; two mods touching different
-   defaults in one module; same-target conflict; coexistence with an unrelated
-   script mod; reapply, undeploy and game-update refusal/rebase. Ask the user to
+   integer/float/bool/string and damage-map edits; an explicit conflict for two
+   mods touching one module; coexistence with a script mod editing a different
+   module; reapply, undeploy and game-update refusal/rebase. Ask the user to
    confirm visible values in game, including a new-game case and the expected
    existing-save limitation. Only then switch README/guide quick starts and
    `gore doctor` from mandatory UE4SS to the native path.
