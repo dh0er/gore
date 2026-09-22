@@ -1486,11 +1486,13 @@ class _PendingLineRow extends ConsumerWidget {
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
     final showObjectIds = ref.watch(showObjectIdsProvider);
     final isAdd = tone == PendingTone.add;
+    final catalogName = localizedGameName(locCatalog, lang, item.id);
+    final fromCatalog = catalogName != null && catalogName.trim().isNotEmpty;
     return PendingStructuralRow(
       tone: tone,
       icon: isAdd ? Icons.add_circle_outline : Icons.delete_outline,
-      title: localizedGameName(locCatalog, lang, item.id) ?? item.id,
-      gameTextLocale: lang.locale,
+      title: fromCatalog ? catalogName : item.id,
+      gameTextLocale: fromCatalog ? lang.locale : null,
       subtitle: isAdd
           ? l10n.pendingAddSubtitle(item.count)
           : l10n.pendingRemovalSubtitle,
@@ -1531,7 +1533,9 @@ class _StockRow extends ConsumerWidget {
     // `.value` (not `.asData?.value`) so a background refresh keeps the previous
     // catalog instead of briefly dropping every row back to its raw class id.
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
-    final label = localizedGameName(locCatalog, lang, item.id) ?? item.id;
+    final catalogName = localizedGameName(locCatalog, lang, item.id);
+    final fromCatalog = catalogName != null && catalogName.trim().isNotEmpty;
+    final label = fromCatalog ? catalogName : item.id;
     final showObjectIds = ref.watch(showObjectIdsProvider);
     // The id repeats the title whenever no localized name exists, so drop it
     // then rather than printing the same string twice.
@@ -1570,7 +1574,10 @@ class _StockRow extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(label, style: gameScriptTextStyle(context, lang.locale)),
+        Text(
+          label,
+          style: fromCatalog ? gameScriptTextStyle(context, lang.locale) : null,
+        ),
         if (subtitle.isNotEmpty)
           Text(subtitle, style: theme.textTheme.bodySmall),
       ],
@@ -1581,7 +1588,12 @@ class _StockRow extends ConsumerWidget {
     // rather than a stocked item, so it has no card.
     Widget hoverable(Widget row) => item.isOre
         ? row
-        : ItemStatsTooltip(itemId: item.id, title: label, child: row);
+        : ItemStatsTooltip(
+            itemId: item.id,
+            title: label,
+            titleFromCatalog: fromCatalog,
+            child: row,
+          );
 
     return LayoutBuilder(
       builder: (context, box) {
@@ -1602,7 +1614,9 @@ class _StockRow extends ConsumerWidget {
               leading: icon,
               title: Text(
                 label,
-                style: gameScriptTextStyle(context, lang.locale),
+                style: fromCatalog
+                    ? gameScriptTextStyle(context, lang.locale)
+                    : null,
               ),
               subtitle: subtitle.isEmpty
                   ? null
