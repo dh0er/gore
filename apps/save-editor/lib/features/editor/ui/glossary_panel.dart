@@ -1269,16 +1269,25 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
       context,
       ref.read(currentGameLangProvider).locale,
     );
+    final preview = Text(
+      fullText,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: script,
+    );
+    if (script == null) {
+      return Tooltip(
+        message: fullText,
+        waitDuration: const Duration(milliseconds: 450),
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: preview,
+      );
+    }
     return Tooltip(
-      message: fullText,
+      richMessage: TextSpan(text: fullText, style: script),
       waitDuration: const Duration(milliseconds: 450),
       constraints: const BoxConstraints(maxWidth: 520),
-      child: Text(
-        fullText,
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-        style: script,
-      ),
+      child: preview,
     );
   }
 
