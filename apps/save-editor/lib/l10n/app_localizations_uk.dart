@@ -2300,7 +2300,7 @@ class AppLocalizationsUk extends AppLocalizations {
       'Level': 'Рівень',
       'LockpickDurability': 'Міцність відмички',
       'LockpickPrecision': 'Точність відмички',
-      'PickPocketing': 'Кишківництво',
+      'PickPocketing': 'Кишенькова крадіж',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2358,7 +2358,7 @@ class AppLocalizationsUk extends AppLocalizations {
       'LockpickPrecision':
           'Залежить від навички «Замки»: 0 без підготовки, 1 навчений, 2 майстер.',
       'PickPocketing':
-          'Залежить від навички «Кишківництво»: -30 без підготовки, -10 навчений, +10 майстер.',
+          'Залежить від навички «Кишенькова крадіж»: -30 без підготовки, -10 навчений, +10 майстер.',
       'other': '?',
     });
     return '$_temp0';
