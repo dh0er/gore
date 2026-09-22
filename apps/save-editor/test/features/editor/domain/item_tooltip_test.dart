@@ -275,6 +275,7 @@ void main() {
     // single figure.
     expect(tooltip.stats.first.label, 'Health');
     expect(tooltip.stats.first.value, '+1/s · 3 s');
+    expect(tooltip.stats.first.interfaceValueRun, '3 s');
   });
 
   test('a brew lists every effect it carries, magnitude and percentage', () {
@@ -302,9 +303,21 @@ void main() {
 
     final values = {for (final row in tooltip.stats) row.label: row.value};
     expect(values['Alcohol'], '+40');
+    expect(
+      tooltip.stats
+          .firstWhere((row) => row.label == 'Alcohol')
+          .interfaceValueRun,
+      isNull,
+    );
     // The effect class raises the resistance by a share of itself, for a span
     // it declares rather than one the item passes in.
     expect(values['Fire Protection'], '+15% · 30 s');
+    expect(
+      tooltip.stats
+          .firstWhere((row) => row.label == 'Fire Protection')
+          .interfaceValueRun,
+      '30 s',
+    );
   });
 
   test('a spell that deals no damage still names its mana cost', () {

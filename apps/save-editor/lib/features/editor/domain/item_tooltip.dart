@@ -108,6 +108,7 @@ class ItemTooltipRow {
     this.value, {
     this.iconName,
     this.catalogLabel = true,
+    this.interfaceValueRun,
   });
 
   final String label;
@@ -119,6 +120,10 @@ class ItemTooltipRow {
   /// False when [label] is an interface string. Those keep the interface face
   /// when the card paints catalog text in the game-text face.
   final bool catalogLabel;
+
+  /// A slice of [value] that came from interface text, such as the localized
+  /// duration suffix. The rest of the value keeps the game-text face.
+  final String? interfaceValueRun;
 }
 
 /// Build the hover card for one item. Returns an empty tooltip when the
@@ -206,9 +211,11 @@ ItemTooltip buildItemTooltip({
   final perSecond = game('ui_stat_duration_measurement') ?? '/s';
   for (final effect in stats.onConsume) {
     final duration = effect.seconds;
-    String withDuration(String amount) => duration == null
-        ? amount
-        : '$amount · ${l10n.memoryEventSecondsValue(_number(duration))}';
+    final secondsLabel = duration == null
+        ? null
+        : l10n.memoryEventSecondsValue(_number(duration));
+    String withDuration(String amount) =>
+        secondsLabel == null ? amount : '$amount · $secondsLabel';
     void add(String attribute, String amount, {String? setClass}) {
       rows.add(
         _attributeRow(
@@ -218,6 +225,7 @@ ItemTooltip buildItemTooltip({
           attribute,
           withDuration(amount),
           setClass: setClass,
+          interfaceValueRun: secondsLabel,
         ),
       );
     }
@@ -375,6 +383,7 @@ ItemTooltipRow _attributeRow(
   String attribute,
   String amount, {
   String? setClass,
+  String? interfaceValueRun,
 }) {
   final fromCatalog = catalogAttributeName(
     catalog,
@@ -387,6 +396,7 @@ ItemTooltipRow _attributeRow(
     amount,
     iconName: gameIconForAttribute(attribute, setClass),
     catalogLabel: fromCatalog != null,
+    interfaceValueRun: interfaceValueRun,
   );
 }
 

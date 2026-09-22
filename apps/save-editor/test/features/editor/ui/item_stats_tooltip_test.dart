@@ -283,6 +283,7 @@ void main() {
               stats: [
                 ItemTooltipRow('斬撃', '10'),
                 ItemTooltipRow('価値', '31', catalogLabel: false),
+                ItemTooltipRow('体力', '+1/秒 · 3秒', interfaceValueRun: '3秒'),
               ],
               recipe: [ItemTooltipRow('鉄', '')],
               recipeLabel: 'レシピ: 长剑',
@@ -336,5 +337,23 @@ void main() {
     expect(runs.map((span) => span.text), ['レシピ: ', '长剑']);
     expect(runs[0].style?.fontFamily, notoSerifJpFontFamily);
     expect(runs[1].style?.fontFamily, notoSerifScFontFamily);
+
+    final duration = tester.widget<RichText>(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is RichText && widget.text.toPlainText() == '+1/秒 · 3秒',
+      ),
+    );
+    final durationRuns = <TextSpan>[];
+    void walkDuration(InlineSpan span) {
+      if (span is! TextSpan) return;
+      if (span.text != null && span.text!.isNotEmpty) durationRuns.add(span);
+      span.children?.forEach(walkDuration);
+    }
+
+    walkDuration(duration.text);
+    expect(durationRuns.map((span) => span.text), ['+1/秒 · ', '3秒']);
+    expect(durationRuns[0].style?.fontFamily, notoSerifScFontFamily);
+    expect(durationRuns[1].style?.fontFamily, notoSerifJpFontFamily);
   });
 }

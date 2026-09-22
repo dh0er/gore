@@ -521,17 +521,46 @@ class _Row extends StatelessWidget {
           ),
           if (row.value.isNotEmpty) ...[
             const SizedBox(width: 12),
-            Text(
-              row.value,
-              style: paint(
+            _valueText(
+              row,
+              paint(
                 theme.textTheme.bodySmall?.copyWith(
                   color: accent,
                   fontWeight: FontWeight.w600,
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
+              theme.textTheme.bodySmall?.copyWith(
+                color: accent,
+                fontWeight: FontWeight.w600,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  /// Catalog amounts stay on the game-text face. A localized duration suffix
+  /// inside the same value stays on the interface face.
+  Widget _valueText(
+    ItemTooltipRow row,
+    TextStyle? gameStyle,
+    TextStyle? uiStyle,
+  ) {
+    final run = row.interfaceValueRun ?? '';
+    final index = run.isEmpty ? -1 : row.value.lastIndexOf(run);
+    if (index < 0) return Text(row.value, style: gameStyle);
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(text: row.value.substring(0, index), style: gameStyle),
+          TextSpan(text: run, style: uiStyle),
+          TextSpan(
+            text: row.value.substring(index + run.length),
+            style: gameStyle,
+          ),
         ],
       ),
     );
