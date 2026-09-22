@@ -263,7 +263,7 @@ fn sites_refuses_a_game_path_that_holds_no_script_cache() {
 }
 
 #[test]
-fn stage_binds_single_module_commands_to_the_selected_and_configured_cache() {
+fn stage_refuses_mismatched_or_unparseable_cache_before_writing_commands() {
     let tmp = TempDir::new().unwrap();
     let game = tmp.path().join("game");
     let cache = gore_mod::resolve_game_paths(&game).script_cache;
@@ -365,16 +365,9 @@ fn stage_binds_single_module_commands_to_the_selected_and_configured_cache() {
         std::fs::write(&selected, b"checkout cache").unwrap();
         stage()
             .assert()
-            .success()
-            .stdout(contains("gore as compile-module"))
-            .stdout(contains(format!("--game \"{}\"", game.display())));
-        assert!(dir.join("spec.json").is_file());
-        if operation == "checkout" {
-            std::fs::write(&source, edited.replace("class UTest", "class UOther")).unwrap();
-            stage()
-                .assert()
-                .failure()
-                .stderr(contains("workspace source failed the NPC guards"));
-        }
+            .failure()
+            .stderr(contains("not an AngelScript module cache"));
+        assert!(!dir.join("spec.json").exists());
+        assert!(!tmp.path().join(format!("{operation}.work")).exists());
     }
 }

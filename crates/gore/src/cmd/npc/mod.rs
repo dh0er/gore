@@ -1172,6 +1172,7 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
     validate_manifest_modules(&manifest)?;
     routine::check_managed(dir, &manifest, game.clone())?;
     let spawn_class = generate::spawn_class(&manifest.npc_id);
+    let path = cache_path(cache.clone(), game.clone())?;
     let emitted = emit_index(cache, game, Some(&spawn_class))?;
 
     let mut findings: Vec<check::Finding> = Vec::new();
@@ -1189,7 +1190,7 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
         });
     }
 
-    findings.extend(workspace_source_findings(dir, &manifest)?);
+    findings.extend(workspace_source_findings(dir, &manifest, &path)?);
 
     if manifest.authored_module().is_some() && emitted.classes.contains_key(&spawn_class) {
         findings.push(check::Finding {
@@ -1239,6 +1240,7 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
 fn workspace_source_findings(
     dir: &Path,
     manifest: &workspace::Manifest,
+    cache: &Path,
 ) -> Result<Vec<check::Finding>> {
     let spawn_class = generate::spawn_class(&manifest.npc_id);
     let mut findings = Vec::new();
@@ -1255,6 +1257,12 @@ fn workspace_source_findings(
     let pristine_path = dir.join(pristine_rel);
     let pristine = fs::read_to_string(&pristine_path)
         .with_context(|| format!("reading {}", pristine_path.display()))?;
+    let cached = emit_named_module(cache, &level.module)?;
+    findings.extend(check::guard_pristine_source(
+        cached.as_deref(),
+        &pristine,
+        &level.module,
+    ));
     // Ein Checkout aendert Werte im eigenen Modul der Figur; ein Verfassen aendert Spawn-Zeilen
     // in einem fremden Levelskript. Zwei Absichten, zwei Waechter.
     match manifest.operation {
@@ -1466,7 +1474,9 @@ fn stage_workspace(
     let manifest = read_manifest(dir)?;
     validate_manifest_modules(&manifest)?;
     routine::check_managed(dir, &manifest, game.clone())?;
-    let findings = workspace_source_findings(dir, &manifest)?;
+    let path = cache_path(cache, game.clone())?;
+    let game = Some(stage::compiler_game_for(&manifest, &path, game)?);
+    let findings = workspace_source_findings(dir, &manifest, &path)?;
     let blocking: Vec<_> = findings
         .iter()
         .filter(|finding| finding.severity == check::Severity::Blocking)
@@ -1477,9 +1487,7 @@ fn stage_workspace(
         }
         bail!("workspace source failed the NPC guards; run `gore npc check` for details");
     }
-    let path = cache_path(cache, game.clone())?;
     let route = stage::route_of(&manifest);
-    let game = Some(stage::compiler_game_for(&manifest, &path, game)?);
 
     let tree_display = match (route, tree) {
         (stage::Route::FullTree, None) => {
@@ -1528,8 +1536,8 @@ fn stage_workspace(
         println!("  {command}");
     }
     println!(
-        "then: gore mod deploy --bundle {}/build/{mod_name}",
-        dir.display()
+        "then: gore mod deploy --bundle {}",
+        stage::shell_quote(&format!("{}/build/{mod_name}", dir.display()))
     );
     println!(
         "offline-prepared only: whether this character appears in game is decided by that run, \

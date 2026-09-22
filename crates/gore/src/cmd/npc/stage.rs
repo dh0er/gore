@@ -103,6 +103,15 @@ pub fn spec_json(manifest: &Manifest, mod_name: &str) -> serde_json::Value {
     })
 }
 
+/// Quote a literal argument for the platform's interactive shell (PowerShell or POSIX sh).
+pub fn shell_quote(value: &str) -> String {
+    #[cfg(windows)]
+    let escaped = value.replace('\'', "''");
+    #[cfg(not(windows))]
+    let escaped = value.replace('\'', "'\\''");
+    format!("'{escaped}'")
+}
+
 /// Die Kommandos, die diese Arbeit übersetzen und verpacken.
 ///
 /// `stage` führt sie nicht aus. Der Voll-Baum-Lauf dauert eine Viertelstunde, und ein Werkzeug,
@@ -115,19 +124,22 @@ pub fn build_commands(
     game: Option<&str>,
 ) -> Vec<String> {
     let game_arg = match game {
-        Some(path) => format!(" --game \"{path}\""),
+        Some(path) => format!(" --game {}", shell_quote(path)),
         None => String::new(),
     };
     // Der Preflight lehnt einen Arbeitsordner unterhalb des Ausgabe-Elternverzeichnisses ab, also
     // liegt er bewusst daneben statt darin.
     let work = format!("{dir}.work");
+    let work_arg = shell_quote(&work);
+    let mini_arg = shell_quote(&format!("{dir}/{mod_name}.mini.Cache"));
     let mut out = Vec::new();
     match route_of(manifest) {
         Route::FullTree => {
             out.push(format!(
-                "gore as compile \"{tree}\" -o \"{dir}/full.Cache\" \
-                 --mini \"{dir}/{mod_name}.mini.Cache\" --work-dir \"{work}\" \
-                 --backend standalone{game_arg}"
+                "gore as compile {} -o {} --mini {mini_arg} --work-dir {work_arg} \
+                 --backend standalone{game_arg}",
+                shell_quote(tree),
+                shell_quote(&format!("{dir}/full.Cache")),
             ));
         }
         Route::SingleModule => {
@@ -136,14 +148,18 @@ pub fn build_commands(
                 .expect("a checkout or suppression always edits a shipped module");
             out.push(format!(
                 "gore as compile-module --backend standalone --op edit \
-                 --module \"{}\" --rel-path \"{}\" --source \"{dir}/{}\" \
-                 --work-dir \"{work}\" -o \"{dir}/{mod_name}.mini.Cache\"{game_arg}",
-                edit.module, edit.relative_path, edit.source_file
+                 --module {} --rel-path {} --source {} \
+                 --work-dir {work_arg} -o {mini_arg}{game_arg}",
+                shell_quote(&edit.module),
+                shell_quote(&edit.relative_path),
+                shell_quote(&format!("{dir}/{}", edit.source_file)),
             ));
         }
     }
     out.push(format!(
-        "gore mod build --spec \"{dir}/spec.json\" -o \"{dir}/build\""
+        "gore mod build --spec {} -o {}",
+        shell_quote(&format!("{dir}/spec.json")),
+        shell_quote(&format!("{dir}/build")),
     ));
     out
 }
@@ -237,19 +253,19 @@ mod tests {
     #[test]
     fn the_full_tree_route_asks_for_a_multi_module_mini() {
         let commands = build_commands(&authored(), "ws", "tree", "MyMod", Some("G"));
-        assert!(commands[0].starts_with("gore as compile \"tree\""));
-        assert!(commands[0].contains("--mini \"ws/MyMod.mini.Cache\""));
+        assert!(commands[0].starts_with("gore as compile 'tree'"));
+        assert!(commands[0].contains("--mini 'ws/MyMod.mini.Cache'"));
         assert!(commands[0].contains("--backend standalone"));
-        assert!(commands[0].contains("--game \"G\""));
+        assert!(commands[0].contains("--game 'G'"));
     }
 
     #[test]
     fn the_single_module_route_names_the_module_and_its_source() {
         let commands = build_commands(&suppression(), "ws", "tree", "MyMod", None);
         assert!(commands[0].starts_with("gore as compile-module"));
-        assert!(commands[0].contains("--module \"LevelScripts.XardasTower_AI\""));
-        assert!(commands[0].contains("--rel-path \"LevelScripts/XardasTower_AI.as\""));
-        assert!(commands[0].contains("--source \"ws/XardasTower_AI.as\""));
+        assert!(commands[0].contains("--module 'LevelScripts.XardasTower_AI'"));
+        assert!(commands[0].contains("--rel-path 'LevelScripts/XardasTower_AI.as'"));
+        assert!(commands[0].contains("--source 'ws/XardasTower_AI.as'"));
         assert!(!commands[0].contains("--game"));
     }
 
@@ -259,8 +275,8 @@ mod tests {
         // müssen disjunkt sein.
         for manifest in [authored(), suppression()] {
             let commands = build_commands(&manifest, "ws", "tree", "MyMod", None);
-            assert!(commands[0].contains("--work-dir \"ws.work\""));
-            assert!(!commands[0].contains("--work-dir \"ws/"));
+            assert!(commands[0].contains("--work-dir 'ws.work'"));
+            assert!(!commands[0].contains("--work-dir 'ws/"));
         }
     }
 
@@ -269,8 +285,37 @@ mod tests {
         for manifest in [authored(), suppression()] {
             let commands = build_commands(&manifest, "ws", "tree", "MyMod", None);
             assert_eq!(commands.len(), 2);
-            assert!(commands[1].starts_with("gore mod build --spec \"ws/spec.json\""));
+            assert!(commands[1].starts_with("gore mod build --spec 'ws/spec.json'"));
         }
+    }
+
+    #[test]
+    fn printed_commands_keep_shell_metacharacters_in_literal_arguments() {
+        let dir = "C:/mods/$HOME`bad'$(echo bad)";
+        let tree = "C:/tree/$HOME`bad'$(echo bad)";
+        #[cfg(windows)]
+        assert_eq!(shell_quote(dir), "'C:/mods/$HOME`bad''$(echo bad)'");
+        #[cfg(not(windows))]
+        assert_eq!(shell_quote(dir), "'C:/mods/$HOME`bad'\\''$(echo bad)'");
+        for manifest in [authored(), suppression()] {
+            let commands = build_commands(&manifest, dir, tree, "MyMod", Some(dir));
+            assert!(commands[0].contains(&format!("--game {}", shell_quote(dir))));
+            assert!(commands[0].contains(&format!(
+                "--work-dir {}",
+                shell_quote(&format!("{dir}.work"))
+            )));
+            assert!(commands[1].contains(&format!(
+                "--spec {}",
+                shell_quote(&format!("{dir}/spec.json"))
+            )));
+        }
+        let commands = build_commands(&authored(), dir, tree, "MyMod", Some(dir));
+        assert!(commands[0].contains(&shell_quote(tree)));
+        let commands = build_commands(&suppression(), dir, tree, "MyMod", Some(dir));
+        assert!(commands[0].contains(&format!(
+            "--source {}",
+            shell_quote(&format!("{dir}/XardasTower_AI.as"))
+        )));
     }
 
     #[test]

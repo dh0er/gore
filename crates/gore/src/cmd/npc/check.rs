@@ -164,6 +164,16 @@ pub fn guard_suppressed_spawn(pristine: &str, edited: &str, spawn_class: &str) -
     ))]
 }
 
+/// The copied baseline must still be the source emitted from the selected cache.
+pub fn guard_pristine_source(cached: Option<&str>, pristine: &str, module: &str) -> Vec<Finding> {
+    if cached == Some(pristine) {
+        return Vec::new();
+    }
+    vec![Finding::blocking(format!(
+        "the pristine copy of {module} differs from the selected cache; author this workspace again"
+    ))]
+}
+
 /// Die Klassen des verfassten Moduls gegen die Id prüfen.
 pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
     let classes = defaults::parse_classes(source);
@@ -410,6 +420,14 @@ mod tests {
             !guard_suppressed_spawn(&source, &relocated, "USpawnAIAgentDefinition_Diego")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_modified_pristine_copy_is_blocking_even_if_authored_source_matches_it() {
+        assert!(guard_pristine_source(Some(PRISTINE), PRISTINE, "LevelScripts.Test").is_empty());
+        let altered = PRISTINE.replace("return;", "DoSomethingElse();");
+        assert!(!guard_pristine_source(Some(PRISTINE), &altered, "LevelScripts.Test").is_empty());
+        assert!(!guard_pristine_source(None, PRISTINE, "LevelScripts.Test").is_empty());
     }
 
     #[test]
