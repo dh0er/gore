@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/ui/character_master_list.dart'
-    show localizedNpcName;
+    show catalogNpcName, localizedNpcName;
 import 'package:goresave/features/editor/domain/glossary_images.dart';
 import 'package:goresave/features/editor/ui/glossary_portrait.dart';
 import 'package:goresave/features/editor/ui/npc_role_badges.dart';
@@ -75,13 +75,21 @@ class ActorDetailHeader extends StatelessWidget {
         (!isOrphan || showObjectIds);
     // Orphans resolve by uniqueName (their loc-catalog key — the `orphan:` id
     // sentinel would prettify into nonsense); NPCs resolve by GlobalId.
-    final name = isPlayer
-        ? l10n.tabPlayer
-        : localizedNpcName(
+    final catalogName = isPlayer
+        ? null
+        : catalogNpcName(
             locCatalog,
             lang,
             isOrphan ? actor.uniqueName : (id ?? ''),
           );
+    final name = isPlayer
+        ? l10n.tabPlayer
+        : (catalogName ??
+              localizedNpcName(
+                locCatalog,
+                lang,
+                isOrphan ? actor.uniqueName : (id ?? ''),
+              ));
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
@@ -135,7 +143,7 @@ class ActorDetailHeader extends StatelessWidget {
                   children: [
                     Text(
                       name,
-                      style: isPlayer
+                      style: catalogName == null
                           ? theme.textTheme.titleMedium
                           : gameScriptTextStyle(
                               context,

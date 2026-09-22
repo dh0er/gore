@@ -26,9 +26,19 @@ String localizedNpcName(
   String id,
 ) {
   final charKey = id.split('-').first;
-  final localized = localizedGameName(catalog, lang, charKey);
-  if (localized != null && localized.trim().isNotEmpty) return localized;
-  return _prettifyNpcKey(charKey);
+  return catalogNpcName(catalog, lang, id) ?? _prettifyNpcKey(charKey);
+}
+
+/// The catalog's own name for [id], or null when the list has to humanize the
+/// key itself.
+String? catalogNpcName(
+  Map<String, Map<String, String>> catalog,
+  GameLang lang,
+  String id,
+) {
+  final localized = localizedGameName(catalog, lang, id.split('-').first);
+  if (localized == null || localized.trim().isEmpty) return null;
+  return localized;
 }
 
 /// Leading classification prefixes that carry no display value (NPC archetype /
@@ -96,11 +106,18 @@ String _prettifyNpcKey(String key) {
 /// keystroke is a cheap substring scan over the cached strings rather than
 /// re-resolving every name.
 class _SearchableRow {
-  const _SearchableRow(this.row, this.name, this.search, this.isHuman);
+  const _SearchableRow(
+    this.row,
+    this.name,
+    this.search,
+    this.isHuman, {
+    this.nameFromCatalog = false,
+  });
 
   final CharacterRow row;
   final String name;
   final String search;
+  final bool nameFromCatalog;
 
   /// Whether the character catalog calls this one a person.
   ///
@@ -270,12 +287,20 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
       for (final row in rows)
         () {
           final key = row.globalId ?? row.uniqueName;
-          final name = localizedNpcName(widget.locCatalog, widget.lang, key);
+          final fromCatalog = catalogNpcName(
+            widget.locCatalog,
+            widget.lang,
+            key,
+          );
+          final name =
+              fromCatalog ??
+              localizedNpcName(widget.locCatalog, widget.lang, key);
           return _SearchableRow(
             row,
             name,
             '$key\n$name'.toLowerCase(),
             widget.categories?.isHuman(key) ?? false,
+            nameFromCatalog: fromCatalog != null,
           );
         }(),
     ];
@@ -539,7 +564,9 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
         name,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: gameScriptTextStyle(context, widget.lang.locale),
+        style: entry.nameFromCatalog
+            ? gameScriptTextStyle(context, widget.lang.locale)
+            : null,
       ),
       subtitle: widget.showObjectIds
           ? Text(
@@ -586,7 +613,9 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
           '${group.name} (${group.members.length})',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: gameScriptTextStyle(context, widget.lang.locale),
+          style: group.first.nameFromCatalog
+              ? gameScriptTextStyle(context, widget.lang.locale)
+              : null,
         ),
         trailing: Icon(open ? Icons.expand_less : Icons.expand_more, size: 20),
         // Highlighted while it holds the selection, so a collapsed group still
