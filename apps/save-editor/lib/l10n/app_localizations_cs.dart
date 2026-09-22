@@ -2197,7 +2197,7 @@ class AppLocalizationsCs extends AppLocalizations {
   String get tutorialGateDrugs => 'Spotřební věci a efekty';
 
   @override
-  String get tutorialGateLockpicking => 'Zamykání';
+  String get tutorialGateLockpicking => 'Páčení zámků';
 
   @override
   String get tutorialGateMagic => 'Magie';
@@ -2346,9 +2346,9 @@ class AppLocalizationsCs extends AppLocalizations {
           'Zkušenost za sražení této postavy, ať už zemře, nebo jen upadne do bezvědomí.',
       'Level': 'Úroveň postavy. Roste se zkušeností a dává body učení.',
       'LockpickDurability':
-          'Podle dovednosti Zamykání: 2 nevyškolený, 4 vyškolený, 6 mistr.',
+          'Podle dovednosti Páčení zámků: 2 nevyškolený, 4 vyškolený, 6 mistr.',
       'LockpickPrecision':
-          'Podle dovednosti Zamykání: 0 nevyškolený, 1 vyškolený, 2 mistr.',
+          'Podle dovednosti Páčení zámků: 0 nevyškolený, 1 vyškolený, 2 mistr.',
       'PickPocketing':
           'Podle dovednosti Kapsářství: -30 nevyškolený, -10 vyškolený, +10 mistr.',
       'other': '?',
