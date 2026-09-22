@@ -1194,6 +1194,24 @@ fn workspace_source_findings(
         findings.extend(check::guard_checkout_diff(&pristine, &edited));
     } else {
         findings.extend(check::guard_level_diff(&pristine, &edited, &spawn_class));
+        if matches!(
+            manifest.operation,
+            workspace::Operation::New | workspace::Operation::Clone
+        ) {
+            match manifest.world_points.as_slice() {
+                [world_point] => findings.extend(check::guard_generated_spawn(
+                    &pristine,
+                    &edited,
+                    world_point,
+                    &spawn_class,
+                )),
+                _ => findings.push(check::Finding {
+                    severity: check::Severity::Blocking,
+                    message: "a new NPC workspace must name exactly one spawn world point"
+                        .to_string(),
+                }),
+            }
+        }
     }
 
     if let Some(authored) = manifest.authored_module() {
@@ -1304,6 +1322,10 @@ const STAGED_TREE_MARKER: &str = ".gore-npc-staged-tree.marker";
 fn copy_tree_contents(source: &Path, target: &Path) -> Result<()> {
     for entry in fs::read_dir(source).with_context(|| format!("reading {}", source.display()))? {
         let entry = entry?;
+        // A staged copy must never be accepted later as a pristine --tree.
+        if entry.file_name() == std::ffi::OsStr::new(stage::TREE_STAMP_NAME) {
+            continue;
+        }
         let kind = entry.file_type()?;
         let destination = target.join(entry.file_name());
         if kind.is_dir() {
@@ -1607,6 +1629,7 @@ mod tests {
         let tree = tmp.path().join("base");
         fs::create_dir(&tree).unwrap();
         fs::write(tree.join("Level.as"), "pristine").unwrap();
+        fs::write(tree.join(stage::TREE_STAMP_NAME), "base stamp").unwrap();
         let first = tmp.path().join("first");
         let second = tmp.path().join("second");
         fs::create_dir(&first).unwrap();
@@ -1624,6 +1647,8 @@ mod tests {
             fs::read_to_string(second_copy.join("Level.as")).unwrap(),
             "pristine"
         );
+        assert!(!second_copy.join(stage::TREE_STAMP_NAME).exists());
+        assert!(ensure_tree(&first_copy, "abc", Path::new("missing.Cache")).is_err());
     }
 
     fn entry(domain: &'static str, id: &str, category: &str, class: Option<&str>) -> CatalogEntry {

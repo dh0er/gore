@@ -2627,6 +2627,25 @@ mod tests {
     }
 
     #[test]
+    fn npc_stage_treats_the_emitted_tree_as_an_installation_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let game = temp.path().join("G1R");
+        let work = temp.path().join("npc-work");
+        std::fs::create_dir(&game).unwrap();
+        let args = json!({
+            "dir": work.to_string_lossy(),
+            "tree": game.join("npc-tree").to_string_lossy(),
+            "game": game.to_string_lossy()
+        });
+        assert!(asks_about_a_write(question(
+            "gore_npc",
+            "stage",
+            args,
+            &options()
+        )));
+    }
+
+    #[test]
     fn manager_recovery_forces_noninteractive_confirmation_and_json() {
         assert_eq!(
             argv_of(

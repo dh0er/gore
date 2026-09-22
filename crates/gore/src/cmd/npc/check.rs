@@ -7,7 +7,7 @@
 //! eine Zeile, die sich unbeabsichtigt bewegt hat, sähe im Spiel aus wie ein Fehler an ganz
 //! anderer Stelle.
 
-use super::defaults;
+use super::{defaults, edit};
 
 /// Wie ernst ein Befund ist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +123,32 @@ pub fn guard_level_diff(pristine: &str, edited: &str, spawn_class: &str) -> Vec<
             ))
         })
         .collect()
+}
+
+/// A new character's level script must be exactly the generated edit at its chosen world point.
+/// This also rejects spawn-looking comments and a valid call moved into another class.
+pub fn guard_generated_spawn(
+    pristine: &str,
+    edited: &str,
+    world_point: &str,
+    spawn_class: &str,
+) -> Vec<Finding> {
+    let no_routine = edit::add_spawn(pristine, world_point, spawn_class, None);
+    let routine = spawn_class
+        .strip_prefix("USpawnAIAgentDefinition_")
+        .map(|id| format!("UDailyRoutine_{id}_Start"));
+    let with_routine = routine
+        .as_deref()
+        .and_then(|name| edit::add_spawn(pristine, world_point, spawn_class, Some(name)).ok());
+    if no_routine.as_ref().is_ok_and(|expected| expected == edited)
+        || with_routine.as_deref() == Some(edited)
+    {
+        return Vec::new();
+    }
+    vec![Finding::blocking(format!(
+        "the level script must contain only the generated spawn call for {spawn_class} in \
+         {world_point}'s OnWorldStart body"
+    ))]
 }
 
 /// Die Klassen des verfassten Moduls gegen die Id prüfen.
@@ -301,6 +327,27 @@ mod tests {
         let findings =
             guard_level_diff(PRISTINE, &with_added_line(), "USpawnAIAgentDefinition_MINE");
         assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn a_new_spawn_must_match_the_selected_world_point_and_generated_call() {
+        let source = format!(
+            "{PRISTINE}\nclass UWP_B : UWorldPointScript\n{{\n    void OnWorldStart()\n    {{\n        return;\n    }}\n}}\n"
+        );
+        let class = "USpawnAIAgentDefinition_MINE";
+        let valid = edit::add_spawn(&source, "UWP_A", class, None).unwrap();
+        assert!(guard_generated_spawn(&source, &valid, "UWP_A", class).is_empty());
+        let with_routine =
+            edit::add_spawn(&source, "UWP_A", class, Some("UDailyRoutine_MINE_Start")).unwrap();
+        assert!(guard_generated_spawn(&source, &with_routine, "UWP_A", class).is_empty());
+
+        let wrong_point = edit::add_spawn(&source, "UWP_B", class, None).unwrap();
+        assert!(!guard_generated_spawn(&source, &wrong_point, "UWP_A", class).is_empty());
+        let comment = source.replace(
+            "        return;",
+            "        // this.SpawnAIAgent(USpawnAIAgentDefinition_MINE::StaticClass());\n        return;",
+        );
+        assert!(!guard_generated_spawn(&source, &comment, "UWP_A", class).is_empty());
     }
 
     #[test]

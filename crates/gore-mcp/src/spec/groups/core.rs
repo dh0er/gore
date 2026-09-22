@@ -1484,7 +1484,7 @@ const NPC_COMMANDS: &[CommandSpec] = &[
         NPC_STAGE_ARGS,
         Safety::write()
             .also_writes(&[("dir", Derived::Child("spec.json"))])
-            .writes_into(&["dir"]),
+            .writes_into(&["dir", "tree"]),
         T_LONG,
     )
     .guide("npc-authoring"),
