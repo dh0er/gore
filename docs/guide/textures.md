@@ -1,7 +1,7 @@
 # Textures
 
-Replace any `Texture2D` packed in the game's UE5 IoStore container. The output
-is an **additive** Zen triplet (`.utoc`/`.ucas`/`.pak`) dropped into the game's
+Replace supported `Texture2D` assets packed in the game's UE5 IoStore
+container. The output is an **additive** Zen triplet (`.utoc`/`.ucas`/`.pak`) dropped into the game's
 `~mods\` folder — no original game file is ever modified.
 
 Not everything you see on screen is one of those assets, and these commands
@@ -69,6 +69,27 @@ gore texture replace --game "$GAME" /Game/UI/Textures/Common/T_HardwareCursor `
 
 Repeat `replace` with the same `--mod-dir` to collect several textures into one
 mod.
+
+### Current replacement limits
+
+`extract` can preview more pixel formats than `replace` can encode. The write
+path currently supports `PF_DXT1`, `PF_DXT5`, `PF_BC5` and `PF_BC7`. It can read
+but not replace `PF_BC4`, `PF_BC6H`, `PF_B8G8R8A8`, `PF_G8` and
+`PF_FloatRGBA`; for example, the uncompressed UI brushes `T_Arrow` and
+`T_Checkbox_Checked` cannot yet be rewritten by `texture replace`.
+
+For regular textures with a mip chain, new dimensions must be powers of two
+and multiples of four. A single-mip regular texture only requires multiples
+of four. Virtual textures must keep the original dimensions and currently
+support only single-layer, non-legacy tile layouts. Textures whose first
+serialized mip is not mip 0 are rejected. `--fit-original` solves a size
+mismatch, not an unsupported pixel format or layout. Separate-asset creation
+with `--as-asset` has the package-shape restrictions described below.
+
+These are limits of cooked `Texture2D` rewriting, not a claim that other
+visible images are unreachable: bundles can ship unshadowed images as `files`
+and packed cursor PNGs as `pak_files` (see
+[what these commands reach](#what-these-commands-reach)).
 
 ### Create a separate texture asset
 
@@ -293,8 +314,11 @@ build, one sitting, and no screenshots.
   `DefaultEngine.ini` included, exists only inside a pak. This is the only route
   to any of them.
 
-One corner the pass did not reach: nothing about texture replacement has been
-checked on any build other than these two, 24340829 and 24539464.
+That 2026-08-07 pass did not check texture replacement on a later build. A
+separate [NPC beard-variant test](../../scripts/fixtures/npc-batch-tests/heads/beard-runtime-0.1.3.json)
+subsequently confirmed two newly packed virtual-texture assets, appearance
+restoration, and save/load after a full restart. Its result does not record a
+game BuildID or qualify every texture format and layout.
 
 A *deployed* triplet is verified by SHA-256 and by nothing else: `deploy` records
 a hash per file and confirms the bytes arrived. Nothing in this toolkit ever

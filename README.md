@@ -6,17 +6,13 @@
 
 ## 🧰 Tools
 
-| <div style="width:150px">Tool⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀</div> | What it does | <div style="width:150px">Status⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀</div> |
-|---|---|---|
-| **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing your save files. Never touches the game install. | ✅ Ready to use |
-| **[CLI](docs/guide/README.md)** | All modding from the terminal: item values, text and dialogs, audio, voice, textures, DataAssets, scripts. Start here. | ⚗️ Experimental use |
-| **[Mod Manager](apps/mod-manager/README.md)** | Windows GUI for installing and ordering *many* mods together. | ⚗️ Experimental use |
-| **[Assistant plugin](plugins/gore/README.md)** | The MCP server and the modding skill, installed into Claude Code, Codex or Cursor in one step. | ⚗️ Experimental use |
-| **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the same engine, for *authoring* one mod. | 📋 Planned |
-
-The Flutter GUIs reuse the same Rust engine as the CLI through a `dart:ffi`
-bridge. The CLI is the expert and automation surface; the GUIs package those
-contracts into guided workflows instead of maintaining a second engine.
+| <div style="width:150px">Tool⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀</div> | What it does | <div style="width:150px">Status⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀</div> | Download |
+|---|---|---|---|
+| **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing savegames. | ✅ Ready to use | [1.4.1](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.4.1) |
+| **[CLI](docs/guide/README.md)** | All-in-one command-line tool for all modding tasks. | ⚗️ Experimental use | [0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.3.0) |
+| **[Mod Manager](apps/mod-manager/README.md)** | Windows GUI for installing and ordering *many* mods together. | ⚗️ Experimental use | [0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
+| **[AI Plugins](plugins/gore/README.md)** | MCP server and skill for the CLI. | ⚗️ Experimental use | |
+| **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the GORE engine, for *authoring* mods. | 📋 Planned | |
 
 ## ✅ Compatibility
 
@@ -42,36 +38,19 @@ displayed game version. If they do not match, strict standalone compilation
 fails safely; the default `standalone-then-game` mode reports the reason and can
 use the game's embedded compiler as a fallback.
 
-## ⬇️ Downloads
-
-| Tool | Version | Release page |
-|---|---|---|
-| **CLI** | 0.3.0 | [gore-cli-v0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.3.0) |
-| **Mod Manager** | 0.2.0 | [gore-mod-manager-v0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
-| **Save Editor** | 1.4.0 | [gore-save-editor-v1.4.0](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.4.0) |
-
-Every release page lists its own assets and changes. The full history is on the
-[releases page](https://github.com/dh0er/gore/releases). Mod Studio has no
-release yet — build it from source.
-
 ## 📊 Status
 
-| Area | Status | What you can do | The catch |
+| Area | Status | What you can do | What's missing |
 |---|---|---|---|
-| [Item & stat values](docs/guide/items.md) | Full | Change what items are worth, what weapons do, what NPCs have | Needs UE4SS, which GORE does not install |
-| [Characters](docs/guide/npc-authoring.md) | Read and author | See which characters the game ships, the class chain one is made of, and which world points spawn it; add a new character to the world, change a shipped one's values, or stop one being placed | An authored character was built, deployed and seen in game: it stands at its world point, animates, can be focused and spoken to, and the save records it under its own identity. A shipped Diego health edit was also verified in a new-game save: Health and MaxHealth both 1234. Not seen: a character following its routine or `--modular-visuals` reproducing the template's look (it renders, but as the player character) |
-| [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace localized game text across all 19 catalog slots | Twelve slots are ordinary languages; German and English use multiple generations, while `foreign` and `stagedirections` are not languages |
-| [Dialog authoring](docs/guide/dialog-authoring.md) | Mostly | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | A first conversation needs an exact already-loaded per-NPC settings module; cross-module new-symbol dependencies need a separate selective complete-cache compile, not dialog minis |
-| [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | Finding which sound plays where is guesswork |
-| [Voice-over](docs/guide/voice.md) | Mostly | Replace spoken lines and add voice to authored new lines | Publication requires Vorbis; a new member also needs matching script and localization, and receives generic lip movement rather than exact new lip sync |
-| [Textures](docs/guide/textures.md) | Full | Replace textures | A few, like the mouse cursors, are stored somewhere this cannot reach |
+| [Item & stat values](docs/guide/items.md) | Partly | Change what items are worth, what weapons do, what NPCs have | Still needs UE4SS, should actually use scripts instead |
+| [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace all localized game text | |
+| [Dialog authoring](docs/guide/dialog-authoring.md) | Full | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | |
+| [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | |
+| [Voice](docs/guide/voice.md) | Partly | Replace spoken lines and add voice to authored new lines | Other formats than Vorbis; Lip sync |
+| [Textures](docs/guide/textures.md) | Mostly | Replace supported cooked `Texture2D` assets; bundle loose images and cursor PNGs | Some pixel formats and virtual-texture layouts cannot yet be rewritten; cursor PNGs require `pak_files` rather than `texture replace` |
 | [DataAssets](docs/guide/dataassets.md) | Partly | Edit cooked game data | Only assets the engine describes natively; Blueprint ones are refused |
-| [Scripts](docs/guide/scripts.md) | Mostly | Read the game's script code, change it, add your own | Splicing recompiles the WHOLE module, including functions you did not touch. On BuildID 24878692, 7,311 of 7,317 modules have no known semantic difference among aligned functions; six carry 10 unresolved differences, which `emit` and `compile-module` warn about. The current BuildID 25168047 has a complete offline round trip with 164,724 aligned functions and zero semantic differences. This does not prove behavior for arbitrary edited mods in game. |
-| [Mods & load order](docs/guide/bundles.md) | Full | Ship all of the above as one mod, run many together, and install mods that GORE did not build — plain zips, pak files, UE4SS mod folders | Four Nexus mods have run through one real-install campaign; third-party AngelScript and three-way script conflicts remain unqualified |
-
-GORE will not edit your saves — that is the
-[Save Editor](apps/save-editor/README.md) — and everything above was seen by one
-person, on one install.
+| [Scripts](docs/guide/scripts.md) | Full | Read the game's script code, change it, add your own | |
+| [Mod managing](docs/guide/bundles.md) | Mostly | Ship all of the above as one mod, run many together, install third-party mods — plain zips, pak files, UE4SS mod folders | Mods have not yet been tested after game patches |
 
 ## 🚀 Quick start
 
@@ -176,7 +155,6 @@ Everything lives in [`docs/`](docs/README.md).
 |---|---|
 | [Getting started](docs/guide/getting-started.md) | Install, configure, first mod, which tool for which job |
 | [Item & stat values](docs/guide/items.md) | `overrides.toml` → UE4SS Lua CDO override mod |
-| [Characters](docs/guide/npc-authoring.md) | `gore npc`: which characters exist, what one is made of, where it spawns, and authoring a new one |
 | [Text & dialogs](docs/guide/text-and-dialogs.md) | Decrypt, edit, re-encrypt the localization `.lcache` |
 | [Dialog trees](docs/guide/dialog-trees.md) · [Dialog authoring](docs/guide/dialog-authoring.md) | Inspect conversations; edit defaults and behavior; add roots, submenus, multi-level trees and complete conversations |
 | [Audio](docs/guide/audio.md) · [Voice-over](docs/guide/voice.md) | FMOD bank samples; voice-over ZIP archives |
@@ -195,32 +173,14 @@ Markdown, for `grep`. The MCP server answers from its own copy, compiled into
 `gore.exe`, so editing those files changes what you read and not what an
 assistant is told. Regenerate the HTML any time with `gore guide html`.
 
-Implementation contracts behind the commands — receipt semantics, seal
-guarantees, why a patch is refused — live separately in
-[`docs/reference/`](docs/reference/README.md). They are not part of the guide.
-
 ## 🔨 Build
-
-Requires Windows 10+, a stable Rust toolchain, Python 3, Visual Studio 2022
-with "Desktop development with C++", and — for the GUI apps — Flutter with
-Windows desktop support.
-
-```powershell
-cargo build
-cargo test
-```
-
-Shippable products are driven by the top-level orchestrator. Registered
-projects: `gore-cli`, `gore-save-editor`, `gore-mod-studio`, `gore-mod-manager`.
-A project name is also its release-tag prefix and its artifact name.
 
 ```powershell
 python build.py <project> build|run|dist|installer|test
 python build.py all test
 ```
 
-Release tags and manual smoke builds run the [same CI quality gates](docs/development.md#release-quality-gates)
-on the exact commit before any product build.
+Registered projects: `gore-cli`, `gore-save-editor`, `gore-mod-studio`, `gore-mod-manager`.
 
 Details, repo layout, and the crate table: [Building](docs/development.md).
 
