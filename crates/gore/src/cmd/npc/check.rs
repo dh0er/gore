@@ -7,7 +7,7 @@
 //! eine Zeile, die sich unbeabsichtigt bewegt hat, sähe im Spiel aus wie ein Fehler an ganz
 //! anderer Stelle.
 
-use super::{defaults, edit};
+use super::{chain, defaults, edit};
 
 /// Wie ernst ein Befund ist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,12 +185,13 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
         return findings;
     }
 
-    let assigned = |class: &defaults::EmittedClass, field: &str| -> Option<String> {
+    let assigned = |class: &defaults::EmittedClass, field: &str| -> Vec<String> {
         class
             .assignments
             .iter()
-            .find(|(lhs, _)| lhs == field)
+            .filter(|(lhs, _)| lhs == field)
             .map(|(_, rhs)| rhs.trim_start_matches('n').trim_matches('"').to_string())
+            .collect()
     };
 
     let definition = classes
@@ -201,33 +202,96 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
             "no class UCharacterDefinition_Human_{npc_id}: the character has no definition to \
              spawn from"
         ))),
-        Some(class) => match assigned(class, "m_UniqueName").as_deref() {
-            Some(name) if name == npc_id => {}
-            Some(name) => findings.push(Finding::blocking(format!(
+        Some(class) => match assigned(class, chain::UNIQUE_NAME_FIELD).as_slice() {
+            [name] if name == npc_id => {}
+            [name] => findings.push(Finding::blocking(format!(
                 "m_UniqueName is {name:?} but the character is {npc_id:?}. The save keys a \
                  character by that name, so the two have to agree"
             ))),
-            None => findings.push(Finding::blocking(
+            [] => findings.push(Finding::blocking(
                 "the character definition sets no m_UniqueName. Without it the save cannot key \
                  this character",
             )),
+            values => findings.push(Finding::blocking(format!(
+                "the character definition sets m_UniqueName {} times. The authored identity must \
+                 have exactly one value",
+                values.len()
+            ))),
         },
+    }
+
+    let config_name = format!("UAIAgentConfig_Human_{npc_id}");
+    let config = classes.iter().find(|class| class.name == config_name);
+    match config {
+        None => findings.push(Finding::blocking(format!(
+            "no class {config_name}: the spawn has no authored AI config to use"
+        ))),
+        Some(class) => {
+            let expected = format!("UCharacterDefinition_Human_{npc_id}");
+            let values = assigned(class, chain::AI_CHARACTER_FIELD);
+            match values.as_slice() {
+                [value] if defaults::static_class_target(value) == Some(expected.as_str()) => {}
+                [value] => findings.push(Finding::blocking(format!(
+                    "m_CharacterDefinition targets {:?} but must target {expected}",
+                    defaults::static_class_target(value)
+                ))),
+                [] => findings.push(Finding::blocking(format!(
+                    "{config_name} sets no m_CharacterDefinition"
+                ))),
+                values => findings.push(Finding::blocking(format!(
+                    "{config_name} sets m_CharacterDefinition {} times; the authored chain must \
+                     have exactly one target",
+                    values.len()
+                ))),
+            }
+        }
+    }
+
+    let spawn_name = format!("USpawnAIAgentDefinition_{npc_id}");
+    let spawn = classes.iter().find(|class| class.name == spawn_name);
+    match spawn {
+        None => findings.push(Finding::blocking(format!(
+            "no class {spawn_name}: the character has no authored spawn definition"
+        ))),
+        Some(class) => {
+            let values = assigned(class, chain::SPAWN_AI_FIELD);
+            match values.as_slice() {
+                [value] if defaults::static_class_target(value) == Some(config_name.as_str()) => {}
+                [value] => findings.push(Finding::blocking(format!(
+                    "AIAgentConfigClass targets {:?} but must target {config_name}",
+                    defaults::static_class_target(value)
+                ))),
+                [] => findings.push(Finding::blocking(format!(
+                    "{spawn_name} sets no AIAgentConfigClass"
+                ))),
+                values => findings.push(Finding::blocking(format!(
+                    "{spawn_name} sets AIAgentConfigClass {} times; the authored chain must have \
+                     exactly one target",
+                    values.len()
+                ))),
+            }
+        }
     }
 
     if let Some(settings) = classes
         .iter()
         .find(|class| class.super_class.as_deref() == Some("UConversationCharacterSettings"))
     {
-        match assigned(settings, "ForCharacter").as_deref() {
-            Some(name) if name == npc_id => {}
-            Some(name) => findings.push(Finding::blocking(format!(
+        match assigned(settings, "ForCharacter").as_slice() {
+            [name] if name == npc_id => {}
+            [name] => findings.push(Finding::blocking(format!(
                 "ForCharacter is {name:?} but the character is {npc_id:?}. The game binds \
                  conversation settings by that name"
             ))),
-            None => findings.push(Finding::blocking(
+            [] => findings.push(Finding::blocking(
                 "the conversation settings set no ForCharacter, so nothing binds them to this \
                  character",
             )),
+            values => findings.push(Finding::blocking(format!(
+                "the conversation settings set ForCharacter {} times. The authored identity must \
+                 have exactly one value",
+                values.len()
+            ))),
         }
     }
 
@@ -235,8 +299,8 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
         .iter()
         .find(|class| class.name.starts_with("UCharacterVisualsDefinition_Human_"))
     {
-        let prebaked = assigned(visuals, "m_HasPreBakedSK");
-        let name = assigned(visuals, "m_PreBakedName");
+        let prebaked = assigned(visuals, "m_HasPreBakedSK").into_iter().next();
+        let name = assigned(visuals, "m_PreBakedName").into_iter().next();
         match (prebaked.as_deref(), name) {
             (Some("true"), None) => findings.push(Finding::blocking(
                 "m_HasPreBakedSK is true but no m_PreBakedName says which baked model to use. A \
@@ -464,6 +528,16 @@ mod tests {
     default m_CharacterVisualsDefinition = UCharacterVisualsDefinition_Human_MINE::StaticClass();
 }
 
+class UAIAgentConfig_Human_MINE : UAIAgentConfig_Human_OC_STT_Diego
+{
+    default m_CharacterDefinition = UCharacterDefinition_Human_MINE::StaticClass();
+}
+
+class USpawnAIAgentDefinition_MINE : USpawnAIAgentDefinition_OC_STT_Diego
+{
+    default AIAgentConfigClass = UAIAgentConfig_Human_MINE::StaticClass();
+}
+
 class UCharacterVisualsDefinition_Human_MINE : UCharacterVisualsDefinition_Human_OC_STT_Diego
 {
     default m_PreBakedName = "OC_STT_Diego";
@@ -493,6 +567,63 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
         assert!(findings
             .iter()
             .any(|f| f.severity == Severity::Blocking && f.message.contains("m_UniqueName")));
+    }
+
+    #[test]
+    fn duplicate_identity_assignments_are_blocking() {
+        for (anchor, duplicate, field) in [
+            (
+                "    default m_UniqueName = n\"MINE\";",
+                "    default m_UniqueName = n\"OTHER\";",
+                "m_UniqueName",
+            ),
+            (
+                "    default ForCharacter = n\"MINE\";",
+                "    default ForCharacter = n\"OTHER\";",
+                "ForCharacter",
+            ),
+        ] {
+            let source = AUTHORED.replace(anchor, &format!("{anchor}\n{duplicate}"));
+            let findings = guard_authored_module(&source, "MINE");
+            assert!(findings.iter().any(|finding| {
+                finding.severity == Severity::Blocking && finding.message.contains(field)
+            }));
+        }
+    }
+
+    #[test]
+    fn authored_spawn_chain_must_target_its_own_classes() {
+        for (from, to, field) in [
+            (
+                "UAIAgentConfig_Human_MINE::StaticClass()",
+                "UAIAgentConfig_Human_OC_STT_Diego::StaticClass()",
+                "AIAgentConfigClass",
+            ),
+            (
+                "UCharacterDefinition_Human_MINE::StaticClass()",
+                "UCharacterDefinition_Human_OC_STT_Diego::StaticClass()",
+                "m_CharacterDefinition",
+            ),
+        ] {
+            let findings = guard_authored_module(&AUTHORED.replace(from, to), "MINE");
+            assert!(findings.iter().any(|finding| {
+                finding.severity == Severity::Blocking && finding.message.contains(field)
+            }));
+        }
+    }
+
+    #[test]
+    fn authored_spawn_chain_requires_all_classes() {
+        for class in ["UAIAgentConfig_Human_MINE", "USpawnAIAgentDefinition_MINE"] {
+            let source = AUTHORED.replace(
+                &format!("class {class}"),
+                &format!("class UMissing_{class}"),
+            );
+            let findings = guard_authored_module(&source, "MINE");
+            assert!(findings.iter().any(|finding| {
+                finding.severity == Severity::Blocking && finding.message.contains(class)
+            }));
+        }
     }
 
     #[test]

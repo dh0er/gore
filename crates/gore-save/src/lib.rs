@@ -5309,6 +5309,24 @@ fn incoming_public_metadata(payload: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Co
     Ok(fields)
 }
 
+/// Read a public flag only from the save's public-data branches. Other custom
+/// payload entries may legally reuse these field names for unrelated state.
+fn read_public_bool_property(payload: &[u8], name: &str) -> Result<Option<bool>, CoreError> {
+    let root = properties::parse_property_list_root_at(payload, 0)?;
+    for path in public_field_paths(&root, name) {
+        let property = properties::resolve(&root.properties, &properties::parse_path(&path)?)?;
+        match &property.value {
+            properties::PropertyValue::Bool(value) => return Ok(Some(*value)),
+            _ => {
+                return Err(CoreError::Validation(format!(
+                    "public field {name} is not a BoolProperty"
+                )))
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// Refresh only the selected cached row, including when it was registered by an
 /// older importer. Keep the map's order and all unrelated entry bytes intact.
 fn refresh_persistent_slot_metadata(
@@ -5489,21 +5507,8 @@ where
     let save_original = fs::read(save_path)?;
     let save_parts = split_gsav(&save_original)?;
     let public_summary = summarize_public_payload(save_parts.public_payload);
-    let public_refs = scan_fstrings(save_parts.public_payload, 0);
-    let incoming_quick = read_bool_property_in_range(
-        save_parts.public_payload,
-        &public_refs,
-        0,
-        public_refs.len(),
-        "m_QuickSave",
-    );
-    let incoming_auto = read_bool_property_in_range(
-        save_parts.public_payload,
-        &public_refs,
-        0,
-        public_refs.len(),
-        "m_AutoSave",
-    );
+    let incoming_quick = read_public_bool_property(save_parts.public_payload, "m_QuickSave")?;
+    let incoming_auto = read_public_bool_property(save_parts.public_payload, "m_AutoSave")?;
     let player_save_name = public_summary
         .player_save_name
         .clone()
@@ -18187,16 +18192,48 @@ mod tests {
         quick_save: bool,
         auto_save: bool,
     ) -> Vec<u8> {
+        dual_public_payload_with_decoy_flags(
+            slot,
+            name,
+            profile_id,
+            quick_save,
+            auto_save,
+            None,
+        )
+    }
+
+    fn dual_public_payload_with_decoy_flags(
+        slot: &str,
+        name: &str,
+        profile_id: i32,
+        quick_save: bool,
+        auto_save: bool,
+        decoy_flags: Option<(bool, bool)>,
+    ) -> Vec<u8> {
         let mut map_body = [0u32.to_le_bytes(), 3u32.to_le_bytes()].concat();
-        for class in ["SaveDataPayload", "SaveGamePublicData", "UnrelatedPayload"] {
-            let mut body = [
-                str_property("m_SlotName", slot),
-                str_property("m_PlayerSaveName", name),
-                int_property("m_ProfileId", profile_id),
-                bool_property("m_QuickSave", quick_save),
-                bool_property("m_AutoSave", auto_save),
-            ]
-            .concat();
+        let classes = if decoy_flags.is_some() {
+            ["UnrelatedPayload", "SaveDataPayload", "SaveGamePublicData"]
+        } else {
+            ["SaveDataPayload", "SaveGamePublicData", "UnrelatedPayload"]
+        };
+        for class in classes {
+            let mut body = if class == "UnrelatedPayload" && decoy_flags.is_some() {
+                let (decoy_quick, decoy_auto) = decoy_flags.unwrap();
+                [
+                    bool_property("m_QuickSave", decoy_quick),
+                    bool_property("m_AutoSave", decoy_auto),
+                ]
+                .concat()
+            } else {
+                [
+                    str_property("m_SlotName", slot),
+                    str_property("m_PlayerSaveName", name),
+                    int_property("m_ProfileId", profile_id),
+                    bool_property("m_QuickSave", quick_save),
+                    bool_property("m_AutoSave", auto_save),
+                ]
+                .concat()
+            };
             if class == "SaveGamePublicData" {
                 body.extend(str_property("m_MapName", "MainMap"));
                 body.extend(int_property("m_ChapterID", 3));
@@ -18441,6 +18478,48 @@ mod tests {
             assert_eq!(
                 properties::resolve(&root.properties, &path).unwrap().value,
                 properties::PropertyValue::Bool(true)
+            );
+        }
+    }
+
+    #[test]
+    fn assign_save_profile_import_ignores_unrelated_quick_and_auto_flags() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("detached.sav");
+        let target = dir.path().join("G1R-007.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let payload = dual_public_payload_with_decoy_flags(
+            "G1R-054",
+            "Imported",
+            0,
+            false,
+            true,
+            Some((true, false)),
+        );
+        fs::write(
+            &source,
+            build_gsav(2, &payload, &minimal_stream(), &[1, 2, 3, 4]),
+        )
+        .unwrap();
+        fs::write(
+            &persistent_path,
+            assignment_persistent_data_list("G1R-006", 0),
+        )
+        .unwrap();
+
+        assign_save_profile(&source, Some(&target), &persistent_path, 1, true).unwrap();
+
+        let cached = fs::read(&persistent_path).unwrap();
+        let root = parse_profile_file(&cached).unwrap();
+        assert!(!profile_array_contains(&root, 1, "m_QuickSaveName", "G1R-007").unwrap());
+        assert!(profile_array_contains(&root, 1, "m_AutoSaveName", "G1R-007").unwrap());
+        for (field, value) in [("m_QuickSave", false), ("m_AutoSave", true)] {
+            let path = persistent_slot_property_path(&root, "G1R-007", field)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                properties::resolve(&root.properties, &path).unwrap().value,
+                properties::PropertyValue::Bool(value)
             );
         }
     }
