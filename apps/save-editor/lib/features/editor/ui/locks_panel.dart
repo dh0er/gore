@@ -574,29 +574,55 @@ class _LockList extends StatelessWidget {
     return parts.isEmpty ? null : parts.join(' · ');
   }
 
+  /// The line under a lock's name. App-owned sentences stay on the interface
+  /// face. A key list keeps that face on the "Key:" wrapper and uses the
+  /// game-text face only for the names themselves.
+  Widget _subtitleLine(
+    BuildContext context,
+    String text, {
+    String? catalogRun,
+  }) {
+    final game = gameScriptTextStyle(context, lang.locale);
+    final run = catalogRun ?? '';
+    final index = run.isEmpty ? -1 : text.lastIndexOf(run);
+    if (game == null || index < 0) {
+      return Text(text, overflow: TextOverflow.ellipsis);
+    }
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(text: text.substring(0, index)),
+          TextSpan(text: run, style: game),
+          TextSpan(text: text.substring(index + run.length)),
+        ],
+      ),
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
+  String? _catalogKeyRun(_LockRow row) {
+    final entry = row.entry;
+    if (entry == null || entry.keys.isEmpty) return null;
+    if (entry.keys.length == 1 && entry.keys.first == 'Permalocked') {
+      return null;
+    }
+    return entry.keys.map(_keyName).join(', ');
+  }
+
   /// The line under a lock's name: the game's own difficulty pips, then what it
   /// takes to open it.
   Widget? _subtitle(BuildContext context, _LockRow row) {
     final text = _subtitleText(row);
     final difficulty = row.entry?.difficulty;
-    if (difficulty == null) {
-      return text == null
-          ? null
-          : Text(text, style: gameScriptTextStyle(context, lang.locale));
-    }
+    if (text == null && difficulty == null) return null;
+    final line = text == null
+        ? null
+        : _subtitleLine(context, text, catalogRun: _catalogKeyRun(row));
+    if (difficulty == null) return line;
     return Row(
       children: [
         _DifficultyBars(difficulty: difficulty, theme: theme, l10n: l10n),
-        if (text != null) ...[
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              text,
-              overflow: TextOverflow.ellipsis,
-              style: gameScriptTextStyle(context, lang.locale),
-            ),
-          ),
-        ],
+        if (line != null) ...[const SizedBox(width: 8), Flexible(child: line)],
       ],
     );
   }

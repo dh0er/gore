@@ -1230,8 +1230,19 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                               caption: meta?.caption,
                               l10n: l10n,
                             );
+                            final fromCatalog = knowledgeEntryFromCatalog(
+                              locCatalog,
+                              lang,
+                              entry,
+                              locKey: meta?.locKey,
+                              caption: meta?.caption,
+                              l10n: l10n,
+                            );
                             final title =
                                 text ?? readableKnowledgeEntry(entry, l10n);
+                            final pendingStyle = TextStyle(
+                              color: scheme.onTertiaryContainer,
+                            );
                             return ListTile(
                               dense: true,
                               tileColor: scheme.tertiaryContainer.withValues(
@@ -1241,13 +1252,13 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                                 entry: entry,
                                 catalogCategory: meta?.category,
                                 title: title,
-                                titleStyle: gameScriptTextStyle(
-                                  context,
-                                  lang.locale,
-                                  style: TextStyle(
-                                    color: scheme.onTertiaryContainer,
-                                  ),
-                                ),
+                                titleStyle: fromCatalog
+                                    ? gameScriptTextStyle(
+                                        context,
+                                        lang.locale,
+                                        style: pendingStyle,
+                                      )
+                                    : pendingStyle,
                               ),
                               subtitle: showObjectIds
                                   ? Text(
@@ -1297,24 +1308,34 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                                   caption: meta?.caption,
                                   l10n: l10n,
                                 );
+                                final fromCatalog = knowledgeEntryFromCatalog(
+                                  locCatalog,
+                                  lang,
+                                  entry,
+                                  locKey: meta?.locKey,
+                                  caption: meta?.caption,
+                                  l10n: l10n,
+                                );
                                 final title =
                                     text ?? readableKnowledgeEntry(entry, l10n);
+                                final savedStyle = isRemoved
+                                    ? const TextStyle(
+                                        decoration: TextDecoration.lineThrough,
+                                      )
+                                    : null;
                                 return ListTile(
                                   dense: true,
                                   title: _KnowledgeEntryTitle(
                                     entry: entry,
                                     catalogCategory: meta?.category,
                                     title: title,
-                                    titleStyle: gameScriptTextStyle(
-                                      context,
-                                      lang.locale,
-                                      style: isRemoved
-                                          ? const TextStyle(
-                                              decoration:
-                                                  TextDecoration.lineThrough,
-                                            )
-                                          : null,
-                                    ),
+                                    titleStyle: fromCatalog
+                                        ? gameScriptTextStyle(
+                                            context,
+                                            lang.locale,
+                                            style: savedStyle,
+                                          )
+                                        : savedStyle,
                                   ),
                                   // Raw entry id is opt-in through Advanced
                                   // settings, independent of text resolution.

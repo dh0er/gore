@@ -268,6 +268,32 @@ String? localizedKnowledgeEntry(
   return null;
 }
 
+/// True when [localizedKnowledgeEntry] resolved [entry] from the game catalog.
+/// Interface captions and the readable fallback are not catalog text.
+bool knowledgeEntryFromCatalog(
+  Map<String, Map<String, String>> catalog,
+  GameLang lang,
+  String entry, {
+  String? locKey,
+  String? caption,
+  AppLocalizations? l10n,
+}) {
+  final text = localizedKnowledgeEntry(
+    catalog,
+    lang,
+    entry,
+    locKey: locKey,
+    caption: caption,
+    l10n: l10n,
+  );
+  if (text == null) return false;
+  if (catalog.isNotEmpty && locKey != null && locKey.trim().isNotEmpty) {
+    if (resolveGameText(catalog, locKey, lang) != null) return true;
+  }
+  if (caption != null && caption.trim().isNotEmpty) return false;
+  return true;
+}
+
 /// Player-facing fallback for a knowledge id when neither extracted game text
 /// nor cache-derived Caption metadata is available. It deliberately avoids
 /// echoing the raw token: separators and camel-case are humanized, while opaque

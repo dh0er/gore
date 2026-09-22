@@ -232,6 +232,7 @@ class _AddKnowledgeEntryDialogState
   ) {
     // Generated numeric ids need their exact cache-derived Caption key; their
     // class-name spelling alone carries no dialog meaning.
+    final l10n = AppLocalizations.of(context);
     final name =
         localizedKnowledgeEntry(
           catalog,
@@ -239,9 +240,17 @@ class _AddKnowledgeEntryDialogState
           entry.id,
           locKey: entry.locKey,
           caption: entry.caption,
-          l10n: AppLocalizations.of(context),
+          l10n: l10n,
         ) ??
-        readableKnowledgeEntry(entry.id, AppLocalizations.of(context));
+        readableKnowledgeEntry(entry.id, l10n);
+    final fromCatalog = knowledgeEntryFromCatalog(
+      catalog,
+      lang,
+      entry.id,
+      locKey: entry.locKey,
+      caption: entry.caption,
+      l10n: l10n,
+    );
     return ListTile(
       dense: true,
       leading: Icon(_iconForKnowledgeCategory(entry.category)),
@@ -249,7 +258,7 @@ class _AddKnowledgeEntryDialogState
         name,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: gameScriptTextStyle(context, lang.locale),
+        style: fromCatalog ? gameScriptTextStyle(context, lang.locale) : null,
       ),
       subtitle: showObjectIds
           ? Text(entry.id, maxLines: 1, overflow: TextOverflow.ellipsis)
