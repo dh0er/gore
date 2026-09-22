@@ -120,6 +120,30 @@ void main() {
     expect(scriptCoverageFont(const Locale('zh')), notoSerifScFontFamily);
   });
 
+  testWidgets('technical ids stay on the Traditional Chinese face', (
+    tester,
+  ) async {
+    late String family;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGoresaveTheme(
+          uiFontFamily: UiFontFamily.notoSerif,
+          locale: const Locale.fromSubtags(
+            languageCode: 'zh',
+            scriptCode: 'Hant',
+          ),
+        ),
+        home: Builder(
+          builder: (context) {
+            family = uiAwareMonospaceFontFamily(context);
+            return const SizedBox();
+          },
+        ),
+      ),
+    );
+    expect(family, notoSerifTcFontFamily);
+  });
+
   testWidgets('title progress is centered in the available title-bar space', (
     tester,
   ) async {

@@ -71,7 +71,8 @@ String uiAwareMonospaceFontFamily(
     podkovaFontFamily ||
     notoSerifFontFamily ||
     notoSerifJpFontFamily ||
-    notoSerifScFontFamily => activeFamily!,
+    notoSerifScFontFamily ||
+    notoSerifTcFontFamily => activeFamily!,
     _ => fallback,
   };
 }
