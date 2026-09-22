@@ -2,55 +2,43 @@
 
 **GORE** (Go-thic Re-make) is a vibe-coded modding and save-editing toolsuite for Gothic 1 Remake. One Rust engine, one CLI, and three Windows apps built on top of it.
 
-[<img src="docs/images/screenshot_dark.png" alt="GORE Save Editor" width="600"/>](docs/images/screenshot_light.png)
-
 ## 🧰 Tools
 
-| <div style="width:150px">Tool⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀</div> | What it does | <div style="width:150px">Status⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀</div> | Download |
+| Tool⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀ | What it does | Status⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀ | Download |
 |---|---|---|---|
 | **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing savegames. | ✅ Ready to use | [1.4.1](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.4.1) |
 | **[CLI](docs/guide/README.md)** | All-in-one command-line tool for all modding tasks. | ⚗️ Experimental use | [0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.3.0) |
 | **[Mod Manager](apps/mod-manager/README.md)** | Windows GUI for installing and ordering *many* mods together. | ⚗️ Experimental use | [0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
-| **[AI Plugins](plugins/gore/README.md)** | MCP server and skill for the CLI. | ⚗️ Experimental use | |
-| **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the GORE engine, for *authoring* mods. | 📋 Planned | |
-
-## ✅ Compatibility
-
-**Save Editor** is not tied to a specific game version. It edits the save file
-itself, never the game installation, and is designed to preserve data it does
-not understand. Its core save editing is stable across game versions, although
-a future patch can add or change save fields or make the bundled item and
-location catalogs stale. Keep backups of important saves.
-
-The **CLI** has been tested with Gothic 1 Remake **1.0.5 (Steam BuildID
-24878692)**; **Mod Manager** has been tested with **1.0.4a (CL171864)**.
-Neither uses a simple version-number lock. Mod Manager
-compatibility also depends on the individual mod and whether its target files,
-localization IDs, assets, and script targets exist in the installed game.
-Import validates the package, but cannot prove runtime compatibility; Apply
-checks the current installation and reports missing or incompatible targets.
-
-Many offline CLI commands are independent of the installed game version, while
-commands that read, build, or deploy game data depend on the relevant formats
-and APIs. In particular, the bundled standalone AngelScript compiler checks the
-installed Shipping cache format and complete ordered Binds API instead of the
-displayed game version. If they do not match, strict standalone compilation
-fails safely; the default `standalone-then-game` mode reports the reason and can
-use the game's embedded compiler as a fallback.
+| **[AI Plugins](plugins/gore/README.md)** | MCP server and skill for the CLI. | ⚗️ Experimental use | ⠀⠀⠀⠀⠀ |
+| **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the GORE engine, for *authoring* mods. | 📋 Planned | ⠀⠀⠀⠀⠀ |
 
 ## 📊 Status
 
 | Area | Status | What you can do | What's missing |
 |---|---|---|---|
+| [Savegames](apps/save-editor/README.md) | Mostly | Edit Player and NPC values, inventories, quests and much more | Armor upgrades, chest and corpse loot, other loot points |
 | [Item & stat values](docs/guide/items.md) | Partly | Change what items are worth, what weapons do, what NPCs have | Still needs UE4SS, should actually use scripts instead |
-| [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace all localized game text | |
-| [Dialog authoring](docs/guide/dialog-authoring.md) | Full | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | |
-| [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | |
-| [Voice](docs/guide/voice.md) | Partly | Replace spoken lines and add voice to authored new lines | Other formats than Vorbis; Lip sync |
+| [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace all localized game text | ⠀⠀⠀⠀⠀ |
+| [Dialog authoring](docs/guide/dialog-authoring.md) | Full | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | ⠀⠀⠀⠀⠀ |
+| [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | ⠀⠀⠀⠀⠀ |
+| [Voice](docs/guide/voice.md) | Mostly | Replace spoken lines and add voice to authored new lines | Other formats than Vorbis; Lip sync |
 | [Textures](docs/guide/textures.md) | Mostly | Replace supported cooked `Texture2D` assets; bundle loose images and cursor PNGs | Some pixel formats and virtual-texture layouts cannot yet be rewritten; cursor PNGs require `pak_files` rather than `texture replace` |
 | [DataAssets](docs/guide/dataassets.md) | Partly | Edit cooked game data | Only assets the engine describes natively; Blueprint ones are refused |
-| [Scripts](docs/guide/scripts.md) | Full | Read the game's script code, change it, add your own | |
+| [Scripts](docs/guide/scripts.md) | Full | Read the game's script code, change it, add your own | ⠀⠀⠀⠀⠀ |
 | [Mod managing](docs/guide/bundles.md) | Mostly | Ship all of the above as one mod, run many together, install third-party mods — plain zips, pak files, UE4SS mod folders | Mods have not yet been tested after game patches |
+
+## 📸 Screenshots
+[<img src="docs/images/screenshot_dark.png" alt="GORE Save Editor" width="600"/>](docs/images/screenshot_light.png)
+
+## ✅ Compatibility
+
+**Save Editor** is compatible with any vanilla game version. It may also work for small mods, but there's no guarantee.
+
+**CLI** has been tested with **1.0.5 Hotfix 1 (CL173255)**.
+Many CLI commands are independent of the installed game version, while commands that read, build, or deploy game data depend on the relevant formats and APIs.
+
+**Mod Manager** has been tested with **1.0.4a (CL171864)**.
+Its compatibility depends on the individual mod and whether its target files, localization IDs, assets, and script targets exist in the installed game.
 
 ## 🚀 Quick start
 
