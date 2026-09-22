@@ -2439,7 +2439,7 @@ Future<void> _expectOverviewActionFullyInteractive(WidgetTester tester) async {
 
 Future<void> _pumpLoadedLibrary(
   WidgetTester tester, {
-  int questGeneratorVersion = 5,
+  int questGeneratorVersion = 6,
   String questGeneratorId = 'gore-authoring.draft-quest-skeleton',
   Revision3QuestOutlineEditor? editQuestOutline,
   Revision3QuestContextEditor? editQuestContext,
@@ -2534,7 +2534,7 @@ Future<void> _pumpLibrary(
 Revision3ContentIndex _fixture({
   int revision = 7,
   bool includeQuest = true,
-  int questGeneratorVersion = 5,
+  int questGeneratorVersion = 6,
   String questGeneratorId = 'gore-authoring.draft-quest-skeleton',
   bool includeNpc = true,
 }) => Revision3ContentIndex.fromJsonObject(<String, Object?>{

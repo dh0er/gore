@@ -923,7 +923,7 @@ Map<String, Object?> _contentIndexJson({
         origin: <String, Object?>{
           'type': 'generated',
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': 5,
+          'generator_version': 6,
           'owner': <String, Object?>{
             'project_id': revision3QuestOutlineProjectId,
             'entity_id': revision3QuestOutlineQuestId,
@@ -932,7 +932,7 @@ Map<String, Object?> _contentIndexJson({
         },
         summary: <String, Object?>{
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': 5,
+          'generator_version': 6,
           'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
           'module_relative_path': 'PROJECT/QUESTS/FINDHOMER.as',
           'status': <String, Object?>{

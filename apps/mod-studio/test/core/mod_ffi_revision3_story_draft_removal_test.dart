@@ -443,7 +443,7 @@ void main() {
       kind: 'quest_draft',
       data: <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 5,
+        'generator_version': 6,
         'script_module': _ref(_moduleId, 'script_module'),
       },
     );

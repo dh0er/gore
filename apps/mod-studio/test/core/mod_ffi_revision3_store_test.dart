@@ -150,7 +150,7 @@ String _validQuestCandidateProjectJson({
           'kind': 'quest_draft',
           'data': <String, Object?>{
             'generator_id': 'gore-authoring.draft-quest-skeleton',
-            'generator_version': 5,
+            'generator_version': 6,
             'input': input,
             'script_module': <String, Object?>{
               'project_id': '00000000000000000000000000000003',
@@ -166,7 +166,7 @@ String _validQuestCandidateProjectJson({
         'origin': <String, Object?>{
           'type': 'generated',
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': 5,
+          'generator_version': 6,
           'owner': <String, Object?>{
             'project_id': '00000000000000000000000000000003',
             'id': _questId,
@@ -178,7 +178,7 @@ String _validQuestCandidateProjectJson({
           'kind': 'script_module',
           'data': <String, Object?>{
             'generator_id': 'gore-authoring.draft-quest-skeleton',
-            'generator_version': 5,
+            'generator_version': 6,
             'owner': <String, Object?>{
               'project_id': '00000000000000000000000000000003',
               'id': _questId,
@@ -772,7 +772,7 @@ void main() {
             '"authoring":"published"',
           ),
       (response) => response['project_json'] = _validQuestCandidateProjectJson()
-          .replaceAll('"generator_version":5', '"generator_version":4'),
+          .replaceAll('"generator_version":6', '"generator_version":5'),
       (response) => response['project_json'] = _validQuestCandidateProjectJson()
           .replaceFirst(
             '"authored_runtime_id":"GORE_ADAPTER_QUEST"',

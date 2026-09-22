@@ -492,7 +492,7 @@ final class _JourneyFixture {
     origin: _generatedOrigin(ownerId: ownerId),
     summaryData: <String, Object?>{
       'generator_id': 'gore-authoring.draft-quest-skeleton',
-      'generator_version': 5,
+      'generator_version': 6,
       'module_namespace': namespace,
       'module_relative_path': '${namespace.replaceAll('.', '/')}.as',
       'status': <String, Object?>{
@@ -585,7 +585,7 @@ Map<String, Object?> _generatedOrigin({required String ownerId}) =>
     <String, Object?>{
       'type': 'generated',
       'generator_id': 'gore-authoring.draft-quest-skeleton',
-      'generator_version': 5,
+      'generator_version': 6,
       'owner': <String, Object?>{
         'project_id': revision3QuestOutlineProjectId,
         'entity_id': ownerId,

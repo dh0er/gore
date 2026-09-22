@@ -824,11 +824,11 @@ Map<String, Object?> _contentIndexJson({
         ownerId: _questId,
         ownerKind: 'quest_draft',
         generatorId: 'gore-authoring.draft-quest-skeleton',
-        generatorVersion: 5,
+        generatorVersion: 6,
       ),
       summaryData: <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 5,
+        'generator_version': 6,
         'module_namespace': 'PROJECT.QUESTS.SECUREGATE',
         'module_relative_path': 'PROJECT/QUESTS/SECUREGATE.as',
         'status': <String, Object?>{

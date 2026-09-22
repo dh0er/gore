@@ -75,7 +75,7 @@ Map<String, Object?> _validPlan() {
       'persisted_source': _seal(sourceBytes.length, sourceSha),
       'generated': <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 5,
+        'generator_version': 6,
         'owner': _typedRef(_questId, 'quest_draft'),
         'module_namespace': 'GoreMods.Quests.Inspection',
         'module_relative_path': 'GoreMods/Quests/Inspection.as',
@@ -220,7 +220,7 @@ void main() {
       expect(result.moduleRelativePath, 'GoreMods/Quests/Inspection.as');
       expect(result.plan.module.quest.id, _questId);
       expect(result.plan.module.scriptModule.id, _moduleId);
-      expect(result.plan.module.generated.generatorVersion, 5);
+      expect(result.plan.module.generated.generatorVersion, 6);
       expect(result.plan.provenance.collisionPriorQuestCount, 2);
       expect(
         result.plan.provenance.collisionBasisHead.canonicalJson,
