@@ -15,9 +15,10 @@ between combat cases.
 ## Economy / teacher
 
 Completed as `NpcEconomyRolesTest 0.1.3` on2026-09-12; now disabled.
-The separate [late-restock follow-up](restock/README.md) is active as0.1.0
-on2026-09-22, with one clean noon START067. Its [checklist](restock/FIELD-TEST.md)
-does not repeat teacher tests; late-event persistence remains pending.
+The separate [late-restock follow-up](restock/README.md) passed as0.1.0
+on2026-09-22: late delivery, repeated dispatch, purchase and two full restarts.
+Its six START/result saves are archived outside the game. See the
+[runtime result](restock/runtime-0.1.0.json); no repeated teacher tests were needed.
 The [runtime result](economy-runtime-0.1.3.json) confirms both reloads preserve
 the traded stock and Hero inventory. The [reload correction](economy-reload-0.1.3.json) records the focused rebuild.
 The [0.1.0 deployment report](economy-deployment.json) remains historical.
@@ -49,7 +50,8 @@ purchase/sale and cancel, but failed persistence:026 had3/10/105 current stock
 and an empty default map;027 had6/20/205 current stock and3/10/100 defaults.
 The generated-event ledger and once marker survived unchanged. This rules out
 a lost menu marker; saves alone do not identify the exact native replay/delta
-implementation. The late custom stock event remains unqualified for persistence.
+implementation. That historical path remains unqualified; the later
+[initial-plus-late batch test](restock/runtime-0.1.0.json) passes persistence.
 
 For initial stock0.1.3 uses the shipped `OnWorldStart` batch. No choice dispatches
 a stock event or adds goods.01 only acknowledges the prepared stock and unlocks

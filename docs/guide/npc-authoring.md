@@ -255,8 +255,8 @@ one without a word; catalog membership does not prove a navigable route.
 `npc new --trader` supplies an empty config, not goods. Define stock in its
 `UTraderConfigBase` subclass with `AddTraderItemAllDifficulties(ItemClass, Count,
 EventName)`, as shipped configs do. Use `OnWorldStart` for initial stock. Shipped
-configs also use chapter and dedicated global events, but the batch fixture's
-manual late event did not pass save/load persistence; see the observed limit below.
+configs also use chapter and dedicated global events. The initial-plus-late
+batch path now has a successful save/load test; see the evidence below.
 
 Do not seed a shop with `AddItemToInventory(..., EInventoryTypes::Trader)`:
 that writes an NPC container. Native trading uses the matching row in
@@ -284,13 +284,20 @@ in `UTraderConfigBase` can change quantities; this fixture fixes the relevant
 ore/arrow multipliers to1 for reproducible counts. Preserve the shipped helper
 bytecode rather than recompiling a semantically unqualified decompilation.
 
-The [late-stock follow-up](../../scripts/fixtures/npc-batch-tests/roles/restock/README.md)
-registers initial and later batches together, initializes a clean shop, then
-dispatches the late event through `UWorldPointManager::CallGlobalEvent`.
-It separately checks repeated dispatch, a purchase and two full restarts.
-This is a prepared test, not yet a qualified late-stock recipe. Inspect both
-stock maps before and after loading; an empty initial baseline has not been
-established as the sole cause of the earlier duplication.
+The [late-stock follow-up](../../scripts/fixtures/npc-batch-tests/roles/restock/runtime-0.1.0.json)
+passes on25168047. Register initial and later batches in the same config before
+initializing the shop; use `OnWorldStart` for the initial batch, then dispatch
+the distinct later event through `UWorldPointManager::CallGlobalEvent`.
+In this test3/10/100 becomes5/15/120. Sending the same event again does not
+grant it twice. One cheese purchase and two full restarts leave A4/15/127 and
+Hero1 cheese/43 ore, matching all five inspected saves and the user's checklist.
+
+Saved defaults remain3/10/100 immediately after the late delivery and become
+5/15/120 after restart, without adding the batch again to current stock.
+Do not manually repair this normal baseline update. The older0.1.2 path and
+game version differ; an empty initial baseline has not been established as
+its sole failure cause. This qualifies one later batch and replay protection,
+not unlimited time-based stock replenishment or every shop configuration.
 
 ### `npc delete` — stop a shipped character being placed
 

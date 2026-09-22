@@ -1,5 +1,9 @@
 # Haendlernachschub testen
 
+**Bestanden am2026-09-22.** Alle fuenf Schritte vom Benutzer bestaetigt und
+anhand der Ergebnisstaende geprueft. START067 und die Ergebnisse sind extern
+archiviert; Profil4 ist leer. Diese Liste bleibt zur spaeteren Reproduktion.
+
 **Profil 4 → `NPC 06 Nachschub - START` (Slot 067).**
 Es ist 12:00 Uhr. A steht am bisherigen Testplatz bei Xardas' Turm.
 Kein Aufbau noetig. Sprich A an; getestet wird **sein Handelsbestand**.

@@ -194,10 +194,14 @@ The earlier NPC-container readback was not shop-stock proof.
 
 - [x] Trader with actual stock and working buying/selling/cancel, tested0.1.2.
 - [x] Initial trader stock and transaction changes survive full restart and repeated loading (0.1.3).
-- [ ] Qualify persistent late stock-event grants;0.1.2 duplicated a batch on first reload despite a retained event ledger.
+- [x] Qualify persistent late stock-event grants after native initial stock.
+  The0.1.2 path duplicated a batch on first reload despite a retained ledger.
   The [focused restock follow-up](../../scripts/fixtures/npc-batch-tests/roles/restock/README.md)
-  is prepared on25168047: clean noon START067, initial3/10/100, later2/5/20,
-  repeated dispatch and two restarts. Runtime result remains pending.
+  passed on25168047: initial3/10/100, later2/5/20, repeated dispatch without
+  another grant, purchase and two restarts. Five saves confirm the result;
+  final A stock is4/15/127 and Hero retains1 cheese/43 ore. The default map
+  grows on load without duplicating current stock. The older failure's native
+  cause remains unproven. All six START/result saves are archived externally.
 - [x] Teacher with separate LP/ore requirements, exact cost, no duplicate charge
   and persistent learned result after full restart.
 - [x] Companion/following behavior, including stopping, resuming and reload.

@@ -1,0 +1,201 @@
+{
+  "schema": "gore.npc-batch.restock-runtime.v1",
+  "date": "2026-09-22",
+  "bundle": "NpcTraderRestockTest",
+  "version": "0.1.0",
+  "game_build": "g1r-steam-25168047",
+  "passed": true,
+  "tested_by": "user",
+  "agent_played_game": false,
+  "user_confirmation": "alles getestet, alles hat perfekt funktioniert.",
+  "user_confirmed": [
+    "initial stock visible",
+    "late batch delivered exactly once",
+    "same event dispatched again without extra goods",
+    "stock survives first full restart",
+    "purchase of one cheese",
+    "second full restart preserves traded goods and Hero inventory"
+  ],
+  "save_core_dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "saves": [
+    {
+      "slot": "G1R-003",
+      "title": "nachschub - vorher",
+      "file": {
+        "bytes": 1020800,
+        "sha256": "57d127ed308573d6ecd5a6338ad9a12a5ea46ed76b4471e8396b39a31771da14"
+      },
+      "items": {
+        "ItAm_Arrow": 10,
+        "ItFo_Cheese": 3,
+        "ItMi_Orenugget": 100
+      },
+      "default_items": {
+        "ItAm_Arrow": 10,
+        "ItFo_Cheese": 3,
+        "ItMi_Orenugget": 100
+      },
+      "generated_events": [
+        "OnWorldStart"
+      ],
+      "last_trade_seconds": 43244.986283928156,
+      "markers": {},
+      "hero_items": {
+        "ItWr_Scroll_Letter_01": 1,
+        "ItMs_Glossary": 1,
+        "ItMi_Orenugget": 50
+      }
+    },
+    {
+      "slot": "G1R-022",
+      "title": "nachschub-geliefert",
+      "file": {
+        "bytes": 1025744,
+        "sha256": "0c51b74b3268fbdb2866c34e29782c9547a856b450e65741e428b43bf1aecc49"
+      },
+      "items": {
+        "ItAm_Arrow": 15,
+        "ItFo_Cheese": 5,
+        "ItMi_Orenugget": 120
+      },
+      "default_items": {
+        "ItAm_Arrow": 10,
+        "ItFo_Cheese": 3,
+        "ItMi_Orenugget": 100
+      },
+      "generated_events": [
+        "OnWorldStart",
+        "GoreNpcRestockTrialV1"
+      ],
+      "last_trade_seconds": 43244.986283928156,
+      "markers": {
+        "gore_restock_trial_v1": 1.0,
+        "gore_restock_event_calls_v1": 1.0
+      },
+      "hero_items": {
+        "ItWr_Scroll_Letter_01": 1,
+        "ItMs_Glossary": 1,
+        "ItMi_Orenugget": 50
+      }
+    },
+    {
+      "slot": "G1R-023",
+      "title": "nachschub-wiederholt",
+      "file": {
+        "bytes": 1025253,
+        "sha256": "404bdd187f773bc6883ddc7087564e2fae488d78174df719a310f16d02949205"
+      },
+      "items": {
+        "ItAm_Arrow": 15,
+        "ItFo_Cheese": 5,
+        "ItMi_Orenugget": 120
+      },
+      "default_items": {
+        "ItAm_Arrow": 10,
+        "ItFo_Cheese": 3,
+        "ItMi_Orenugget": 100
+      },
+      "generated_events": [
+        "OnWorldStart",
+        "GoreNpcRestockTrialV1"
+      ],
+      "last_trade_seconds": 43244.986283928156,
+      "markers": {
+        "gore_restock_trial_v1": 1.0,
+        "gore_restock_event_calls_v1": 2.0
+      },
+      "hero_items": {
+        "ItWr_Scroll_Letter_01": 1,
+        "ItMs_Glossary": 1,
+        "ItMi_Orenugget": 50
+      }
+    },
+    {
+      "slot": "G1R-024",
+      "title": "nachschub-gehandelt",
+      "file": {
+        "bytes": 1031056,
+        "sha256": "245199f9144421306439aa9c16e19c2119dbbfcb3c940fab8fa866a7567d6b3d"
+      },
+      "items": {
+        "ItAm_Arrow": 15,
+        "ItFo_Cheese": 4,
+        "ItMi_Orenugget": 127
+      },
+      "default_items": {
+        "ItAm_Arrow": 15,
+        "ItFo_Cheese": 5,
+        "ItMi_Orenugget": 120
+      },
+      "generated_events": [
+        "OnWorldStart",
+        "GoreNpcRestockTrialV1"
+      ],
+      "last_trade_seconds": 43244.986283928156,
+      "markers": {
+        "gore_restock_trial_v1": 1.0,
+        "gore_restock_event_calls_v1": 2.0
+      },
+      "hero_items": {
+        "ItWr_Scroll_Letter_01": 1,
+        "ItMs_Glossary": 1,
+        "ItMi_Orenugget": 43,
+        "ItFo_Cheese": 1
+      }
+    },
+    {
+      "slot": "G1R-025",
+      "title": "nachschub-neustart",
+      "file": {
+        "bytes": 1031466,
+        "sha256": "1d4b8016c54e189dba470c0cecb645facdad8ab2d7720841a0edd8f9c5c5c6e0"
+      },
+      "items": {
+        "ItAm_Arrow": 15,
+        "ItFo_Cheese": 4,
+        "ItMi_Orenugget": 127
+      },
+      "default_items": {
+        "ItAm_Arrow": 15,
+        "ItFo_Cheese": 5,
+        "ItMi_Orenugget": 120
+      },
+      "generated_events": [
+        "OnWorldStart",
+        "GoreNpcRestockTrialV1"
+      ],
+      "last_trade_seconds": 43244.986283928156,
+      "markers": {
+        "gore_restock_trial_v1": 1.0,
+        "gore_restock_event_calls_v1": 2.0
+      },
+      "hero_items": {
+        "ItWr_Scroll_Letter_01": 1,
+        "ItMs_Glossary": 1,
+        "ItMi_Orenugget": 43,
+        "ItFo_Cheese": 1
+      }
+    }
+  ],
+  "checks": {
+    "initial_current_and_default_stock_match": true,
+    "late_batch_current_stock_increased_once": true,
+    "repeat_dispatch_counter_increased_without_duplicate_stock": true,
+    "generated_events_remain_unique_and_persist": true,
+    "default_baseline_grows_after_restart_without_duplicate_current_stock": true,
+    "one_cheese_cost_seven_ore_matches_both_inventories": true,
+    "post_purchase_stock_and_hero_inventory_identical_after_second_restart": true,
+    "live_saves_never_edited_for_runtime_readback": true,
+    "archived_hashes_match_all_five_results": true
+  },
+  "interpretation": "The prepared initial-plus-late-event path passes. Saved default stock remains3/10/100 immediately after delivery/repeat, then becomes5/15/120 after restart. Current stock does not gain that baseline delta again. Baseline reconstruction alone is therefore not sufficient to explain the older0.1.2 failure.",
+  "limits": "One merchant, one extra batch, one repeated event, one purchase and two user-confirmed full restarts on25168047. This is not a time-based infinite restock test. The earlier0.1.2 fixture used a different initialization path and older game build; its exact native failure cause remains unproven.",
+  "readback_path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\restock-complete\\readback.json",
+  "readback_sha256": "beeb0037ed1f4ebdf4f44bb98eb25640d8cce172bd6e16907f742ee797c75b42",
+  "archive": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-restock-complete-20260922T090736Z",
+  "archive_manifest_sha256": "565d0465307537ef7dabdebb774de4444043761b0b69ed45b4f2a341fe8ac921",
+  "cleanup_report": "../../profile-cleanup-after-restock-complete.json"
+}

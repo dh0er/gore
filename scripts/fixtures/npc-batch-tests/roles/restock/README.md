@@ -1,11 +1,13 @@
 # Late trader stock — focused follow-up
 
-Prepared2026-09-22 as `NpcTraderRestockTest 0.1.0` for Steam build25168047.
-Runtime status: **pending user test**. The completed initial-stock test and
-teacher tests do not need repeating. See the [German checklist](FIELD-TEST.md).
+Completed2026-09-22 as `NpcTraderRestockTest 0.1.0` for Steam build25168047.
+Runtime status: **passed**, confirmed by the user and five result saves in the
+[runtime report](runtime-0.1.0.json). No repeat is needed. The [German checklist](FIELD-TEST.md)
+is retained for reproduction.
 The [build/deployment report](build-deploy.json) records the installed package;
-the [START publication](start-save.json) verifies that profile4 contains only067
-and all other profiles and existing save files remain unchanged.
+the [START publication](start-save.json) records the original setup. All six
+START/result saves are now [archived outside the game](../../profile-cleanup-after-restock-complete.json).
+Profile4 is empty; other profiles and existing unrelated save files are unchanged.
 
 This fixture retains every class from the passed economy0.1.3 A/B sources,
 hides the completed teacher/test-funds menus and registers both stock batches
@@ -38,16 +40,23 @@ The shipped scripts register late chapter batches and dedicated events, e.g.
 `OnOrcEnclaveFightStarted` for Cronos/BaalCadar. The event mechanism is valid;
 its native saved-stock implementation is not present in the script sources.
 
-Read back A's `m_Items`, `m_DefaultItems`, `m_GeneratedEvents`, the two test
-markers and Hero inventory in all named result saves. Before the late event,
-both stock maps must contain3/10/100. Do not infer the late default-map behavior
-in advance. One diagnostic pattern would be defaults3/10/100 immediately after
-delivery, then defaults5/15/120 on load while current stock incorrectly rises
-to7/20/140. That would support a reload delta, not prove its native cause.
+Readback of A's `m_Items`, `m_DefaultItems`, `m_GeneratedEvents`, both test
+markers and Hero inventory confirms:
 
-The user checks the visible shop before/after dispatch, repeated dispatch,
-two full restarts and one purchase. Only that observation plus save readback
-can qualify persistence. A compiled/deployed fixture is not a runtime pass.
+| Save | Current cheese/arrows/ore | Defaults | Event calls |
+|---|---|---|---:|
+|003 `nachschub - vorher`|3/10/100|3/10/100|0|
+|022 `nachschub-geliefert`|5/15/120|3/10/100|1|
+|023 `nachschub-wiederholt`|5/15/120|3/10/100|2|
+|024 `nachschub-gehandelt`|4/15/127|5/15/120|2|
+|025 `nachschub-neustart`|4/15/127|5/15/120|2|
+
+The ledger contains the late event once throughout022–025. Hero keeps50 ore
+until the purchase, then1 cheese/43 ore across the second restart. The user
+confirms both full restarts and the visible UI checks. Default reconstruction
+does occur, but does not duplicate current stock in this path; that update
+alone cannot explain the older failure. Its exact native cause remains open.
+This qualifies the tested initial-plus-late batch, not periodic unlimited restock.
 
 ## Rebuild
 

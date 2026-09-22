@@ -1,6 +1,6 @@
 # NPC-Testpakete: restliche Faelle
 
-Stand 2026-09-22: **Die Spieltests der ersten fuenf Pakete sind abgeschlossen.** Der Kopf-/Barttest
+Stand 2026-09-22: **Die Spieltests aller sechs Pakete sind abgeschlossen.** Der Kopf-/Barttest
 ist bestanden. Beim Sprachtest sind Begruessungen, Alltagszeilen von B/C und Bs
 Routine sowie der vollstaendige Neustart ohne erneuten Aufbau bestaetigt.
 Die Lehrerpruefungen einschliesslich Neustart sowie Kaufen/Verkaufen/Abbrechen
@@ -25,10 +25,12 @@ Siehe [Build-/Paketpruefung](build-checks.json) und
 [veroeffentlichte Startstaende](start-saves.json).
 
 **Aktiv ist NpcTraderRestockTest 0.1.0**; Manager-Status `in_sync`.
-Profil4 enthaelt nur067 **„NPC 06 Nachschub - START“**, um12:00 Uhr.
-Die [deutsche Nachschub-Testliste](roles/restock/FIELD-TEST.md) prueft eine
+Profil4 ist leer; alle sechs Nachschub-START/Ergebnisstaende sind
+[ausserhalb des Spiels archiviert](profile-cleanup-after-restock-complete.json).
+Die [Nachschub-Testliste](roles/restock/FIELD-TEST.md) ist bestanden:
 spaetere Lieferung, erneutes Melden derselben Lieferung, Kauf und zwei Neustarts.
-Dieser Nachtest ist vorbereitet; das Spielergebnis steht noch aus.
+Fuenf Saves bestaetigen den [Erfolg](roles/restock/runtime-0.1.0.json), zuletzt
+A4 Kaese/15 Pfeile/127 Erz und Held1 Kaese/43 Erz ohne weitere Vergabe.
 Alle anderen Testpakete und Barttexturen sind deaktiviert. Die
 [vorherige Quest-Aktivierung](quest/hotfix-0.1.2.json) verwendete bereits die neue Spielbasis25168047 und
 den aktuellen Decompiler von main. Questinhalt und Start071 blieben unveraendert;
@@ -42,7 +44,8 @@ Nachtest und die gespeicherten Bewegungswerte. Die Feld-Starts070/072 und der
 letzte Ergebnisstand sind [extern archiviert](profile-cleanup-after-field-complete.json).
 Der [Wirtschaftsabschluss](roles/economy-runtime-0.1.3.json) bestaetigt den
 nativen Anfangsbestand ohne doppelte Vergabe. Die spaetere Bestandsvergabe per
-eigenem Ereignis bleibt separat ungeprueft; ihr0.1.2-Ladefehler ist dokumentiert.
+eigenem Ereignis hat inzwischen den separaten Nachtest bestanden; der fruehere
+0.1.2-Ladefehler bleibt als anderer Initialisierungspfad dokumentiert.
 Der [Barttest 0.1.3](heads/beard-runtime-0.1.3.json)
 und der [Bericht zur Sprach-Aufbaukorrektur](voice/setup-fix.json) bleiben
 dokumentiert. In0.1.1 blieb der Ortswechsel
@@ -66,7 +69,7 @@ den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
 | 3 | NpcEconomyRolesTest | Starts/Ergebnisse archiviert | Lehrer, Handel und Bestand nach wiederholtem Laden bestanden |
 | 4 | NpcFieldRolesTest | Starts070/072 und Ergebnisse archiviert | Folgen/Warten, Feindschaft/Gilde, Flucht, Niederlage/Tod und Wiederbelebung bestanden; Waffenwahl-Ursache offen |
 | 5 | NpcQuestCallbacksTest | Start071 und Ergebnisse archiviert | Bestanden: eigenes Journal, zwei automatische Ziele, Abgabe, einmalige Belohnung, Erfolg/Abbruch und Neustarts |
-| 6 | NpcTraderRestockTest | 067: NPC 06 Nachschub - START | Bereit zum Testen: spaeterer Nachschub, doppelte Ausloesung, Kauf und zwei Neustarts |
+| 6 | NpcTraderRestockTest | Start067 und Ergebnisse archiviert | Bestanden: spaeterer Nachschub, doppelte Ausloesung ohne Mehrfachvergabe, Kauf und zwei Neustarts |
 
 ## 1. Koepfe
 
