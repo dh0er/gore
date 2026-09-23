@@ -37,6 +37,7 @@ pub struct TreeStamp {
 /// Der Dateiname des Stempels im Baumverzeichnis.
 pub const TREE_STAMP_NAME: &str = ".gore-npc-tree.json";
 pub const TREE_STAMP_VERSION: u32 = 3;
+pub const STAGED_SOURCE_NAME: &str = ".gore-npc-staged-source.as";
 
 /// Detect accidental edits to a reusable tree. This digest and its stamp are both local; the
 /// stage-generated compile command independently checks the full diff against the sealed cache.
@@ -219,7 +220,7 @@ pub fn build_commands(
                  --work-dir {work_arg} -o {mini_arg}{game_arg}",
                 shell_quote(&edit.module),
                 shell_quote(&edit.relative_path),
-                shell_quote(&format!("{dir}/{}", edit.source_file)),
+                shell_quote(&format!("{dir}/{STAGED_SOURCE_NAME}")),
             ));
         }
     }
@@ -334,7 +335,7 @@ mod tests {
         assert!(commands[0].starts_with("gore as compile-module"));
         assert!(commands[0].contains("--module 'LevelScripts.XardasTower_AI'"));
         assert!(commands[0].contains("--rel-path 'LevelScripts/XardasTower_AI.as'"));
-        assert!(commands[0].contains("--source 'ws/XardasTower_AI.as'"));
+        assert!(commands[0].contains("--source 'ws/.gore-npc-staged-source.as'"));
         assert!(!commands[0].contains("--game"));
     }
 
@@ -395,7 +396,7 @@ mod tests {
         let commands = build_commands(&suppression(), dir, tree, "MyMod", Some(dir));
         assert!(commands[0].contains(&format!(
             "--source {}",
-            shell_quote(&format!("{dir}/XardasTower_AI.as"))
+            shell_quote(&format!("{dir}/{STAGED_SOURCE_NAME}"))
         )));
     }
 

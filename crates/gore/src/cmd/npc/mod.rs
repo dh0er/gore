@@ -1660,7 +1660,7 @@ fn stage_tree_copy(tree: &Path, dir: &Path) -> Result<PathBuf> {
     Ok(dir.join(STAGED_TREE_DIR))
 }
 
-fn validate_stage_spec_target(path: &Path) -> Result<()> {
+fn validate_stage_output_target(path: &Path, kind: &str) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
             let linked = metadata.file_type().is_symlink();
@@ -1671,12 +1671,12 @@ fn validate_stage_spec_target(path: &Path) -> Result<()> {
             };
             ensure!(
                 !linked,
-                "NPC stage spec output is a link or reparse point: {}",
+                "NPC stage {kind} output is a link or reparse point: {}",
                 path.display()
             );
             ensure!(
                 metadata.is_file(),
-                "NPC stage spec output is not a regular file: {}",
+                "NPC stage {kind} output is not a regular file: {}",
                 path.display()
             );
         }
@@ -1686,22 +1686,28 @@ fn validate_stage_spec_target(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_stage_spec_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+fn write_stage_output_atomic(path: &Path, bytes: &[u8], kind: &str) -> Result<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("NPC stage spec output has no parent"))?;
+        .ok_or_else(|| anyhow::anyhow!("NPC stage {kind} output has no parent"))?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .with_context(|| format!("creating temporary spec in {}", parent.display()))?;
+        .with_context(|| format!("creating temporary {kind} in {}", parent.display()))?;
     temporary
         .write_all(bytes)
-        .with_context(|| format!("writing temporary spec for {}", path.display()))?;
+        .with_context(|| format!("writing temporary {kind} for {}", path.display()))?;
     temporary
         .flush()
-        .with_context(|| format!("flushing temporary spec for {}", path.display()))?;
+        .with_context(|| format!("flushing temporary {kind} for {}", path.display()))?;
     temporary.persist(path).map_err(|error| {
-        anyhow::anyhow!("publishing NPC stage spec {}: {}", path.display(), error.error)
+        anyhow::anyhow!("publishing NPC stage {kind} {}: {}", path.display(), error.error)
     })?;
     Ok(())
+}
+
+fn write_staged_source(dir: &Path, source: &str) -> Result<()> {
+    let snapshot = dir.join(stage::STAGED_SOURCE_NAME);
+    validate_stage_output_target(&snapshot, "source")?;
+    write_stage_output_atomic(&snapshot, source.as_bytes(), "source")
 }
 
 /// `gore npc stage` — Baum herrichten, Spec schreiben, Bau-Kommandos drucken.
@@ -1714,7 +1720,7 @@ fn stage_workspace(
 ) -> Result<()> {
     gore_mod::validate_mod_name(mod_name).context("invalid --mod-name")?;
     let spec_path = dir.join("spec.json");
-    validate_stage_spec_target(&spec_path)?;
+    validate_stage_output_target(&spec_path, "spec")?;
     let manifest = read_manifest(dir)?;
     validate_manifest_modules(&manifest)?;
     routine::check_managed(dir, &manifest, game.clone())?;
@@ -1748,8 +1754,14 @@ fn stage_workspace(
             overlay_authored(&staged, &manifest, &inspection.module_sources)?;
             staged.display().to_string()
         }
-        // Der Ein-Modul-Weg overlayt die Quelle selbst; ein Baum waere verschenkte Zeit.
-        (stage::Route::SingleModule, _) => "(not needed)".to_string(),
+        (stage::Route::SingleModule, _) => {
+            let level = manifest.level_edit().expect("single-module route has a level edit");
+            let source = inspection.module_sources.get(&level.source_file).with_context(|| {
+                format!("the validated NPC source snapshot is missing {}", level.source_file)
+            })?;
+            write_staged_source(dir, source)?;
+            "(not needed)".to_string()
+        }
     };
 
     // Der Compiler verlangt einen **vorhandenen** privaten Arbeitsordner und bricht sonst mit
@@ -1759,9 +1771,10 @@ fn stage_workspace(
     fs::create_dir_all(&work).with_context(|| format!("creating {}", work.display()))?;
 
     let spec = stage::spec_json(&manifest, mod_name);
-    write_stage_spec_atomic(
+    write_stage_output_atomic(
         &spec_path,
         format!("{}\n", serde_json::to_string_pretty(&spec)?).as_bytes(),
+        "spec",
     )
     .with_context(|| format!("writing {}", spec_path.display()))?;
 
@@ -2277,11 +2290,26 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
         fs::write(&outside, b"keep this file").unwrap();
         fs::hard_link(&outside, &spec).unwrap();
 
-        validate_stage_spec_target(&spec).unwrap();
-        write_stage_spec_atomic(&spec, b"new spec").unwrap();
+        validate_stage_output_target(&spec, "spec").unwrap();
+        write_stage_output_atomic(&spec, b"new spec", "spec").unwrap();
 
         assert_eq!(fs::read(&spec).unwrap(), b"new spec");
         assert_eq!(fs::read(&outside).unwrap(), b"keep this file");
+    }
+
+    #[test]
+    fn staged_single_module_source_survives_later_workspace_edits() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace_source = temp.path().join("Level.as");
+        fs::write(&workspace_source, "validated source").unwrap();
+        let validated = fs::read_to_string(&workspace_source).unwrap();
+        write_staged_source(temp.path(), &validated).unwrap();
+
+        fs::write(&workspace_source, "changed after stage").unwrap();
+        assert_eq!(
+            fs::read_to_string(temp.path().join(stage::STAGED_SOURCE_NAME)).unwrap(),
+            "validated source"
+        );
     }
 
     #[test]

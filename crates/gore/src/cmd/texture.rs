@@ -149,6 +149,65 @@ fn mount_dir(mod_dir: &std::path::Path, asset: &str) -> Result<PathBuf> {
     Ok(mod_dir.join(dir_rel))
 }
 
+/// Create a clone destination one component at a time, rejecting directory links
+/// before they can redirect the cooked files outside the requested mod tree.
+fn ensure_plain_clone_output_dir(path: &std::path::Path) -> Result<()> {
+    use std::path::Component;
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut current = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(_) => {
+                current.push(component.as_os_str());
+                continue;
+            }
+            Component::RootDir | Component::Normal(_) => current.push(component.as_os_str()),
+            Component::CurDir => continue,
+            Component::ParentDir => anyhow::bail!(
+                "clone output directory may not contain '..': {}",
+                path.display()
+            ),
+        }
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => ensure_plain_clone_component(&current, &metadata)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&current).with_context(|| {
+                    format!("creating clone output directory {}", current.display())
+                })?;
+                let metadata = std::fs::symlink_metadata(&current)?;
+                ensure_plain_clone_component(&current, &metadata)?;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("checking {}", current.display()))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_plain_clone_component(
+    path: &std::path::Path,
+    metadata: &std::fs::Metadata,
+) -> Result<()> {
+    let linked = metadata.file_type().is_symlink();
+    #[cfg(windows)]
+    let linked = {
+        use std::os::windows::fs::MetadataExt as _;
+        linked || metadata.file_attributes() & 0x400 != 0
+    };
+    anyhow::ensure!(
+        metadata.is_dir() && !linked,
+        "clone output directory must be a plain directory: {}",
+        path.display()
+    );
+    Ok(())
+}
+
 /// Publish a cloned package without replacing files that appeared after the early destination
 /// checks. On failure, report paths this call created: deleting by path could remove another
 /// process's replacement, so the caller must inspect any incomplete output before retrying.
@@ -659,7 +718,12 @@ pub fn run(action: TextureAction) -> Result<()> {
             }
 
             // 4. Write the rewritten triplet under the asset's mount path in mod_dir.
-            std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+            if as_asset.is_some() {
+                ensure_plain_clone_output_dir(&dir)?;
+            } else {
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("creating {}", dir.display()))?;
+            }
             let out_uasset = dir.join(format!("{leaf}.uasset"));
             let out_uexp = dir.join(format!("{leaf}.uexp"));
             let out_ubulk = dir.join(format!("{leaf}.ubulk"));
@@ -959,6 +1023,36 @@ mod tests {
         assert_eq!(std::fs::read(&uasset).unwrap(), b"asset");
         assert_eq!(std::fs::read(&uexp).unwrap(), b"export");
         assert_eq!(std::fs::read(&ubulk).unwrap(), b"bulk");
+    }
+
+    #[test]
+    fn clone_output_dir_rejects_linked_parent_without_writing_through_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let mod_dir = temp.path().join("mod");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&mod_dir).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let link = mod_dir.join("G1R");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_dir(&outside, &link).is_err() {
+            // Some Windows hosts disallow creating symlinks without Developer Mode.
+            return;
+        }
+
+        let dir = mod_dir.join("G1R/Content/UI");
+        let error = ensure_plain_clone_output_dir(&dir).unwrap_err();
+        assert!(error.to_string().contains("plain directory"));
+        assert!(!outside.join("Content").exists());
+    }
+
+    #[test]
+    fn clone_output_dir_creates_plain_nested_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("mod/G1R/Content/UI");
+        ensure_plain_clone_output_dir(&dir).unwrap();
+        assert!(dir.is_dir());
     }
 
     #[test]
