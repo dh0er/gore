@@ -1780,7 +1780,11 @@ fn stage_workspace(
     // Der Compiler verlangt einen **vorhandenen** privaten Arbeitsordner und bricht sonst mit
     // "reading compiler workspace metadata" ab. Ihn hier anzulegen erspart dem Nutzer ein
     // Kommando, das aussieht, als sei es vollständig, und dann scheitert.
-    let work = stage::work_dir(dir);
+    // The printed paths and the work directory must share one canonical workspace root.
+    // For `stage .`, suffixing the literal `.` would otherwise create `..work` inside it.
+    let command_dir = fs::canonicalize(dir)
+        .with_context(|| format!("resolving NPC stage workspace {}", dir.display()))?;
+    let work = stage::work_dir(&command_dir);
     fs::create_dir_all(&work).with_context(|| format!("creating {}", work.display()))?;
 
     let spec = stage::spec_json(&manifest, mod_name);
@@ -1795,7 +1799,7 @@ fn stage_workspace(
     let commands = stage::build_commands(
         &manifest,
         &inspection.module_sources,
-        &dir.display().to_string(),
+        &command_dir.display().to_string(),
         &tree_display,
         mod_name,
         game_arg.as_deref(),

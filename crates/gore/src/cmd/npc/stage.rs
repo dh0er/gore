@@ -405,6 +405,28 @@ mod tests {
     }
 
     #[test]
+    fn canonical_current_workspace_puts_work_beside_outputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("npc");
+        fs::create_dir(&workspace).unwrap();
+        let resolved = fs::canonicalize(workspace.join(".")).unwrap();
+        let work = work_dir(&resolved);
+        assert_eq!(work, resolved.with_file_name("npc.work"));
+        assert!(!work.starts_with(&resolved));
+        let commands = build_commands(
+            &authored(),
+            &resolved.display().to_string(),
+            "tree",
+            "MyMod",
+            None,
+        );
+        assert!(commands[0].contains(&format!(
+            "--work-dir {}",
+            shell_quote(&work.display().to_string())
+        )));
+    }
+
+    #[test]
     fn both_routes_end_with_the_bundle_build() {
         for manifest in [authored(), suppression()] {
             let commands = build_commands(&manifest, "ws", "tree", "MyMod", None);
