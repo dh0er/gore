@@ -299,18 +299,23 @@ fn strip_ci<'a>(name: &'a str, suffix: &str) -> Option<&'a str> {
 fn leaf_aliases(name: &str) -> Vec<String> {
     let mut names = Vec::new();
     remember_name(&mut names, name.to_string());
-    if let Some(stem) = strip_ci(name, "_Door") {
-        if strip_ci(stem, "_Door").is_none() {
+    // Stem, `U` prefix, and `Trigger` spellings are verified for catalog doors
+    // in the actor map. An unknown save-only name such as `Vault_Door` must
+    // not also close a different door stored as `Vault`.
+    if is_mapped_door(name) {
+        if let Some(stem) = strip_ci(name, "_Door") {
+            if strip_ci(stem, "_Door").is_none() {
+                remember_name(&mut names, stem.to_string());
+            }
+        }
+        if let Some(stem) = strip_ci(name, "Trigger") {
             remember_name(&mut names, stem.to_string());
         }
+        if !name.starts_with('U') && !name.starts_with('u') {
+            remember_name(&mut names, format!("U{name}"));
+        }
+        remember_name(&mut names, format!("{name}Trigger"));
     }
-    if let Some(stem) = strip_ci(name, "Trigger") {
-        remember_name(&mut names, stem.to_string());
-    }
-    if !name.starts_with('U') && !name.starts_with('u') {
-        remember_name(&mut names, format!("U{name}"));
-    }
-    remember_name(&mut names, format!("{name}Trigger"));
     for actor in placed_actor_names(name) {
         remember_name(&mut names, actor.clone());
     }
@@ -322,7 +327,7 @@ fn leaf_aliases(name: &str) -> Vec<String> {
 /// Keyed by `m_UniqueName`. Values are the object name of
 /// `actorToInteractWith` on the interaction spot of the same name. A door
 /// with no such spot (no leaf message under a different name) is absent.
-fn placed_actor_names(name: &str) -> &'static [String] {
+fn actor_map() -> &'static std::collections::HashMap<String, Vec<String>> {
     use std::collections::HashMap;
     use std::sync::LazyLock;
 
@@ -334,7 +339,15 @@ fn placed_actor_names(name: &str) -> &'static [String] {
             .map(|(key, actors)| (key.to_ascii_lowercase(), actors))
             .collect()
     });
-    ACTORS
+    &ACTORS
+}
+
+fn is_mapped_door(name: &str) -> bool {
+    actor_map().contains_key(&name.to_ascii_lowercase())
+}
+
+fn placed_actor_names(name: &str) -> &'static [String] {
+    actor_map()
         .get(&name.to_ascii_lowercase())
         .map(Vec::as_slice)
         .unwrap_or(&[])
@@ -563,6 +576,11 @@ mod tests {
         // has to go — but the closed entry must not be duplicated.
         assert_eq!(plan.open_indices, [0]);
         assert!(plan.closed_names.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_lock_does_not_inherit_another_doors_name() {
+        assert_eq!(leaf_aliases("Vault_Door"), ["Vault_Door"]);
     }
 
     #[test]
