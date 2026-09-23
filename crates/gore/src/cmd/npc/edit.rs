@@ -55,18 +55,35 @@ fn indent_of(line: &str) -> &str {
     &line[..line.len() - line.trim_start().len()]
 }
 
-/// Beginnt hier die Klasse `world_point`?
-fn opens_world_point(line: &str, world_point: &str) -> bool {
+/// Beginnt hier eine Weltpunkt-Klasse?
+fn world_point_name(line: &str) -> Option<&str> {
     let trimmed = line.trim();
     trimmed
         .strip_prefix("class ")
         .and_then(|rest| rest.split_once(':'))
-        .is_some_and(|(name, base)| name.trim() == world_point && base.trim() == WORLD_POINT_BASE)
+        .and_then(|(name, base)| (base.trim() == WORLD_POINT_BASE).then_some(name.trim()))
 }
 
 /// Beginnt hier irgendeine Klasse?
 fn opens_any_class(line: &str) -> bool {
     line.trim().starts_with("class ")
+}
+
+/// Zeilenbereich innerhalb des `OnWorldStart`-Rumpfs einer Klasse.
+fn on_world_start_body(lines: &[&str], start: usize, end: usize) -> Option<(usize, usize)> {
+    let open = (start..end).find(|&index| {
+        lines[index].trim_start().starts_with("void OnWorldStart()")
+            && lines.get(index + 1).is_some_and(|next| next.trim() == "{")
+    })? + 1;
+    let mut depth = 0isize;
+    for (index, line) in lines.iter().enumerate().take(end).skip(open) {
+        depth += line.chars().filter(|&ch| ch == '{').count() as isize;
+        depth -= line.chars().filter(|&ch| ch == '}').count() as isize;
+        if depth == 0 {
+            return Some((open, index));
+        }
+    }
+    None
 }
 
 /// `source` mit einer zusätzlichen Spawn-Zeile in `world_point`s `OnWorldStart`.
@@ -82,7 +99,7 @@ pub fn add_spawn(
     let lines: Vec<&str> = source.lines().collect();
     let Some(start) = lines
         .iter()
-        .position(|line| opens_world_point(line, world_point))
+        .position(|line| world_point_name(line) == Some(world_point))
     else {
         return Err(EditError::NoSuchWorldPoint(world_point.to_string()));
     };
@@ -91,24 +108,8 @@ pub fn add_spawn(
         .position(|line| opens_any_class(line))
         .map_or(lines.len(), |offset| start + 1 + offset);
 
-    let body_open = (start..end)
-        .find(|&index| {
-            lines[index].trim_start().starts_with("void OnWorldStart()")
-                && lines.get(index + 1).is_some_and(|next| next.trim() == "{")
-        })
-        .map(|index| index + 1)
+    let (body_open, body_close) = on_world_start_body(&lines, start, end)
         .ok_or_else(|| EditError::NoBody(world_point.to_string()))?;
-    let mut depth = 0isize;
-    let mut body_close = None;
-    for (index, line) in lines.iter().enumerate().take(end).skip(body_open) {
-        depth += line.chars().filter(|&ch| ch == '{').count() as isize;
-        depth -= line.chars().filter(|&ch| ch == '}').count() as isize;
-        if depth == 0 {
-            body_close = Some(index);
-            break;
-        }
-    }
-    let body_close = body_close.ok_or_else(|| EditError::NoBody(world_point.to_string()))?;
     let mut last_spawn = None;
     for (index, line) in lines.iter().enumerate().take(body_close).skip(body_open + 1) {
         if line.contains("SpawnAIAgent(") {
@@ -144,11 +145,31 @@ pub fn add_spawn(
 /// Die Weltpunkt-Klassen selbst bleiben stehen; nur ihre Zeile verschwindet. Ein leerer
 /// `OnWorldStart`-Rumpf ist gültig und setzt schlicht niemanden mehr.
 pub fn remove_spawn(source: &str, spawn_class: &str) -> Result<String, EditError> {
-    let matches = |line: &str| is_spawn_line_for(line, spawn_class);
-    if !source.lines().any(matches) {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut remove = vec![false; lines.len()];
+    for start in 0..lines.len() {
+        if world_point_name(lines[start]).is_none() {
+            continue;
+        }
+        let end = lines[start + 1..]
+            .iter()
+            .position(|line| opens_any_class(line))
+            .map_or(lines.len(), |offset| start + 1 + offset);
+        let Some((open, close)) = on_world_start_body(&lines, start, end) else {
+            continue;
+        };
+        for index in open + 1..close {
+            remove[index] |= is_spawn_line_for(lines[index], spawn_class);
+        }
+    }
+    if !remove.iter().any(|&matched| matched) {
         return Err(EditError::NotSpawnedHere(spawn_class.to_string()));
     }
-    let kept: Vec<&str> = source.lines().filter(|line| !matches(line)).collect();
+    let kept: Vec<&str> = lines
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, line)| (!remove[index]).then_some(line))
+        .collect();
     let mut text = kept.join("\n");
     if source.ends_with('\n') {
         text.push('\n');
@@ -332,6 +353,37 @@ class UWP_B : UWorldPointScript
         assert!(out.contains("class UWP_A : UWorldPointScript"));
         assert!(out.contains("void OnWorldStart()"));
         assert_eq!(out.lines().count(), SOURCE.lines().count() - 1);
+    }
+
+    #[test]
+    fn removal_keeps_dynamic_spawns_outside_world_point_startup() {
+        let source = SOURCE.replace(
+            "        return;\n    }\n}\n",
+            "        return;\n    }\n    void SpawnHelper()\n    {\n        this.SpawnAIAgent(TSubclassOf<USpawnAIAgentDefinition>(USpawnAIAgentDefinition_Diego::StaticClass()), nullptr);\n    }\n}\n",
+        );
+        let source = format!(
+            "{source}\nvoid SpawnAnywhere()\n{{\n    this.SpawnAIAgent(TSubclassOf<USpawnAIAgentDefinition>(USpawnAIAgentDefinition_Diego::StaticClass()), nullptr);\n}}\n"
+        );
+        let out = remove_spawn(&source, "USpawnAIAgentDefinition_Diego").unwrap();
+        assert_eq!(
+            out.matches("USpawnAIAgentDefinition_Diego::StaticClass()")
+                .count(),
+            3
+        );
+        assert_eq!(out.lines().count(), source.lines().count() - 1);
+        assert!(out.contains("void SpawnHelper()"));
+        assert!(out.contains("void SpawnAnywhere()"));
+    }
+
+    #[test]
+    fn dynamic_spawn_without_a_world_point_is_not_a_suppression_site() {
+        let source = "void SpawnAnywhere()\n{\n    this.SpawnAIAgent(USpawnAIAgentDefinition_Diego, nullptr);\n}\n";
+        assert_eq!(
+            remove_spawn(source, "USpawnAIAgentDefinition_Diego"),
+            Err(EditError::NotSpawnedHere(
+                "USpawnAIAgentDefinition_Diego".to_string()
+            ))
+        );
     }
 
     #[test]
