@@ -47,7 +47,10 @@ const DOORS_CLOSED_PROPERTY: &str = "m_DoorsClosed";
 const DOOR_MESSAGE_NAMES_PROPERTY: &str = "m_SavedDoorsMessagesName";
 const DOOR_MESSAGE_STRUCTS_PROPERTY: &str = "m_SavedDoorsMessagesStruct";
 
-/// The event whose magnitude carries the door's section: 1 opens, 0 shuts.
+/// The event whose magnitude is the door's section. The listener converts it
+/// with truncation and skips the mesh update when that step is already the
+/// component's spawn step (0). A stored 0 therefore leaves an open mesh where
+/// it was. A door the player has shut simply has no message.
 const DOOR_SECTION_EVENT: &str = "m_CurrentSection";
 
 /// Door entries keyed by a CLASS rather than by one door's unique name.
@@ -78,10 +81,20 @@ pub struct DoorLeafPlan {
     pub open_indices: Vec<usize>,
     /// Addressable path of `m_DoorsClosed`, when the save has that array.
     pub closed_path: Option<Vec<String>>,
-    /// Whether the name still has to be appended there.
-    pub closed_needs_entry: bool,
-    /// Paths of every saved-message magnitude that still says "open".
-    pub open_message_magnitudes: Vec<Vec<String>>,
+    /// Names that still have to be appended to `m_DoorsClosed`, in the spelling
+    /// the open list used. One door is often recorded there under a second
+    /// name (`OC_Guards_Cell_01_Door` in the lock set, `OC_Guards_Cell_01` in
+    /// the leaf arrays); each of those has to be shut or `IsDoorOpen` still
+    /// hits the leftover copy.
+    pub closed_names: Vec<String>,
+    /// Addressable path of `m_SavedDoorsMessagesName`, when that array exists.
+    pub message_names_path: Option<Vec<String>>,
+    /// Addressable path of `m_SavedDoorsMessagesStruct`. Same indices as the names.
+    pub message_structs_path: Option<Vec<String>>,
+    /// Section messages for this door. They are removed, not zeroed: a magnitude
+    /// of 0 replays as step 0, the component already starts at step 0, and the
+    /// mesh update is skipped, so the leaf stays visually open.
+    pub message_indices: Vec<usize>,
 }
 
 /// Case-insensitive name/string equality, matching UE `FName` semantics.
@@ -111,10 +124,7 @@ pub fn plan_close_door_leaf(
     root: &RootObject,
     name: &str,
 ) -> Result<Option<DoorLeafPlan>, CoreError> {
-    if SHARED_DOOR_BUCKETS
-        .iter()
-        .any(|bucket| bucket.eq_ignore_ascii_case(name))
-    {
+    if is_shared_door_bucket(name) {
         return Err(CoreError::UnsupportedEdit(format!(
             "{name:?} names a whole class of doors, not one door; refusing to \
              shut every door that shares it"
@@ -123,28 +133,24 @@ pub fn plan_close_door_leaf(
     let Some((open_path, open_elements)) = array_elements(root, DOORS_OPEN_PROPERTY) else {
         return Ok(None);
     };
-    let open_indices: Vec<usize> = open_elements
-        .iter()
-        .enumerate()
-        .filter(|(_, element)| element_is(element, name))
-        .map(|(index, _)| index)
-        .collect();
-    if open_indices.is_empty() {
-        return Ok(None);
-    }
 
-    let (closed_path, closed_needs_entry) = match array_elements(root, DOORS_CLOSED_PROPERTY) {
-        Some((path, elements)) => {
-            let present = elements.iter().any(|element| element_is(element, name));
-            (Some(path), !present)
-        }
-        None => (None, false),
+    // The lock set, the leaf arrays and the replayed section message do not
+    // always use the same string. A locked door's unique name is
+    // `OC_Guards_Cell_01_Door`, but the leaf is stored as `OC_Guards_Cell_01`;
+    // a section message may be stored as `U` + the class or with a `Trigger`
+    // suffix. `GlobalResendSavedDoorMessages` replays a magnitude of 1 as
+    // "open" after load, so leaving that message (or the alias still sitting
+    // in `m_DoorsOpen`) puts the leaf back open on top of a lock that is shut.
+    let mut names_to_clear = leaf_aliases(name);
+
+    let (closed_path, closed_elements) = match array_elements(root, DOORS_CLOSED_PROPERTY) {
+        Some((path, elements)) => (Some(path), Some(elements)),
+        None => (None, None),
     };
 
-    // A door that carries a saved verb message would have it replayed on load;
-    // if that message still says section 1, the leaf swings back open however
-    // the arrays read. Zero it for this door only.
-    let mut open_message_magnitudes = Vec::new();
+    let mut message_names_path = None;
+    let mut message_structs_path = None;
+    let mut message_indices = Vec::new();
     let message_names = array_elements(root, DOOR_MESSAGE_NAMES_PROPERTY);
     let message_structs = array_elements(root, DOOR_MESSAGE_STRUCTS_PROPERTY);
     if message_names
@@ -158,42 +164,193 @@ pub fn plan_close_door_leaf(
             "cannot relock {name:?}: saved door-message name and struct arrays have different lengths"
         )));
     }
-    if let (Some((_, names)), Some((structs_path, structs))) = (message_names, message_structs) {
+    if let (Some((names_path, names)), Some((structs_path, structs))) =
+        (message_names, message_structs)
+    {
         for (index, entry) in names.iter().enumerate() {
-            if !element_is(entry, name) {
-                continue;
-            }
-            // Unknown message payloads are left intact.
             let Some(message) = structs.get(index).and_then(struct_properties) else {
                 continue;
             };
+            let trigger = message
+                .iter()
+                .find(|p| p.name.as_str() == "m_ConnectedTrigger");
+            let mentions_door = names_to_clear.iter().any(|alias| element_is(entry, alias))
+                || trigger.is_some_and(|property| {
+                    names_to_clear
+                        .iter()
+                        .any(|alias| element_is(&property.value, alias))
+                });
+            if !mentions_door {
+                continue;
+            }
+            if let Some(spelling) = element_name(entry) {
+                remember_name(&mut names_to_clear, spelling);
+            }
             let is_section_event = message
                 .iter()
                 .any(|p| p.name.as_str() == "m_Event" && element_is(&p.value, DOOR_SECTION_EVENT));
             if !is_section_event {
                 continue;
             }
-            let still_open = message.iter().any(|p| {
-                p.name.as_str() == "m_Magnitude"
-                    && matches!(p.value, PropertyValue::Double(value) if value != 0.0)
-            });
-            if !still_open {
-                continue;
-            }
-            let mut path = structs_path.clone();
-            path.push(format!("[{index}]"));
-            path.push("m_Magnitude".to_string());
-            open_message_magnitudes.push(path);
+            message_names_path = Some(names_path.clone());
+            message_structs_path = Some(structs_path.clone());
+            message_indices.push(index);
         }
+    }
+
+    let mut open_indices = Vec::new();
+    let mut closed_names = Vec::new();
+    for (index, element) in open_elements.iter().enumerate() {
+        if !names_to_clear
+            .iter()
+            .any(|alias| element_is(element, alias))
+        {
+            continue;
+        }
+        open_indices.push(index);
+        let Some(spelling) = element_name(element) else {
+            continue;
+        };
+        let already_closed = closed_elements.is_some_and(|elements| {
+            elements
+                .iter()
+                .any(|element| element_is(element, &spelling))
+        });
+        let already_queued = closed_names
+            .iter()
+            .any(|queued: &String| queued.eq_ignore_ascii_case(&spelling));
+        if !already_closed && !already_queued {
+            closed_names.push(spelling);
+        }
+    }
+
+    if open_indices.is_empty() && message_indices.is_empty() {
+        return Ok(None);
     }
 
     Ok(Some(DoorLeafPlan {
         open_path,
         open_indices,
         closed_path,
-        closed_needs_entry,
-        open_message_magnitudes,
+        closed_names,
+        message_names_path,
+        message_structs_path,
+        message_indices,
     }))
+}
+
+fn is_shared_door_bucket(name: &str) -> bool {
+    SHARED_DOOR_BUCKETS
+        .iter()
+        .any(|bucket| bucket.eq_ignore_ascii_case(name))
+}
+
+fn element_name(element: &PropertyValue) -> Option<String> {
+    match element {
+        PropertyValue::Name(value) | PropertyValue::Str(value) => Some(value.clone()),
+        _ => None,
+    }
+}
+
+fn remember_name(names: &mut Vec<String>, candidate: String) {
+    if candidate.is_empty() || is_shared_door_bucket(&candidate) {
+        return;
+    }
+    if names
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&candidate))
+    {
+        return;
+    }
+    names.push(candidate);
+}
+
+/// Case-insensitive suffix strip that keeps the original spelling of the stem.
+fn strip_ci<'a>(name: &'a str, suffix: &str) -> Option<&'a str> {
+    if suffix.len() >= name.len() {
+        return None;
+    }
+    let split_at = name.len() - suffix.len();
+    // Lock names are arbitrary UTF-8. A byte offset inside a character is not
+    // a suffix match, and slicing there panics.
+    if !name.is_char_boundary(split_at) {
+        return None;
+    }
+    let (stem, tail) = name.split_at(split_at);
+    if tail.eq_ignore_ascii_case(suffix) {
+        Some(stem)
+    } else {
+        None
+    }
+}
+
+/// Every string this one door is known to be stored under.
+///
+/// The stem of a `_Door` suffix is included only when that stem is not itself
+/// another `_Door` name: `OC_Guards_Cell_01_Door` shuts `OC_Guards_Cell_01`,
+/// but `OC_Cellar_Door_02` must not also shut `OC_Cellar_Door`.
+///
+/// The placed actor is a different string again. The lock set and the leaf
+/// arrays use `m_UniqueName` (`OC_Prison_Dungeons_Cell_06_Door`); the section
+/// message `GlobalResendSavedDoorMessages` replays is the level actor
+/// (`IO_OC_NormalDoor_C_UAID_...`). That pairing is not in the save. It is the
+/// interaction spot whose name is the unique name, from the game's
+/// `InteractionSpots.json`, baked into [`placed_actor_names`].
+fn leaf_aliases(name: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    remember_name(&mut names, name.to_string());
+    // Stem, `U` prefix, and `Trigger` spellings are verified for catalog doors
+    // in the actor map. An unknown save-only name such as `Vault_Door` must
+    // not also close a different door stored as `Vault`.
+    if is_mapped_door(name) {
+        if let Some(stem) = strip_ci(name, "_Door") {
+            if strip_ci(stem, "_Door").is_none() {
+                remember_name(&mut names, stem.to_string());
+            }
+        }
+        if let Some(stem) = strip_ci(name, "Trigger") {
+            remember_name(&mut names, stem.to_string());
+        }
+        if !name.starts_with('U') && !name.starts_with('u') {
+            remember_name(&mut names, format!("U{name}"));
+        }
+        remember_name(&mut names, format!("{name}Trigger"));
+    }
+    for actor in placed_actor_names(name) {
+        remember_name(&mut names, actor.clone());
+    }
+    names
+}
+
+/// Level actor that owns this door's saved section message.
+///
+/// Keyed by `m_UniqueName`. Values are the object name of
+/// `actorToInteractWith` on the interaction spot of the same name. A door
+/// with no such spot (no leaf message under a different name) is absent.
+fn actor_map() -> &'static std::collections::HashMap<String, Vec<String>> {
+    use std::collections::HashMap;
+    use std::sync::LazyLock;
+
+    static ACTORS: LazyLock<HashMap<String, Vec<String>>> = LazyLock::new(|| {
+        let raw: HashMap<String, Vec<String>> =
+            serde_json::from_str(include_str!("door_leaf_actors.json"))
+                .expect("door_leaf_actors.json is a unique-name to actor-name map");
+        raw.into_iter()
+            .map(|(key, actors)| (key.to_ascii_lowercase(), actors))
+            .collect()
+    });
+    &ACTORS
+}
+
+fn is_mapped_door(name: &str) -> bool {
+    actor_map().contains_key(&name.to_ascii_lowercase())
+}
+
+fn placed_actor_names(name: &str) -> &'static [String] {
+    actor_map()
+        .get(&name.to_ascii_lowercase())
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
 }
 
 fn struct_properties(element: &PropertyValue) -> Option<&[properties::Property]> {
@@ -404,7 +561,7 @@ mod tests {
             [0, 2],
             "one removal would leave the door open"
         );
-        assert!(plan.closed_needs_entry);
+        assert_eq!(plan.closed_names, ["OC_Santino_Door"]);
         assert!(plan.closed_path.is_some());
     }
 
@@ -418,7 +575,18 @@ mod tests {
         // m_DoorsOpen is scanned first and wins, so the stale open entry still
         // has to go — but the closed entry must not be duplicated.
         assert_eq!(plan.open_indices, [0]);
-        assert!(!plan.closed_needs_entry);
+        assert!(plan.closed_names.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_lock_does_not_inherit_another_doors_name() {
+        assert_eq!(leaf_aliases("Vault_Door"), ["Vault_Door"]);
+    }
+
+    #[test]
+    fn a_multibyte_lock_name_is_not_sliced_mid_character() {
+        assert_eq!(strip_ci("aé_Door", "_Door"), Some("aé"));
+        assert!(strip_ci("aédefg", "_Door").is_none());
     }
 
     #[test]
@@ -445,6 +613,70 @@ mod tests {
             error.to_string().contains("whole class of doors"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn closing_a_suffixed_lock_also_shuts_the_unsuffixed_leaf_name() {
+        // The lock catalog and m_UnlockedLocks say OC_Guards_Cell_01_Door.
+        // The leaf arrays in a real save say OC_Guards_Cell_01. Shutting only
+        // the lock's spelling leaves every copy of the leaf name in
+        // m_DoorsOpen, and IsDoorOpen returns true on the first hit.
+        let payload = door_payload(
+            &[
+                "OC_Guards_Cell_01",
+                "OC_Guards_Cell_02",
+                "OC_Guards_Cell_01",
+            ],
+            &[],
+        );
+        let root = properties::parse_private_root(&payload).unwrap();
+        let plan = plan_close_door_leaf(&root, "OC_Guards_Cell_01_Door")
+            .unwrap()
+            .expect("the unsuffixed leaf is still open");
+        assert_eq!(plan.open_indices, [0, 2]);
+        assert_eq!(plan.closed_names, ["OC_Guards_Cell_01"]);
+    }
+
+    #[test]
+    fn a_door_alias_includes_the_level_actor_and_not_its_neighbor() {
+        let cell = leaf_aliases("OC_Prison_Dungeons_Cell_06_Door");
+        assert!(
+            cell.iter()
+                .any(|name| { name == "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1351102996" })
+        );
+        let neighbor = leaf_aliases("OC_Prison_Dungeons_Cell_23_Door");
+        assert!(
+            neighbor
+                .iter()
+                .all(|name| { name != "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1351102996" })
+        );
+        let fence = leaf_aliases("AbandonedMine_Fence_Door");
+        assert!(fence.iter().any(|name| {
+            name == "FenceDoor_Abandoned_C_UAID_E89C256C6855633902_1078604137"
+        }));
+        let altar = leaf_aliases("SunkenTower_Door_02_Altar_A");
+        assert!(altar.iter().any(|name| {
+            name == "SunkenTower_Door_02_Altar_C_UAID_2CF05D5C3CF14B7E02_1407505779"
+        }));
+        assert!(altar.iter().all(|name| name != "Sunken_Door_01_C_UAID_2CF05D5C3CF1EB7E02_1534383934"));
+        let cell_05 = leaf_aliases("OC_Prison_Dungeons_Cell_05_Door");
+        assert!(cell_05.iter().any(|name| {
+            name == "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1308812995"
+        }));
+        assert!(cell_05.iter().all(|name| {
+            name != "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1784882001"
+        }));
+    }
+
+    #[test]
+    fn closing_a_numbered_door_does_not_shut_the_door_it_is_named_after() {
+        let payload = door_payload(&["OC_Cellar_Door", "OC_Cellar_Door_02"], &[]);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let plan = plan_close_door_leaf(&root, "OC_Cellar_Door_02")
+            .unwrap()
+            .expect("door 02 is open");
+        assert_eq!(plan.open_indices, [1]);
+        assert_eq!(plan.closed_names, ["OC_Cellar_Door_02"]);
     }
 
     #[test]

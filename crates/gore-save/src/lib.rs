@@ -14073,14 +14073,11 @@ fn apply_private_lock_set_unlocked_to_payload(
     Ok(())
 }
 
-/// Shut one door's leaf, doing exactly what the game's own
-/// `Server_SetDoorOpenState(false, name)` does: strip EVERY copy of the name
-/// from `m_DoorsOpen` (the game appends without a uniqueness check, so a door
-/// used often has dozens) and append it once to `m_DoorsClosed`.
+/// Shut one door's leaf: strip every copy from `m_DoorsOpen`, append each
+/// removed spelling once to `m_DoorsClosed`, and delete the section message.
+/// Leaving that message at magnitude 0 does not move the mesh.
 ///
-/// A name that is not in `m_DoorsOpen` is not a door, or is a door already
-/// shut — either way there is nothing to do, so every chest lands here as a
-/// no-op.
+/// A chest, or a door already shut with no section message, is a no-op.
 fn close_door_leaf_in_payload(payload: &mut Vec<u8>, name: &str) -> Result<(), CoreError> {
     let root = properties::parse_private_root(payload)?;
     let Some(plan) = locks::plan_close_door_leaf(&root, name)? else {
@@ -14088,28 +14085,43 @@ fn close_door_leaf_in_payload(payload: &mut Vec<u8>, name: &str) -> Result<(), C
     };
     drop(root);
 
-    // Fixed-size writes first, so they resolve against the layout they were
-    // planned on; the length-changing splices come after.
-    for magnitude_path in &plan.open_message_magnitudes {
-        let root = properties::parse_private_root(payload)?;
-        let segments = properties::parse_path(magnitude_path)?;
-        let target = properties::resolve(&root.properties, &segments)?.clone();
-        drop(root);
-        properties::patch_scalar(payload, &target, properties::ScalarValue::Double(0.0))?;
+    // Drop the section messages before the leaf arrays move. A magnitude of 0
+    // is replayed as step 0, and the door component already starts at step 0,
+    // so the mesh update is skipped and the leaf stays open. A shut door in a
+    // real save has no message.
+    if !plan.message_indices.is_empty() {
+        if let Some(path) = &plan.message_structs_path {
+            apply_container_edit_by_path(
+                payload,
+                path,
+                properties::ContainerEdit::ArrayRemoveMany(plan.message_indices.clone()),
+            )?;
+        }
+        if let Some(path) = &plan.message_names_path {
+            apply_container_edit_by_path(
+                payload,
+                path,
+                properties::ContainerEdit::ArrayRemoveMany(plan.message_indices.clone()),
+            )?;
+        }
     }
 
-    apply_container_edit_by_path(
-        payload,
-        &plan.open_path,
-        properties::ContainerEdit::ArrayRemoveMany(plan.open_indices.clone()),
-    )?;
+    if !plan.open_indices.is_empty() {
+        apply_container_edit_by_path(
+            payload,
+            &plan.open_path,
+            properties::ContainerEdit::ArrayRemoveMany(plan.open_indices.clone()),
+        )?;
+    }
 
-    if plan.closed_needs_entry {
-        if let Some(closed_path) = &plan.closed_path {
+    if let Some(closed_path) = &plan.closed_path {
+        for closed_name in &plan.closed_names {
             apply_container_edit_by_path(
                 payload,
                 closed_path,
-                properties::ContainerEdit::ArrayInsertBytes(properties::encode_fstring_value(name)),
+                properties::ContainerEdit::ArrayInsertBytes(properties::encode_fstring_value(
+                    closed_name,
+                )),
             )?;
         }
     }
@@ -17013,6 +17025,202 @@ mod tests {
     }
 
     #[test]
+    fn relocking_shuts_the_placed_actor_message_the_save_does_not_name() {
+        // m_DoorsOpen stores the lock's unique name. The mesh replay stores the
+        // level actor, and that message's trigger is the actor again — the
+        // unique name appears in neither. Interaction spots pair them.
+        let actor = "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1351102996";
+        let neighbor = "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF172D501_1521852189";
+        let mut props =
+            private_name_set_property("m_UnlockedLocks", &["OC_Prison_Dungeons_Cell_06_Door"]);
+        props.extend(inv_name_array_property(
+            "m_DoorsOpen",
+            &[
+                "OC_Prison_Dungeons_Cell_06_Door",
+                "OC_Prison_Dungeons_Cell_23_Door",
+            ],
+        ));
+        props.extend(inv_name_array_property("m_DoorsClosed", &[]));
+        props.extend(inv_name_array_property(
+            "m_SavedDoorsMessagesName",
+            &[actor, neighbor],
+        ));
+        let mut cell = inv_name_property("m_Event", "m_CurrentSection");
+        cell.extend(inv_name_property("m_ConnectedTrigger", actor));
+        cell.extend(private_double_property("m_Magnitude", 1.0));
+        let mut other = inv_name_property("m_Event", "m_CurrentSection");
+        other.extend(inv_name_property("m_ConnectedTrigger", neighbor));
+        other.extend(private_double_property("m_Magnitude", 1.0));
+        props.extend(inv_struct_array_property(
+            "m_SavedDoorsMessagesStruct",
+            "SavedDoorMessage",
+            &[cell, other],
+        ));
+        let mut payload = fstring("/Script/G1R.GameStateDataBaseSaveData");
+        payload.push(0);
+        payload.extend(props);
+        payload.extend(fstring("None"));
+        payload.extend(0u32.to_le_bytes());
+
+        apply_private_lock_set_unlocked_to_payload(
+            &mut payload,
+            &PrivateLockSetUnlockedEdit {
+                lock: "OC_Prison_Dungeons_Cell_06_Door".to_string(),
+                unlocked: false,
+            },
+        )
+        .unwrap();
+
+        let (open, closed) = door_arrays(&payload);
+        assert_eq!(open, ["OC_Prison_Dungeons_Cell_23_Door"]);
+        assert_eq!(closed, ["OC_Prison_Dungeons_Cell_06_Door"]);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let (_, names) = properties::find_property_by_name(&root, "m_SavedDoorsMessagesName").unwrap();
+        let properties::PropertyValue::Array { elements } = &names.value else {
+            panic!("names");
+        };
+        assert_eq!(elements.len(), 1, "the cell's section message has to go");
+        let path = properties::parse_path(&[
+            "m_SavedDoorsMessagesStruct".to_string(),
+            "[0]".to_string(),
+            "m_Magnitude".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(
+            &properties::resolve(&root.properties, &path).unwrap().value,
+            &properties::PropertyValue::Double(1.0),
+            "the neighboring door's message stays"
+        );
+    }
+
+    #[test]
+    fn relocking_still_shuts_the_actor_message_when_the_leaf_arrays_already_say_closed() {
+        // A previous editor build moved the unique name into m_DoorsClosed and
+        // stored the actor message at magnitude 0. That replay is step 0, the
+        // component already starts at step 0, and the mesh update is skipped.
+        // Locking again has to delete the message.
+        let actor = "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1351102996";
+        let mut props = private_name_set_property("m_UnlockedLocks", &[]);
+        props.extend(inv_name_array_property("m_DoorsOpen", &[]));
+        props.extend(inv_name_array_property(
+            "m_DoorsClosed",
+            &["OC_Prison_Dungeons_Cell_06_Door"],
+        ));
+        props.extend(inv_name_array_property(
+            "m_SavedDoorsMessagesName",
+            &[actor],
+        ));
+        let mut cell = inv_name_property("m_Event", "m_CurrentSection");
+        cell.extend(inv_name_property("m_ConnectedTrigger", actor));
+        cell.extend(private_double_property("m_Magnitude", 0.0));
+        props.extend(inv_struct_array_property(
+            "m_SavedDoorsMessagesStruct",
+            "SavedDoorMessage",
+            &[cell],
+        ));
+        let mut payload = fstring("/Script/G1R.GameStateDataBaseSaveData");
+        payload.push(0);
+        payload.extend(props);
+        payload.extend(fstring("None"));
+        payload.extend(0u32.to_le_bytes());
+
+        apply_private_lock_set_unlocked_to_payload(
+            &mut payload,
+            &PrivateLockSetUnlockedEdit {
+                lock: "OC_Prison_Dungeons_Cell_06_Door".to_string(),
+                unlocked: false,
+            },
+        )
+        .unwrap();
+
+        let (open, closed) = door_arrays(&payload);
+        assert!(open.is_empty());
+        assert_eq!(closed, ["OC_Prison_Dungeons_Cell_06_Door"]);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let (_, names) = properties::find_property_by_name(&root, "m_SavedDoorsMessagesName").unwrap();
+        let properties::PropertyValue::Array { elements } = &names.value else {
+            panic!("names");
+        };
+        assert!(elements.is_empty(), "a magnitude-0 section message still has to go");
+    }
+
+    #[test]
+    fn relocking_shuts_a_leaf_stored_under_another_name() {
+        // The lock is OC_Guards_Cell_01_Door. The leaf array and the section
+        // message that GlobalResendSavedDoorMessages replays (magnitude 1
+        // opens the mesh) use OC_Guards_Cell_01. A second message belongs to
+        // this door only through m_ConnectedTrigger, under the placed actor's
+        // name. Neither used to be touched, so the lock shut and the leaf
+        // stayed open.
+        let mut props = private_name_set_property("m_UnlockedLocks", &["OC_Guards_Cell_01_Door"]);
+        props.extend(inv_name_array_property(
+            "m_DoorsOpen",
+            &[
+                "OC_Guards_Cell_01",
+                "CV_Stash_Door",
+                "OC_Guards_Cell_01",
+                "Actor_UAID_GuardCell",
+            ],
+        ));
+        props.extend(inv_name_array_property("m_DoorsClosed", &[]));
+        props.extend(inv_name_array_property(
+            "m_SavedDoorsMessagesName",
+            &["OC_Guards_Cell_01", "CV_Stash_Door", "Actor_UAID_GuardCell"],
+        ));
+        let mut guard = inv_name_property("m_Event", "m_CurrentSection");
+        guard.extend(inv_name_property("m_ConnectedTrigger", "OC_Guards_Cell_01"));
+        guard.extend(private_double_property("m_Magnitude", 1.0));
+        let mut stash = inv_name_property("m_Event", "m_CurrentSection");
+        stash.extend(inv_name_property("m_ConnectedTrigger", "CV_Stash_Door"));
+        stash.extend(private_double_property("m_Magnitude", 1.0));
+        let mut actor = inv_name_property("m_Event", "m_CurrentSection");
+        actor.extend(inv_name_property(
+            "m_ConnectedTrigger",
+            "OC_Guards_Cell_01_Door",
+        ));
+        actor.extend(private_double_property("m_Magnitude", 1.0));
+        props.extend(inv_struct_array_property(
+            "m_SavedDoorsMessagesStruct",
+            "SavedDoorMessage",
+            &[guard, stash, actor],
+        ));
+        let mut payload = fstring("/Script/G1R.GameStateDataBaseSaveData");
+        payload.push(0);
+        payload.extend(props);
+        payload.extend(fstring("None"));
+        payload.extend(0u32.to_le_bytes());
+
+        apply_private_lock_set_unlocked_to_payload(
+            &mut payload,
+            &PrivateLockSetUnlockedEdit {
+                lock: "OC_Guards_Cell_01_Door".to_string(),
+                unlocked: false,
+            },
+        )
+        .unwrap();
+
+        let (open, closed) = door_arrays(&payload);
+        assert_eq!(open, ["CV_Stash_Door"]);
+        assert_eq!(closed, ["OC_Guards_Cell_01", "Actor_UAID_GuardCell"]);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let (_, names) = properties::find_property_by_name(&root, "m_SavedDoorsMessagesName").unwrap();
+        match &names.value {
+            properties::PropertyValue::Array { elements } => assert_eq!(elements.len(), 1),
+            other => panic!("names: {other:?}"),
+        }
+        let path = properties::parse_path(&[
+            "m_SavedDoorsMessagesStruct".to_string(),
+            "[0]".to_string(),
+            "m_Magnitude".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(
+            &properties::resolve(&root.properties, &path).unwrap().value,
+            &properties::PropertyValue::Double(1.0)
+        );
+    }
+
+    #[test]
     fn relocking_an_already_locked_door_still_closes_its_leaf() {
         let mut payload = door_state_payload(&["CV_Stash_Door", "OC_Cellar_Door"], &[]);
         apply_private_lock_set_unlocked_to_payload(
@@ -17070,16 +17278,22 @@ mod tests {
             } else {
                 result.unwrap();
                 let root = properties::parse_private_root(&payload).unwrap();
-                for (index, expected) in [(0, 0.0), (1, 1.0)] {
-                    let path = properties::parse_path(&[
-                        "m_SavedDoorsMessagesStruct".to_string(),
-                        format!("[{index}]"),
-                        "m_Magnitude".to_string(),
-                    ])
-                    .unwrap();
-                    let actual = &properties::resolve(&root.properties, &path).unwrap().value;
-                    assert_eq!(actual, &properties::PropertyValue::Double(expected));
+                let (_, names) =
+                    properties::find_property_by_name(&root, "m_SavedDoorsMessagesName").unwrap();
+                match &names.value {
+                    properties::PropertyValue::Array { elements } => assert_eq!(elements.len(), 1),
+                    other => panic!("names: {other:?}"),
                 }
+                let path = properties::parse_path(&[
+                    "m_SavedDoorsMessagesStruct".to_string(),
+                    "[0]".to_string(),
+                    "m_Magnitude".to_string(),
+                ])
+                .unwrap();
+                assert_eq!(
+                    &properties::resolve(&root.properties, &path).unwrap().value,
+                    &properties::PropertyValue::Double(1.0)
+                );
             }
         }
     }
