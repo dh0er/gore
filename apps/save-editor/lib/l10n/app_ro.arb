@@ -808,6 +808,6 @@
   "locksPermalocked": "Sigilat permanent",
   "locksReadOnly": "Această salvare nu are set de lăcate editabil.",
   "locksUnknownEntry": "Nu e în această versiune a jocului",
-  "locksDoorLeafHint": "Închiderea din nou a unei uși o închide și pe ușă.",
+  "locksDoorLeafHint": "Încuierea din nou a unei uși o închide și pe ușă.",
   "locksResetPending": "Renunță la modificările de lăcate din coadă"
 }

@@ -3321,7 +3321,7 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get locksDoorLeafHint =>
-      'Închiderea din nou a unei uși o închide și pe ușă.';
+      'Încuierea din nou a unei uși o închide și pe ușă.';
 
   @override
   String get locksResetPending => 'Renunță la modificările de lăcate din coadă';
