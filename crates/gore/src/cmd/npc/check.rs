@@ -197,9 +197,10 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
             .assignments
             .iter()
             .filter(|(lhs, _)| lhs == field)
-            .map(|(_, rhs)| rhs.trim_start_matches('n').trim_matches('"').to_string())
+            .map(|(_, rhs)| rhs.to_string())
             .collect()
     };
+    let expected_name = format!("n\"{npc_id}\"");
 
     let definition = classes
         .iter()
@@ -210,10 +211,10 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
              spawn from"
         ))),
         Some(class) => match assigned(class, chain::UNIQUE_NAME_FIELD).as_slice() {
-            [name] if name == npc_id => {}
+            [name] if name == &expected_name => {}
             [name] => findings.push(Finding::blocking(format!(
-                "m_UniqueName is {name:?} but the character is {npc_id:?}. The save keys a \
-                 character by that name, so the two have to agree"
+                "m_UniqueName must be exactly {expected_name}, not {name:?}. The save keys a \
+                 character by that name"
             ))),
             [] => findings.push(Finding::blocking(
                 "the character definition sets no m_UniqueName. Without it the save cannot key \
@@ -315,9 +316,9 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
     }
     match settings.as_slice() {
         [settings] => match assigned(settings, "ForCharacter").as_slice() {
-            [name] if name == npc_id => {}
+            [name] if name == &expected_name => {}
             [name] => findings.push(Finding::blocking(format!(
-                "ForCharacter is {name:?} but the character is {npc_id:?}. The game binds \
+                "ForCharacter must be exactly {expected_name}, not {name:?}. The game binds \
                  conversation settings by that name"
             ))),
             [] => findings.push(Finding::blocking(
@@ -629,6 +630,43 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
         assert!(findings
             .iter()
             .any(|f| f.severity == Severity::Blocking && f.message.contains("m_UniqueName")));
+    }
+
+    #[test]
+    fn identity_fields_require_exact_name_literals() {
+        for (original, replacement, field) in [
+            (
+                "default m_UniqueName = n\"MINE\";",
+                "default m_UniqueName = nMINE;",
+                "m_UniqueName",
+            ),
+            (
+                "default ForCharacter = n\"MINE\";",
+                "default ForCharacter = nMINE;",
+                "ForCharacter",
+            ),
+        ] {
+            let source = AUTHORED.replacen(original, replacement, 1);
+            let findings = guard_authored_module(&source, "MINE");
+            assert!(findings.iter().any(|finding| {
+                finding.severity == Severity::Blocking && finding.message.contains(field)
+            }));
+        }
+    }
+
+    #[test]
+    fn an_identity_default_after_the_class_body_is_missing() {
+        let source = AUTHORED
+            .replacen("    default m_UniqueName = n\"MINE\";\n", "", 1)
+            .replacen(
+                "}\n\nclass UAIAgentConfig_Human_MINE",
+                "}\ndefault m_UniqueName = n\"MINE\";\n\nclass UAIAgentConfig_Human_MINE",
+                1,
+            );
+        let findings = guard_authored_module(&source, "MINE");
+        assert!(findings.iter().any(|finding| {
+            finding.severity == Severity::Blocking && finding.message.contains("m_UniqueName")
+        }));
     }
 
     #[test]

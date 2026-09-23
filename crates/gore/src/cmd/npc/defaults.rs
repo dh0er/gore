@@ -85,6 +85,8 @@ pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
     let mut depth = 0usize;
     let mut namespaces: Vec<(usize, String)> = Vec::new();
     let mut pending_namespace = None;
+    let mut pending_class = None;
+    let mut class_body: Option<(usize, usize)> = None;
     for line in source.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("namespace ") {
@@ -112,19 +114,23 @@ pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
                 assignments: Vec::new(),
                 calls: Vec::new(),
             });
-        } else if let (Some(rest), Some(current)) =
-            (trimmed.strip_prefix("default "), out.last_mut())
+            pending_class = Some(out.len() - 1);
+        } else if let (Some(rest), Some((index, class_depth))) =
+            (trimmed.strip_prefix("default "), class_body)
         {
-            let statement = rest.trim().trim_end_matches(';').trim();
-            // Ein `=` weist nur zu, wenn es vor der ersten `(` steht: alles hinter dieser Klammer
-            // gehört zu den Argumenten eines Aufrufs, wo ein `=` in einem Literal stehen darf.
-            let first_paren = statement.find('(').unwrap_or(statement.len());
-            match statement[..first_paren].find('=') {
-                Some(at) => current.assignments.push((
-                    statement[..at].trim().to_string(),
-                    statement[at + 1..].trim().to_string(),
-                )),
-                None => current.calls.push(statement.to_string()),
+            if depth == class_depth {
+                let current = &mut out[index];
+                let statement = rest.trim().trim_end_matches(';').trim();
+                // Ein `=` weist nur zu, wenn es vor der ersten `(` steht: alles hinter dieser
+                // Klammer gehört zu den Argumenten eines Aufrufs.
+                let first_paren = statement.find('(').unwrap_or(statement.len());
+                match statement[..first_paren].find('=') {
+                    Some(at) => current.assignments.push((
+                        statement[..at].trim().to_string(),
+                        statement[at + 1..].trim().to_string(),
+                    )),
+                    None => current.calls.push(statement.to_string()),
+                }
             }
         }
 
@@ -149,9 +155,14 @@ pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
                     depth += 1;
                     if let Some(name) = pending_namespace.take() {
                         namespaces.push((depth, name));
+                    } else if let Some(index) = pending_class.take() {
+                        class_body = Some((index, depth));
                     }
                 }
                 '}' => {
+                    if class_body.is_some_and(|(_, start)| start == depth) {
+                        class_body = None;
+                    }
                     if namespaces.last().is_some_and(|(start, _)| *start == depth) {
                         namespaces.pop();
                     }
@@ -246,6 +257,16 @@ class UAfter : UBase
         assert_eq!(classes[1].namespace.as_deref(), Some("Outer"));
         assert_eq!(classes[2].namespace.as_deref(), Some("Outer::Inner"));
         assert_eq!(classes[3].namespace, None);
+    }
+
+    #[test]
+    fn defaults_outside_the_class_body_are_not_assigned_to_it() {
+        let source = "class UX : UBase\n{\n    default m_Name = n\"VALID\";\n}\ndefault m_Name = n\"OUTSIDE\";\n";
+        let classes = parse_classes(source);
+        assert_eq!(
+            classes[0].assignments,
+            vec![("m_Name".to_string(), "n\"VALID\"".to_string())]
+        );
     }
 
     #[test]
