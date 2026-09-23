@@ -284,6 +284,25 @@ void main() {
     );
   });
 
+  testWidgets('toggling a door back to locked still writes the leaf close', (
+    tester,
+  ) async {
+    final core = _LocksCore();
+    final notifier = await _notifier(tester, core);
+    await _panel(tester, notifier);
+
+    final row = find.byKey(const ValueKey('lock-NC_Cave_Tavern_Door'));
+    await tester.tap(row);
+    await _settle(tester);
+    await tester.tap(row);
+    await _settle(tester);
+
+    expect(notifier.pendingEditFor('world.locks')!.edits.single, {
+      'path': 'private.locks.setUnlocked',
+      'value': {'lock': 'NC_Cave_Tavern_Door', 'unlocked': false},
+    });
+  });
+
   testWidgets('clearing drafts elsewhere resets the displayed lock state', (
     tester,
   ) async {

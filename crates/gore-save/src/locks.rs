@@ -267,11 +267,17 @@ fn remember_name(names: &mut Vec<String>, candidate: String) {
 
 /// Case-insensitive suffix strip that keeps the original spelling of the stem.
 fn strip_ci<'a>(name: &'a str, suffix: &str) -> Option<&'a str> {
-    if name.len() <= suffix.len() {
+    if suffix.len() >= name.len() {
         return None;
     }
-    let stem = &name[..name.len() - suffix.len()];
-    if name[stem.len()..].eq_ignore_ascii_case(suffix) {
+    let split_at = name.len() - suffix.len();
+    // Lock names are arbitrary UTF-8. A byte offset inside a character is not
+    // a suffix match, and slicing there panics.
+    if !name.is_char_boundary(split_at) {
+        return None;
+    }
+    let (stem, tail) = name.split_at(split_at);
+    if tail.eq_ignore_ascii_case(suffix) {
         Some(stem)
     } else {
         None
@@ -557,6 +563,12 @@ mod tests {
         // has to go — but the closed entry must not be duplicated.
         assert_eq!(plan.open_indices, [0]);
         assert!(plan.closed_names.is_empty());
+    }
+
+    #[test]
+    fn a_multibyte_lock_name_is_not_sliced_mid_character() {
+        assert_eq!(strip_ci("aé_Door", "_Door"), Some("aé"));
+        assert!(strip_ci("aédefg", "_Door").is_none());
     }
 
     #[test]

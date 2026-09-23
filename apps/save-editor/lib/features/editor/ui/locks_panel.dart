@@ -186,13 +186,13 @@ class _LocksDetailState extends ConsumerState<LocksDetail> {
 
   void _toggle(_LockRow row, bool unlocked) {
     setState(() {
-      if (unlocked == row.unlocked && unlocked) {
-        // Back to a save that already has the lock open: nothing to write.
+      final backToSaved = unlocked == row.unlocked;
+      // Chests have no leaf, so returning to the saved lock is an undo.
+      // A door that ends locked still writes: an older editor left the leaf
+      // open, and dropping the edit would skip closing it.
+      if (backToSaved && (unlocked || row.kind == LockKind.chest)) {
         _pending.remove(row.name);
       } else {
-        // Locking always writes, even when the file already lists the lock as
-        // shut. An older editor only flipped the lock and left the leaf open;
-        // dropping the edit here would skip the leaf close.
         _pending[row.name] = LockSetUnlockedEdit(
           lock: row.name,
           unlocked: unlocked,
