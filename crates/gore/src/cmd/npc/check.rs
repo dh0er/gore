@@ -360,10 +360,12 @@ pub fn guard_authored_module(
         }
     }
 
-    if let Some(visuals) = classes
+    let visuals_name = format!("UCharacterVisualsDefinition_Human_{npc_id}");
+    let visuals = classes
         .iter()
-        .find(|class| class.name.starts_with("UCharacterVisualsDefinition_Human_"))
-    {
+        .filter(|class| class.name == visuals_name)
+        .collect::<Vec<_>>();
+    if let [visuals] = visuals.as_slice() {
         let prebaked = assigned(visuals, "m_HasPreBakedSK").into_iter().next();
         let name = assigned(visuals, "m_PreBakedName").into_iter().next();
         match (prebaked.as_deref(), name) {
@@ -379,6 +381,11 @@ pub fn guard_authored_module(
             )),
             _ => {}
         }
+    } else {
+        findings.push(Finding::blocking(format!(
+            "the authored module declares {} classes named {visuals_name}; exactly one visuals definition is required",
+            visuals.len()
+        )));
     }
 
     findings
@@ -787,6 +794,28 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
             assert!(findings.iter().any(|finding| {
                 finding.severity == Severity::Blocking
                     && finding.message.contains("m_CharacterVisualsDefinition")
+            }));
+        }
+    }
+
+    #[test]
+    fn authored_module_requires_exactly_one_referenced_visuals_class() {
+        let declaration = "class UCharacterVisualsDefinition_Human_MINE : UCharacterVisualsDefinition_Human_OC_STT_Diego\n{\n    default m_PreBakedName = \"OC_STT_Diego\";\n    default m_HasPreBakedSK = true;\n}\n";
+        assert!(AUTHORED.contains(declaration));
+        for source in [
+            AUTHORED.replace(declaration, ""),
+            AUTHORED.replace(
+                "class UCharacterVisualsDefinition_Human_MINE :",
+                "class UCharacterVisualsDefinition_Human_OTHER :",
+            ),
+            AUTHORED.replace(declaration, &format!("{declaration}\n{declaration}")),
+        ] {
+            let findings = guard_authored_module(&source, "MINE");
+            assert!(findings.iter().any(|finding| {
+                finding.severity == Severity::Blocking
+                    && finding
+                        .message
+                        .contains("UCharacterVisualsDefinition_Human_MINE")
             }));
         }
     }
