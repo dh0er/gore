@@ -5277,22 +5277,35 @@ fn incoming_public_metadata(payload: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Co
         // Older fixtures/saves carry only SaveDataPayload, not a metadata copy.
         return Ok(Vec::new());
     };
+    let layout = properties::map_layout(payload, custom)?;
     let mut fields = Vec::new();
     let mut identity = Vec::new();
-    for (key, value) in entries {
-        let properties::PropertyValue::Struct(properties::StructValue::Instanced(Some(body))) =
-            value
-        else {
+    for (index, (key, value)) in entries.iter().enumerate() {
+        let Some(key) = map_key_string(key) else {
             continue;
         };
-        match map_key_string(key) {
-            Some("/Script/G1R.SaveGamePublicData") => {
-                fields =
-                    raw_public_properties(payload, &body.properties, body.data_size_offset + 4)?;
+        let (props, start) = match value {
+            properties::PropertyValue::Struct(properties::StructValue::Properties(props)) => {
+                let entry = &layout.entry_ranges[index];
+                let mut reader = Reader::new(&payload[entry.clone()], entry.start);
+                if reader.fstring()? != key {
+                    return Err(CoreError::Parse(
+                        "public-data map key disagrees with its byte layout".to_string(),
+                    ));
+                }
+                (props.as_slice(), reader.abs_pos())
             }
-            Some("/Script/G1R.SaveDataPayload") => {
-                identity =
-                    raw_public_properties(payload, &body.properties, body.data_size_offset + 4)?;
+            properties::PropertyValue::Struct(properties::StructValue::Instanced(Some(body))) => {
+                (body.properties.as_slice(), body.data_size_offset + 4)
+            }
+            _ => continue,
+        };
+        match key {
+            "/Script/G1R.SaveGamePublicData" => {
+                fields = raw_public_properties(payload, props, start)?;
+            }
+            "/Script/G1R.SaveDataPayload" => {
+                identity = raw_public_properties(payload, props, start)?;
                 identity.retain(|(name, _)| {
                     matches!(name.as_str(), "m_ProfileId" | "m_QuickSave" | "m_AutoSave")
                 });
@@ -18351,6 +18364,28 @@ mod tests {
         decoy_flags: Option<(bool, bool)>,
         decoy_player_save_name: Option<&str>,
     ) -> Vec<u8> {
+        dual_public_payload_with_shape(
+            slot,
+            name,
+            profile_id,
+            quick_save,
+            auto_save,
+            decoy_flags,
+            decoy_player_save_name,
+            true,
+        )
+    }
+
+    fn dual_public_payload_with_shape(
+        slot: &str,
+        name: &str,
+        profile_id: i32,
+        quick_save: bool,
+        auto_save: bool,
+        decoy_flags: Option<(bool, bool)>,
+        decoy_player_save_name: Option<&str>,
+        instanced: bool,
+    ) -> Vec<u8> {
         let mut map_body = [0u32.to_le_bytes(), 3u32.to_le_bytes()].concat();
         let classes = if decoy_flags.is_some() || decoy_player_save_name.is_some() {
             ["UnrelatedPayload", "SaveDataPayload", "SaveGamePublicData"]
@@ -18422,8 +18457,10 @@ mod tests {
             body.extend(fstring("None"));
             let class = format!("/Script/G1R.{class}");
             map_body.extend(fstring(&class));
-            map_body.extend(fstring(&class));
-            map_body.extend((body.len() as u32).to_le_bytes());
+            if instanced {
+                map_body.extend(fstring(&class));
+                map_body.extend((body.len() as u32).to_le_bytes());
+            }
             map_body.extend(body);
         }
         let descriptor = [
@@ -18432,9 +18469,17 @@ mod tests {
             0u32.to_le_bytes().to_vec(),
             fstring("StructProperty"),
             1u32.to_le_bytes().to_vec(),
-            fstring("InstancedStruct"),
+            fstring(if instanced {
+                "InstancedStruct"
+            } else {
+                "SaveGamePublicData"
+            }),
             1u32.to_le_bytes().to_vec(),
-            fstring("/Script/StructUtils"),
+            fstring(if instanced {
+                "/Script/StructUtils"
+            } else {
+                "/Script/G1R"
+            }),
         ]
         .concat();
         [
@@ -18442,7 +18487,11 @@ mod tests {
                 "CustomPayload",
                 "MapProperty",
                 &descriptor,
-                properties::TAG_FLAG_NATIVE_SERIALIZE,
+                if instanced {
+                    properties::TAG_FLAG_NATIVE_SERIALIZE
+                } else {
+                    0
+                },
                 &map_body,
             ),
             fstring("None"),
@@ -18588,6 +18637,57 @@ mod tests {
         assert_eq!(fs::read(&source).unwrap(), original);
         assert_eq!(parts.compressed_stream, minimal_stream());
         assert_eq!(parts.trailer, &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn assign_save_profile_import_copies_plain_struct_public_metadata() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("detached.sav");
+        let target = dir.path().join("G1R-007.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let payload = dual_public_payload_with_shape(
+            "G1R-054",
+            "Plain struct",
+            0,
+            true,
+            false,
+            None,
+            None,
+            false,
+        );
+        fs::write(
+            &source,
+            build_gsav(2, &payload, &minimal_stream(), &[1, 2, 3, 4]),
+        )
+        .unwrap();
+        fs::write(
+            &persistent_path,
+            assignment_persistent_data_list("G1R-006", 0),
+        )
+        .unwrap();
+
+        assign_save_profile(&source, Some(&target), &persistent_path, 1, true).unwrap();
+
+        let written = fs::read(&target).unwrap();
+        let parts = split_gsav(&written).unwrap();
+        let root = properties::parse_property_list_root_at(parts.public_payload, 0).unwrap();
+        let custom = root
+            .properties
+            .iter()
+            .find(|p| p.name == "CustomPayload")
+            .unwrap();
+        let properties::PropertyValue::Map { entries, .. } = &custom.value else {
+            panic!("expected public-data map")
+        };
+        assert!(entries.iter().all(|(_, value)| matches!(
+            value,
+            properties::PropertyValue::Struct(properties::StructValue::Properties(_))
+        )));
+        assert_cached_public_metadata(
+            &fs::read(&persistent_path).unwrap(),
+            "G1R-007",
+            parts.public_payload,
+        );
     }
 
     #[test]
