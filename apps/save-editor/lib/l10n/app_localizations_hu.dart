@@ -391,7 +391,7 @@ class AppLocalizationsHu extends AppLocalizations {
   String get skillNameTakeShadowbeastHorn => 'Szarv levétele (árnyvad)';
 
   @override
-  String get skillNameTakeSpines => 'Tüske kivétele';
+  String get skillNameTakeSpines => 'Gerinc kivétele';
 
   @override
   String get skillNameBreakSwampsharkTeeth => 'Cápfogak kivétele';
