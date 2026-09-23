@@ -248,9 +248,9 @@ unselected modules are preserved. See the
 [hotfix deployment](../../scripts/fixtures/npc-batch-tests/quest/hotfix-0.1.2.json).
 In0.1.0 A had no dialogue menu. All29 authored events were incorrectly registered
 as ordinary callables;0.1.1 fixes dialog, quest and document event bindings and
-const predicate signatures. Generator v6 and revision3 generator v5 now emit the
-correct native overrides too. The corrected fixture's runtime progression is
-now confirmed; the earlier failure remains documented:
+const predicate signatures. The standalone and Revision-3 generators both use
+version 6 and emit the correct native overrides. The corrected fixture's
+runtime progression is now confirmed; the earlier failure remains documented:
 [failure and diagnosis](../../scripts/fixtures/npc-batch-tests/quest/runtime-0.1.0.json).
 
 The [session campaign](../../scripts/fixtures/npc-session/RESULTS.md) passed
