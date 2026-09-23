@@ -4875,6 +4875,45 @@ fn profile_array_contains(
     Ok(string_array_element_index(root, &path, value)?.is_some())
 }
 
+fn ensure_profile_ring_capacity(
+    root: &properties::RootObject,
+    profile_id: i32,
+    array_name: &str,
+    limit_name: &str,
+    slot: &str,
+) -> Result<(), CoreError> {
+    let (_, profile) = profile_element(root, profile_id)
+        .ok_or_else(|| CoreError::Validation(format!("profile {profile_id} not found")))?;
+    let Some((_, limit)) = properties::find_path_in_properties(profile, limit_name) else {
+        return Ok(()); // Older profile files do not carry ring limits.
+    };
+    let properties::PropertyValue::Int(limit) = &limit.value else {
+        return Err(CoreError::Validation(format!(
+            "profile {profile_id} {limit_name} is not an IntProperty"
+        )));
+    };
+    let limit = usize::try_from(*limit).map_err(|_| {
+        CoreError::Validation(format!("profile {profile_id} {limit_name} is negative"))
+    })?;
+    let path = profile_array_path(root, profile_id, array_name)?.ok_or_else(|| {
+        CoreError::Validation(format!("profile {profile_id} has no {array_name} property"))
+    })?;
+    let segments = properties::parse_path(&path)?;
+    let array = properties::resolve(&root.properties, &segments)?;
+    let properties::PropertyValue::Array { elements } = &array.value else {
+        return Err(CoreError::Validation(format!("{array_name} is not an ArrayProperty")));
+    };
+    if !elements.iter().any(|element| {
+        matches!(element, properties::PropertyValue::Str(name) | properties::PropertyValue::Name(name) if name == slot)
+    }) && elements.len() >= limit {
+        return Err(CoreError::Validation(format!(
+            "profile {profile_id} {array_name} is full ({}/{limit}); cannot add {slot}",
+            elements.len()
+        )));
+    }
+    Ok(())
+}
+
 /// Remove all occurrences of `slot` from one named array in every profile.
 /// Re-parses after each splice because all recorded offsets shift.
 fn remove_slot_from_all_profile_arrays(
@@ -5662,6 +5701,14 @@ where
     } else {
         incoming_auto.unwrap_or(false)
     };
+    for (member, array, limit) in [
+        (quick_member, "m_QuickSaveName", "m_MaxQuick"),
+        (auto_member, "m_AutoSaveName", "m_MaxAuto"),
+    ] {
+        if member {
+            ensure_profile_ring_capacity(&root, profile_id, array, limit, slot)?;
+        }
+    }
     drop(root);
 
     let mut save_edited = save_original.clone();
@@ -18779,6 +18826,47 @@ mod tests {
                 properties::resolve(&root.properties, &path).unwrap().value,
                 properties::PropertyValue::Bool(true)
             );
+        }
+    }
+
+    #[test]
+    fn importing_into_a_full_quick_or_auto_ring_leaves_both_files_untouched() {
+        let slots = [
+            ("G1R-001", "One", 1, "Map", 1.0, true, true),
+            ("G1R-002", "Two", 1, "Map", 2.0, true, true),
+            ("G1R-003", "Three", 1, "Map", 3.0, true, false),
+        ];
+        for (quick, auto, array_name) in [
+            (true, false, "m_QuickSaveName"),
+            (false, true, "m_AutoSaveName"),
+        ] {
+            let dir = tempdir().unwrap();
+            let source = dir.path().join("detached.sav");
+            let target = dir.path().join("G1R-007.sav");
+            let persistent_path = dir.path().join("PersistentDataList.sav");
+            let incoming = build_gsav(
+                2,
+                &dual_public_payload_with_flags("G1R-054", "Imported", 0, quick, auto),
+                &minimal_stream(),
+                &[1, 2, 3, 4],
+            );
+            let mut persistent = persistent_data_list(&slots);
+            if auto {
+                let root = parse_profile_file(&persistent).unwrap();
+                let (mut path, profile) = profile_element(&root, 0).unwrap();
+                path.extend(properties::find_path_in_properties(profile, "m_MaxAuto").unwrap().0);
+                let target = properties::resolve(&root.properties, &properties::parse_path(&path).unwrap()).unwrap();
+                properties::patch_scalar(&mut persistent, target, properties::ScalarValue::Int(2)).unwrap();
+            }
+            fs::write(&source, &incoming).unwrap();
+            fs::write(&persistent_path, &persistent).unwrap();
+
+            let error = assign_save_profile(&source, Some(&target), &persistent_path, 0, true)
+                .unwrap_err().to_string();
+            assert!(error.contains(array_name) && error.contains("is full"), "{error}");
+            assert_eq!(fs::read(&source).unwrap(), incoming);
+            assert_eq!(fs::read(&persistent_path).unwrap(), persistent);
+            assert!(!target.exists());
         }
     }
 
