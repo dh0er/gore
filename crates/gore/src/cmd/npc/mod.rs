@@ -419,10 +419,11 @@ fn colliding_class_names<'a>(
     shipped: impl Iterator<Item = &'a str>,
     authored_source: &str,
 ) -> Vec<String> {
-    let existing: std::collections::HashSet<&str> = shipped.collect();
+    let existing: std::collections::HashSet<String> =
+        shipped.map(str::to_ascii_lowercase).collect();
     let mut collisions: Vec<String> = defaults::parse_classes(authored_source)
         .into_iter()
-        .filter(|class| existing.contains(class.name.as_str()))
+        .filter(|class| existing.contains(&class.name.to_ascii_lowercase()))
         .map(|class| class.name)
         .collect();
     collisions.sort();
@@ -2031,6 +2032,17 @@ mod tests {
             "class USpawnAIAgentDefinition_MINE : UBase\n{}\n"
         )
         .is_empty());
+    }
+
+    #[test]
+    fn authored_npc_collision_check_is_case_insensitive() {
+        assert_eq!(
+            colliding_class_names(
+                ["UCharacterDefinition_Human_OC_STT_Diego"].into_iter(),
+                "class UCharacterDefinition_Human_oc_stt_diego : UBase\n{}\n"
+            ),
+            vec!["UCharacterDefinition_Human_oc_stt_diego".to_string()]
+        );
     }
 
     #[test]
