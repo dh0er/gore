@@ -738,7 +738,7 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get saveProfileDescription =>
-      'Признач це збереження іншому ігровому профілю. Збереження та індекс профілю резервуються разом.';
+      'Признач це збереження іншому ігровому профілю. Для збереження та індексу профілю створюються парні резервні копії.';
 
   @override
   String get saveProfileExternalHint =>
