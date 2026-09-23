@@ -286,7 +286,7 @@ class AppLocalizationsRo extends AppLocalizations {
   String get skillHintBlacksmith2H => 'Arme 2H';
 
   @override
-  String get skillScutesTrained => 'Antrenat (scuturi osoase)';
+  String get skillScutesTrained => 'Antrenat (plăci osoase)';
 
   @override
   String get skillScutesMaster => 'Maestru (+ plăci ascuțite)';
@@ -370,7 +370,7 @@ class AppLocalizationsRo extends AppLocalizations {
   String get skillNameTakeMinecrawlerPlates => 'Ia plăci';
 
   @override
-  String get skillNameTakeScutes => 'Ia scuturi';
+  String get skillNameTakeScutes => 'Ia plăci osoase';
 
   @override
   String get skillNameTakeUluMulu => 'Ia Ulu-Mulu';
