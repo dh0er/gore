@@ -8,9 +8,13 @@ use super::{
 };
 use anyhow::{ensure, Context, Result};
 use clap::Subcommand;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+#[cfg(windows)]
+use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
 use std::{
     fs,
-    io::Write,
+    io::{Read, Seek, SeekFrom, Write},
     ops::Range,
     path::{Component, Path, PathBuf},
 };
@@ -393,38 +397,26 @@ impl RoutineWorkspace {
             &self.manifest,
             self.current.range.is_some(),
         )?;
-        ensure!(
-            fs::read_to_string(&self.source_path)? == self.source_original
-                && fs::read_to_string(&self.level_path)? == self.level_original,
-            "workspace changed while editing; retry the command"
-        );
+        // Claim both original files before checking either one. On Windows, exclusive sharing
+        // prevents editors from writing or replacing the claimed paths until both writes finish.
+        let mut source_file = ClaimedFile::open(&self.source_path, &self.source_original)?;
+        let mut level_file = ClaimedFile::open(&self.level_path, &self.level_original)?;
         if source == self.source_original && level == self.level_original {
             return Ok(());
         }
-        if level == self.level_original {
-            let staged_source = stage_file(&self.source_path, &source)?;
-            replace_if_unchanged(&self.source_path, &self.source_original, staged_source)
-                .context("replacing NPC source")?;
-            return Ok(());
+        if source != self.source_original {
+            write_or_restore(&mut source_file, &source, &self.source_original)
+                .context("writing NPC source")?;
         }
-        // Prepare both files before touching either. If the level replacement fails, restore
-        // the source so first-use wiring never leaves a half-applied routine.
-        let staged_source = stage_file(&self.source_path, &source)?;
-        let staged_level = stage_file(&self.level_path, &level)?;
-        ensure_unchanged(&self.level_path, &self.level_original)?;
-        replace_if_unchanged(&self.source_path, &self.source_original, staged_source)
-            .context("replacing NPC source")?;
-        if let Err(error) =
-            replace_if_unchanged(&self.level_path, &self.level_original, staged_level)
-        {
-            let rollback = stage_file(&self.source_path, &self.source_original)
-                .and_then(|staged| replace_if_unchanged(&self.source_path, &source, staged));
-            return match rollback {
-                Ok(()) => Err(error).context("replacing level source; NPC source restored"),
-                Err(rollback_error) => Err(error).context(format!(
-                    "replacing level source; NPC source rollback failed or was skipped: {rollback_error}"
-                )),
-            };
+        if level != self.level_original {
+            if let Err(error) = write_or_restore(&mut level_file, &level, &self.level_original) {
+                if source != self.source_original {
+                    source_file.write(&self.source_original).with_context(|| {
+                        format!("level write failed ({error}); restoring NPC source also failed")
+                    })?;
+                }
+                return Err(error).context("writing level source; NPC source restored");
+            }
         }
         Ok(())
     }
@@ -446,30 +438,70 @@ fn original_offset(source: &str, normalized_offset: usize) -> usize {
     source.len()
 }
 
-fn stage_file(path: &Path, source: &str) -> Result<tempfile::NamedTempFile> {
-    let mut temp =
-        tempfile::NamedTempFile::new_in(path.parent().context("missing source parent")?)?;
-    temp.write_all(source.as_bytes())?;
-    temp.as_file().sync_all()?;
-    Ok(temp)
-}
+struct ClaimedFile(fs::File);
 
-fn ensure_unchanged(path: &Path, expected: &str) -> Result<()> {
+#[cfg(windows)]
+fn link_count(file: &fs::File) -> Result<u64> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, info.as_mut_ptr()) };
     ensure!(
-        fs::read_to_string(path)? == expected,
-        "workspace file changed while editing: {}; retry the command",
-        path.display()
+        ok != 0,
+        "reading workspace file link count: {}",
+        std::io::Error::last_os_error()
     );
-    Ok(())
+    Ok(unsafe { info.assume_init() }.nNumberOfLinks as u64)
 }
 
-fn replace_if_unchanged(
-    path: &Path,
-    expected: &str,
-    staged: tempfile::NamedTempFile,
-) -> Result<()> {
-    ensure_unchanged(path, expected)?;
-    staged.persist(path)?;
+#[cfg(unix)]
+fn link_count(file: &fs::File) -> Result<u64> {
+    Ok(file.metadata()?.nlink())
+}
+
+impl ClaimedFile {
+    fn open(path: &Path, expected: &str) -> Result<Self> {
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true);
+        #[cfg(windows)]
+        options.share_mode(0);
+        let mut file = options
+            .open(path)
+            .with_context(|| format!("claiming {}", path.display()))?;
+        file.try_lock()
+            .with_context(|| format!("locking {}", path.display()))?;
+        #[cfg(any(windows, unix))]
+        ensure!(
+            link_count(&file)? == 1,
+            "workspace file has multiple hard links: {}",
+            path.display()
+        );
+        let mut current = String::new();
+        file.read_to_string(&mut current)?;
+        ensure!(
+            current == expected,
+            "workspace file changed while editing: {}; retry the command",
+            path.display()
+        );
+        Ok(Self(file))
+    }
+
+    fn write(&mut self, content: &str) -> Result<()> {
+        self.0.seek(SeekFrom::Start(0))?;
+        self.0.write_all(content.as_bytes())?;
+        self.0.set_len(content.len() as u64)?;
+        self.0.sync_all()?;
+        Ok(())
+    }
+}
+
+fn write_or_restore(file: &mut ClaimedFile, content: &str, original: &str) -> Result<()> {
+    if let Err(error) = file.write(content) {
+        file.write(original)
+            .with_context(|| format!("writing failed ({error}); restoring original also failed"))?;
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -478,18 +510,31 @@ mod replacement_tests {
     use super::*;
 
     #[test]
-    fn replacement_and_rollback_preserve_later_workspace_edits() {
+    fn claimed_write_checks_content_and_does_not_replace_later_edits() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("npc.as");
         fs::write(&path, "original").unwrap();
-        let staged = stage_file(&path, "generated").unwrap();
         fs::write(&path, "editor change").unwrap();
-        assert!(replace_if_unchanged(&path, "original", staged).is_err());
+        assert!(ClaimedFile::open(&path, "original").is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "editor change");
 
-        let rollback = stage_file(&path, "original").unwrap();
-        assert!(replace_if_unchanged(&path, "generated", rollback).is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "editor change");
+        let mut claim = ClaimedFile::open(&path, "editor change").unwrap();
+        #[cfg(windows)]
+        assert!(fs::write(&path, "later edit").is_err());
+        claim.write("generated").unwrap();
+        drop(claim);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "generated");
+    }
+
+    #[test]
+    fn claimed_write_rejects_hard_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("npc.as");
+        let peer = dir.path().join("outside.as");
+        fs::write(&path, "original").unwrap();
+        fs::hard_link(&path, &peer).unwrap();
+        assert!(ClaimedFile::open(&path, "original").is_err());
+        assert_eq!(fs::read_to_string(&peer).unwrap(), "original");
     }
 }
 

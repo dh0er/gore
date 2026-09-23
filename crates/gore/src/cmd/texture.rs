@@ -149,6 +149,68 @@ fn mount_dir(mod_dir: &std::path::Path, asset: &str) -> Result<PathBuf> {
     Ok(mod_dir.join(dir_rel))
 }
 
+/// Publish a cloned package without replacing files that appeared after the early destination
+/// checks. Roll back only paths created by this call if a later component cannot be published.
+fn write_clone_outputs(
+    uasset_path: &std::path::Path,
+    uexp_path: &std::path::Path,
+    ubulk_path: &std::path::Path,
+    uasset: &[u8],
+    uexp: &[u8],
+    ubulk: &[u8],
+) -> Result<()> {
+    use std::io::Write;
+
+    let ensure_no_inline_bulk = || -> Result<()> {
+        if ubulk.is_empty() {
+            match std::fs::symlink_metadata(ubulk_path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) => anyhow::bail!("clone output already exists: {}", ubulk_path.display()),
+                Err(error) => {
+                    return Err(error).context(format!("checking {}", ubulk_path.display()))
+                }
+            }
+        }
+        Ok(())
+    };
+    ensure_no_inline_bulk()?;
+    let mut outputs = vec![(uasset_path, uasset), (uexp_path, uexp)];
+    if !ubulk.is_empty() {
+        outputs.push((ubulk_path, ubulk));
+    }
+    let mut created = Vec::new();
+    let published = (|| {
+        for (path, bytes) in outputs {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .with_context(|| format!("creating clone output {}", path.display()))?;
+            created.push(path);
+            file.write_all(bytes)
+                .with_context(|| format!("writing clone output {}", path.display()))?;
+        }
+        ensure_no_inline_bulk()?;
+        Ok(())
+    })();
+    if let Err(error) = published {
+        let mut leftovers = Vec::new();
+        for path in created.into_iter().rev() {
+            if let Err(cleanup_error) = std::fs::remove_file(path) {
+                leftovers.push(format!("{} ({cleanup_error})", path.display()));
+            }
+        }
+        if !leftovers.is_empty() {
+            return Err(error).context(format!(
+                "clone output cleanup failed: {}",
+                leftovers.join(", ")
+            ));
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// Reject a triplet `--name` that isn't a single filename component. Without
 /// this, a value like `../foo` or `a/b` flows into `format!("{name}.utoc")` joins
 /// (pack/deploy) and would write or delete files OUTSIDE the intended directory.
@@ -601,19 +663,30 @@ pub fn run(action: TextureAction) -> Result<()> {
             std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
             let out_uasset = dir.join(format!("{leaf}.uasset"));
             let out_uexp = dir.join(format!("{leaf}.uexp"));
-            std::fs::write(&out_uasset, &new_uasset)
-                .with_context(|| format!("writing {}", out_uasset.display()))?;
-            std::fs::write(&out_uexp, &new_uexp)
-                .with_context(|| format!("writing {}", out_uexp.display()))?;
             let out_ubulk = dir.join(format!("{leaf}.ubulk"));
-            if !new_ubulk.is_empty() {
-                std::fs::write(&out_ubulk, &new_ubulk)
-                    .with_context(|| format!("writing {}", out_ubulk.display()))?;
+            if as_asset.is_some() {
+                write_clone_outputs(
+                    &out_uasset,
+                    &out_uexp,
+                    &out_ubulk,
+                    &new_uasset,
+                    &new_uexp,
+                    &new_ubulk,
+                )?;
             } else {
-                // New rewrite is inline (no streamed bulk). Remove any stale
-                // `.ubulk` left by a prior replacement into this same mod dir,
-                // else `texture pack` would pair it with the new .uasset/.uexp.
-                let _ = std::fs::remove_file(&out_ubulk);
+                std::fs::write(&out_uasset, &new_uasset)
+                    .with_context(|| format!("writing {}", out_uasset.display()))?;
+                std::fs::write(&out_uexp, &new_uexp)
+                    .with_context(|| format!("writing {}", out_uexp.display()))?;
+                if !new_ubulk.is_empty() {
+                    std::fs::write(&out_ubulk, &new_ubulk)
+                        .with_context(|| format!("writing {}", out_ubulk.display()))?;
+                } else {
+                    // New rewrite is inline (no streamed bulk). Remove any stale
+                    // `.ubulk` left by a prior replacement into this same mod dir,
+                    // else `texture pack` would pair it with the new .uasset/.uexp.
+                    let _ = std::fs::remove_file(&out_ubulk);
+                }
             }
 
             println!(
@@ -860,5 +933,69 @@ mod tests {
         assert!(!built_new);
         assert!(!built.get());
         assert!(!published.get());
+    }
+
+    #[test]
+    fn clone_output_collision_preserves_existing_bulk_and_removes_partial_outputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let uasset = temp.path().join("T_New.uasset");
+        let uexp = temp.path().join("T_New.uexp");
+        let ubulk = temp.path().join("T_New.ubulk");
+        std::fs::write(&ubulk, b"existing bulk").unwrap();
+
+        let error =
+            write_clone_outputs(&uasset, &uexp, &ubulk, b"asset", b"export", b"bulk").unwrap_err();
+        assert!(error.to_string().contains("creating clone output"));
+        assert_eq!(std::fs::read(&ubulk).unwrap(), b"existing bulk");
+        assert!(!uasset.exists());
+        assert!(!uexp.exists());
+
+        std::fs::remove_file(&ubulk).unwrap();
+        write_clone_outputs(&uasset, &uexp, &ubulk, b"asset", b"export", b"bulk").unwrap();
+        assert_eq!(std::fs::read(&uasset).unwrap(), b"asset");
+        assert_eq!(std::fs::read(&uexp).unwrap(), b"export");
+        assert_eq!(std::fs::read(&ubulk).unwrap(), b"bulk");
+    }
+
+    #[test]
+    fn inline_clone_rejects_a_dangling_bulk_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let uasset = temp.path().join("T_New.uasset");
+        let uexp = temp.path().join("T_New.uexp");
+        let ubulk = temp.path().join("T_New.ubulk");
+        let missing_target = temp.path().join("missing");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&missing_target, &ubulk).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&missing_target, &ubulk).is_err() {
+            // Some Windows hosts disallow creating symlinks without Developer Mode.
+            return;
+        }
+
+        let error =
+            write_clone_outputs(&uasset, &uexp, &ubulk, b"asset", b"export", b"").unwrap_err();
+        assert!(error.to_string().contains("clone output already exists"));
+        assert!(std::fs::symlink_metadata(&ubulk)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(!missing_target.exists());
+        assert!(!uasset.exists());
+        assert!(!uexp.exists());
+
+        std::fs::remove_file(&ubulk).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&missing_target, &uexp).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&missing_target, &uexp).unwrap();
+        let error =
+            write_clone_outputs(&uasset, &uexp, &ubulk, b"asset", b"export", b"").unwrap_err();
+        assert!(error.to_string().contains("creating clone output"));
+        assert!(std::fs::symlink_metadata(&uexp)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(!missing_target.exists());
+        assert!(!uasset.exists());
     }
 }
