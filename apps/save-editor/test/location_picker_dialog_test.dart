@@ -146,14 +146,14 @@ void main() {
     await pumpPicker(tester, buildCatalog());
 
     final labels = tester
-        .widgetList<Text>(
+        .widgetList<RichText>(
           find.descendant(
             of: find.byType(SingleChildScrollView),
-            matching: find.byType(Text),
+            matching: find.byType(RichText),
           ),
         )
-        .map((t) => t.data)
-        .whereType<String>()
+        .map((text) => text.text.toPlainText())
+        .where((text) => text.contains('('))
         .toList();
     expect(labels, ['All (5)', 'Old Camp (3)', 'New Camp (1)', 'Other (1)']);
   });
@@ -222,8 +222,7 @@ void main() {
         expect(
           ours,
           isNot(area.label),
-          reason:
-              'area ${area.id} still shows the raw English label in German',
+          reason: 'area ${area.id} still shows the raw English label in German',
         );
       }
     }

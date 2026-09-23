@@ -10,6 +10,7 @@ import 'package:goresave/features/editor/domain/character_index.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 /// Localized NPC display name for a GlobalId. The loc catalog is keyed by the
 /// character key — the GlobalId prefix before the first `-`, lowercased (the
@@ -25,9 +26,19 @@ String localizedNpcName(
   String id,
 ) {
   final charKey = id.split('-').first;
-  final localized = localizedGameName(catalog, lang, charKey);
-  if (localized != null && localized.trim().isNotEmpty) return localized;
-  return _prettifyNpcKey(charKey);
+  return catalogNpcName(catalog, lang, id) ?? _prettifyNpcKey(charKey);
+}
+
+/// The catalog's own name for [id], or null when the list has to humanize the
+/// key itself.
+String? catalogNpcName(
+  Map<String, Map<String, String>> catalog,
+  GameLang lang,
+  String id,
+) {
+  final localized = localizedGameName(catalog, lang, id.split('-').first);
+  if (localized == null || localized.trim().isEmpty) return null;
+  return localized;
 }
 
 /// Leading classification prefixes that carry no display value (NPC archetype /
@@ -95,11 +106,18 @@ String _prettifyNpcKey(String key) {
 /// keystroke is a cheap substring scan over the cached strings rather than
 /// re-resolving every name.
 class _SearchableRow {
-  const _SearchableRow(this.row, this.name, this.search, this.isHuman);
+  const _SearchableRow(
+    this.row,
+    this.name,
+    this.search,
+    this.isHuman, {
+    this.nameFromCatalog = false,
+  });
 
   final CharacterRow row;
   final String name;
   final String search;
+  final bool nameFromCatalog;
 
   /// Whether the character catalog calls this one a person.
   ///
@@ -269,12 +287,20 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
       for (final row in rows)
         () {
           final key = row.globalId ?? row.uniqueName;
-          final name = localizedNpcName(widget.locCatalog, widget.lang, key);
+          final fromCatalog = catalogNpcName(
+            widget.locCatalog,
+            widget.lang,
+            key,
+          );
+          final name =
+              fromCatalog ??
+              localizedNpcName(widget.locCatalog, widget.lang, key);
           return _SearchableRow(
             row,
             name,
             '$key\n$name'.toLowerCase(),
             widget.categories?.isHuman(key) ?? false,
+            nameFromCatalog: fromCatalog != null,
           );
         }(),
     ];
@@ -534,7 +560,14 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
       // A one-line row would otherwise hang its text from the top of a leading
       // taller than itself.
       titleAlignment: ListTileTitleAlignment.center,
-      title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      title: Text(
+        name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: entry.nameFromCatalog
+            ? gameScriptTextStyle(context, widget.lang.locale)
+            : null,
+      ),
       subtitle: widget.showObjectIds
           ? Text(
               row.globalId ?? '',
@@ -558,6 +591,28 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
     );
   }
 
+  /// Catalog name on the game-text face. The ` (n)` suffix is interface text.
+  Widget _groupTitle(_CharacterGroup group) {
+    final name = group.name;
+    final suffix = ' (${group.members.length})';
+    final font = group.first.nameFromCatalog
+        ? gameScriptTextStyle(context, widget.lang.locale)
+        : null;
+    if (font == null) {
+      return Text('$name$suffix', maxLines: 1, overflow: TextOverflow.ellipsis);
+    }
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(text: name, style: font),
+          TextSpan(text: suffix),
+        ],
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
   /// One expandable row standing for every actor sharing a display name, and —
   /// while it is open — the rows themselves.
   List<Widget> _groupTiles(
@@ -576,11 +631,7 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
         // character over and over, so any of them draws the same one.
         leading: GlossaryPortrait(npcUniqueName: group.first.row.globalId),
         titleAlignment: ListTileTitleAlignment.center,
-        title: Text(
-          '${group.name} (${group.members.length})',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
+        title: _groupTitle(group),
         trailing: Icon(open ? Icons.expand_less : Icons.expand_more, size: 20),
         // Highlighted while it holds the selection, so a collapsed group still
         // shows where the user is.

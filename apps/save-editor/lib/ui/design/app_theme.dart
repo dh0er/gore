@@ -5,6 +5,60 @@ const podkovaFontFamily = 'Podkova';
 const notoSerifFontFamily = 'NotoSerif';
 const notoSerifJpFontFamily = 'NotoSerifJP';
 const notoSerifScFontFamily = 'NotoSerifSC';
+const notoSerifTcFontFamily = 'NotoSerifTC';
+
+/// Fallback faces for glyphs the primary face does not have.
+///
+/// The system font links missing CJK through the Windows UI faces. Bundled
+/// fonts add the other Noto face, and Noto Serif itself whenever the primary
+/// face does not cover Latin and Cyrillic. Noto Serif JP and Noto Serif SC
+/// both draw Han, and the Windows UI faces do too, so this list never selects
+/// the other CJK face. Game-text widgets use [gameScriptTextStyle] for that.
+List<String>? uiFontFamilyFallback(
+  UiFontFamily font,
+  Locale uiLocale, {
+  Locale? gameTextLocale,
+}) {
+  if (font == UiFontFamily.system) {
+    return _systemFontFallback(uiLocale, gameTextLocale);
+  }
+  final primary = uiFontFamilyName(font, uiLocale);
+  final fallback = <String>[];
+  void add(String name) {
+    if (name == primary || fallback.contains(name)) return;
+    fallback.add(name);
+  }
+
+  add(scriptCoverageFont(uiLocale));
+  if (gameTextLocale != null) add(scriptCoverageFont(gameTextLocale));
+  add(notoSerifFontFamily);
+  return fallback.isEmpty ? null : fallback;
+}
+
+List<String> _systemFontFallback(Locale uiLocale, Locale? gameTextLocale) {
+  const ja = 'Yu Gothic UI';
+  const hans = 'Microsoft YaHei UI';
+  const hant = 'Microsoft JhengHei UI';
+
+  String? face(Locale locale) => switch (locale.languageCode) {
+    'ja' => ja,
+    'zh' when locale.scriptCode == 'Hant' => hant,
+    'zh' => hans,
+    _ => null,
+  };
+
+  final ordered = <String>[];
+  void add(String? name) {
+    if (name != null && !ordered.contains(name)) ordered.add(name);
+  }
+
+  add(face(uiLocale));
+  if (gameTextLocale != null) add(face(gameTextLocale));
+  add(hans);
+  add(hant);
+  add(ja);
+  return ordered;
+}
 
 /// Keeps technical values monospaced for the system font, while honoring a
 /// bundled font when the user applies it to the entire interface.
@@ -17,7 +71,8 @@ String uiAwareMonospaceFontFamily(
     podkovaFontFamily ||
     notoSerifFontFamily ||
     notoSerifJpFontFamily ||
-    notoSerifScFontFamily => activeFamily!,
+    notoSerifScFontFamily ||
+    notoSerifTcFontFamily => activeFamily!,
     _ => fallback,
   };
 }
@@ -27,25 +82,92 @@ String uiFontFamilyName(UiFontFamily font, Locale locale) => switch (font) {
   UiFontFamily.podkova => podkovaFontFamily,
   UiFontFamily.notoSerif when locale.languageCode == 'ja' =>
     notoSerifJpFontFamily,
+  UiFontFamily.notoSerif
+      when locale.languageCode == 'zh' && locale.scriptCode == 'Hant' =>
+    notoSerifTcFontFamily,
   UiFontFamily.notoSerif when locale.languageCode == 'zh' =>
     notoSerifScFontFamily,
   UiFontFamily.notoSerif => notoSerifFontFamily,
 };
 
+/// Bundled face that covers [locale]'s script. Latin, Cyrillic and Greek stay
+/// on Noto Serif. Japanese, Simplified Chinese, and Traditional Chinese each
+/// use their own CJK face so shared Han code points keep the regional form.
+String scriptCoverageFont(Locale locale) => switch (locale.languageCode) {
+  'ja' => notoSerifJpFontFamily,
+  'zh' when locale.scriptCode == 'Hant' => notoSerifTcFontFamily,
+  'zh' => notoSerifScFontFamily,
+  _ => notoSerifFontFamily,
+};
+
+/// Game-text language for widgets that do not receive it as a parameter.
+///
+/// Absent in widget tests that pump a panel on its own. Those keep the theme
+/// face. The running app provides it from the selected game-text language.
+class GameTextScript extends InheritedWidget {
+  const GameTextScript({super.key, required this.locale, required super.child});
+
+  final Locale locale;
+
+  static Locale? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<GameTextScript>()?.locale;
+
+  @override
+  bool updateShouldNotify(GameTextScript oldWidget) =>
+      oldWidget.locale != locale;
+}
+
+/// Style for a game-text run when its script face is not the interface face.
+///
+/// Merge the result onto the text's own style. A null result means the scripts
+/// share a face, so Podkova, Segoe, and that shared CJK face stay as the theme
+/// set them. When [style] is set and the faces differ, [style] is returned with
+/// the game-text family as the primary face.
+TextStyle? gameScriptTextStyle(
+  BuildContext context,
+  Locale gameLocale, {
+  TextStyle? style,
+}) {
+  final gameFont = scriptCoverageFont(gameLocale);
+  final uiFont = scriptCoverageFont(Localizations.localeOf(context));
+  if (gameFont == uiFont) return style;
+  final override = TextStyle(
+    fontFamily: gameFont,
+    fontFamilyFallback: [
+      uiFont,
+      notoSerifFontFamily,
+    ].where((font) => font != gameFont).toList(),
+  );
+  return (style ?? const TextStyle()).merge(override);
+}
+
 ThemeData buildGoresaveTheme({
   UiFontFamily uiFontFamily = UiFontFamily.system,
   Locale locale = const Locale('en'),
-}) => _buildTheme(Brightness.light, uiFontFamily: uiFontFamily, locale: locale);
+  Locale? gameTextLocale,
+}) => _buildTheme(
+  Brightness.light,
+  uiFontFamily: uiFontFamily,
+  locale: locale,
+  gameTextLocale: gameTextLocale,
+);
 
 ThemeData buildGoresaveDarkTheme({
   UiFontFamily uiFontFamily = UiFontFamily.system,
   Locale locale = const Locale('en'),
-}) => _buildTheme(Brightness.dark, uiFontFamily: uiFontFamily, locale: locale);
+  Locale? gameTextLocale,
+}) => _buildTheme(
+  Brightness.dark,
+  uiFontFamily: uiFontFamily,
+  locale: locale,
+  gameTextLocale: gameTextLocale,
+);
 
 ThemeData _buildTheme(
   Brightness brightness, {
   required UiFontFamily uiFontFamily,
   required Locale locale,
+  Locale? gameTextLocale,
 }) {
   const teal = Color(0xFF0F766E);
   const gold = Color(0xFFB7791F);
@@ -102,11 +224,11 @@ ThemeData _buildTheme(
     colorScheme: scheme,
     scaffoldBackgroundColor: scheme.surface,
     fontFamily: uiFontFamilyName(uiFontFamily, locale),
-    fontFamilyFallback: uiFontFamily == UiFontFamily.system
-        ? locale.languageCode == 'ja'
-              ? const ['Yu Gothic UI', 'Microsoft YaHei UI']
-              : const ['Microsoft YaHei UI', 'Yu Gothic UI']
-        : null,
+    fontFamilyFallback: uiFontFamilyFallback(
+      uiFontFamily,
+      locale,
+      gameTextLocale: gameTextLocale,
+    ),
     appBarTheme: AppBarTheme(
       backgroundColor: scheme.surfaceContainerLowest,
       foregroundColor: scheme.onSurface,

@@ -16,5 +16,8 @@ void registerBundledFontLicenses() {
     yield LicenseEntryWithLineBreaks(const [
       'Noto Serif SC',
     ], await rootBundle.loadString('assets/licenses/NotoSerifSC-OFL.txt'));
+    yield LicenseEntryWithLineBreaks(const [
+      'Noto Serif TC',
+    ], await rootBundle.loadString('assets/licenses/NotoSerifTC-OFL.txt'));
   });
 }

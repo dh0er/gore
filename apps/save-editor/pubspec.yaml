@@ -1,7 +1,7 @@
 name: goresave
 description: "goresave: Gothic Remake Savegame-Editor"
 publish_to: "none"
-version: 1.4.1
+version: 1.5.0
 
 environment:
   sdk: ^3.12.0
@@ -88,3 +88,6 @@ flutter:
     - family: NotoSerifSC
       fonts:
         - asset: assets/fonts/NotoSerifSC-Variable.ttf
+    - family: NotoSerifTC
+      fonts:
+        - asset: assets/fonts/NotoSerifTC-Variable.ttf

@@ -24,14 +24,124 @@ void main() {
       buildGoresaveTheme(
         locale: const Locale('ja'),
       ).textTheme.bodyMedium?.fontFamilyFallback,
-      ['Yu Gothic UI', 'Microsoft YaHei UI'],
+      ['Yu Gothic UI', 'Microsoft YaHei UI', 'Microsoft JhengHei UI'],
     );
     expect(
       buildGoresaveTheme(
         locale: const Locale('zh'),
       ).textTheme.bodyMedium?.fontFamilyFallback,
-      ['Microsoft YaHei UI', 'Yu Gothic UI'],
+      ['Microsoft YaHei UI', 'Microsoft JhengHei UI', 'Yu Gothic UI'],
     );
+    expect(
+      buildGoresaveTheme(
+        locale: const Locale.fromSubtags(
+          languageCode: 'zh',
+          scriptCode: 'Hant',
+        ),
+      ).textTheme.bodyMedium?.fontFamilyFallback,
+      ['Microsoft JhengHei UI', 'Microsoft YaHei UI', 'Yu Gothic UI'],
+    );
+    expect(
+      buildGoresaveTheme(
+        uiFontFamily: UiFontFamily.notoSerif,
+        locale: const Locale('cs'),
+        gameTextLocale: const Locale('ja'),
+      ).textTheme.bodyMedium?.fontFamilyFallback,
+      [notoSerifJpFontFamily],
+    );
+  });
+
+  testWidgets(
+    'game text uses its own CJK face when the interface face already has those glyphs',
+    (tester) async {
+      const zh = Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans');
+      TextStyle? fromJapanese;
+      TextStyle? sameScript;
+      TextStyle? latin;
+
+      Future<void> pump(Locale ui, void Function(BuildContext) read) {
+        return tester.pumpWidget(
+          MaterialApp(
+            locale: ui,
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Builder(
+              builder: (context) {
+                read(context);
+                return const SizedBox();
+              },
+            ),
+          ),
+        );
+      }
+
+      await pump(const Locale('ja'), (context) {
+        fromJapanese = gameScriptTextStyle(
+          context,
+          zh,
+          style: const TextStyle(
+            fontSize: 16,
+            fontFamily: notoSerifJpFontFamily,
+          ),
+        );
+      });
+      expect(fromJapanese?.fontFamily, notoSerifScFontFamily);
+      expect(fromJapanese?.fontSize, 16);
+      expect(fromJapanese?.fontFamilyFallback, contains(notoSerifJpFontFamily));
+
+      await pump(const Locale('ja'), (context) {
+        sameScript = gameScriptTextStyle(
+          context,
+          const Locale('ja'),
+          style: const TextStyle(fontFamily: notoSerifJpFontFamily),
+        );
+      });
+      expect(sameScript?.fontFamily, notoSerifJpFontFamily);
+
+      await pump(const Locale('de'), (context) {
+        latin = gameScriptTextStyle(
+          context,
+          const Locale('pl'),
+          style: const TextStyle(fontFamily: podkovaFontFamily, fontSize: 14),
+        );
+      });
+      expect(latin?.fontFamily, podkovaFontFamily);
+      expect(latin?.fontSize, 14);
+    },
+  );
+
+  test('Traditional Chinese uses its own Noto face', () {
+    const hant = Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant');
+    expect(scriptCoverageFont(hant), notoSerifTcFontFamily);
+    expect(
+      uiFontFamilyName(UiFontFamily.notoSerif, hant),
+      notoSerifTcFontFamily,
+    );
+    expect(scriptCoverageFont(const Locale('zh')), notoSerifScFontFamily);
+  });
+
+  testWidgets('technical ids stay on the Traditional Chinese face', (
+    tester,
+  ) async {
+    late String family;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGoresaveTheme(
+          uiFontFamily: UiFontFamily.notoSerif,
+          locale: const Locale.fromSubtags(
+            languageCode: 'zh',
+            scriptCode: 'Hant',
+          ),
+        ),
+        home: Builder(
+          builder: (context) {
+            family = uiAwareMonospaceFontFamily(context);
+            return const SizedBox();
+          },
+        ),
+      ),
+    );
+    expect(family, notoSerifTcFontFamily);
   });
 
   testWidgets('title progress is centered in the available title-bar space', (
@@ -661,7 +771,7 @@ void main() {
       'JSON', (tester) async {
     // Tall surface so all Settings cards (including the debug section) lay out
     // without scrolling.
-    await tester.binding.setSurfaceSize(const Size(1400, 1600));
+    await tester.binding.setSurfaceSize(const Size(1400, 1800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final core = _FakeCoreService();
     await tester.pumpWidget(
@@ -713,7 +823,7 @@ void main() {
     final fontDropdown = find.byKey(const ValueKey('ui-font-family-dropdown'));
     expect(
       tester.getTopLeft(fontDropdown).dy,
-      greaterThan(tester.getTopLeft(find.text('Language')).dy),
+      greaterThan(tester.getTopLeft(find.text('Interface')).dy),
     );
     expect(
       tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).value,

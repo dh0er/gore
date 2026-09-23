@@ -16,6 +16,7 @@ import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import '../domain/editor_notifier.dart';
@@ -362,6 +363,7 @@ class _InventoryTab {
   const _InventoryTab({
     required this.category,
     required this.label,
+    required this.catalogLabel,
     required this.gameIcon,
     required this.fallbackIcon,
     required this.items,
@@ -370,6 +372,7 @@ class _InventoryTab {
   /// Null for "All", which is no category and collects everything.
   final ItemCategory? category;
   final String label;
+  final bool catalogLabel;
   final String? gameIcon;
   final IconData fallbackIcon;
   final List<PrivateInventoryItem> items;
@@ -651,16 +654,22 @@ class _PrivateInventorySummaryCardState
     // is a few milliseconds off a bundled asset, and queueing a removal in
     // that window would disarm the creature.
     final awaitingStats = itemStatsAsync.isLoading && itemStats == null;
+    String? catalogName(String id) {
+      final localized = localizedGameName(locCatalog, lang, id);
+      if (localized == null || localized.trim().isEmpty) return null;
+      return localized;
+    }
+
+    String readableName(String id) =>
+        catalogName(id) ??
+        itemDisplayNameFromId(id, fallback: l10n.fallbackItem);
     // What the row actually shows (see the ListTile title below): the localized
     // game name, falling back to id/path. Sorting by this keeps the browse list
     // and the flat search list ordered the way the user reads them, not by the
     // raw internal id.
-    String nameOf(PrivateInventoryItem item) =>
-        localizedGameName(locCatalog, lang, item.id) ??
-        itemDisplayNameFromId(
-          item.id.isEmpty ? _itemDisplayFromPath(item.path) : item.id,
-          fallback: l10n.fallbackItem,
-        );
+    String nameOf(PrivateInventoryItem item) => readableName(
+      item.id.isEmpty ? _itemDisplayFromPath(item.path) : item.id,
+    );
     // What the creature actually carries, as far as the editor is concerned. A
     // creature's built-in weapon — its jaw, its claws, its sting — is an item
     // in its weapon slot, but not one anybody can do anything with: the game
@@ -692,8 +701,7 @@ class _PrivateInventorySummaryCardState
     // derived id-only name for items the catalog can actually name.
     String pendingNameOf(String path, {String id = ''}) {
       final classId = id.isEmpty ? _itemDisplayFromPath(path) : id;
-      return localizedGameName(locCatalog, lang, classId) ??
-          itemDisplayNameFromId(classId, fallback: l10n.fallbackItem);
+      return readableName(classId);
     }
 
     final groups = groupInventoryItems(
@@ -709,12 +717,13 @@ class _PrivateInventorySummaryCardState
       for (final filter in itemStats?.filters ?? const <InventoryFilter>[])
         ?itemCategoryFromFilterId(filter.id): filter,
     };
-    String categoryLabel(ItemCategory category) {
+    (String text, bool fromCatalog) categoryLabel(ItemCategory category) {
       final key = filtersById[category]?.nameKey ?? '';
       final fromGame = key.isEmpty
           ? null
           : resolveGameText(locCatalog, key, lang);
-      return fromGame ?? localizedItemCategoryLabel(l10n, category);
+      if (fromGame != null) return (fromGame, true);
+      return (localizedItemCategoryLabel(l10n, category), false);
     }
 
     String? categoryGameIcon(ItemCategory category) =>
@@ -731,27 +740,32 @@ class _PrivateInventorySummaryCardState
     final allFilter = itemStats?.filters
         .where((filter) => filter.isAll)
         .firstOrNull;
+    final allFromGame = allFilter == null
+        ? null
+        : resolveGameText(locCatalog, allFilter.nameKey, lang);
     final tabs = <_InventoryTab>[
       _InventoryTab(
         category: null,
-        label:
-            (allFilter == null
-                ? null
-                : resolveGameText(locCatalog, allFilter.nameKey, lang)) ??
-            l10n.itemCategoryAll,
+        label: allFromGame ?? l10n.itemCategoryAll,
+        catalogLabel: allFromGame != null,
         gameIcon: allFilter?.icon ?? 'T_Icon_AllItems',
         fallbackIcon: Icons.all_inclusive,
         items: allItems,
       ),
-      for (final group in groups)
+    ];
+    for (final group in groups) {
+      final named = categoryLabel(group.category);
+      tabs.add(
         _InventoryTab(
           category: group.category,
-          label: categoryLabel(group.category),
+          label: named.$1,
+          catalogLabel: named.$2,
           gameIcon: categoryGameIcon(group.category),
           fallbackIcon: iconForItemCategory(group.category),
           items: group.items,
         ),
-    ];
+      );
+    }
 
     // Keep the current category selected while it still has items; a group that
     // emptied out falls back to "All" rather than to whatever sorts first.
@@ -1016,6 +1030,10 @@ class _PrivateInventorySummaryCardState
                 tone: PendingTone.add,
                 icon: Icons.add_circle_outline,
                 title: pendingNameOf(add.path),
+                gameTextLocale:
+                    catalogName(_itemDisplayFromPath(add.path)) == null
+                    ? null
+                    : lang.locale,
                 subtitle: l10n.pendingAddSubtitle(add.count),
                 technicalId: showObjectIds ? add.path : null,
                 cancelTooltip: l10n.cancelPendingAdd,
@@ -1034,6 +1052,15 @@ class _PrivateInventorySummaryCardState
                   _pendingRemovePath!,
                   id: _pendingRemove!.id,
                 ),
+                gameTextLocale:
+                    catalogName(
+                          _pendingRemove!.id.isEmpty
+                              ? _itemDisplayFromPath(_pendingRemovePath!)
+                              : _pendingRemove!.id,
+                        ) ==
+                        null
+                    ? null
+                    : lang.locale,
                 subtitle: l10n.pendingRemovalSubtitle,
                 technicalId: showObjectIds
                     ? (_pendingRemove!.id.isEmpty
@@ -1096,11 +1123,14 @@ class _PrivateInventorySummaryCardState
                                           fallbackIcon: tab.fallbackIcon,
                                           size: 18,
                                         ),
-                                        label: Text(
-                                          l10n.categoryWithCount(
-                                            tab.label,
-                                            tab.items.length,
-                                          ),
+                                        label: catalogCountChipLabel(
+                                          context,
+                                          l10n: l10n,
+                                          name: tab.label,
+                                          count: tab.items.length,
+                                          gameLocale: tab.catalogLabel
+                                              ? lang.locale
+                                              : null,
                                         ),
                                         selected: tab.category == selected,
                                         onSelected: (_) => setState(() {
@@ -1136,27 +1166,43 @@ class _PrivateInventorySummaryCardState
                                             child: Column(
                                               children: [
                                                 for (final tab in tabs)
-                                                  SidebarTile(
-                                                    icon: tab.fallbackIcon,
-                                                    gameIcon: tab.gameIcon,
-                                                    label: l10n
-                                                        .categoryWithCount(
+                                                  () {
+                                                    final parts =
+                                                        catalogCountParts(
+                                                          l10n,
                                                           tab.label,
                                                           tab.items.length,
-                                                        ),
-                                                    selected:
-                                                        !searching &&
-                                                        tab.category ==
-                                                            selected,
-                                                    onTap: () => setState(() {
-                                                      _selectedCategory =
-                                                          tab.category;
-                                                      // Leave search mode so the chosen
-                                                      // tab's items are shown.
-                                                      _query = '';
-                                                      _searchController.clear();
-                                                    }),
-                                                  ),
+                                                        );
+                                                    final catalog =
+                                                        tab.catalogLabel &&
+                                                        parts.splits;
+                                                    return SidebarTile(
+                                                      icon: tab.fallbackIcon,
+                                                      gameIcon: tab.gameIcon,
+                                                      gameTextLocale: catalog
+                                                          ? lang.locale
+                                                          : null,
+                                                      catalogRun: catalog
+                                                          ? parts.run
+                                                          : null,
+                                                      catalogLead: parts.lead,
+                                                      catalogTail: parts.tail,
+                                                      label: parts.full,
+                                                      selected:
+                                                          !searching &&
+                                                          tab.category ==
+                                                              selected,
+                                                      onTap: () => setState(() {
+                                                        _selectedCategory =
+                                                            tab.category;
+                                                        // Leave search mode so the chosen
+                                                        // tab's items are shown.
+                                                        _query = '';
+                                                        _searchController
+                                                            .clear();
+                                                      }),
+                                                    );
+                                                  }(),
                                               ],
                                             ),
                                           ),
@@ -1212,6 +1258,15 @@ class _PrivateInventorySummaryCardState
                                                             )
                                                           : item.id,
                                                       title: nameOf(item),
+                                                      titleFromCatalog:
+                                                          catalogName(
+                                                            item.id.isEmpty
+                                                                ? _itemDisplayFromPath(
+                                                                    item.path,
+                                                                  )
+                                                                : item.id,
+                                                          ) !=
+                                                          null,
                                                       child: ListTile(
                                                         key: ValueKey((
                                                           'inventory-item-row',
@@ -1317,6 +1372,20 @@ class _PrivateInventorySummaryCardState
                                                                     overflow:
                                                                         TextOverflow
                                                                             .ellipsis,
+                                                                    style:
+                                                                        catalogName(
+                                                                              item.id.isEmpty
+                                                                                  ? _itemDisplayFromPath(
+                                                                                      item.path,
+                                                                                    )
+                                                                                  : item.id,
+                                                                            ) ==
+                                                                            null
+                                                                        ? null
+                                                                        : gameScriptTextStyle(
+                                                                            context,
+                                                                            lang.locale,
+                                                                          ),
                                                                   ),
                                                                 ),
                                                                 if (item.equipped &&

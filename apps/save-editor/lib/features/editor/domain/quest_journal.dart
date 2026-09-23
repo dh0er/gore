@@ -99,6 +99,7 @@ class QuestJournalNode {
     required this.quest,
     required this.label,
     this.description,
+    this.localized = false,
     List<QuestJournalNode> children = const [],
     List<ProgressionQuest> technicalDescendants = const [],
   }) : children = List.unmodifiable(children),
@@ -107,6 +108,10 @@ class QuestJournalNode {
   final ProgressionQuest quest;
   final String label;
   final String? description;
+
+  /// True when [label] came from the localization catalog. A readable
+  /// fallback built from the save id stays false so the interface face paints it.
+  final bool localized;
 
   /// Recursively named subquests/objectives. An unnamed structural row between
   /// two named rows is skipped, so the child remains attached to the nearest
@@ -246,6 +251,7 @@ QuestJournal buildQuestJournal(
     quest: entry.quest,
     label: entry.label!,
     description: entry.description,
+    localized: entry.localized,
     children: entry.namedChildren.map(freeze).toList(growable: false),
     technicalDescendants: entry.technicalChildren,
   );

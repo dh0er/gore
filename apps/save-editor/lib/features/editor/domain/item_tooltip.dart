@@ -30,11 +30,18 @@ class ItemTooltip {
     this.writing = const [],
     this.requirements = const [],
     this.requirementsLabel = '',
+    this.protectionLabelFromCatalog = false,
+    this.requirementsLabelFromCatalog = false,
+    this.titleFromCatalog = true,
+    this.recipeProduct = '',
     this.description = '',
   });
 
   /// Localized item name.
   final String title;
+
+  /// False when [title] is an interface fallback rather than a catalog name.
+  final bool titleFromCatalog;
 
   /// The item type as the game names it — "One-Handed Sword", "Scroll".
   final String subtitle;
@@ -46,10 +53,17 @@ class ItemTooltip {
   final List<ItemTooltipRow> protection;
   final String protectionLabel;
 
+  /// True when [protectionLabel] came from the game catalog.
+  final bool protectionLabelFromCatalog;
+
   /// The crafting chain a blueprint teaches, one row per step: what it takes on
   /// the left, what it yields on the right.
   final List<ItemTooltipRow> recipe;
   final String recipeLabel;
+
+  /// Catalog item name inside [recipeLabel]. The words around it are interface
+  /// text.
+  final String recipeProduct;
 
   /// What can be made from this item, under [ingredientForLabel].
   final List<ItemTooltipRow> ingredientFor;
@@ -61,6 +75,9 @@ class ItemTooltip {
   /// What the hero needs to use the item, under [requirementsLabel].
   final List<ItemTooltipRow> requirements;
   final String requirementsLabel;
+
+  /// True when [requirementsLabel] came from the game catalog.
+  final bool requirementsLabelFromCatalog;
 
   /// The item's flavour text.
   final String description;
@@ -90,13 +107,41 @@ class ItemTooltipParagraph {
 /// One line of the card: an optional game glyph, a label, and the value the
 /// game right-aligns against it.
 class ItemTooltipRow {
-  const ItemTooltipRow(this.label, this.value, {this.iconName});
+  const ItemTooltipRow(
+    this.label,
+    this.value, {
+    this.iconName,
+    this.catalogLabel = true,
+    this.interfaceValueRun,
+    this.labelRuns = const [],
+  });
 
   final String label;
   final String value;
 
   /// Shared game glyph in front of the label, or null for the game's ◆ bullet.
   final String? iconName;
+
+  /// False when [label] is an interface string. Those keep the interface face
+  /// when the card paints catalog text in the game-text face.
+  final bool catalogLabel;
+
+  /// A slice of [value] that came from interface text, such as the localized
+  /// duration suffix. The rest of the value keeps the game-text face.
+  final String? interfaceValueRun;
+
+  /// Ordered pieces of [label]. Empty means the whole label follows
+  /// [catalogLabel]. A recipe line uses this so a fallback id and the
+  /// count or arrow stay on the interface face while a catalog name does not.
+  final List<ItemTooltipLabelRun> labelRuns;
+}
+
+/// One piece of an [ItemTooltipRow] label.
+class ItemTooltipLabelRun {
+  const ItemTooltipLabelRun(this.text, {required this.fromCatalog});
+
+  final String text;
+  final bool fromCatalog;
 }
 
 /// Build the hover card for one item. Returns an empty tooltip when the
@@ -112,6 +157,7 @@ ItemTooltip buildItemTooltip({
   required Map<String, Map<String, String>> catalog,
   required GameLang lang,
   required AppLocalizations l10n,
+  bool titleFromCatalog = true,
 }) {
   if (stats == null || stats.isEmpty) return const ItemTooltip();
   String? game(String key) => resolveGameText(catalog, key, lang);
@@ -127,12 +173,24 @@ ItemTooltip buildItemTooltip({
           .map((level) => _number(level[tag]))
           .where((value) => value.isNotEmpty);
       if (values.isEmpty) continue;
-      rows.add(ItemTooltipRow(_damageLabel(game, tag), values.join('/')));
+      final damage = _damageLabel(game, tag);
+      rows.add(
+        ItemTooltipRow(
+          damage.label,
+          values.join('/'),
+          catalogLabel: damage.fromCatalog,
+        ),
+      );
     }
   } else {
     for (final entry in stats.damage.entries) {
+      final damage = _damageLabel(game, entry.key);
       rows.add(
-        ItemTooltipRow(_damageLabel(game, entry.key), _number(entry.value)),
+        ItemTooltipRow(
+          damage.label,
+          _number(entry.value),
+          catalogLabel: damage.fromCatalog,
+        ),
       );
     }
   }
@@ -150,26 +208,29 @@ ItemTooltip buildItemTooltip({
         .where((value) => value.isNotEmpty)
         .join('/');
     if (initial.isNotEmpty) {
+      final mana = game(
+        upkeep.isEmpty
+            ? 'ui_stat_manacost_text'
+            : 'ui_stat_initialmanacost_text',
+      );
       rows.add(
         ItemTooltipRow(
-          game(
-                upkeep.isEmpty
-                    ? 'ui_stat_manacost_text'
-                    : 'ui_stat_initialmanacost_text',
-              ) ??
-              l10n.itemTooltipManaCost,
+          mana ?? l10n.itemTooltipManaCost,
           initial,
           iconName: 'T_Icon_Mana',
+          catalogLabel: mana != null,
         ),
       );
     }
     if (upkeep.isNotEmpty) {
       final perSecond = game('ui_stat_duration_measurement') ?? '/s';
+      final upkeepLabel = game('ui_stat_manaupkeep_text');
       rows.add(
         ItemTooltipRow(
-          game('ui_stat_manaupkeep_text') ?? l10n.itemTooltipManaUpkeep,
+          upkeepLabel ?? l10n.itemTooltipManaUpkeep,
           '$upkeep$perSecond',
           iconName: 'T_Icon_Mana',
+          catalogLabel: upkeepLabel != null,
         ),
       );
     }
@@ -181,21 +242,21 @@ ItemTooltip buildItemTooltip({
   final perSecond = game('ui_stat_duration_measurement') ?? '/s';
   for (final effect in stats.onConsume) {
     final duration = effect.seconds;
-    String withDuration(String amount) => duration == null
-        ? amount
-        : '$amount · ${l10n.memoryEventSecondsValue(_number(duration))}';
+    final secondsLabel = duration == null
+        ? null
+        : l10n.memoryEventSecondsValue(_number(duration));
+    String withDuration(String amount) =>
+        secondsLabel == null ? amount : '$amount · $secondsLabel';
     void add(String attribute, String amount, {String? setClass}) {
       rows.add(
-        ItemTooltipRow(
-          localizedAttributeName(
-            catalog,
-            lang,
-            attribute,
-            setClass: setClass,
-            l10n: l10n,
-          ),
+        _attributeRow(
+          catalog,
+          lang,
+          l10n,
+          attribute,
           withDuration(amount),
-          iconName: gameIconForAttribute(attribute, setClass),
+          setClass: setClass,
+          interfaceValueRun: secondsLabel,
         ),
       );
     }
@@ -224,16 +285,13 @@ ItemTooltip buildItemTooltip({
   for (final entry in stats.onEquip.entries) {
     final isProtection = entry.key.startsWith('Resistance_');
     final setClass = isProtection ? 'AttributeSet_Armor' : null;
-    final row = ItemTooltipRow(
-      localizedAttributeName(
-        catalog,
-        lang,
-        entry.key,
-        setClass: setClass,
-        l10n: l10n,
-      ),
+    final row = _attributeRow(
+      catalog,
+      lang,
+      l10n,
+      entry.key,
       _signed(entry.value),
-      iconName: gameIconForAttribute(entry.key, setClass),
+      setClass: setClass,
     );
     (isProtection ? protection : rows).add(row);
   }
@@ -244,22 +302,42 @@ ItemTooltip buildItemTooltip({
   // editor does not enforce it — a count of 999 on a 99-stack item loads fine —
   // and more than half the catalog declares 1 or nothing at all.
   if (stats.value != null) {
-    rows.add(ItemTooltipRow(l10n.itemTooltipValue, _number(stats.value)));
+    rows.add(
+      ItemTooltipRow(
+        l10n.itemTooltipValue,
+        _number(stats.value),
+        catalogLabel: false,
+      ),
+    );
   }
 
   final requirements = [
     for (final entry in stats.requires.entries)
-      ItemTooltipRow(
-        localizedAttributeName(catalog, lang, entry.key, l10n: l10n),
-        _number(entry.value),
-        iconName: gameIconForAttribute(entry.key),
-      ),
+      _attributeRow(catalog, lang, l10n, entry.key, _number(entry.value)),
   ];
 
-  String itemName(String id) => localizedGameName(catalog, lang, id) ?? id;
-  String counted(MapEntry<String, int> entry) => entry.value == 1
-      ? itemName(entry.key)
-      : '${entry.value}× ${itemName(entry.key)}';
+  ({String name, bool fromCatalog}) named(String id) {
+    final name = localizedGameName(catalog, lang, id);
+    if (name == null || name.trim().isEmpty) {
+      return (name: id, fromCatalog: false);
+    }
+    return (name: name, fromCatalog: true);
+  }
+
+  List<ItemTooltipLabelRun> pieceRuns(Map<String, int> items) {
+    final runs = <ItemTooltipLabelRun>[];
+    for (final entry in items.entries) {
+      if (runs.isNotEmpty) {
+        runs.add(const ItemTooltipLabelRun(' + ', fromCatalog: false));
+      }
+      if (entry.value != 1) {
+        runs.add(ItemTooltipLabelRun('${entry.value}× ', fromCatalog: false));
+      }
+      final item = named(entry.key);
+      runs.add(ItemTooltipLabelRun(item.name, fromCatalog: item.fromCatalog));
+    }
+    return runs;
+  }
 
   // A blueprint has no numbers of its own; what is worth knowing is the chain
   // it unlocks. Each step reads as one line — what goes in, what comes out —
@@ -267,30 +345,47 @@ ItemTooltip buildItemTooltip({
   // which belonged to which.
   final recipe = <ItemTooltipRow>[];
   for (final step in stats.teaches) {
-    final makes = step.makes.entries.map(counted).join(' + ');
-    final needs = step.needs.entries.map(counted).join(' + ');
+    final needs = pieceRuns(step.needs);
+    final makes = pieceRuns(step.makes);
+    final runs = <ItemTooltipLabelRun>[
+      ...needs,
+      if (needs.isNotEmpty)
+        const ItemTooltipLabelRun('  →  ', fromCatalog: false),
+      ...makes,
+    ];
     recipe.add(
       ItemTooltipRow(
-        needs.isEmpty ? makes : '$needs  →  $makes',
+        runs.map((run) => run.text).join(),
         '',
         iconName: _stationIcon(step.station),
+        catalogLabel: false,
+        labelRuns: runs,
       ),
     );
   }
   // The last step yields what the blueprint is actually for; the ones before it
-  // are the parts on the way there.
-  final product = stats.teaches.isEmpty
-      ? ''
-      : stats.teaches.last.makes.keys.map(itemName).join(' + ');
+  // are the parts on the way there. A fallback id in that yield is not a
+  // catalog run, so the heading keeps the interface face.
+  final products = stats.teaches.isEmpty
+      ? const <({String name, bool fromCatalog})>[]
+      : [for (final id in stats.teaches.last.makes.keys) named(id)];
+  final product = products.map((item) => item.name).join(' + ');
+  final productFromCatalog =
+      products.isNotEmpty && products.every((item) => item.fromCatalog);
 
   // What a raw material is for. Long lists are cut: the point is what it makes,
   // not an inventory of every recipe in the game.
-  final ingredientFor = stats.ingredientFor.map(itemName).toList()..sort();
+  final ingredientFor = [for (final id in stats.ingredientFor) named(id)]
+    ..sort((a, b) => a.name.compareTo(b.name));
   final ingredientRows = <ItemTooltipRow>[
-    for (final name in ingredientFor.take(_maxIngredientRows))
-      ItemTooltipRow(name, ''),
+    for (final item in ingredientFor.take(_maxIngredientRows))
+      ItemTooltipRow(item.name, '', catalogLabel: item.fromCatalog),
     if (ingredientFor.length > _maxIngredientRows)
-      ItemTooltipRow('+ ${ingredientFor.length - _maxIngredientRows}', ''),
+      ItemTooltipRow(
+        '+ ${ingredientFor.length - _maxIngredientRows}',
+        '',
+        catalogLabel: false,
+      ),
   ];
 
   // A writing's own text, where it has one. Most carry no description at all —
@@ -302,16 +397,25 @@ ItemTooltip buildItemTooltip({
     written.add(ItemTooltipParagraph(text.trim(), isHeading: part.isHeading));
   }
 
+  final protectionName = protection.isEmpty
+      ? null
+      : game('ui_protection_protection');
+  final requirementsName = requirements.isEmpty
+      ? null
+      : game('ui_inventory_requirements');
   return ItemTooltip(
     title: title,
+    titleFromCatalog: titleFromCatalog,
     subtitle: _itemTypeName(game, stats.itemType) ?? '',
     stats: rows,
     protection: protection,
     protectionLabel: protection.isEmpty
         ? ''
-        : (game('ui_protection_protection') ?? l10n.itemTooltipProtection),
+        : (protectionName ?? l10n.itemTooltipProtection),
+    protectionLabelFromCatalog: protectionName != null,
     recipe: recipe,
     recipeLabel: recipe.isEmpty ? '' : l10n.itemTooltipTeaches(product),
+    recipeProduct: productFromCatalog ? product : '',
     ingredientFor: ingredientRows,
     ingredientForLabel: ingredientRows.isEmpty
         ? ''
@@ -319,7 +423,8 @@ ItemTooltip buildItemTooltip({
     requirements: requirements,
     requirementsLabel: requirements.isEmpty
         ? ''
-        : (game('ui_inventory_requirements') ?? l10n.itemTooltipRequirements),
+        : (requirementsName ?? l10n.itemTooltipRequirements),
+    requirementsLabelFromCatalog: requirementsName != null,
     // Some items name no description class-side although the game ships one
     // under their own id — the permanent potions, above all.
     description:
@@ -331,6 +436,30 @@ ItemTooltip buildItemTooltip({
         ) ??
         '',
     writing: written,
+  );
+}
+
+ItemTooltipRow _attributeRow(
+  Map<String, Map<String, String>> catalog,
+  GameLang lang,
+  AppLocalizations l10n,
+  String attribute,
+  String amount, {
+  String? setClass,
+  String? interfaceValueRun,
+}) {
+  final fromCatalog = catalogAttributeName(
+    catalog,
+    lang,
+    attribute,
+    setClass: setClass,
+  );
+  return ItemTooltipRow(
+    fromCatalog ?? readableAttributeName(attribute, l10n, setClass),
+    amount,
+    iconName: gameIconForAttribute(attribute, setClass),
+    catalogLabel: fromCatalog != null,
+    interfaceValueRun: interfaceValueRun,
   );
 }
 
@@ -349,8 +478,16 @@ String? _itemTypeName(String? Function(String) game, String itemType) {
   return null;
 }
 
-String _damageLabel(String? Function(String) game, String tag) =>
-    game(tag.toLowerCase()) ?? tag;
+({String label, bool fromCatalog}) _damageLabel(
+  String? Function(String) game,
+  String tag,
+) {
+  final text = game(tag.toLowerCase());
+  if (text == null || text.trim().isEmpty) {
+    return (label: tag, fromCatalog: false);
+  }
+  return (label: text, fromCatalog: true);
+}
 
 /// The game's own mark for the bench a recipe step is worked at.
 String? _stationIcon(String station) => switch (station) {

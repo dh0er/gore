@@ -9,6 +9,7 @@ import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import '../domain/editor_models.dart';
@@ -448,6 +449,11 @@ class _RegionRail extends StatelessWidget {
             selected: selected == area,
             onTap: () => onSelected(area),
             theme: theme,
+            gameTextLocale:
+                locations != null &&
+                    catalogAreaLabel(area, locations!, locCatalog, lang) != null
+                ? lang.locale
+                : null,
           ),
       ],
     );
@@ -461,6 +467,7 @@ class _RegionTile extends StatelessWidget {
     required this.selected,
     required this.onTap,
     required this.theme,
+    this.gameTextLocale,
   });
 
   final String label;
@@ -468,6 +475,7 @@ class _RegionTile extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   final ThemeData theme;
+  final Locale? gameTextLocale;
 
   @override
   Widget build(BuildContext context) {
@@ -476,7 +484,7 @@ class _RegionTile extends StatelessWidget {
       dense: true,
       selected: selected,
       selectedTileColor: theme.colorScheme.primaryContainer,
-      title: _EllipsisTooltip(text: label),
+      title: _EllipsisTooltip(text: label, gameTextLocale: gameTextLocale),
       trailing: Text(
         '$count',
         style: theme.textTheme.bodySmall?.copyWith(
@@ -540,45 +548,65 @@ class _LockList extends StatelessWidget {
     _StateFilter.locked => l10n.locksFilterLocked,
   };
 
-  String _keyName(String id) {
-    final name = localizedKeyName(locCatalog, lang, id);
-    return showObjectIds && name != id ? '$name ($id)' : name;
-  }
-
-  /// The line under a lock's name: what it takes to open it.
-  String? _subtitleText(_LockRow row) {
+  /// The line under a lock's name. App-owned sentences stay on the interface
+  /// face. Each catalog key name is its own span, so a later name cannot match
+  /// inside an earlier technical id or generated fallback.
+  Widget? _subtitleLine(BuildContext context, _LockRow row) {
     final entry = row.entry;
-    if (entry == null) return l10n.locksUnknownEntry;
+    if (entry == null) {
+      return Text(l10n.locksUnknownEntry, overflow: TextOverflow.ellipsis);
+    }
     // `Permalocked` is a sentinel key that matches no item in the game — the
     // lock is meant never to open, so say that instead of naming a key the
     // player can never hold.
     if (entry.keys.length == 1 && entry.keys.first == 'Permalocked') {
-      return l10n.locksPermalocked;
+      return Text(l10n.locksPermalocked, overflow: TextOverflow.ellipsis);
     }
-    final parts = <String>[];
-    // A lock with no pickable difficulty at all only ever opens with its key.
-    if (entry.difficulty == null && entry.keys.isNotEmpty) {
-      parts.add(l10n.locksKeyOnly);
+    if (entry.keys.isEmpty) return null;
+
+    final game = gameScriptTextStyle(context, lang.locale);
+    // A character no localization string contains, so the wrapper split cannot
+    // land inside a key name.
+    const marker = '\uE000';
+    final wrapped = l10n.locksKeyLabel(marker).split(marker);
+    final spans = <InlineSpan>[
+      if (entry.difficulty == null) TextSpan(text: '${l10n.locksKeyOnly} · '),
+      if (wrapped.isNotEmpty && wrapped.first.isNotEmpty)
+        TextSpan(text: wrapped.first),
+    ];
+    for (var index = 0; index < entry.keys.length; index++) {
+      if (index > 0) spans.add(const TextSpan(text: ', '));
+      final id = entry.keys[index];
+      final localized = localizedGameName(locCatalog, lang, id);
+      final fromCatalog = localized != null && localized.trim().isNotEmpty;
+      final name = fromCatalog
+          ? localized
+          : itemDisplayNameFromId(id, fallback: id);
+      spans.add(TextSpan(text: name, style: fromCatalog ? game : null));
+      if (showObjectIds && name != id) {
+        spans.add(TextSpan(text: ' ($id)'));
+      }
     }
-    if (entry.keys.isNotEmpty) {
-      parts.add(l10n.locksKeyLabel(entry.keys.map(_keyName).join(', ')));
+    if (wrapped.length > 1 && wrapped.last.isNotEmpty) {
+      spans.add(TextSpan(text: wrapped.last));
     }
-    return parts.isEmpty ? null : parts.join(' · ');
+    return Text.rich(
+      TextSpan(children: spans),
+      overflow: TextOverflow.ellipsis,
+    );
   }
 
   /// The line under a lock's name: the game's own difficulty pips, then what it
   /// takes to open it.
-  Widget? _subtitle(_LockRow row) {
-    final text = _subtitleText(row);
+  Widget? _subtitle(BuildContext context, _LockRow row) {
     final difficulty = row.entry?.difficulty;
-    if (difficulty == null) return text == null ? null : Text(text);
+    final line = _subtitleLine(context, row);
+    if (line == null && difficulty == null) return null;
+    if (difficulty == null) return line;
     return Row(
       children: [
         _DifficultyBars(difficulty: difficulty, theme: theme, l10n: l10n),
-        if (text != null) ...[
-          const SizedBox(width: 8),
-          Flexible(child: Text(text, overflow: TextOverflow.ellipsis)),
-        ],
+        if (line != null) ...[const SizedBox(width: 8), Flexible(child: line)],
       ],
     );
   }
@@ -675,7 +703,7 @@ class _LockList extends StatelessWidget {
                     final row = rows[index];
                     final draft = pending[row.name];
                     final effective = draft?.unlocked ?? row.unlocked;
-                    final subtitle = _subtitle(row);
+                    final subtitle = _subtitle(context, row);
                     return ListTile(
                       key: ValueKey('lock-${row.name}'),
                       dense: true,
@@ -794,20 +822,28 @@ class _DifficultyBars extends StatelessWidget {
 /// something they cannot already see. The region rail is where this bites —
 /// "Illegale Sumpfkrautmischer" does not fit a 220px rail in any language.
 class _EllipsisTooltip extends StatelessWidget {
-  const _EllipsisTooltip({required this.text});
+  const _EllipsisTooltip({required this.text, this.gameTextLocale});
 
   final String text;
+  final Locale? gameTextLocale;
 
   @override
   Widget build(BuildContext context) {
-    final label = Text(text, maxLines: 1, overflow: TextOverflow.ellipsis);
+    final font = gameTextLocale == null
+        ? null
+        : gameScriptTextStyle(context, gameTextLocale!);
+    final label = Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: font,
+    );
     return LayoutBuilder(
       builder: (context, constraints) {
         if (!constraints.hasBoundedWidth) return label;
-        // The enclosing DefaultTextStyle is the one the row actually paints
-        // with (ListTile installs its own), so measuring against it matches
-        // what the reader sees.
-        final effective = DefaultTextStyle.of(context).style;
+        // ListTile installs the style the row paints with. A game-text face
+        // overrides only the family, so measure the merge the Text widget uses.
+        final effective = DefaultTextStyle.of(context).style.merge(label.style);
         final painter = TextPainter(
           text: TextSpan(text: text, style: effective),
           maxLines: 1,
@@ -816,7 +852,12 @@ class _EllipsisTooltip extends StatelessWidget {
         )..layout(maxWidth: constraints.maxWidth);
         final truncated = painter.didExceedMaxLines;
         painter.dispose();
-        return truncated ? Tooltip(message: text, child: label) : label;
+        if (!truncated) return label;
+        if (font == null) return Tooltip(message: text, child: label);
+        return Tooltip(
+          richMessage: TextSpan(text: text, style: font),
+          child: label,
+        );
       },
     );
   }

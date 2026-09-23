@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/character_category_catalog.dart';
 import 'package:goresave/features/editor/domain/character_index.dart';
@@ -50,7 +51,12 @@ void main() {
                 'nc_sld_wolf_701': {'english': 'Wolf'},
                 'wolf': {'english': 'Wolf'},
               },
-              lang: const GameLang('en', 'English', Locale('en'), kEnglishLocSets),
+              lang: const GameLang(
+                'en',
+                'English',
+                Locale('en'),
+                kEnglishLocSets,
+              ),
               categories: _catalog,
             ),
           ),
@@ -98,5 +104,69 @@ void main() {
     expect(find.text('Wolf (5)'), findsOneWidget);
     expect(find.text('Wolf (3)'), findsNothing);
     expect(find.text('Wolf (2)'), findsNothing);
+  });
+
+  testWidgets('a grouped character count stays on the interface face', (
+    tester,
+  ) async {
+    const zh = Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans');
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          locale: const Locale('en'),
+          theme: buildGoresaveTheme(
+            uiFontFamily: UiFontFamily.podkova,
+            locale: const Locale('en'),
+            gameTextLocale: zh,
+          ),
+          localizationsDelegates: testLocalizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: SizedBox(
+              width: 380,
+              height: 700,
+              child: CharacterMasterList(
+                selected: const Actor.player(),
+                onSelect: (_) {},
+                load: () async => CharacterIndexPage(
+                  characters: [
+                    for (var i = 1; i <= 3; i++) _row('Wolf-OW_PATH_$i'),
+                  ],
+                  total: 3,
+                ),
+                reloadKey: 'k',
+                locCatalog: const {
+                  'wolf': {'schinese': '狼'},
+                },
+                lang: gameLangByCode('zh-Hans'),
+                categories: _catalog,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final rich = tester.widget<RichText>(
+      find.byWidgetPredicate(
+        (widget) => widget is RichText && widget.text.toPlainText() == '狼 (3)',
+      ),
+    );
+    final runs = <TextSpan>[];
+    void walk(InlineSpan span) {
+      if (span is! TextSpan) return;
+      if (span.text != null && span.text!.isNotEmpty) runs.add(span);
+      span.children?.forEach(walk);
+    }
+
+    walk(rich.text);
+    expect(runs.map((span) => span.text), ['狼', ' (3)']);
+    expect(runs[0].style?.fontFamily, notoSerifScFontFamily);
+    expect(runs[1].style, isNull);
+    expect(
+      DefaultTextStyle.of(tester.element(find.byWidget(rich))).style.fontFamily,
+      podkovaFontFamily,
+    );
   });
 }
