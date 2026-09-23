@@ -187,6 +187,7 @@ pub fn build_commands(
     let work = work_dir(Path::new(dir));
     let work_arg = shell_quote(&work.display().to_string());
     let mini_arg = shell_quote(&format!("{dir}/{mod_name}.mini.Cache"));
+    let base_arg = shell_quote(&manifest.cache_sha256);
     let mut out = Vec::new();
     match route_of(manifest) {
         Route::FullTree => {
@@ -205,7 +206,7 @@ pub fn build_commands(
                 .collect::<String>();
             out.push(format!(
                 "gore as compile {} -o {} --mini {mini_arg} --work-dir {work_arg} \
-                 --backend standalone{only_changes}{game_arg}",
+                 --backend standalone --expect-base-sha256 {base_arg}{only_changes}{game_arg}",
                 shell_quote(tree),
                 shell_quote(&format!("{dir}/full.Cache")),
             ));
@@ -217,7 +218,7 @@ pub fn build_commands(
             out.push(format!(
                 "gore as compile-module --backend standalone --op edit \
                  --module {} --rel-path {} --source {} \
-                 --work-dir {work_arg} -o {mini_arg}{game_arg}",
+                 --work-dir {work_arg} -o {mini_arg} --expect-base-sha256 {base_arg}{game_arg}",
                 shell_quote(&edit.module),
                 shell_quote(&edit.relative_path),
                 shell_quote(&format!("{dir}/{STAGED_SOURCE_NAME}")),
@@ -337,6 +338,17 @@ mod tests {
         assert!(commands[0].contains("--rel-path 'LevelScripts/XardasTower_AI.as'"));
         assert!(commands[0].contains("--source 'ws/.gore-npc-staged-source.as'"));
         assert!(!commands[0].contains("--game"));
+    }
+
+    #[test]
+    fn both_compile_routes_bind_to_the_checked_cache() {
+        for mut manifest in [authored(), suppression()] {
+            manifest.cache_sha256 = "a".repeat(64);
+            let commands = build_commands(&manifest, "ws", "tree", "MyMod", None);
+            assert!(commands[0].contains(&format!(
+                "--expect-base-sha256 '{}'", manifest.cache_sha256
+            )));
+        }
     }
 
     #[test]
