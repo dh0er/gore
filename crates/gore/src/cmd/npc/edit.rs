@@ -91,10 +91,26 @@ pub fn add_spawn(
         .position(|line| opens_any_class(line))
         .map_or(lines.len(), |offset| start + 1 + offset);
 
+    let body_open = (start..end)
+        .find(|&index| {
+            lines[index].trim_start().starts_with("void OnWorldStart()")
+                && lines.get(index + 1).is_some_and(|next| next.trim() == "{")
+        })
+        .map(|index| index + 1)
+        .ok_or_else(|| EditError::NoBody(world_point.to_string()))?;
+    let mut depth = 0isize;
+    let mut body_close = None;
+    for (index, line) in lines.iter().enumerate().take(end).skip(body_open) {
+        depth += line.chars().filter(|&ch| ch == '{').count() as isize;
+        depth -= line.chars().filter(|&ch| ch == '}').count() as isize;
+        if depth == 0 {
+            body_close = Some(index);
+            break;
+        }
+    }
+    let body_close = body_close.ok_or_else(|| EditError::NoBody(world_point.to_string()))?;
     let mut last_spawn = None;
-    let mut body_open = None;
-    for (index, line) in lines[start..end].iter().enumerate() {
-        let index = start + index;
+    for (index, line) in lines.iter().enumerate().take(body_close).skip(body_open + 1) {
         if line.contains("SpawnAIAgent(") {
             if is_spawn_line_for(line, spawn_class) {
                 return Err(EditError::AlreadySpawns(
@@ -104,23 +120,13 @@ pub fn add_spawn(
             }
             last_spawn = Some(index);
         }
-        if body_open.is_none() && line.contains("OnWorldStart()") {
-            // Die öffnende Klammer steht in der Zeile darauf, im Stil des Emitters.
-            body_open = lines
-                .get(index + 1)
-                .filter(|next| next.trim() == "{")
-                .map(|_| index + 1);
-        }
     }
 
     let (at, indent) = match last_spawn {
         Some(index) => (index + 1, indent_of(lines[index]).to_string()),
-        None => match body_open {
-            // Ohne vorhandene Spawn-Zeile richtet sich die Einrückung nach der Klammer plus einer
-            // Ebene, so wie der Emitter Rümpfe schreibt.
-            Some(index) => (index + 1, format!("{}    ", indent_of(lines[index]))),
-            None => return Err(EditError::NoBody(world_point.to_string())),
-        },
+        // Ohne vorhandene Spawn-Zeile richtet sich die Einrückung nach der Klammer plus einer
+        // Ebene, so wie der Emitter Rümpfe schreibt.
+        None => (body_open + 1, format!("{}    ", indent_of(lines[body_open]))),
     };
 
     let mut out: Vec<String> = lines[..at].iter().map(|line| line.to_string()).collect();
@@ -237,6 +243,32 @@ class UWP_B : UWorldPointScript
             .expect("body brace");
         assert!(lines[brace + 1].contains("MY_NPC"));
         assert!(lines[brace + 1].starts_with("        "));
+    }
+
+    #[test]
+    fn a_later_helper_spawn_does_not_move_the_insertion_out_of_on_world_start() {
+        let source = r#"class UWP_C : UWorldPointScript
+{
+    void OnWorldStart()
+    {
+        return;
+    }
+    void SpawnHelper()
+    {
+        this.SpawnAIAgent(TSubclassOf<USpawnAIAgentDefinition>(USpawnAIAgentDefinition_Other::StaticClass()), nullptr);
+    }
+}
+"#;
+        let out = add_spawn(source, "UWP_C", "USpawnAIAgentDefinition_MY_NPC", None).unwrap();
+        let lines: Vec<_> = out.lines().collect();
+        let mine = lines.iter().position(|line| line.contains("MY_NPC")).unwrap();
+        let world_start_end = lines
+            .iter()
+            .position(|line| line.contains("void SpawnHelper()"))
+            .unwrap();
+        assert!(mine < world_start_end);
+        assert_eq!(lines[mine + 1].trim(), "return;");
+        assert!(out.contains("USpawnAIAgentDefinition_Other::StaticClass()"));
     }
 
     #[test]
