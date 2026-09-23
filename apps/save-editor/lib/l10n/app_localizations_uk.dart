@@ -2291,7 +2291,7 @@ class AppLocalizationsUk extends AppLocalizations {
       'Mana_RecoveryRatePerHourOfSleep': 'Мана за годину сну',
       'Alcohol': 'Рівень алкоголю',
       'MaxAlcohol': 'Макс. алкоголь',
-      'AlcoholDepletionRate': 'Швидкість трезвощення',
+      'AlcoholDepletionRate': 'Швидкість протверезіння',
       'Swampweed': 'Рівень болотної трави',
       'MaxSwampweed': 'Макс. болотна трава',
       'SwampweedDepletionRate': 'Швидкість згасання ефекту',
@@ -2342,7 +2342,7 @@ class AppLocalizationsUk extends AppLocalizations {
           'Наскільки цей персонаж п’яний; на вищих рівнях змінює спритність і ману на силу.',
       'MaxAlcohol':
           'Найвищий рівень алкоголю, якого може досягти цей персонаж.',
-      'AlcoholDepletionRate': 'Як швидко рівень алкоголю падає до трезвості.',
+      'AlcoholDepletionRate': 'Як швидко рівень алкоголю падає до тверезості.',
       'Swampweed':
           'Наскільки цей персонаж під кайфом; вищі рівні перерозподіляють його атрибути.',
       'MaxSwampweed':
