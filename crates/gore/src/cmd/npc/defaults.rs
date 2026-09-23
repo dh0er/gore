@@ -98,7 +98,10 @@ pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
         }
         if let Some(rest) = trimmed.strip_prefix("class ") {
             let (name, super_class) = match rest.split_once(':') {
-                Some((name, base)) => (name.trim(), Some(base.trim().to_string())),
+                Some((name, base)) => (
+                    name.trim(),
+                    Some(base.trim().trim_end_matches('{').trim().to_string()),
+                ),
                 None => (rest.trim().trim_end_matches('{').trim(), None),
             };
             out.push(EmittedClass {
@@ -227,6 +230,15 @@ class UVisualFeatures_OC_STT_Diego : UCharacterVisualFeaturesDefinition
             Some("UCharacterDefinition_Human_OldCamp_Shadow")
         );
         assert_eq!(classes[1].name, "UVisualFeatures_OC_STT_Diego");
+    }
+
+    #[test]
+    fn parse_classes_trims_same_line_brace_from_super() {
+        let classes = parse_classes("class UChild : UBase {\n    default Ready = true;\n}\n");
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name, "UChild");
+        assert_eq!(classes[0].super_class.as_deref(), Some("UBase"));
+        assert_eq!(classes[0].assignments, vec![("Ready".into(), "true".into())]);
     }
 
     #[test]
