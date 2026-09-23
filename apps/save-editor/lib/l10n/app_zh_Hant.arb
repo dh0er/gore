@@ -800,7 +800,7 @@
   "locksShownOfTotal": "{total} 箇中的 {shown} 個",
   "locksFilterChests": "箱子",
   "locksFilterDoors": "門",
-  "locksFilterUnlocked": "已開啟",
+  "locksFilterUnlocked": "已解鎖",
   "locksFilterLocked": "已上鎖",
   "locksDifficultyLevel": "難度 {bars}/4（內部等級 {level}/7）",
   "locksKeyOnly": "僅限鑰匙",

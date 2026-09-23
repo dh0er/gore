@@ -9507,7 +9507,7 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String get locksFilterDoors => '門';
 
   @override
-  String get locksFilterUnlocked => '已開啟';
+  String get locksFilterUnlocked => '已解鎖';
 
   @override
   String get locksFilterLocked => '已上鎖';
