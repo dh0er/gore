@@ -1042,14 +1042,17 @@ fn author(
     let edited = edit::add_spawn(pristine, &request.at, &new_spawn, routine.as_deref())
         .with_context(|| format!("adding the spawn line to {level_module}"))?;
 
-    create_workspace(out)?;
-
     let module_relative = generate::relative_path(&request.id);
     let module_leaf = leaf_of(&module_relative).to_string();
-    fs::write(out.join(&module_leaf), &source).with_context(|| format!("writing {module_leaf}"))?;
-
     let level_relative = format!("{}.as", level_module.replace('.', "/"));
     let level_leaf = leaf_of(&level_relative).to_string();
+    ensure!(
+        !module_leaf.eq_ignore_ascii_case(&level_leaf),
+        "NPC source {module_leaf} collides with level source {level_leaf}; choose another --id"
+    );
+
+    create_workspace(out)?;
+    fs::write(out.join(&module_leaf), &source).with_context(|| format!("writing {module_leaf}"))?;
     fs::write(out.join(&level_leaf), &edited).with_context(|| format!("writing {level_leaf}"))?;
     fs::write(out.join("pristine").join(&level_leaf), pristine)
         .with_context(|| format!("writing pristine/{level_leaf}"))?;
@@ -1261,6 +1264,13 @@ fn validate_manifest_modules(manifest: &workspace::Manifest) -> Result<()> {
     let level = manifest
         .level_edit()
         .context("the manifest names no edited level script")?;
+    if let Some(authored) = manifest.authored_module() {
+        ensure!(
+            !authored.source_file.eq_ignore_ascii_case(&level.source_file),
+            "the NPC and level modules share a source filename: {}",
+            level.source_file
+        );
+    }
     let level_path = format!("{}.as", manifest.level_module.replace('.', "/"));
     ensure!(
         level.op == "edit" && level.relative_path == level_path && level.pristine_file.is_some(),
@@ -2012,6 +2022,10 @@ mod tests {
         manifest.modules.pop();
         manifest.modules[1].relative_path = "../outside.as".to_string();
         assert!(validate_manifest_modules(&manifest).is_err());
+        manifest.modules[1].relative_path = "LevelScripts/Test.as".to_string();
+        manifest.modules[0].source_file = "TEST.as".to_string();
+        let error = validate_manifest_modules(&manifest).unwrap_err();
+        assert!(error.to_string().contains("share a source filename"));
     }
 
     #[test]
