@@ -175,7 +175,11 @@ pub fn guard_pristine_source(cached: Option<&str>, pristine: &str, module: &str)
 }
 
 /// Die Klassen des verfassten Moduls gegen die Id prüfen.
-pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
+pub fn guard_authored_module(
+    source: &str,
+    npc_id: &str,
+    expected_actor_blueprint: &str,
+) -> Vec<Finding> {
     let classes = defaults::parse_classes(source);
     let mut findings = Vec::new();
     if classes.is_empty() {
@@ -285,9 +289,9 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
                 .map(|(_, value)| value.as_str())
                 .collect::<Vec<_>>();
             match actor_values.as_slice() {
-                [value] if !matches!(*value, "" | "nullptr" | "n\"\"" | "\"\"") => {}
-                [_] => findings.push(Finding::blocking(format!(
-                    "{spawn_name} needs a non-null AIAgentCharacterClass actor blueprint"
+                [value] if *value == expected_actor_blueprint => {}
+                [value] => findings.push(Finding::blocking(format!(
+                    "{spawn_name} AIAgentCharacterClass must retain the template's actor blueprint {expected_actor_blueprint}, not {value}"
                 ))),
                 [] => findings.push(Finding::blocking(format!(
                     "{spawn_name} sets no AIAgentCharacterClass actor blueprint"
@@ -442,6 +446,12 @@ pub fn scheduled_waypoints(source: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ACTOR_BLUEPRINT: &str = "n\"Blueprint'/Game/AI/AIAgent/Human/AIAgentCharacter_Human_Base.AIAgentCharacter_Human_Base_C'\"";
+
+    fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
+        super::guard_authored_module(source, npc_id, ACTOR_BLUEPRINT)
+    }
 
     const PRISTINE: &str = r#"class UWP_A : UWorldPointScript
 {
@@ -737,6 +747,17 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
                     && finding.message.contains("AIAgentCharacterClass")
             }));
         }
+    }
+
+    #[test]
+    fn authored_spawn_rejects_a_nonexistent_actor_blueprint() {
+        let source = AUTHORED.replace(ACTOR_BLUEPRINT, "n\"Bogus\"");
+        let findings = guard_authored_module(&source, "MINE");
+        assert!(findings.iter().any(|finding| {
+            finding.severity == Severity::Blocking
+                && finding.message.contains("AIAgentCharacterClass")
+                && finding.message.contains("Bogus")
+        }));
     }
 
     #[test]

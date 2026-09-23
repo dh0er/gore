@@ -1466,7 +1466,20 @@ fn workspace_source_findings(
         let source = fs::read_to_string(&source_path)
             .with_context(|| format!("reading {}", source_path.display()))?;
         module_sources.insert(authored.source_file.clone(), source.clone());
-        findings.extend(check::guard_authored_module(&source, &manifest.npc_id));
+        let from = manifest.derived_from.as_deref().context("the authored NPC has no template id")?;
+        let template_spawn = generate::spawn_class(from);
+        let template = emit_index(Some(cache.to_path_buf()), None, Some(&template_spawn))?;
+        let (_, spawn_defaults) = derivable_parent(
+            &template.classes,
+            &template.subclass_counts,
+            &template_spawn,
+        );
+        let expected_actor = spawn_defaults
+            .iter()
+            .rev()
+            .find_map(|line| line.strip_prefix("AIAgentCharacterClass = "))
+            .with_context(|| format!("template {from} has no inherited actor blueprint"))?;
+        findings.extend(check::guard_authored_module(&source, &manifest.npc_id, expected_actor));
 
         let modules = model::parse_modules(&read_module_cache(cache)?)
             .context("parsing modules for NPC class validation")?;
