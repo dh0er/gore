@@ -413,16 +413,17 @@ pub fn guard_checkout_diff(pristine: &str, edited: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     for class in &before {
-        match after
+        let matches = after
             .iter()
-            .find(|other| other.name == class.name && other.namespace == class.namespace)
-        {
-            None => findings.push(Finding::blocking(format!(
+            .filter(|other| other.name == class.name && other.namespace == class.namespace)
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [] => findings.push(Finding::blocking(format!(
                 "class {} is gone. A shipped class may change its values, but removing or \
                  renaming it produces a different symbol that no longer matches the base cache",
                 class.name
             ))),
-            Some(other) if other.super_class != class.super_class => {
+            [other] if other.super_class != class.super_class => {
                 findings.push(Finding::blocking(format!(
                     "class {} now derives from {} instead of {}. The parent is part of the \
                      class's identity, so changing it makes it a different class",
@@ -431,7 +432,12 @@ pub fn guard_checkout_diff(pristine: &str, edited: &str) -> Vec<Finding> {
                     class.super_class.as_deref().unwrap_or("nothing")
                 )));
             }
-            Some(_) => {}
+            [_] => {}
+            _ => findings.push(Finding::blocking(format!(
+                "class {} is declared {} times. A checked-out class must have exactly one declaration",
+                class.name,
+                matches.len()
+            ))),
         }
     }
 
@@ -971,6 +977,23 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
     fn a_changed_value_in_a_checked_out_module_passes() {
         let edited = AUTHORED.replace("1000.0f", "500.0f");
         assert!(guard_checkout_diff(AUTHORED, &edited).is_empty());
+    }
+
+    #[test]
+    fn duplicate_checked_out_class_declarations_are_blocking() {
+        for name in [
+            "UCharacterDefinition_Human_MINE",
+            "UAIAgentConfig_Human_MINE",
+            "USpawnAIAgentDefinition_MINE",
+        ] {
+            let edited = format!("{AUTHORED}\nclass {name} : UObject\n{{\n}}\n");
+            let findings = guard_checkout_diff(AUTHORED, &edited);
+            assert!(findings.iter().any(|finding| {
+                finding.severity == Severity::Blocking
+                    && finding.message.contains(name)
+                    && finding.message.contains("declared 2 times")
+            }));
+        }
     }
 
     #[test]
