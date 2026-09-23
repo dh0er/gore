@@ -536,6 +536,11 @@ pub fn run(action: TextureAction) -> Result<()> {
                         "clone output already exists: {output_asset}.{extension}"
                     );
                 }
+                anyhow::ensure!(
+                    !gore_tex::container::mod_tree_package_id_occupied(&mod_dir, target)
+                        .context("checking texture package IDs in the mod tree")?,
+                    "clone destination already exists in the mod tree: {target}"
+                );
                 // UE package IDs ignore case, so exact header-name lookup alone
                 // cannot distinguish a free destination from a case collision.
                 anyhow::ensure!(
