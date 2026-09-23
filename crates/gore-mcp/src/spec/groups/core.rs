@@ -1429,6 +1429,7 @@ const NPC_COMMANDS: &[CommandSpec] = &[
         Safety::read(),
         T_NORMAL,
     )
+    .at_most_one(&[&["free", "occupied"]])
     .json(JsonSupport::Stdout)
     .guide("npc-authoring"),
     // A workspace under a caller-picked directory: the character's own module, the level script one
