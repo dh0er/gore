@@ -78,6 +78,7 @@ pub fn run(action: RoutineAction) -> Result<()> {
             game,
         } => {
             routine_plan::parse_time(&time)?;
+            let _lock = lock_workspace(&dir)?;
             let mut workspace = RoutineWorkspace::load(&dir)?;
             let mut plan = workspace.current.plan.clone();
             plan.set(Phase {
@@ -90,6 +91,7 @@ pub fn run(action: RoutineAction) -> Result<()> {
             show(&dir, false)
         }
         RoutineAction::Remove { dir, time, game } => {
+            let _lock = lock_workspace(&dir)?;
             let mut workspace = RoutineWorkspace::load(&dir)?;
             let mut plan = workspace.current.plan.clone();
             plan.remove(&time)?;
@@ -312,6 +314,19 @@ fn workspace_file(dir: &Path, relative: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Serialize routine commands in one workspace; editors are covered by the content checks below.
+fn lock_workspace(dir: &Path) -> Result<fs::File> {
+    let path = dir.canonicalize()?.join(".gore-npc-routine.lock");
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&path)?;
+    file.try_lock()
+        .with_context(|| format!("another routine command is editing {}", dir.display()))?;
+    Ok(file)
+}
+
 struct RoutineWorkspace {
     manifest: Manifest,
     source_path: PathBuf,
@@ -387,8 +402,8 @@ impl RoutineWorkspace {
             return Ok(());
         }
         if level == self.level_original {
-            stage_file(&self.source_path, &source)?
-                .persist(&self.source_path)
+            let staged_source = stage_file(&self.source_path, &source)?;
+            replace_if_unchanged(&self.source_path, &self.source_original, staged_source)
                 .context("replacing NPC source")?;
             return Ok(());
         }
@@ -396,14 +411,20 @@ impl RoutineWorkspace {
         // the source so first-use wiring never leaves a half-applied routine.
         let staged_source = stage_file(&self.source_path, &source)?;
         let staged_level = stage_file(&self.level_path, &level)?;
-        staged_source
-            .persist(&self.source_path)
+        ensure_unchanged(&self.level_path, &self.level_original)?;
+        replace_if_unchanged(&self.source_path, &self.source_original, staged_source)
             .context("replacing NPC source")?;
-        if let Err(error) = staged_level.persist(&self.level_path) {
-            stage_file(&self.source_path, &self.source_original)?
-                .persist(&self.source_path)
-                .context("restoring NPC source after level write failed")?;
-            return Err(error).context("replacing level source; NPC source restored");
+        if let Err(error) =
+            replace_if_unchanged(&self.level_path, &self.level_original, staged_level)
+        {
+            let rollback = stage_file(&self.source_path, &self.source_original)
+                .and_then(|staged| replace_if_unchanged(&self.source_path, &source, staged));
+            return match rollback {
+                Ok(()) => Err(error).context("replacing level source; NPC source restored"),
+                Err(rollback_error) => Err(error).context(format!(
+                    "replacing level source; NPC source rollback failed or was skipped: {rollback_error}"
+                )),
+            };
         }
         Ok(())
     }
@@ -431,6 +452,45 @@ fn stage_file(path: &Path, source: &str) -> Result<tempfile::NamedTempFile> {
     temp.write_all(source.as_bytes())?;
     temp.as_file().sync_all()?;
     Ok(temp)
+}
+
+fn ensure_unchanged(path: &Path, expected: &str) -> Result<()> {
+    ensure!(
+        fs::read_to_string(path)? == expected,
+        "workspace file changed while editing: {}; retry the command",
+        path.display()
+    );
+    Ok(())
+}
+
+fn replace_if_unchanged(
+    path: &Path,
+    expected: &str,
+    staged: tempfile::NamedTempFile,
+) -> Result<()> {
+    ensure_unchanged(path, expected)?;
+    staged.persist(path)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod replacement_tests {
+    use super::*;
+
+    #[test]
+    fn replacement_and_rollback_preserve_later_workspace_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("npc.as");
+        fs::write(&path, "original").unwrap();
+        let staged = stage_file(&path, "generated").unwrap();
+        fs::write(&path, "editor change").unwrap();
+        assert!(replace_if_unchanged(&path, "original", staged).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "editor change");
+
+        let rollback = stage_file(&path, "original").unwrap();
+        assert!(replace_if_unchanged(&path, "generated", rollback).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "editor change");
+    }
 }
 
 fn wire_spawn(level: &str, manifest: &Manifest, had_routine: bool) -> Result<String> {
