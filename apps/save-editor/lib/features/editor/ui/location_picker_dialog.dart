@@ -127,8 +127,9 @@ class _LocationPickerDialogState extends ConsumerState<_LocationPickerDialog> {
             (areaId: entry.key, spots: entry.value),
         ]..sort((a, b) {
           // The unlabelled bucket is last, never sorted by size.
-          if (a.areaId.isEmpty != b.areaId.isEmpty)
+          if (a.areaId.isEmpty != b.areaId.isEmpty) {
             return a.areaId.isEmpty ? 1 : -1;
+          }
           final byCount = b.spots.length.compareTo(a.spots.length);
           return byCount != 0 ? byCount : a.areaId.compareTo(b.areaId);
         });
