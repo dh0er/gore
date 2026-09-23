@@ -416,6 +416,7 @@ fn current_routine(source: &str, id: &str) -> Result<CurrentRoutine> {
 #[cfg(test)]
 mod routine_parse_tests {
     use super::*;
+    use super::super::workspace::ModuleEdit;
 
     fn phase(activity: Activity) -> Phase {
         Phase {
@@ -484,6 +485,45 @@ mod routine_parse_tests {
         assert!(current_routine(&format!("{outside}{original}"), "TEST").is_ok());
         let next = block(&Plan { phases: vec![phase(Activity::Read)] }, "TEST").unwrap();
         assert!(ensure_no_generated_collisions(outside, &next, "TEST").is_err());
+    }
+
+    #[test]
+    fn wired_spawn_requires_routine_class_when_managed_block_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = Manifest {
+            operation: Operation::New,
+            npc_id: "TEST".into(),
+            derived_from: None,
+            modules: vec![
+                ModuleEdit {
+                    module: "TEST".into(), relative_path: "TEST.as".into(),
+                    source_file: "TEST.as".into(), pristine_file: None, op: "add".into(),
+                },
+                ModuleEdit {
+                    module: "Level".into(), relative_path: "Level.as".into(),
+                    source_file: "Level.as".into(), pristine_file: None, op: "edit".into(),
+                },
+            ],
+            world_points: vec![],
+            level_module: "Level".into(),
+            cache_sha256: "0".repeat(64),
+            modular_visuals: false,
+        };
+        let source_path = dir.path().join("TEST.as");
+        let level_path = dir.path().join("Level.as");
+        fs::write(&source_path, "class UCharacterDefinition_TEST : UObject\n{}\n").unwrap();
+        fs::write(&level_path, edit::spawn_line("", &generate::spawn_class("TEST"), Some("UDailyRoutine_TEST_Start"))).unwrap();
+        assert!(check_managed(dir.path(), &manifest, None)
+            .unwrap_err().to_string().contains("routine class is missing"));
+
+        fs::write(&source_path, "// class UDailyRoutine_TEST_Start : UObject\n").unwrap();
+        assert!(check_managed(dir.path(), &manifest, None).is_err());
+        fs::write(&source_path, "class UDailyRoutine_TEST_Start : UAIState_DailyRoutine_Human\n{}\n").unwrap();
+        check_managed(dir.path(), &manifest, None).unwrap();
+
+        fs::write(&source_path, "class UCharacterDefinition_TEST : UObject\n{}\n").unwrap();
+        fs::write(&level_path, edit::spawn_line("", &generate::spawn_class("TEST"), None)).unwrap();
+        check_managed(dir.path(), &manifest, None).unwrap();
     }
 }
 
@@ -957,6 +997,19 @@ pub fn check_managed(dir: &Path, manifest: &Manifest, game: Option<PathBuf>) -> 
     };
     let source = fs::read_to_string(workspace_file(dir, &authored.source_file)?)?;
     if !source.contains("// gore npc routine") {
+        if let Some(level) = manifest.level_edit() {
+            let level_source = fs::read_to_string(workspace_file(dir, &level.source_file)?)?;
+            let routine = format!("UDailyRoutine_{}_Start", manifest.npc_id);
+            let spawn = edit::spawn_line("", &generate::spawn_class(&manifest.npc_id), Some(&routine));
+            if level_source.lines().any(|line| line.trim() == spawn) {
+                ensure!(
+                    defaults::parse_classes(&source)
+                        .iter()
+                        .any(|class| class.namespace.is_none() && class.name == routine),
+                    "spawn references {routine}, but its routine class is missing from the authored source"
+                );
+            }
+        }
         return Ok(());
     }
     let workspace = RoutineWorkspace::load(dir)?;
