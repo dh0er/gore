@@ -57,73 +57,91 @@ impl WorldPoint {
     }
 }
 
+/// Der Klammerblock direkt nach einer Deklaration. Die emittierten Levelskripte setzen die
+/// öffnende Klammer auf die nächste Zeile; die Tiefe hält auch verschachtelte Blöcke zusammen.
+fn braced_body_after(source: &str, declaration_end: usize) -> Option<&str> {
+    let tail = &source[declaration_end..];
+    let open = tail.find(|c: char| !c.is_whitespace())?;
+    if tail.as_bytes()[open] != b'{' {
+        return None;
+    }
+    let mut depth = 0;
+    for (offset, ch) in tail[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&tail[open + 1..open + offset]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn on_world_start_body(class_body: &str) -> Option<&str> {
+    let mut offset = 0;
+    for line in class_body.split_inclusive('\n') {
+        if line.trim_start().starts_with("void OnWorldStart()") {
+            let signature = line.find("void OnWorldStart()")?;
+            let after_signature = offset + signature + "void OnWorldStart()".len();
+            return braced_body_after(class_body, after_signature);
+        }
+        offset += line.len();
+    }
+    None
+}
+
 /// Jeder Weltpunkt eines emittierten Levelskripts, belegt oder nicht.
 ///
 /// `parse_sites` sieht nur die belegten, weil es die Spawn-Zeilen liest. Diese Funktion geht von
 /// den Klassen aus und findet deshalb auch die 2729 leeren.
 pub fn parse_world_points(module: &str, source: &str) -> Vec<WorldPoint> {
     let mut out: Vec<WorldPoint> = Vec::new();
-    let mut current = None;
-    for line in source.lines() {
+    let mut offset = 0;
+    for line in source.split_inclusive('\n') {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("class ") {
-            current = match rest.split_once(':') {
-                Some((name, base)) if base.trim() == WORLD_POINT_BASE => {
+            if let Some((name, base)) = rest.split_once(':') {
+                if base.trim() == WORLD_POINT_BASE {
+                    let occupants = braced_body_after(source, offset + line.len())
+                        .and_then(on_world_start_body)
+                        .into_iter()
+                        .flat_map(str::lines)
+                        .filter(|line| line.contains("SpawnAIAgent("))
+                        .filter_map(spawn_definition_in)
+                        .map(str::to_string)
+                        .collect();
                     out.push(WorldPoint {
                         name: name.trim().to_string(),
                         module: module.to_string(),
-                        occupants: Vec::new(),
+                        occupants,
                     });
-                    Some(out.len() - 1)
                 }
-                _ => None,
-            };
-            continue;
+            }
         }
-        if !trimmed.contains("SpawnAIAgent(") {
-            continue;
-        }
-        let Some(point) = current.and_then(|index| out.get_mut(index)) else {
-            continue;
-        };
-        if let Some(definition) = spawn_definition_in(trimmed) {
-            point.occupants.push(definition.to_string());
-        }
+        offset += line.len();
     }
     out
 }
 
 /// Jede Spawn-Stelle eines emittierten Levelskripts.
 pub fn parse_sites(module: &str, source: &str) -> Vec<Site> {
-    let mut out = Vec::new();
-    let mut current: Option<String> = None;
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("class ") {
-            current = match rest.split_once(':') {
-                Some((name, base)) if base.trim() == WORLD_POINT_BASE => {
-                    Some(name.trim().to_string())
-                }
-                _ => None,
-            };
-            continue;
-        }
-        let Some(world_point) = current.as_deref() else {
-            continue;
-        };
-        if !trimmed.contains("SpawnAIAgent(") {
-            continue;
-        }
-        let Some(spawn_definition) = spawn_definition_in(trimmed).map(str::to_string) else {
-            continue;
-        };
-        out.push(Site {
-            world_point: world_point.to_string(),
-            module: module.to_string(),
-            spawn_definition,
-        });
-    }
-    out
+    parse_world_points(module, source)
+        .into_iter()
+        .flat_map(|point| {
+            point
+                .occupants
+                .into_iter()
+                .map(move |spawn_definition| Site {
+                    world_point: point.name.clone(),
+                    module: point.module.clone(),
+                    spawn_definition,
+                })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -264,6 +282,37 @@ class UNotAWorldPoint : USomethingElse
         assert!(points
             .iter()
             .all(|point| !point.occupants.iter().any(|npc| npc.ends_with("_WRONG"))));
+    }
+
+    #[test]
+    fn only_spawns_in_on_world_start_occupy_a_point() {
+        let source = r#"class UWP_TEST : UWorldPointScript
+{
+    void OnWorldStart()
+    {
+        if (true)
+        {
+            this.SpawnAIAgent(USpawnAIAgentDefinition_REAL, nullptr);
+        }
+    }
+
+    void Helper()
+    {
+        this.SpawnAIAgent(USpawnAIAgentDefinition_IN_CLASS_HELPER, nullptr);
+    }
+}
+
+void ModuleHelper()
+{
+    this.SpawnAIAgent(USpawnAIAgentDefinition_AFTER_CLASS, nullptr);
+}
+"#;
+        let points = parse_world_points("LevelScripts.Demo", source);
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].occupants, ["USpawnAIAgentDefinition_REAL"]);
+        let sites = parse_sites("LevelScripts.Demo", source);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].spawn_definition, "USpawnAIAgentDefinition_REAL");
     }
 
     #[test]

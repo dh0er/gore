@@ -412,6 +412,33 @@ fn module_of_class(modules: &[model::Module], class_name: &str) -> Option<usize>
         .position(|module| module.classes.iter().any(|class| class.name == class_name))
 }
 
+/// Compare every declaration in an authored module with all classes in the installed cache.
+/// The spawn class alone is insufficient: visuals, settings, routines, and trader configs are
+/// emitted into the same new module and must also be globally unique.
+fn colliding_class_names<'a>(
+    shipped: impl Iterator<Item = &'a str>,
+    authored_source: &str,
+) -> Vec<String> {
+    let existing: std::collections::HashSet<&str> = shipped.collect();
+    let mut collisions: Vec<String> = defaults::parse_classes(authored_source)
+        .into_iter()
+        .filter(|class| existing.contains(class.name.as_str()))
+        .map(|class| class.name)
+        .collect();
+    collisions.sort();
+    collisions.dedup();
+    collisions
+}
+
+fn cache_class_collisions(modules: &[model::Module], authored_source: &str) -> Vec<String> {
+    colliding_class_names(
+        modules
+            .iter()
+            .flat_map(|module| module.classes.iter().map(|class| class.name.as_str())),
+        authored_source,
+    )
+}
+
 /// Den Baum für ein Kommando aufbauen — und **nur** die Module emittieren, die es braucht.
 ///
 /// Den ganzen Baum zu emittieren ist nie richtig: `Map.MainMap.WorldPointManagerConfig_MainMap`
@@ -880,12 +907,6 @@ fn author(
         );
     }
     let new_spawn = generate::spawn_class(&request.id);
-    if module_of_class(&modules, &new_spawn).is_some() {
-        bail!(
-            "{} is already a character in this game. Pick an id nothing ships under",
-            request.id
-        );
-    }
     if let Some(guild) = &request.guild {
         let guild_class = format!("UCharacterDefinition_Human_{guild}");
         ensure!(
@@ -983,6 +1004,14 @@ fn author(
         spawn_parent,
         spawn_defaults,
     };
+    let source = generate::source(&npc);
+    let collisions = cache_class_collisions(&modules, &source);
+    if !collisions.is_empty() {
+        bail!(
+            "generated NPC classes already exist in this game: {}. Pick another id",
+            collisions.join(", ")
+        );
+    }
     let routine = generate::routine_class(&npc);
     let edited = edit::add_spawn(pristine, &request.at, &new_spawn, routine.as_deref())
         .with_context(|| format!("adding the spawn line to {level_module}"))?;
@@ -991,8 +1020,7 @@ fn author(
 
     let module_relative = generate::relative_path(&request.id);
     let module_leaf = leaf_of(&module_relative).to_string();
-    fs::write(out.join(&module_leaf), generate::source(&npc))
-        .with_context(|| format!("writing {module_leaf}"))?;
+    fs::write(out.join(&module_leaf), &source).with_context(|| format!("writing {module_leaf}"))?;
 
     let level_relative = format!("{}.as", level_module.replace('.', "/"));
     let level_leaf = leaf_of(&level_relative).to_string();
@@ -1028,7 +1056,7 @@ fn author(
     write_manifest(out, &manifest)?;
 
     println!("authored {} in {}", request.id, out.display());
-    let class_count = generate::source(&npc)
+    let class_count = source
         .lines()
         .filter(|line| line.starts_with("class "))
         .count();
@@ -1259,17 +1287,6 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
 
     findings.extend(workspace_source_findings(dir, &manifest, &path)?);
 
-    if manifest.authored_module().is_some() && emitted.classes.contains_key(&spawn_class) {
-        findings.push(check::Finding {
-            severity: check::Severity::Blocking,
-            message: format!(
-                "{} is already a character in this game. The authored module would collide \
-                 with the shipped one",
-                manifest.npc_id
-            ),
-        });
-    }
-
     println!(
         "{}",
         render::translation_line(&emitted, &manifest.level_module)
@@ -1372,6 +1389,19 @@ fn workspace_source_findings(
         let source = fs::read_to_string(&source_path)
             .with_context(|| format!("reading {}", source_path.display()))?;
         findings.extend(check::guard_authored_module(&source, &manifest.npc_id));
+
+        let modules = model::parse_modules(&read_module_cache(cache)?)
+            .context("parsing modules for NPC class validation")?;
+        let collisions = cache_class_collisions(&modules, &source);
+        if !collisions.is_empty() {
+            findings.push(check::Finding {
+                severity: check::Severity::Blocking,
+                message: format!(
+                    "authored classes collide with the installed game: {}",
+                    collisions.join(", ")
+                ),
+            });
+        }
 
         let spots = gore_catalog::location::LocationCatalog::bundled()
             .context("reading the bundled location catalog")?;
@@ -1842,6 +1872,34 @@ fn is_derivable_base(subclass_counts: &BTreeMap<String, usize>, class_name: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_npc_collision_check_covers_every_declared_class() {
+        let source = "class UCharacterDefinition_Human_MINE : UBase\n{}\n\
+                      class UCharacterVisualsDefinition_Human_MINE : UBase\n{}\n\
+                      class UAIAgentConfig_Human_MINE : UBase\n{}\n\
+                      class USpawnAIAgentDefinition_MINE : UBase\n{}\n\
+                      class UConversationCharacterSettings_Ambient_MINE : UBase\n{}\n\
+                      class UDailyRoutine_MINE_Start : UBase\n{}\n\
+                      class UTraderConfig_MINE : UBase\n{}\n";
+        let shipped = [
+            "UTraderConfig_MINE",
+            "UCharacterDefinition_Human_MINE",
+            "UConversationCharacterSettings_Ambient_MINE",
+            "UDailyRoutine_MINE_Start",
+            "UCharacterVisualsDefinition_Human_MINE",
+            "UAIAgentConfig_Human_MINE",
+            "USpawnAIAgentDefinition_MINE",
+        ];
+        let mut expected = shipped.map(str::to_string);
+        expected.sort();
+        assert_eq!(colliding_class_names(shipped.into_iter(), source), expected);
+        assert!(colliding_class_names(
+            ["UTraderConfig_MINE"].into_iter(),
+            "class USpawnAIAgentDefinition_MINE : UBase\n{}\n"
+        )
+        .is_empty());
+    }
 
     #[test]
     fn only_non_final_character_definition_classes_are_derivable_guild_bases() {
