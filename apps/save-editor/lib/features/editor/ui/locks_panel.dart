@@ -186,10 +186,13 @@ class _LocksDetailState extends ConsumerState<LocksDetail> {
 
   void _toggle(_LockRow row, bool unlocked) {
     setState(() {
-      if (unlocked == row.unlocked) {
-        // Back to what the save holds: the edit is not needed at all.
+      if (unlocked == row.unlocked && unlocked) {
+        // Back to a save that already has the lock open: nothing to write.
         _pending.remove(row.name);
       } else {
+        // Locking always writes, even when the file already lists the lock as
+        // shut. An older editor only flipped the lock and left the leaf open;
+        // dropping the edit here would skip the leaf close.
         _pending[row.name] = LockSetUnlockedEdit(
           lock: row.name,
           unlocked: unlocked,
