@@ -231,6 +231,22 @@ pub fn guard_authored_module(
             ))),
         },
     }
+    if let Some(class) = definition {
+        let expected = format!("UCharacterVisualsDefinition_Human_{npc_id}::StaticClass()");
+        match assigned(class, "m_CharacterVisualsDefinition").as_slice() {
+            [value] if value == &expected => {}
+            [value] => findings.push(Finding::blocking(format!(
+                "m_CharacterVisualsDefinition must be exactly {expected}, not {value}"
+            ))),
+            [] => findings.push(Finding::blocking(format!(
+                "the character definition sets no m_CharacterVisualsDefinition; it must reference {expected}"
+            ))),
+            values => findings.push(Finding::blocking(format!(
+                "the character definition sets m_CharacterVisualsDefinition {} times; it must have exactly one target",
+                values.len()
+            ))),
+        }
+    }
 
     let config_name = format!("UAIAgentConfig_Human_{npc_id}");
     let config = classes.iter().find(|class| class.name == config_name);
@@ -746,6 +762,31 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
             let findings = guard_authored_module(&source, "MINE");
             assert!(findings.iter().any(|finding| {
                 finding.severity == Severity::Blocking && finding.message.contains(field)
+            }));
+        }
+    }
+
+    #[test]
+    fn authored_definition_must_link_to_its_visuals_class() {
+        let expected = "UCharacterVisualsDefinition_Human_MINE::StaticClass()";
+        let missing = AUTHORED.replace(
+            &format!("    default m_CharacterVisualsDefinition = {expected};\n"),
+            "",
+        );
+        let findings = guard_authored_module(&missing, "MINE");
+        assert!(findings.iter().any(|finding| {
+            finding.severity == Severity::Blocking
+                && finding.message.contains("m_CharacterVisualsDefinition")
+        }));
+        for replacement in [
+            "UCharacterVisualsDefinition_Human_Other::StaticClass()",
+            "false ? UCharacterVisualsDefinition_Human_MINE::StaticClass() : UOther::StaticClass()",
+        ] {
+            let source = AUTHORED.replace(expected, replacement);
+            let findings = guard_authored_module(&source, "MINE");
+            assert!(findings.iter().any(|finding| {
+                finding.severity == Severity::Blocking
+                    && finding.message.contains("m_CharacterVisualsDefinition")
             }));
         }
     }
