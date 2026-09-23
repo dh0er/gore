@@ -6610,7 +6610,7 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String get skillTierMaster => '大師級';
 
   @override
-  String get skillTierNovice => '熟練';
+  String get skillTierNovice => '新手';
 
   @override
   String get skillTierAmateur => '業餘（第0環）';
