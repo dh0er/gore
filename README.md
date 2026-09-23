@@ -12,6 +12,16 @@
 | **[AI Plugins](plugins/gore/README.md)** | MCP server and skill for the CLI. | ⚗️ Experimental use | ⠀⠀⠀⠀⠀ |
 | **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the GORE engine, for *authoring* mods. | 📋 Planned | ⠀⠀⠀⠀⠀ |
 
+## ⬇️ Downloads
+
+| Tool | Version | Release page |
+|---|---|---|
+| **CLI** | 0.3.0 | [gore-cli-v0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.3.0) |
+| **Mod Manager** | 0.2.0 | [gore-mod-manager-v0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
+| **Save Editor** | 1.4.1 | [gore-save-editor-v1.4.1](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.4.1) |
+
+Mod Studio has no release yet; build it from source.
+
 ## 📊 Status
 
 | Area | Status | What you can do | What's missing |
