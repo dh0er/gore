@@ -852,15 +852,17 @@ fn nearest<'a>(candidates: impl Iterator<Item = &'a str>, needle: &str) -> Vec<S
 
 /// Das Verzeichnis anlegen — und sich weigern, in ein vorhandenes zu schreiben.
 fn create_workspace(out: &Path) -> Result<()> {
-    if out.exists() {
-        bail!(
-            "{} already exists. Point -o at a directory that does not exist yet, so nothing of \
-             yours is overwritten",
-            out.display()
-        );
+    if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
-    fs::create_dir_all(out.join("pristine"))
-        .with_context(|| format!("creating {}", out.display()))?;
+    fs::create_dir(out).with_context(|| {
+        format!(
+            "creating new NPC workspace {} (it must not already exist)",
+            out.display()
+        )
+    })?;
+    fs::create_dir(out.join("pristine"))
+        .with_context(|| format!("creating pristine/ in {}", out.display()))?;
     Ok(())
 }
 
@@ -1914,6 +1916,29 @@ fn is_derivable_base(subclass_counts: &BTreeMap<String, usize>, class_name: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_output_never_follows_a_dangling_link() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("outside");
+        let output = temp.path().join("workspace");
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&target, &output);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_dir(&target, &output);
+        if let Err(error) = link_result {
+            eprintln!("skip: this account cannot create a directory symlink: {error}");
+            return;
+        }
+
+        assert!(create_workspace(&output).is_err());
+        assert!(!target.exists());
+        assert!(fs::symlink_metadata(&output).is_ok());
+
+        let nested = temp.path().join("missing").join("workspace");
+        create_workspace(&nested).unwrap();
+        assert!(nested.join("pristine").is_dir());
+    }
 
     #[test]
     fn npc_text_output_never_follows_a_dangling_link() {
