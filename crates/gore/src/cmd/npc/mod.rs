@@ -1348,7 +1348,7 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
         });
     }
 
-    findings.extend(workspace_source_findings(dir, &manifest, &path)?);
+    findings.extend(workspace_source_findings(dir, &manifest, &path)?.findings);
 
     println!(
         "{}",
@@ -1384,19 +1384,26 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
 }
 
 /// Read the authored files again at staging time: a successful earlier `check` is not a lock.
+struct WorkspaceSourceInspection {
+    findings: Vec<check::Finding>,
+    module_sources: BTreeMap<String, String>,
+}
+
 fn workspace_source_findings(
     dir: &Path,
     manifest: &workspace::Manifest,
     cache: &Path,
-) -> Result<Vec<check::Finding>> {
+) -> Result<WorkspaceSourceInspection> {
     let spawn_class = generate::spawn_class(&manifest.npc_id);
     let mut findings = Vec::new();
+    let mut module_sources = BTreeMap::new();
     let Some(level) = manifest.level_edit() else {
         bail!("the manifest names no edited level script");
     };
     let edited_path = dir.join(&level.source_file);
     let edited = fs::read_to_string(&edited_path)
         .with_context(|| format!("reading {}", edited_path.display()))?;
+    module_sources.insert(level.source_file.clone(), edited.clone());
     let pristine_rel = level
         .pristine_file
         .as_deref()
@@ -1457,6 +1464,7 @@ fn workspace_source_findings(
         let source_path = dir.join(&authored.source_file);
         let source = fs::read_to_string(&source_path)
             .with_context(|| format!("reading {}", source_path.display()))?;
+        module_sources.insert(authored.source_file.clone(), source.clone());
         findings.extend(check::guard_authored_module(&source, &manifest.npc_id));
 
         let modules = model::parse_modules(&read_module_cache(cache)?)
@@ -1488,7 +1496,10 @@ fn workspace_source_findings(
         }
     }
 
-    Ok(findings)
+    Ok(WorkspaceSourceInspection {
+        findings,
+        module_sources,
+    })
 }
 
 /// Den Quellbaum vorhalten: einmal emittieren, danach an der Cache-Kennung wiedererkennen.
@@ -1559,7 +1570,11 @@ fn ensure_tree(tree: &Path, cache_sha256: &str, path: &Path) -> Result<()> {
 }
 
 /// Die verfassten Dateien an ihre Stellen im Baum kopieren.
-fn overlay_authored(dir: &Path, tree: &Path, manifest: &workspace::Manifest) -> Result<()> {
+fn overlay_authored(
+    tree: &Path,
+    manifest: &workspace::Manifest,
+    module_sources: &BTreeMap<String, String>,
+) -> Result<()> {
     let root = fs::canonicalize(tree).with_context(|| format!("resolving {}", tree.display()))?;
     for edit in &manifest.modules {
         let target = tree.join(&edit.relative_path);
@@ -1580,9 +1595,14 @@ fn overlay_authored(dir: &Path, tree: &Path, manifest: &workspace::Manifest) -> 
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
-        let source = dir.join(&edit.source_file);
-        fs::copy(&source, &target)
-            .with_context(|| format!("copying {} to {}", source.display(), target.display()))?;
+        let source = module_sources.get(&edit.source_file).with_context(|| {
+            format!(
+                "the validated NPC source snapshot is missing {}",
+                edit.source_file
+            )
+        })?;
+        fs::write(&target, source)
+            .with_context(|| format!("writing validated NPC source to {}", target.display()))?;
     }
     Ok(())
 }
@@ -1699,8 +1719,9 @@ fn stage_workspace(
     routine::check_managed(dir, &manifest, game.clone())?;
     let path = cache_path(cache, game.clone())?;
     let game = Some(stage::compiler_game_for(&manifest, &path, game)?);
-    let findings = workspace_source_findings(dir, &manifest, &path)?;
-    let blocking: Vec<_> = findings
+    let inspection = workspace_source_findings(dir, &manifest, &path)?;
+    let blocking: Vec<_> = inspection
+        .findings
         .iter()
         .filter(|finding| finding.severity == check::Severity::Blocking)
         .collect();
@@ -1723,7 +1744,7 @@ fn stage_workspace(
         (stage::Route::FullTree, Some(tree)) => {
             ensure_tree(tree, &manifest.cache_sha256, &path)?;
             let staged = stage_tree_copy(tree, dir)?;
-            overlay_authored(dir, &staged, &manifest)?;
+            overlay_authored(&staged, &manifest, &inspection.module_sources)?;
             staged.display().to_string()
         }
         // Der Ein-Modul-Weg overlayt die Quelle selbst; ein Baum waere verschenkte Zeit.
@@ -2179,6 +2200,61 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
         );
         assert!(!second_copy.join(stage::TREE_STAMP_NAME).exists());
         assert!(ensure_tree(&first_copy, "abc", Path::new("missing.Cache")).is_err());
+    }
+
+    #[test]
+    fn overlay_uses_the_validated_snapshots_instead_of_reopening_workspace_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let staged = temp.path().join("staged");
+        fs::create_dir(&workspace).unwrap();
+        fs::create_dir(&staged).unwrap();
+
+        let authored = workspace::ModuleEdit {
+            module: generate::module_name("MINE"),
+            relative_path: generate::relative_path("MINE"),
+            source_file: "MINE.as".to_string(),
+            pristine_file: None,
+            op: "add".to_string(),
+        };
+        let level = workspace::ModuleEdit {
+            module: "LevelScripts.Test".to_string(),
+            relative_path: "LevelScripts/Test.as".to_string(),
+            source_file: "Test.as".to_string(),
+            pristine_file: Some("pristine/Test.as".to_string()),
+            op: "edit".to_string(),
+        };
+        let manifest = workspace::Manifest {
+            operation: workspace::Operation::New,
+            npc_id: "MINE".to_string(),
+            derived_from: Some("OC_STT_Diego".to_string()),
+            modules: vec![authored, level],
+            world_points: vec!["UWP_A".to_string()],
+            level_module: "LevelScripts.Test".to_string(),
+            cache_sha256: "a".repeat(64),
+            modular_visuals: false,
+        };
+        let snapshots = BTreeMap::from([
+            (
+                "MINE.as".to_string(),
+                "validated authored source".to_string(),
+            ),
+            ("Test.as".to_string(), "validated level source".to_string()),
+        ]);
+
+        // An editor may replace both files while staging spends minutes preparing the tree.
+        fs::write(workspace.join("MINE.as"), "changed after validation").unwrap();
+        fs::write(workspace.join("Test.as"), "changed after validation").unwrap();
+        overlay_authored(&staged, &manifest, &snapshots).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(staged.join(generate::relative_path("MINE"))).unwrap(),
+            "validated authored source"
+        );
+        assert_eq!(
+            fs::read_to_string(staged.join("LevelScripts/Test.as")).unwrap(),
+            "validated level source"
+        );
     }
 
     #[test]

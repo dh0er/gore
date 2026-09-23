@@ -407,24 +407,24 @@ impl RoutineWorkspace {
         let mut source_written = false;
         let mut level_written = false;
         let result = (|| {
-            // Unix advisory locks do not stop an editor's atomic-save rename. Keep checking
-            // that both paths still name the claimed inodes, including after each write.
-            source_file.ensure_current_path()?;
-            level_file.ensure_current_path()?;
+            // Unix advisory locks do not stop atomic-save renames or in-place edits. Check
+            // both paths and their contents before and after each write.
+            source_file.ensure_current_contents(&self.source_original)?;
+            level_file.ensure_current_contents(&self.level_original)?;
             if source != self.source_original {
                 write_or_restore(&mut source_file, &source, &self.source_original)
                     .context("writing NPC source")?;
                 source_written = true;
             }
-            source_file.ensure_current_path()?;
-            level_file.ensure_current_path()?;
+            source_file.ensure_current_contents(&source)?;
+            level_file.ensure_current_contents(&self.level_original)?;
             if level != self.level_original {
                 write_or_restore(&mut level_file, &level, &self.level_original)
                     .context("writing level source")?;
                 level_written = true;
             }
-            source_file.ensure_current_path()?;
-            level_file.ensure_current_path()?;
+            source_file.ensure_current_contents(&source)?;
+            level_file.ensure_current_contents(&level)?;
             Ok(())
         })();
         if let Err(error) = result {
@@ -466,7 +466,6 @@ fn original_offset(source: &str, normalized_offset: usize) -> usize {
 
 struct ClaimedFile {
     file: fs::File,
-    #[cfg(unix)]
     path: PathBuf,
 }
 
@@ -516,7 +515,6 @@ impl ClaimedFile {
         );
         let claimed = Self {
             file,
-            #[cfg(unix)]
             path: path.to_path_buf(),
         };
         claimed.ensure_current_path()?;
@@ -528,6 +526,25 @@ impl ClaimedFile {
         self.file.write_all(content.as_bytes())?;
         self.file.set_len(content.len() as u64)?;
         self.file.sync_all()?;
+        Ok(())
+    }
+
+    fn read_contents(&mut self) -> Result<String> {
+        let mut current = String::new();
+        self.file.seek(SeekFrom::Start(0))?;
+        self.file.read_to_string(&mut current)?;
+        Ok(current)
+    }
+
+    fn ensure_current_contents(&mut self, expected: &str) -> Result<()> {
+        self.ensure_current_path()?;
+        let current = self.read_contents()?;
+        self.ensure_current_path()?;
+        ensure!(
+            current == expected,
+            "workspace file changed while editing: {}; retry the command",
+            self.path.display()
+        );
         Ok(())
     }
 
@@ -554,23 +571,24 @@ impl ClaimedFile {
         if self.ensure_current_path().is_err() {
             return Ok(());
         }
-        let mut current = String::new();
-        self.file.seek(SeekFrom::Start(0))?;
-        self.file.read_to_string(&mut current)?;
+        let current = self.read_contents()?;
         if current == generated {
+            self.ensure_current_path()?;
             self.write(original)?;
+            self.ensure_current_contents(original)?;
         }
         Ok(())
     }
 }
 
 fn write_or_restore(file: &mut ClaimedFile, content: &str, original: &str) -> Result<()> {
+    file.ensure_current_contents(original)?;
     if let Err(error) = file.write(content) {
-        file.write(original)
-            .with_context(|| format!("writing failed ({error}); restoring original also failed"))?;
+        file.restore_if_current(content, original)
+            .with_context(|| format!("writing failed ({error}); safe restore also failed"))?;
         return Err(error);
     }
-    Ok(())
+    file.ensure_current_contents(content)
 }
 
 #[cfg(test)]
@@ -618,6 +636,19 @@ mod replacement_tests {
         assert!(claim.ensure_current_path().is_err());
         claim.restore_if_current("generated", "original").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "editor replacement");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claimed_write_detects_in_place_edit_and_preserves_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("npc.as");
+        fs::write(&path, "original").unwrap();
+        let mut claim = ClaimedFile::open(&path, "original").unwrap();
+        fs::write(&path, "editor change").unwrap();
+        assert!(write_or_restore(&mut claim, "generated", "original").is_err());
+        claim.restore_if_current("generated", "original").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "editor change");
     }
 }
 
