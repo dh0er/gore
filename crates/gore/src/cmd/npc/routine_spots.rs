@@ -350,15 +350,7 @@ struct InteractionCatalog {
 
 impl InteractionCatalog {
     fn resolve(&self, name: &str) -> Option<&[InteractionSpot]> {
-        self.spots
-            .get(name)
-            .or_else(|| {
-                self.spots
-                    .iter()
-                    .find(|(key, _)| key.eq_ignore_ascii_case(name))
-                    .map(|(_, value)| value)
-            })
-            .map(Vec::as_slice)
+        self.spots.get(&name.to_ascii_lowercase()).map(Vec::as_slice)
     }
 }
 
@@ -372,7 +364,10 @@ fn parse_interaction_source(text: &str) -> Result<InteractionCatalog> {
         if row.name.trim().is_empty() {
             bail!("interaction source contains an unnamed spot");
         }
-        spots.entry(row.name.clone()).or_default().push(row);
+        spots
+            .entry(row.name.to_ascii_lowercase())
+            .or_default()
+            .push(row);
     }
     Ok(InteractionCatalog { spots })
 }
@@ -527,6 +522,23 @@ mod tests {
             .contains("evidence unavailable"));
         assert_eq!(
             duplicate
+                .list(Activity::Sit, None, None, 10)
+                .unwrap()
+                .matched_count,
+            0
+        );
+
+        let differently_cased = catalog(vec![
+            chair.clone(),
+            row("io_oc_chair_81", "Action.Interact.Sit.Chair", &[]),
+        ]);
+        assert!(differently_cased
+            .validate(Activity::Sit, "IO_OC_CHAIR_81")
+            .unwrap_err()
+            .to_string()
+            .contains("evidence unavailable"));
+        assert_eq!(
+            differently_cased
                 .list(Activity::Sit, None, None, 10)
                 .unwrap()
                 .matched_count,
