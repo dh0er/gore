@@ -8421,18 +8421,19 @@ where
     //    new rows that cannot resolve in vanilla; it never copies the regen's full global tables.
     //    Deploy still differs by op — gore-mod uses `splice_auto` for add and `replace_module` for
     //    edit — while both accept either minimal shape.
+    // The game backend reads the installed Binds.Cache. An environment-selected Binds file
+    // may help source recovery, but it cannot authorize native property types unless its
+    // bytes still match the game's own file after regeneration. Use the same evidence during
+    // composed default-target verification below.
+    let installed_binds = base_path
+        .parent()
+        .and_then(|parent| std::fs::read(parent.join("Binds.Cache")).ok());
+    let admission_binds = binds_bytes
+        .filter(|selected| installed_binds.as_deref() == Some(*selected))
+        .unwrap_or(&[]);
     let mut mini = {
         let out = splice::extract_module(&regen, &target)
             .map_err(|e| CompileError::Other(format!("extract: {e}")))?;
-        // The game backend reads the installed Binds.Cache. An environment-selected Binds file
-        // may help source recovery, but it cannot authorize native property types unless its
-        // bytes still match the game's own file after regeneration.
-        let installed_binds = base_path
-            .parent()
-            .and_then(|parent| std::fs::read(parent.join("Binds.Cache")).ok());
-        let admission_binds = binds_bytes
-            .filter(|selected| installed_binds.as_deref() == Some(*selected))
-            .unwrap_or(&[]);
         remap::remap_module_to_base_with_options_and_binds(
             &out,
             &base,
@@ -8484,12 +8485,13 @@ where
     }
     canonicalize_mini_guid(&mut mini, &base).map_err(CompileError::Other)?;
     if let Some(plan) = existing_default_targets.as_ref() {
-        let mut guard = splice::SequentialMiniGuard::new(&base).map_err(|error| {
-            CompileError::Other(format!(
-                "preparing composed default-target verification for edit module {:?}: {error}",
-                effective_module_name
-            ))
-        })?;
+        let mut guard = splice::SequentialMiniGuard::new_with_binds(&base, admission_binds)
+            .map_err(|error| {
+                CompileError::Other(format!(
+                    "preparing composed default-target verification for edit module {:?}: {error}",
+                    effective_module_name
+                ))
+            })?;
         let composed = guard
             .compose_edit(&base, &mini, &effective_module_name)
             .map_err(|error| {

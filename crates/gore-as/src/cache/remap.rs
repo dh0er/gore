@@ -2609,6 +2609,11 @@ fn native_api_snapshot_for_base(base: &[u8]) -> Option<Arc<NativeApiSnapshot>> {
     select_native_api_snapshot(base, snapshots)
 }
 
+/// True only when both the pristine script cache and Binds.Cache match one audited snapshot.
+pub fn qualified_native_api_binds_match(base: &[u8], binds: &[u8]) -> bool {
+    native_api_snapshot_for_base(base).is_some_and(|snapshot| snapshot.matches_binds(binds))
+}
+
 fn select_native_api_snapshot(
     base: &[u8],
     snapshots: &[Arc<NativeApiSnapshot>],

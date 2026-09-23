@@ -786,12 +786,19 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .ok_or_else(|| {
                     CoreError::InvalidRequest("missing or invalid payload.profileId".to_string())
                 })?;
+            let destination_path = payload
+                .get("destinationPath")
+                .and_then(Value::as_str)
+                .map(PathBuf::from);
             let persistent_path = payload
                 .get("persistentPath")
                 .and_then(Value::as_str)
                 .map(PathBuf::from)
                 .or_else(|| {
-                    path.parent()
+                    destination_path
+                        .as_deref()
+                        .unwrap_or(&path)
+                        .parent()
                         .map(|parent| parent.join("PersistentDataList.sav"))
                 })
                 .ok_or_else(|| {
@@ -803,10 +810,6 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .get("backup")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
-            let destination_path = payload
-                .get("destinationPath")
-                .and_then(Value::as_str)
-                .map(PathBuf::from);
             Ok(assign_save_profile(
                 &path,
                 destination_path.as_deref(),
@@ -5640,8 +5643,9 @@ where
         None
     };
     let slot = target_path
-        .file_stem()
+        .file_name()
         .and_then(|value| value.to_str())
+        .and_then(|value| value.strip_suffix(".sav"))
         .filter(|value| looks_slot_name(value))
         .ok_or_else(|| {
             CoreError::InvalidRequest(format!(
@@ -20680,6 +20684,87 @@ mod tests {
             properties::resolve(&root.properties, &properties::parse_path(&path).unwrap()).unwrap();
         assert_eq!(property.value, properties::PropertyValue::Int(1));
         assert!(profile_array_contains(&root, 1, "m_SavedSlotsNames", "G1R-007").unwrap());
+    }
+
+    #[test]
+    fn assign_save_profile_command_import_uses_destination_companion_by_default() {
+        let dir = tempdir().unwrap();
+        let game_dir = dir.path().join("SaveGames");
+        fs::create_dir_all(&game_dir).unwrap();
+        let source_path = dir.path().join("detached.sav");
+        let destination_path = game_dir.join("G1R-007.sav");
+        let persistent_path = game_dir.join("PersistentDataList.sav");
+        let source = build_gsav(
+            2,
+            &public_payload_with_profile("Detached", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        fs::write(&source_path, &source).unwrap();
+        fs::write(
+            &persistent_path,
+            assignment_persistent_data_list("G1R-006", 0),
+        )
+        .unwrap();
+
+        let response = execute_json_inner(
+            &json!({
+                "command": "assign_save_profile",
+                "payload": {
+                    "path": source_path,
+                    "destinationPath": destination_path,
+                    "profileId": 1,
+                    "backup": false,
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(response["imported"], true);
+        assert_eq!(
+            response["persistentPath"],
+            persistent_path.display().to_string()
+        );
+        assert!(destination_path.exists());
+        assert_eq!(fs::read(&source_path).unwrap(), source);
+        let root = parse_profile_file(&fs::read(&persistent_path).unwrap()).unwrap();
+        assert!(profile_array_contains(&root, 1, "m_SavedSlotsNames", "G1R-007").unwrap());
+    }
+
+    #[test]
+    fn assign_save_profile_rejects_non_sav_destination_filenames() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("detached.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let source = build_gsav(
+            2,
+            &public_payload_with_profile("Detached", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        let persistent = assignment_persistent_data_list("G1R-006", 0);
+        fs::write(&source_path, &source).unwrap();
+        fs::write(&persistent_path, &persistent).unwrap();
+
+        for name in ["G1R-007.txt", "G1R-007", "G1R-007.SAV"] {
+            let destination_path = dir.path().join(name);
+            let error = assign_save_profile(
+                &source_path,
+                Some(&destination_path),
+                &persistent_path,
+                1,
+                false,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&error, CoreError::InvalidRequest(_)),
+                "{name}: {error}"
+            );
+            assert!(!destination_path.exists());
+        }
+        assert_eq!(fs::read(&source_path).unwrap(), source);
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent);
     }
 
     #[test]

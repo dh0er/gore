@@ -995,6 +995,25 @@ fn native_api_path(cache_file: &Path) -> Option<PathBuf> {
     })
 }
 
+// Standalone splice/remap commands do not select a compiler backend. Find the exact Binds.Cache
+// for this pristine base instead of admitting native declarations from the cache GUID alone.
+fn qualified_native_binds_for_base(cache_file: &Path, base: &[u8]) -> Option<Vec<u8>> {
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("GORE_AS_BINDS") {
+        candidates.push(PathBuf::from(path));
+    }
+    if let Some(parent) = cache_file.parent() {
+        candidates.push(parent.join("Binds.Cache"));
+    }
+    if let Ok(game) = gore_loc::config::game_root(None) {
+        candidates.push(compiler_binds_path(&game));
+    }
+    candidates.into_iter().find_map(|path| {
+        let bytes = read_regular_bounded(&path, DEFAULT_BINDS_MAX_BYTES, "AS_NATIVE_BINDS").ok()?;
+        gore_as::cache::remap::qualified_native_api_binds_match(base, &bytes).then_some(bytes)
+    })
+}
+
 pub(super) fn load_native_api_with_proof(cache_file: &Path) -> Option<LoadedBinds> {
     let path = native_api_path(cache_file)?;
     let bytes = match read_regular_bounded(&path, DEFAULT_BINDS_MAX_BYTES, "AS_DEFAULT_BINDS") {
@@ -4170,7 +4189,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let base_b = read_module_cache(&base)?;
             let mini_b = read_module_cache(&mini)?;
             let n = module_count(&base_b);
-            let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(&base_b)
+            let binds = qualified_native_binds_for_base(&base, &base_b);
+            let mut guard = gore_as::cache::splice::SequentialMiniGuard::new_with_binds(
+                &base_b,
+                binds.as_deref().unwrap_or(&[]),
+            )
                 .context("validating replace base")?;
             let res = guard
                 .compose_edit(&base_b, &mini_b, &target)
@@ -4194,7 +4217,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let base_b = read_module_cache(&base)?;
             let mini_b = read_module_cache(&mini)?;
             let before = module_count(&base_b);
-            let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(&base_b)
+            let binds = qualified_native_binds_for_base(&base, &base_b);
+            let mut guard = gore_as::cache::splice::SequentialMiniGuard::new_with_binds(
+                &base_b,
+                binds.as_deref().unwrap_or(&[]),
+            )
                 .context("validating splice base")?;
             let spliced = if upsert {
                 guard
@@ -4239,12 +4266,15 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let n = module_count(&regen_b);
             let mini =
                 gore_as::cache::splice::extract_module(&regen_b, &module).context("extract")?;
-            let (remapped, counts) = gore_as::cache::remap::remap_module_to_base_with_options(
-                &mini,
-                &base_b,
-                gore_as::cache::remap::RemapOptions { allow_new_symbols },
-            )
-            .context("remap")?;
+            let binds = qualified_native_binds_for_base(&base_cache, &base_b);
+            let (remapped, counts) =
+                gore_as::cache::remap::remap_module_to_base_with_options_and_binds(
+                    &mini,
+                    &base_b,
+                    binds.as_deref().unwrap_or(&[]),
+                    gore_as::cache::remap::RemapOptions { allow_new_symbols },
+                )
+                .context("remap")?;
             std::fs::write(&out, &remapped)
                 .with_context(|| format!("writing {}", out.display()))?;
             println!(
