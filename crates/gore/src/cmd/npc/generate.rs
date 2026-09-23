@@ -87,6 +87,13 @@ fn class_block(name: &str, parent: &str, defaults: &[String]) -> String {
     out
 }
 
+fn is_guild_controlled_default(line: &str) -> bool {
+    let Some((field, _)) = line.split_once('=') else {
+        return false;
+    };
+    matches!(field.trim(), "m_CharacterType" | "m_InitialGuildEffect")
+}
+
 /// Der vollständige Quelltext des Moduls.
 pub fn source(npc: &NewNpc) -> String {
     let id = npc.id.as_str();
@@ -103,13 +110,21 @@ pub fn source(npc: &NewNpc) -> String {
         Some(guild) => format!("UCharacterDefinition_Human_{guild}"),
         None => npc.definition_parent.clone(),
     };
+    let changes_guild = definition_parent != npc.definition_parent;
     let mut definition_defaults = vec![
         format!("m_UniqueName = n\"{id}\""),
         format!(
             "m_CharacterVisualsDefinition = UCharacterVisualsDefinition_Human_{id}::StaticClass()"
         ),
     ];
-    definition_defaults.extend(npc.definition_defaults.iter().cloned());
+    // These carried values were resolved against the template's old guild parent. Keeping them
+    // after changing that parent would override the selected faction again.
+    definition_defaults.extend(
+        npc.definition_defaults
+            .iter()
+            .filter(|line| !changes_guild || !is_guild_controlled_default(line))
+            .cloned(),
+    );
     out.push_str(&class_block(
         &format!("UCharacterDefinition_Human_{id}"),
         &definition_parent,
@@ -300,6 +315,43 @@ mod tests {
         ));
         // Die übrigen Glieder bleiben, wie der Aufrufer sie ermittelt hat.
         assert!(source.contains("class UAIAgentConfig_Human_MY_NPC : UAIAgentConfig_Human"));
+    }
+
+    #[test]
+    fn a_guild_override_drops_template_faction_defaults_but_keeps_personal_defaults() {
+        let mut npc = diego_clone();
+        npc.definition_defaults = vec![
+            "m_CharacterType = GameplayTag::AIAgent_Human_Shadow".to_string(),
+            "m_InitialGuildEffect = UGE_Guild_Human_OldCamp_ShadowLeader::StaticClass()"
+                .to_string(),
+            "m_Personality = UGothicCharacterPersonality_Brave_Archer_Patient::StaticClass()"
+                .to_string(),
+            "SetAttributeValue(\"AttributeSet_Health.Health\", 540.0f, TSubclassOf<UDifficultySettings>(nullptr))"
+                .to_string(),
+        ];
+
+        let inherited = source(&npc);
+        assert!(inherited.contains("default m_CharacterType = GameplayTag::AIAgent_Human_Shadow;"));
+        assert!(inherited.contains(
+            "default m_InitialGuildEffect = UGE_Guild_Human_OldCamp_ShadowLeader::StaticClass();"
+        ));
+
+        npc.guild = Some("OldCamp_Shadow".to_string());
+        let explicit_same_guild = source(&npc);
+        assert!(explicit_same_guild
+            .contains("default m_CharacterType = GameplayTag::AIAgent_Human_Shadow;"));
+        assert!(explicit_same_guild.contains(
+            "default m_InitialGuildEffect = UGE_Guild_Human_OldCamp_ShadowLeader::StaticClass();"
+        ));
+
+        npc.guild = Some("OldCamp_Guard".to_string());
+        let overridden = source(&npc);
+        assert!(!overridden.contains("default m_CharacterType ="));
+        assert!(!overridden.contains("default m_InitialGuildEffect ="));
+        assert!(overridden.contains("default m_Personality = UGothicCharacterPersonality_Brave_Archer_Patient::StaticClass();"));
+        assert!(
+            overridden.contains("default SetAttributeValue(\"AttributeSet_Health.Health\", 540.0f")
+        );
     }
 
     #[test]
