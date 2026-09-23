@@ -115,7 +115,7 @@ impl SpotCatalog {
                     self.evidence(activity)
                 )
             })?;
-            let row = unique_row(rows).with_context(|| {
+            let row = unique_row(&rows).with_context(|| {
                 format!("interaction evidence unavailable for spot '{}'", location.n)
             })?;
             if let Some(problem) = incompatibility(row, tag) {
@@ -168,7 +168,7 @@ impl SpotCatalog {
                 let Some(rows) = catalog.resolve(&location.n) else {
                     continue;
                 };
-                let Ok(row) = unique_row(rows) else {
+                let Ok(row) = unique_row(&rows) else {
                     continue;
                 };
                 if incompatibility(row, tag).is_some() {
@@ -349,8 +349,19 @@ struct InteractionCatalog {
 }
 
 impl InteractionCatalog {
-    fn resolve(&self, name: &str) -> Option<&[InteractionSpot]> {
-        self.spots.get(&name.to_ascii_lowercase()).map(Vec::as_slice)
+    fn resolve(&self, name: &str) -> Option<Vec<&InteractionSpot>> {
+        // The shipped location catalog contains distinct Box_Top and Box_top spots.
+        // Preserve an exact match; only a fallback spelling must consider every folded match.
+        if let Some(rows) = self.spots.get(name) {
+            return Some(rows.iter().collect());
+        }
+        let rows: Vec<_> = self
+            .spots
+            .iter()
+            .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+            .flat_map(|(_, rows)| rows.iter())
+            .collect();
+        (!rows.is_empty()).then_some(rows)
     }
 }
 
@@ -364,22 +375,19 @@ fn parse_interaction_source(text: &str) -> Result<InteractionCatalog> {
         if row.name.trim().is_empty() {
             bail!("interaction source contains an unnamed spot");
         }
-        spots
-            .entry(row.name.to_ascii_lowercase())
-            .or_default()
-            .push(row);
+        spots.entry(row.name.clone()).or_default().push(row);
     }
     Ok(InteractionCatalog { spots })
 }
 
-fn unique_row(rows: &[InteractionSpot]) -> Result<&InteractionSpot> {
+fn unique_row<'a>(rows: &[&'a InteractionSpot]) -> Result<&'a InteractionSpot> {
     if rows.len() != 1 {
         bail!(
             "{} source entries share this name; compatibility is ambiguous",
             rows.len()
         );
     }
-    Ok(&rows[0])
+    Ok(rows[0])
 }
 
 #[cfg(test)]
@@ -528,22 +536,35 @@ mod tests {
             0
         );
 
+        // The cook has two distinct locations with these case-only names. Exact
+        // lookup must preserve both; a spelling matching neither exactly is ambiguous.
+        let mut lower = row("Box_top", "Action.Interact.Sit.Chair", &[]);
+        lower["location"]["x"] = json!(2.0);
         let differently_cased = catalog(vec![
-            chair.clone(),
-            row("io_oc_chair_81", "Action.Interact.Sit.Chair", &[]),
+            row("Box_Top", "Action.Interact.Sit.Chair", &[]),
+            lower,
         ]);
-        assert!(differently_cased
-            .validate(Activity::Sit, "IO_OC_CHAIR_81")
-            .unwrap_err()
-            .to_string()
-            .contains("evidence unavailable"));
         assert_eq!(
             differently_cased
-                .list(Activity::Sit, None, None, 10)
+                .validate(Activity::Sit, "Box_Top")
                 .unwrap()
-                .matched_count,
-            0
+                .x,
+            1.0
         );
+        assert_eq!(
+            differently_cased
+                .validate(Activity::Sit, "Box_top")
+                .unwrap()
+                .x,
+            2.0
+        );
+        let folded = differently_cased
+            .interactions
+            .as_ref()
+            .unwrap()
+            .resolve("BOX_TOP")
+            .unwrap();
+        assert!(unique_row(&folded).is_err());
 
         let single = catalog(vec![chair]);
         let listed = single
