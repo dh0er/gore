@@ -148,7 +148,7 @@
   "traderRestockNotDueYet": "Nu e de așteptat înainte de {time}.",
   "traderRestockPossiblyDue": "Negustorul ar putea fi deja gata de reaprovizionare.",
   "traderRestockEligible": "Negustorul ar trebui să fie acum gata de reaprovizionare.",
-  "traderRestockNoWorldTime": "Timpul actual din joc e indisponibil, deci editorul nu poate spune dacă reaprovizionarea e datorată.",
+  "traderRestockNoWorldTime": "Timpul actual din joc e indisponibil, deci editorul nu poate spune dacă reaprovizionarea e gata.",
   "traderRestockLastActivity": "Ultima activitate a negustorului",
   "traderRestockLastActivityTooltip": "Ultimul timp salvat pentru acest negustor. Poate veni din negoț sau din altă actualizare de negustor, deci nu e neapărat ultima reaprovizionare.",
   "traderRestockForecastWindow": "Reaprovizionare așteptată",

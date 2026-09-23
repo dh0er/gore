@@ -520,7 +520,7 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get traderRestockNoWorldTime =>
-      'Timpul actual din joc e indisponibil, deci editorul nu poate spune dacă reaprovizionarea e datorată.';
+      'Timpul actual din joc e indisponibil, deci editorul nu poate spune dacă reaprovizionarea e gata.';
 
   @override
   String get traderRestockLastActivity => 'Ultima activitate a negustorului';
