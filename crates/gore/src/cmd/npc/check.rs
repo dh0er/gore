@@ -184,6 +184,13 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
         ));
         return findings;
     }
+    for class in classes.iter().filter(|class| class.namespace.is_some()) {
+        findings.push(Finding::blocking(format!(
+            "class {} is inside namespace {}; authored NPC classes must be global because the generated spawn and dialog references use global names",
+            class.name,
+            class.namespace.as_deref().unwrap_or_default()
+        )));
+    }
 
     let assigned = |class: &defaults::EmittedClass, field: &str| -> Vec<String> {
         class
@@ -368,7 +375,10 @@ pub fn guard_checkout_diff(pristine: &str, edited: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     for class in &before {
-        match after.iter().find(|other| other.name == class.name) {
+        match after
+            .iter()
+            .find(|other| other.name == class.name && other.namespace == class.namespace)
+        {
             None => findings.push(Finding::blocking(format!(
                 "class {} is gone. A shipped class may change its values, but removing or \
                  renaming it produces a different symbol that no longer matches the base cache",
@@ -388,7 +398,10 @@ pub fn guard_checkout_diff(pristine: &str, edited: &str) -> Vec<Finding> {
     }
 
     for class in &after {
-        if !before.iter().any(|other| other.name == class.name) {
+        if !before
+            .iter()
+            .any(|other| other.name == class.name && other.namespace == class.namespace)
+        {
             findings.push(Finding::blocking(format!(
                 "class {} is new. Checking a shipped character out is for changing its values; a \
                  new class needs `gore npc new`, which carries the contract for one",
@@ -599,6 +612,17 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
     }
 
     #[test]
+    fn authored_classes_inside_a_namespace_are_blocking() {
+        let source = format!("namespace Example\n{{\n{AUTHORED}\n}}\n");
+        let findings = guard_authored_module(&source, "MINE");
+        assert!(findings.iter().any(|finding| {
+            finding.severity == Severity::Blocking
+                && finding.message.contains("UCharacterDefinition_Human_MINE")
+                && finding.message.contains("namespace Example")
+        }));
+    }
+
+    #[test]
     fn a_unique_name_that_disagrees_with_the_id_is_blocking() {
         let source = AUTHORED.replace(r#"n"MINE""#, r#"n"OTHER""#);
         let findings = guard_authored_module(&source, "MINE");
@@ -774,6 +798,17 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
     fn a_changed_value_in_a_checked_out_module_passes() {
         let edited = AUTHORED.replace("1000.0f", "500.0f");
         assert!(guard_checkout_diff(AUTHORED, &edited).is_empty());
+    }
+
+    #[test]
+    fn wrapping_checked_out_classes_in_a_namespace_is_blocking() {
+        let edited = format!("namespace Example {{\n{AUTHORED}\n}}\n");
+        let findings = guard_checkout_diff(AUTHORED, &edited);
+        assert!(findings.iter().any(|finding| {
+            finding.severity == Severity::Blocking
+                && finding.message.contains("UCharacterDefinition_Human_MINE")
+                && finding.message.contains("gone")
+        }));
     }
 
     #[test]

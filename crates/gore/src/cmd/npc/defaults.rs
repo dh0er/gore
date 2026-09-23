@@ -8,6 +8,8 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmittedClass {
     pub name: String,
+    /// Namespace des Symbols; `None` bezeichnet den globalen Namespace.
+    pub namespace: Option<String>,
     pub super_class: Option<String>,
     /// `default a = b;` als (a, b), in Quelltextreihenfolge.
     pub assignments: Vec<(String, String)>,
@@ -80,8 +82,18 @@ fn without_comments(source: &str) -> String {
 pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
     let mut out: Vec<EmittedClass> = Vec::new();
     let source = without_comments(source);
+    let mut depth = 0usize;
+    let mut namespaces: Vec<(usize, String)> = Vec::new();
+    let mut pending_namespace = None;
     for line in source.lines() {
         let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("namespace ") {
+            pending_namespace = rest
+                .split(|ch: char| ch.is_whitespace() || ch == '{')
+                .next()
+                .filter(|name| !name.is_empty())
+                .map(str::to_string);
+        }
         if let Some(rest) = trimmed.strip_prefix("class ") {
             let (name, super_class) = match rest.split_once(':') {
                 Some((name, base)) => (name.trim(), Some(base.trim().to_string())),
@@ -89,28 +101,64 @@ pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
             };
             out.push(EmittedClass {
                 name: name.to_string(),
+                namespace: (!namespaces.is_empty()).then(|| {
+                    namespaces
+                        .iter()
+                        .map(|(_, name)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join("::")
+                }),
                 super_class,
                 assignments: Vec::new(),
                 calls: Vec::new(),
             });
-            continue;
+        } else if let (Some(rest), Some(current)) =
+            (trimmed.strip_prefix("default "), out.last_mut())
+        {
+            let statement = rest.trim().trim_end_matches(';').trim();
+            // Ein `=` weist nur zu, wenn es vor der ersten `(` steht: alles hinter dieser Klammer
+            // gehört zu den Argumenten eines Aufrufs, wo ein `=` in einem Literal stehen darf.
+            let first_paren = statement.find('(').unwrap_or(statement.len());
+            match statement[..first_paren].find('=') {
+                Some(at) => current.assignments.push((
+                    statement[..at].trim().to_string(),
+                    statement[at + 1..].trim().to_string(),
+                )),
+                None => current.calls.push(statement.to_string()),
+            }
         }
-        let Some(rest) = trimmed.strip_prefix("default ") else {
-            continue;
-        };
-        let Some(current) = out.last_mut() else {
-            continue;
-        };
-        let statement = rest.trim().trim_end_matches(';').trim();
-        // Ein `=` weist nur zu, wenn es vor der ersten `(` steht: alles hinter dieser Klammer
-        // gehört zu den Argumenten eines Aufrufs, wo ein `=` in einem Literal stehen darf.
-        let first_paren = statement.find('(').unwrap_or(statement.len());
-        match statement[..first_paren].find('=') {
-            Some(at) => current.assignments.push((
-                statement[..at].trim().to_string(),
-                statement[at + 1..].trim().to_string(),
-            )),
-            None => current.calls.push(statement.to_string()),
+
+        // Der Emitter setzt Deklarationen auf eigene Zeilen. Klammern in Literalen dürfen den
+        // Namespace-Scope nicht beeinflussen.
+        let mut quote = None;
+        let mut escaped = false;
+        for ch in line.chars() {
+            if let Some(end) = quote {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == end {
+                    quote = None;
+                }
+                continue;
+            }
+            match ch {
+                '"' | '\'' => quote = Some(ch),
+                '{' => {
+                    depth += 1;
+                    if let Some(name) = pending_namespace.take() {
+                        namespaces.push((depth, name));
+                    }
+                }
+                '}' => {
+                    if namespaces.last().is_some_and(|(start, _)| *start == depth) {
+                        namespaces.pop();
+                    }
+                    depth = depth.saturating_sub(1);
+                }
+                _ => {}
+            }
         }
     }
     out
@@ -162,11 +210,42 @@ class UVisualFeatures_OC_STT_Diego : UCharacterVisualFeaturesDefinition
         let classes = parse_classes(SOURCE);
         assert_eq!(classes.len(), 2);
         assert_eq!(classes[0].name, "UCharacterDefinition_Human_OC_STT_Diego");
+        assert_eq!(classes[0].namespace, None);
         assert_eq!(
             classes[0].super_class.as_deref(),
             Some("UCharacterDefinition_Human_OldCamp_Shadow")
         );
         assert_eq!(classes[1].name, "UVisualFeatures_OC_STT_Diego");
+    }
+
+    #[test]
+    fn parse_classes_tracks_namespace_scopes() {
+        let source = r#"// namespace Ignored {
+class UGlobal : UBase
+{
+    default Text = n"{ namespace Fake }";
+}
+namespace Outer
+{
+    class UOuter : UBase
+    {
+    }
+    namespace Inner {
+        class UInner : UBase
+        {
+        }
+    }
+}
+class UAfter : UBase
+{
+}
+"#;
+        let classes = parse_classes(source);
+        assert_eq!(classes.len(), 4);
+        assert_eq!(classes[0].namespace, None);
+        assert_eq!(classes[1].namespace.as_deref(), Some("Outer"));
+        assert_eq!(classes[2].namespace.as_deref(), Some("Outer::Inner"));
+        assert_eq!(classes[3].namespace, None);
     }
 
     #[test]

@@ -77,6 +77,7 @@ mod tests {
     fn class(name: &str, super_class: &str, assignments: &[(&str, &str)]) -> EmittedClass {
         EmittedClass {
             name: name.to_string(),
+            namespace: None,
             super_class: Some(super_class.to_string()),
             assignments: assignments
                 .iter()
