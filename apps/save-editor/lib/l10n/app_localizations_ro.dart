@@ -2291,8 +2291,8 @@ class AppLocalizationsRo extends AppLocalizations {
       'XPExecutedBounty': 'XP pentru lovitura de grație',
       'XPKillOrDefeatBounty': 'XP pentru înfrângere',
       'Level': 'Nivel',
-      'LockpickDurability': 'Durabilitate lockpick',
-      'LockpickPrecision': 'Precizie lockpick',
+      'LockpickDurability': 'Durabilitate șperaclu',
+      'LockpickPrecision': 'Precizie șperaclu',
       'PickPocketing': 'Furatul din buzunare',
       'other': '$fallback',
     });
