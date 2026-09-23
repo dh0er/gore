@@ -195,6 +195,16 @@ pub fn guard_authored_module(
             class.namespace.as_deref().unwrap_or_default()
         )));
     }
+    for (index, class) in classes.iter().enumerate() {
+        if classes[..index].iter().any(|other| {
+            other.namespace == class.namespace && other.name.eq_ignore_ascii_case(&class.name)
+        }) {
+            findings.push(Finding::blocking(format!(
+                "the authored module declares class {} more than once",
+                class.name
+            )));
+        }
+    }
 
     let assigned = |class: &defaults::EmittedClass, field: &str| -> Vec<String> {
         class
@@ -817,6 +827,24 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
                         .message
                         .contains("UCharacterVisualsDefinition_Human_MINE")
             }));
+        }
+    }
+
+    #[test]
+    fn authored_module_rejects_duplicate_class_names() {
+        for name in [
+            "UCharacterDefinition_Human_MINE",
+            "UAIAgentConfig_Human_MINE",
+            "USpawnAIAgentDefinition_MINE",
+        ] {
+            for duplicate in [name.to_string(), name.to_ascii_lowercase()] {
+                let source = format!("{AUTHORED}\nclass {duplicate} : UObject\n{{\n}}\n");
+                let findings = guard_authored_module(&source, "MINE");
+                assert!(findings.iter().any(|finding| {
+                    finding.severity == Severity::Blocking
+                        && finding.message.contains("more than once")
+                }));
+            }
         }
     }
 
