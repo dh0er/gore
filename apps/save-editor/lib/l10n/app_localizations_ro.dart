@@ -3037,7 +3037,7 @@ class AppLocalizationsRo extends AppLocalizations {
       'RideScavenger': 'Călărește scavenger',
       'Robe': 'Robă',
       'Safe': 'În siguranță',
-      'Scraper': 'Răzuitor',
+      'Scraper': 'Miner',
       'SecondChance': 'A doua șansă',
       'SecretLocation': 'Locație secretă',
       'SecretPassage': 'Pasaj secret',

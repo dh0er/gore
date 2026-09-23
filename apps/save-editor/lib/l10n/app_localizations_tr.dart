@@ -3021,7 +3021,7 @@ class AppLocalizationsTr extends AppLocalizations {
       'RideScavenger': 'Scavenger sür',
       'Robe': 'Cübbe',
       'Safe': 'Güvenli',
-      'Scraper': 'Kazıyıcı',
+      'Scraper': 'Madenci',
       'SecondChance': 'İkinci şans',
       'SecretLocation': 'Gizli konum',
       'SecretPassage': 'Gizli geçit',

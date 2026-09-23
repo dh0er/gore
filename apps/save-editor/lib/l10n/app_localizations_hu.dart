@@ -3024,7 +3024,7 @@ class AppLocalizationsHu extends AppLocalizations {
       'RideScavenger': 'Dögevő lovaglás',
       'Robe': 'Köpeny',
       'Safe': 'Biztonságos',
-      'Scraper': 'Kapartató',
+      'Scraper': 'Bányász',
       'SecondChance': 'Második esély',
       'SecretLocation': 'Titkos hely',
       'SecretPassage': 'Titkos átjáró',

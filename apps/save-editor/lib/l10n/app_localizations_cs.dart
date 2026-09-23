@@ -3032,7 +3032,7 @@ class AppLocalizationsCs extends AppLocalizations {
       'RideScavenger': 'Jízda na mrchožroutovi',
       'Robe': 'Roucha',
       'Safe': 'Bezpečí',
-      'Scraper': 'Škrabák',
+      'Scraper': 'Horník',
       'SecondChance': 'Druhá šance',
       'SecretLocation': 'Tajné místo',
       'SecretPassage': 'Tajná chodba',

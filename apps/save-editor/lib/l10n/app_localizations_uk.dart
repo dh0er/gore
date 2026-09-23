@@ -3038,7 +3038,7 @@ class AppLocalizationsUk extends AppLocalizations {
       'RideScavenger': 'Їзда на падальнику',
       'Robe': 'Мантія',
       'Safe': 'Безпечно',
-      'Scraper': 'Скребок',
+      'Scraper': 'Шахтар',
       'SecondChance': 'Другий шанс',
       'SecretLocation': 'Таємне місце',
       'SecretPassage': 'Таємний прохід',
