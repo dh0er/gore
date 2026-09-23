@@ -2284,7 +2284,7 @@ class AppLocalizationsRo extends AppLocalizations {
       'Mana_RecoveryRatePerHourOfSleep': 'Mana pe oră de somn',
       'Alcohol': 'Nivel de alcool',
       'MaxAlcohol': 'Alcool maxim',
-      'AlcoholDepletionRate': 'Viteza de trezire',
+      'AlcoholDepletionRate': 'Viteza de trezire din beție',
       'Swampweed': 'Nivel de iarbă de mlaștină',
       'MaxSwampweed': 'Iarbă de mlaștină maximă',
       'SwampweedDepletionRate': 'Viteza de dispariție',
