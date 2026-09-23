@@ -130,7 +130,7 @@ impl SpotCatalog {
         };
         let interaction = if let Some(tag) = interaction_tag(activity) {
             let catalog = self.require_interactions(activity)?;
-            let rows = catalog.resolve(name).with_context(|| {
+            let rows = catalog.resolve(&location.n).with_context(|| {
                 format!(
                     "interaction evidence unavailable for known spot '{}': no entry in {}",
                     location.n,
@@ -603,5 +603,18 @@ mod tests {
         assert_eq!(listed.listed_count, 0);
         assert!(listed.truncated);
         assert!(single.list(Activity::Sit, Some("typo"), None, 10).is_err());
+    }
+
+    #[test]
+    fn folded_input_uses_the_chosen_locations_interaction_row() {
+        let mut other = row("io_oc_chair_81", "Action.Interact.Sit.Chair", &[]);
+        other["location"]["x"] = json!(99.0);
+        let catalog = catalog(vec![
+            row("IO_OC_CHAIR_81", "Action.Interact.Sit.Chair", &[]),
+            other,
+        ]);
+        let validated = catalog.validate(Activity::Sit, "io_oc_chair_81").unwrap();
+        assert_eq!(validated.name, "IO_OC_CHAIR_81");
+        assert_eq!(validated.x, 1.0);
     }
 }

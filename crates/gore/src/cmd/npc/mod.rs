@@ -1771,18 +1771,15 @@ pub fn display_name_edits(id: &str, german: &str, english: Option<&str>) -> serd
 
 /// `gore npc text` — den Anzeigenamen als `gore loc import --edits`-Dokument schreiben.
 fn write_display_name(id: &str, name: &str, english: Option<&str>, out: &Path) -> Result<()> {
-    if out.exists() {
-        bail!(
-            "{} already exists. Point -o at a file that does not exist yet",
-            out.display()
-        );
-    }
     let document = display_name_edits(id, name, english);
-    fs::write(
-        out,
-        format!("{}\n", serde_json::to_string_pretty(&document)?),
-    )
-    .with_context(|| format!("writing {}", out.display()))?;
+    let content = serde_json::to_string_pretty(&document)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(out)
+        .with_context(|| format!("creating new NPC text file {}", out.display()))?;
+    writeln!(file, "{content}")
+        .with_context(|| format!("writing {}", out.display()))?;
     println!("wrote {}", out.display());
     println!("  {} -> {name:?} in both German columns", id.to_lowercase());
     println!("next: gore loc import --edits {}", out.display());
@@ -1917,6 +1914,25 @@ fn is_derivable_base(subclass_counts: &BTreeMap<String, usize>, class_name: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn npc_text_output_never_follows_a_dangling_link() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("outside.json");
+        let output = temp.path().join("name.json");
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&target, &output);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_file(&target, &output);
+        if let Err(error) = link_result {
+            eprintln!("skip: this account cannot create a file symlink: {error}");
+            return;
+        }
+
+        assert!(write_display_name("TEST", "Name", None, &output).is_err());
+        assert!(!target.exists());
+        assert!(fs::symlink_metadata(&output).is_ok());
+    }
 
     #[test]
     fn authored_npc_collision_check_covers_every_declared_class() {
