@@ -336,7 +336,7 @@ class AppLocalizationsUk extends AppLocalizations {
   String get skillNameLockpicking => 'Злам замків';
 
   @override
-  String get skillNamePickpocketing => 'Кишенькова крадіж';
+  String get skillNamePickpocketing => 'Кишенькова крадіжка';
 
   @override
   String get skillNameTakeOrgans => 'Витягнути орган';
@@ -2300,7 +2300,7 @@ class AppLocalizationsUk extends AppLocalizations {
       'Level': 'Рівень',
       'LockpickDurability': 'Міцність відмички',
       'LockpickPrecision': 'Точність відмички',
-      'PickPocketing': 'Кишенькова крадіж',
+      'PickPocketing': 'Кишенькова крадіжка',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2358,7 +2358,7 @@ class AppLocalizationsUk extends AppLocalizations {
       'LockpickPrecision':
           'Залежить від навички «Злам замків»: 0 без підготовки, 1 навчений, 2 майстер.',
       'PickPocketing':
-          'Залежить від навички «Кишенькова крадіж»: -30 без підготовки, -10 навчений, +10 майстер.',
+          'Залежить від навички «Кишенькова крадіжка»: -30 без підготовки, -10 навчений, +10 майстер.',
       'other': '?',
     });
     return '$_temp0';
@@ -3241,7 +3241,7 @@ class AppLocalizationsUk extends AppLocalizations {
       'newCampMercenary': 'Новий табір · Найманець',
       'newCampWaterMage': 'Новий табір · Маг води',
       'swampCampNovice': 'Табір Братства · Новачок',
-      'swampCampTemplar': 'Табір Братства · Templar',
+      'swampCampTemplar': 'Табір Братства · Храмовник',
       'other': '$fallback',
     });
     return '$_temp0';
