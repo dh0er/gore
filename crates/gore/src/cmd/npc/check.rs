@@ -7,6 +7,8 @@
 //! eine Zeile, die sich unbeabsichtigt bewegt hat, sähe im Spiel aus wie ein Fehler an ganz
 //! anderer Stelle.
 
+use std::collections::BTreeMap;
+
 use super::{chain, defaults, edit};
 
 /// Wie ernst ein Befund ist.
@@ -432,7 +434,18 @@ pub fn guard_checkout_diff(pristine: &str, edited: &str) -> Vec<Finding> {
                     class.super_class.as_deref().unwrap_or("nothing")
                 )));
             }
-            [_] => {}
+            [other] => {
+                let retained = default_targets(other);
+                for (target, expected_count) in default_targets(class) {
+                    let count = retained.get(target).copied().unwrap_or(0);
+                    if count < expected_count {
+                        findings.push(Finding::blocking(format!(
+                            "class {} removes existing default target {target}: expected at least {expected_count}, found {count}",
+                            class.name
+                        )));
+                    }
+                }
+            }
             _ => findings.push(Finding::blocking(format!(
                 "class {} is declared {} times. A checked-out class must have exactly one declaration",
                 class.name,
@@ -460,6 +473,24 @@ pub fn guard_checkout_diff(pristine: &str, edited: &str) -> Vec<Finding> {
         ));
     }
     findings
+}
+
+fn default_targets(class: &defaults::EmittedClass) -> BTreeMap<&str, usize> {
+    let mut targets = BTreeMap::new();
+    for statement in class
+        .assignments
+        .iter()
+        .map(|(lhs, _)| lhs.as_str())
+        .chain(class.calls.iter().map(String::as_str))
+    {
+        let statement = statement.trim().trim_start_matches("::");
+        let statement = statement.strip_prefix("this.").unwrap_or(statement);
+        let root = statement
+            .split_once(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == ':'))
+            .map_or(statement, |(root, _)| root);
+        *targets.entry(root).or_insert(0) += 1;
+    }
+    targets
 }
 
 /// Die Wegpunkte, die der Tagesablauf anspricht.
@@ -977,6 +1008,23 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
     fn a_changed_value_in_a_checked_out_module_passes() {
         let edited = AUTHORED.replace("1000.0f", "500.0f");
         assert!(guard_checkout_diff(AUTHORED, &edited).is_empty());
+    }
+
+    #[test]
+    fn removing_existing_checkout_default_targets_is_blocking() {
+        for (statement, target) in [
+            ("    default m_HasPreBakedSK = true;\n", "m_HasPreBakedSK"),
+            (
+                "    default Schedule(0, 0, UAIState_Stand(), n\"FP_OC_SMALLTALK_33\", 1000.0f, TSubclassOf<UNavArea>(nullptr), nullptr);\n",
+                "Schedule",
+            ),
+        ] {
+            let edited = AUTHORED.replacen(statement, "", 1);
+            let findings = guard_checkout_diff(AUTHORED, &edited);
+            assert!(findings.iter().any(|finding| {
+                finding.severity == Severity::Blocking && finding.message.contains(target)
+            }));
+        }
     }
 
     #[test]
