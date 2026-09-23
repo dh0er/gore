@@ -3003,7 +3003,7 @@ class AppLocalizationsRo extends AppLocalizations {
       'Library': 'Bibliotecă',
       'Lie': 'Minciună',
       'Lock': 'Lacăt',
-      'Lockpick': 'Lockpick',
+      'Lockpick': 'Șperaclu',
       'Mad': 'Nebun',
       'Mandibles': 'Mandibule de minecrawler',
       'MapMaker': 'Cartograf',
