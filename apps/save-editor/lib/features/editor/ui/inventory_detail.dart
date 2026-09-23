@@ -1123,16 +1123,13 @@ class _PrivateInventorySummaryCardState
                                           fallbackIcon: tab.fallbackIcon,
                                           size: 18,
                                         ),
-                                        label: Text(
-                                          l10n.categoryWithCount(
-                                            tab.label,
-                                            tab.items.length,
-                                          ),
-                                          style: tab.catalogLabel
-                                              ? gameScriptTextStyle(
-                                                  context,
-                                                  lang.locale,
-                                                )
+                                        label: catalogCountChipLabel(
+                                          context,
+                                          l10n: l10n,
+                                          name: tab.label,
+                                          count: tab.items.length,
+                                          gameLocale: tab.catalogLabel
+                                              ? lang.locale
                                               : null,
                                         ),
                                         selected: tab.category == selected,
@@ -1169,31 +1166,43 @@ class _PrivateInventorySummaryCardState
                                             child: Column(
                                               children: [
                                                 for (final tab in tabs)
-                                                  SidebarTile(
-                                                    icon: tab.fallbackIcon,
-                                                    gameIcon: tab.gameIcon,
-                                                    gameTextLocale:
-                                                        tab.catalogLabel
-                                                        ? lang.locale
-                                                        : null,
-                                                    label: l10n
-                                                        .categoryWithCount(
+                                                  () {
+                                                    final parts =
+                                                        catalogCountParts(
+                                                          l10n,
                                                           tab.label,
                                                           tab.items.length,
-                                                        ),
-                                                    selected:
-                                                        !searching &&
-                                                        tab.category ==
-                                                            selected,
-                                                    onTap: () => setState(() {
-                                                      _selectedCategory =
-                                                          tab.category;
-                                                      // Leave search mode so the chosen
-                                                      // tab's items are shown.
-                                                      _query = '';
-                                                      _searchController.clear();
-                                                    }),
-                                                  ),
+                                                        );
+                                                    final catalog =
+                                                        tab.catalogLabel &&
+                                                        parts.splits;
+                                                    return SidebarTile(
+                                                      icon: tab.fallbackIcon,
+                                                      gameIcon: tab.gameIcon,
+                                                      gameTextLocale: catalog
+                                                          ? lang.locale
+                                                          : null,
+                                                      catalogRun: catalog
+                                                          ? parts.run
+                                                          : null,
+                                                      catalogLead: parts.lead,
+                                                      catalogTail: parts.tail,
+                                                      label: parts.full,
+                                                      selected:
+                                                          !searching &&
+                                                          tab.category ==
+                                                              selected,
+                                                      onTap: () => setState(() {
+                                                        _selectedCategory =
+                                                            tab.category;
+                                                        // Leave search mode so the chosen
+                                                        // tab's items are shown.
+                                                        _query = '';
+                                                        _searchController
+                                                            .clear();
+                                                      }),
+                                                    );
+                                                  }(),
                                               ],
                                             ),
                                           ),

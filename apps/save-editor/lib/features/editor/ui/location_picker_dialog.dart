@@ -280,34 +280,42 @@ class _LocationPickerDialogState extends ConsumerState<_LocationPickerDialog> {
                           onTap: () => _selectArea(null),
                         ),
                         for (final group in groups)
-                          SidebarTile(
-                            icon: group.areaId.isEmpty
-                                ? Icons.help_outline
-                                : Icons.place_outlined,
-                            gameTextLocale:
+                          () {
+                            final areaName = _areaLabel(
+                              group.areaId,
+                              catalog,
+                              locCatalog,
+                              lang,
+                              l10n,
+                            );
+                            final parts = catalogCountParts(
+                              l10n,
+                              areaName,
+                              group.spots.length,
+                            );
+                            final fromCatalog =
                                 catalogAreaLabel(
                                       group.areaId,
                                       catalog,
                                       locCatalog,
                                       lang,
-                                    ) ==
-                                    null
-                                ? null
-                                : lang.locale,
-                            label: l10n.categoryWithCount(
-                              _areaLabel(
-                                group.areaId,
-                                catalog,
-                                locCatalog,
-                                lang,
-                                l10n,
-                              ),
-                              group.spots.length,
-                            ),
-                            selected:
-                                !searching && _selectedArea == group.areaId,
-                            onTap: () => _selectArea(group.areaId),
-                          ),
+                                    ) !=
+                                    null &&
+                                parts.splits;
+                            return SidebarTile(
+                              icon: group.areaId.isEmpty
+                                  ? Icons.help_outline
+                                  : Icons.place_outlined,
+                              gameTextLocale: fromCatalog ? lang.locale : null,
+                              catalogRun: fromCatalog ? parts.run : null,
+                              catalogLead: parts.lead,
+                              catalogTail: parts.tail,
+                              label: parts.full,
+                              selected:
+                                  !searching && _selectedArea == group.areaId,
+                              onTap: () => _selectArea(group.areaId),
+                            );
+                          }(),
                       ],
                     ),
                   ),

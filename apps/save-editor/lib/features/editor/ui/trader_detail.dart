@@ -1347,25 +1347,37 @@ class _StockSection extends ConsumerWidget {
                               child: Column(
                                 children: [
                                   for (final group in groups)
-                                    SidebarTile(
-                                      icon: iconForItemCategory(group.category),
-                                      gameTextLocale:
-                                          categoryLabel(group.category).$2
-                                          ? lang.locale
-                                          : null,
-                                      gameIcon:
-                                          filtersById[group.category]?.icon ??
-                                          gameIconForItemCategory(
-                                            group.category,
-                                          ),
-                                      label: l10n.categoryWithCount(
-                                        categoryLabel(group.category).$1,
+                                    () {
+                                      final named = categoryLabel(
+                                        group.category,
+                                      );
+                                      final parts = catalogCountParts(
+                                        l10n,
+                                        named.$1,
                                         group.items.length,
-                                      ),
-                                      selected: group.category == selected,
-                                      onTap: () =>
-                                          onSelectCategory(group.category),
-                                    ),
+                                      );
+                                      final catalog = named.$2 && parts.splits;
+                                      return SidebarTile(
+                                        icon: iconForItemCategory(
+                                          group.category,
+                                        ),
+                                        gameTextLocale: catalog
+                                            ? lang.locale
+                                            : null,
+                                        catalogRun: catalog ? parts.run : null,
+                                        catalogLead: parts.lead,
+                                        catalogTail: parts.tail,
+                                        gameIcon:
+                                            filtersById[group.category]?.icon ??
+                                            gameIconForItemCategory(
+                                              group.category,
+                                            ),
+                                        label: parts.full,
+                                        selected: group.category == selected,
+                                        onTap: () =>
+                                            onSelectCategory(group.category),
+                                      );
+                                    }(),
                                 ],
                               ),
                             ),

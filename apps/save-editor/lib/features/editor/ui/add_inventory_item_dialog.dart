@@ -424,30 +424,45 @@ class _AddInventoryItemDialogState
                                   child: Column(
                                     children: [
                                       for (final g in groups)
-                                        SidebarTile(
-                                          icon: iconForItemCategory(g.category),
-                                          gameTextLocale:
-                                              categoryLabel(g.category).$2
-                                              ? lang.locale
-                                              : null,
-                                          gameIcon:
-                                              filtersById[g.category]?.icon ??
-                                              gameIconForItemCategory(
-                                                g.category,
-                                              ),
-                                          label: l10n.categoryWithCount(
-                                            categoryLabel(g.category).$1,
+                                        () {
+                                          final named = categoryLabel(
+                                            g.category,
+                                          );
+                                          final parts = catalogCountParts(
+                                            l10n,
+                                            named.$1,
                                             g.entries.length,
-                                          ),
-                                          selected:
-                                              !searching &&
-                                              g.category == selectedCat,
-                                          onTap: () => setState(() {
-                                            _selectedCategory = g.category;
-                                            _query = '';
-                                            _searchController.clear();
-                                          }),
-                                        ),
+                                          );
+                                          final catalog =
+                                              named.$2 && parts.splits;
+                                          return SidebarTile(
+                                            icon: iconForItemCategory(
+                                              g.category,
+                                            ),
+                                            gameTextLocale: catalog
+                                                ? lang.locale
+                                                : null,
+                                            catalogRun: catalog
+                                                ? parts.run
+                                                : null,
+                                            catalogLead: parts.lead,
+                                            catalogTail: parts.tail,
+                                            gameIcon:
+                                                filtersById[g.category]?.icon ??
+                                                gameIconForItemCategory(
+                                                  g.category,
+                                                ),
+                                            label: parts.full,
+                                            selected:
+                                                !searching &&
+                                                g.category == selectedCat,
+                                            onTap: () => setState(() {
+                                              _selectedCategory = g.category;
+                                              _query = '';
+                                              _searchController.clear();
+                                            }),
+                                          );
+                                        }(),
                                     ],
                                   ),
                                 ),
