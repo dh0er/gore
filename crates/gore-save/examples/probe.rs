@@ -6,8 +6,9 @@
 //! Antwort.
 //!
 //! ```text
-//! cargo run -p gore-save --example probe -- <save.sav> <command> [suchtext]
+//! cargo run -p gore-save --example probe -- <save.sav> <command> [suchtext] [schluessel=wert]
 //! cargo run -p gore-save --example probe -- G1R-003.sav private.characters.list GORE_TEST
+//! cargo run -p gore-save --example probe -- G1R-003.sav private.npc.position id=GORE_TEST
 //! ```
 
 use std::env;
@@ -15,17 +16,19 @@ use std::env;
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let (Some(path), Some(command)) = (args.first(), args.get(1)) else {
-        eprintln!("usage: probe <save.sav> <command> [needle]");
+        eprintln!("usage: probe <save.sav> <command> [needle] [key=value]");
         std::process::exit(2);
     };
-    let needle = args.get(2).map(String::as_str);
 
     // Ein Zusatzargument der Form `schluessel=wert`, weil die interessanten Lesebefehle eine Id
     // brauchen: `private.npc.position` etwa fragt nach genau einer Figur.
     let mut payload = serde_json::json!({ "path": path });
-    if let Some(extra) = args.get(3) {
+    let mut needle = None;
+    for extra in args.iter().skip(2) {
         if let Some((key, value)) = extra.split_once('=') {
             payload[key] = serde_json::json!(value);
+        } else if needle.is_none() {
+            needle = Some(extra.as_str());
         }
     }
 
