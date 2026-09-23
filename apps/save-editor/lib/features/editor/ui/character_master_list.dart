@@ -591,6 +591,28 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
     );
   }
 
+  /// Catalog name on the game-text face. The ` (n)` suffix is interface text.
+  Widget _groupTitle(_CharacterGroup group) {
+    final name = group.name;
+    final suffix = ' (${group.members.length})';
+    final font = group.first.nameFromCatalog
+        ? gameScriptTextStyle(context, widget.lang.locale)
+        : null;
+    if (font == null) {
+      return Text('$name$suffix', maxLines: 1, overflow: TextOverflow.ellipsis);
+    }
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(text: name, style: font),
+          TextSpan(text: suffix),
+        ],
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
   /// One expandable row standing for every actor sharing a display name, and —
   /// while it is open — the rows themselves.
   List<Widget> _groupTiles(
@@ -609,14 +631,7 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
         // character over and over, so any of them draws the same one.
         leading: GlossaryPortrait(npcUniqueName: group.first.row.globalId),
         titleAlignment: ListTileTitleAlignment.center,
-        title: Text(
-          '${group.name} (${group.members.length})',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: group.first.nameFromCatalog
-              ? gameScriptTextStyle(context, widget.lang.locale)
-              : null,
-        ),
+        title: _groupTitle(group),
         trailing: Icon(open ? Icons.expand_less : Icons.expand_more, size: 20),
         // Highlighted while it holds the selection, so a collapsed group still
         // shows where the user is.
