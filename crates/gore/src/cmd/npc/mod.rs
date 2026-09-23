@@ -19,6 +19,7 @@ pub mod workspace;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -1536,6 +1537,50 @@ fn stage_tree_copy(tree: &Path, dir: &Path) -> Result<PathBuf> {
     Ok(dir.join(STAGED_TREE_DIR))
 }
 
+fn validate_stage_spec_target(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            let linked = metadata.file_type().is_symlink();
+            #[cfg(windows)]
+            let linked = {
+                use std::os::windows::fs::MetadataExt as _;
+                linked || metadata.file_attributes() & 0x400 != 0
+            };
+            ensure!(
+                !linked,
+                "NPC stage spec output is a link or reparse point: {}",
+                path.display()
+            );
+            ensure!(
+                metadata.is_file(),
+                "NPC stage spec output is not a regular file: {}",
+                path.display()
+            );
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context(format!("reading {}", path.display())),
+    }
+    Ok(())
+}
+
+fn write_stage_spec_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("NPC stage spec output has no parent"))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("creating temporary spec in {}", parent.display()))?;
+    temporary
+        .write_all(bytes)
+        .with_context(|| format!("writing temporary spec for {}", path.display()))?;
+    temporary
+        .flush()
+        .with_context(|| format!("flushing temporary spec for {}", path.display()))?;
+    temporary.persist(path).map_err(|error| {
+        anyhow::anyhow!("publishing NPC stage spec {}: {}", path.display(), error.error)
+    })?;
+    Ok(())
+}
+
 /// `gore npc stage` — Baum herrichten, Spec schreiben, Bau-Kommandos drucken.
 fn stage_workspace(
     dir: &Path,
@@ -1545,6 +1590,8 @@ fn stage_workspace(
     game: Option<PathBuf>,
 ) -> Result<()> {
     gore_mod::validate_mod_name(mod_name).context("invalid --mod-name")?;
+    let spec_path = dir.join("spec.json");
+    validate_stage_spec_target(&spec_path)?;
     let manifest = read_manifest(dir)?;
     validate_manifest_modules(&manifest)?;
     routine::check_managed(dir, &manifest, game.clone())?;
@@ -1588,10 +1635,9 @@ fn stage_workspace(
     fs::create_dir_all(&work).with_context(|| format!("creating {}", work.display()))?;
 
     let spec = stage::spec_json(&manifest, mod_name);
-    let spec_path = dir.join("spec.json");
-    fs::write(
+    write_stage_spec_atomic(
         &spec_path,
-        format!("{}\n", serde_json::to_string_pretty(&spec)?),
+        format!("{}\n", serde_json::to_string_pretty(&spec)?).as_bytes(),
     )
     .with_context(|| format!("writing {}", spec_path.display()))?;
 
@@ -1923,6 +1969,41 @@ mod tests {
         );
         assert!(!second_copy.join(stage::TREE_STAMP_NAME).exists());
         assert!(ensure_tree(&first_copy, "abc", Path::new("missing.Cache")).is_err());
+    }
+
+    #[test]
+    fn stage_spec_replaces_a_hard_link_without_touching_its_peer() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside.json");
+        let spec = temp.path().join("spec.json");
+        fs::write(&outside, b"keep this file").unwrap();
+        fs::hard_link(&outside, &spec).unwrap();
+
+        validate_stage_spec_target(&spec).unwrap();
+        write_stage_spec_atomic(&spec, b"new spec").unwrap();
+
+        assert_eq!(fs::read(&spec).unwrap(), b"new spec");
+        assert_eq!(fs::read(&outside).unwrap(), b"keep this file");
+    }
+
+    #[test]
+    fn stage_rejects_a_linked_spec_before_workspace_work() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside.json");
+        let spec = temp.path().join("spec.json");
+        fs::write(&outside, b"keep this file").unwrap();
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&outside, &spec);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_file(&outside, &spec);
+        if let Err(error) = link_result {
+            eprintln!("skip: this account cannot create a file symlink: {error}");
+            return;
+        }
+
+        let error = stage_workspace(temp.path(), None, "TestMod", None, None).unwrap_err();
+        assert!(error.to_string().contains("link or reparse point"), "{error:#}");
+        assert_eq!(fs::read(&outside).unwrap(), b"keep this file");
     }
 
     fn entry(domain: &'static str, id: &str, category: &str, class: Option<&str>) -> CatalogEntry {
