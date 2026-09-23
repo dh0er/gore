@@ -2208,7 +2208,7 @@ class AppLocalizationsTr extends AppLocalizations {
   String get tutorialGatePlayerProgression => 'Karakter gelişimi';
 
   @override
-  String get tutorialGateRanged => 'Menilli savaş';
+  String get tutorialGateRanged => 'Menzilli savaş';
 
   @override
   String get tutorialGateRiding => 'Scavenger sürme';
