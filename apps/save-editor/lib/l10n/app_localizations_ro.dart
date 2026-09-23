@@ -567,11 +567,11 @@ class AppLocalizationsRo extends AppLocalizations {
       'Folosește timpul actual din joc ca ultima activitate a negustorului. Asta amână următoarea reaprovizionare așteptată.';
 
   @override
-  String get traderRestockMakeDue => 'Fă-o datorată acum';
+  String get traderRestockMakeDue => 'Fă-o gata acum';
 
   @override
   String get traderRestockMakeDueTooltip =>
-      'Mută ultima activitate a negustorului suficient de înapoi încât reaprovizionarea să fie datorată acum.';
+      'Mută ultima activitate a negustorului suficient de înapoi încât reaprovizionarea să fie gata acum.';
 
   @override
   String get traderRestockCustom => 'Oră personalizată…';
