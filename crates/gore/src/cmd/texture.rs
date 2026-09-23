@@ -176,9 +176,15 @@ fn ensure_plain_clone_output_dir(path: &std::path::Path) -> Result<()> {
         match std::fs::symlink_metadata(&current) {
             Ok(metadata) => ensure_plain_clone_component(&current, &metadata)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::create_dir(&current).with_context(|| {
-                    format!("creating clone output directory {}", current.display())
-                })?;
+                match std::fs::create_dir(&current) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!("creating clone output directory {}", current.display())
+                        })
+                    }
+                }
                 let metadata = std::fs::symlink_metadata(&current)?;
                 ensure_plain_clone_component(&current, &metadata)?;
             }
