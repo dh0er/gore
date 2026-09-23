@@ -38,7 +38,8 @@ pub struct TreeStamp {
 pub const TREE_STAMP_NAME: &str = ".gore-npc-tree.json";
 pub const TREE_STAMP_VERSION: u32 = 3;
 
-/// Authenticate a reusable emitted tree independently of its cache-id stamp.
+/// Detect accidental edits to a reusable tree. This digest and its stamp are both local; the
+/// stage-generated compile command independently checks the full diff against the sealed cache.
 pub fn tree_sha256(root: &Path) -> Result<String> {
     fn collect(root: &Path, dir: &Path, files: &mut Vec<(String, PathBuf)>) -> Result<()> {
         for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
@@ -182,9 +183,22 @@ pub fn build_commands(
     let mut out = Vec::new();
     match route_of(manifest) {
         Route::FullTree => {
+            let only_changes = manifest
+                .modules
+                .iter()
+                .map(|edit| {
+                    format!(
+                        " --only-change {}",
+                        shell_quote(&format!(
+                            "{}:{}:{}",
+                            edit.op, edit.module, edit.relative_path
+                        ))
+                    )
+                })
+                .collect::<String>();
             out.push(format!(
                 "gore as compile {} -o {} --mini {mini_arg} --work-dir {work_arg} \
-                 --backend standalone{game_arg}",
+                 --backend standalone{only_changes}{game_arg}",
                 shell_quote(tree),
                 shell_quote(&format!("{dir}/full.Cache")),
             ));
@@ -303,6 +317,8 @@ mod tests {
         assert!(commands[0].starts_with("gore as compile 'tree'"));
         assert!(commands[0].contains("--mini 'ws/MyMod.mini.Cache'"));
         assert!(commands[0].contains("--backend standalone"));
+        assert!(commands[0].contains("--only-change 'add:AI.AIAgent.Human.Config.MINE.MINE:AI/AIAgent/Human/Config/MINE/MINE.as'"));
+        assert!(commands[0].contains("--only-change 'edit:LevelScripts.XardasTower_AI:LevelScripts/XardasTower_AI.as'"));
         assert!(commands[0].contains("--game 'G'"));
     }
 

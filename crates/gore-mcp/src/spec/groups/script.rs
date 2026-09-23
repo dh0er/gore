@@ -395,6 +395,14 @@ const COMPILE_ARGS: &[ArgSpec] = &[
         false,
     ),
     ArgSpec::new(
+        "only_changes",
+        LongRepeated("only-change"),
+        StrList,
+        "Require the complete source-tree diff to match these add:Module:Path or \
+         edit:Module:Path entries before compiling.",
+        false,
+    ),
+    ArgSpec::new(
         "work_dir",
         Long("work-dir"),
         Path,
@@ -560,6 +568,14 @@ const STANDALONE_COMPILE_ARGS: &[ArgSpec] = &[
         "Also publish a deployable multi-module mini-cache holding only the authored Add/Edit \
          modules, remapped to the pristine cache. Point a bundle spec's `scripts[].mini_cache` \
          at it when a mod spans several modules.",
+        false,
+    ),
+    ArgSpec::new(
+        "only_changes",
+        LongRepeated("only-change"),
+        StrList,
+        "Require the complete source-tree diff to match these add:Module:Path or \
+         edit:Module:Path entries before compiling.",
         false,
     ),
     ArgSpec::new(

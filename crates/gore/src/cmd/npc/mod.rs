@@ -1458,7 +1458,10 @@ fn workspace_source_findings(
 ///
 /// Der Lauf kostet rund 19 Minuten, davon das meiste ein einziges Modul
 /// (`Map.MainMap.WorldPointManagerConfig_MainMap`). Ihn bei jedem `stage` zu wiederholen waere
-/// nicht zumutbar, also bekommt der Baum einen Stempel und wird wiederverwendet.
+/// nicht zumutbar, also bekommt der Baum einen Stempel und wird wiederverwendet. Der lokale
+/// Stempel beweist nicht, dass der Baum noch aus dem Cache stammt. Der ausgegebene Compile-Befehl
+/// vergleicht deshalb alle Aenderungen erneut mit dem versiegelten Cache und erlaubt nur die
+/// beiden Module aus dem NPC-Manifest.
 fn ensure_tree(tree: &Path, cache_sha256: &str, path: &Path) -> Result<()> {
     let stamp_path = tree.join(stage::TREE_STAMP_NAME);
     if let Ok(text) = fs::read_to_string(&stamp_path) {

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -303,6 +304,11 @@ pub enum AsCmd {
         /// `scripts[].mini_cache` should point at when a mod spans several modules.
         #[arg(long, value_name = "PATH")]
         mini: Option<PathBuf>,
+        /// Restrict this compile to exactly these cache-relative changes. Repeat as
+        /// `--only-change add:Module.Name:Path/To/Module.as` or `edit:...`.
+        /// The planner checks the entire tree against the sealed game cache before compiling.
+        #[arg(long = "only-change", value_name = "OP:MODULE:PATH")]
+        only_changes: Vec<String>,
         /// Existing private workspace outside the game installation. GORE recreates only its
         /// fixed `tree` child and uses this root for isolated standalone scratch directories.
         #[arg(long, value_name = "DIR")]
@@ -2140,11 +2146,63 @@ impl gore_as::compile::StandaloneCompilerRunnerV1 for CompileModuleStandaloneRun
     }
 }
 
+/// A staged workflow can name its complete intended diff. The full-graph planner derives the
+/// actual diff from the sealed cache, so a modified source tree and a rewritten local stamp
+/// cannot silently add another module to the resulting mini-cache.
+fn verify_only_changes(
+    allowed: &[String],
+    changes: &[gore_as::compile::FullGraphCompileChangeV1],
+) -> Result<()> {
+    use gore_as::compile::FullGraphCompileOperationV1;
+
+    if allowed.is_empty() {
+        return Ok(());
+    }
+    let mut expected = BTreeSet::new();
+    for item in allowed {
+        let mut parts = item.splitn(3, ':');
+        let (Some(op), Some(module), Some(path)) = (parts.next(), parts.next(), parts.next())
+        else {
+            bail!("invalid --only-change {item:?}; expected add:Module:Path or edit:Module:Path");
+        };
+        if !matches!(op, "add" | "edit") || module.is_empty() || path.is_empty() {
+            bail!("invalid --only-change {item:?}; expected add:Module:Path or edit:Module:Path");
+        }
+        if !expected.insert((op.to_owned(), module.to_owned(), path.to_owned())) {
+            bail!("duplicate --only-change {item:?}");
+        }
+    }
+    let actual: BTreeSet<_> = changes
+        .iter()
+        .map(|change| {
+            let op = match change.operation {
+                FullGraphCompileOperationV1::Add => "add",
+                FullGraphCompileOperationV1::Edit => "edit",
+                FullGraphCompileOperationV1::Delete => "delete",
+            };
+            (
+                op.to_owned(),
+                change.module_name.clone(),
+                change.relative_path.clone(),
+            )
+        })
+        .collect();
+    let unexpected: Vec<_> = actual.difference(&expected).collect();
+    let missing: Vec<_> = expected.difference(&actual).collect();
+    if !unexpected.is_empty() || !missing.is_empty() {
+        bail!(
+            "the source tree differs from --only-change scope (unexpected: {unexpected:?}; missing: {missing:?}); no cache was compiled"
+        );
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compile_full_graph_command(
     src: PathBuf,
     out: PathBuf,
     mini: Option<PathBuf>,
+    only_changes: Vec<String>,
     work_dir: PathBuf,
     game: Option<PathBuf>,
     expected_base: Option<ExpectedBase>,
@@ -2385,6 +2443,12 @@ fn compile_full_graph_command(
         }
     };
     let (changes, final_manifest) = plan.into_parts();
+    if let Err(error) = verify_only_changes(&only_changes, &changes) {
+        return match guard.take() {
+            Some(guard) => Err(release_compile_guard_after_error(guard, error)),
+            None => Err(error),
+        };
+    }
     if mini_path.is_some()
         && !changes.iter().any(|change| {
             change.operation != gore_as::compile::FullGraphCompileOperationV1::Delete
@@ -3620,6 +3684,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             src,
             out,
             mini,
+            only_changes,
             work_dir,
             game,
             expect_base,
@@ -3633,6 +3698,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 src,
                 out,
                 mini,
+                only_changes,
                 work_dir,
                 game,
                 expected_base_from_args(expect_base, expect_base_sha256)?,
@@ -6258,6 +6324,43 @@ fn qualify_count(
 #[cfg(test)]
 mod default_cli_tests {
     use super::*;
+
+    #[test]
+    fn scoped_full_graph_compile_rejects_changes_outside_the_npc_manifest() {
+        use gore_as::compile::{FullGraphCompileChangeV1, FullGraphCompileOperationV1 as Op};
+
+        let allowed = vec![
+            "add:AI.Config.Test:AI/Config/Test.as".to_owned(),
+            "edit:LevelScripts.Test:LevelScripts/Test.as".to_owned(),
+        ];
+        let change = |operation, module_name: &str, relative_path: &str| FullGraphCompileChangeV1 {
+            operation,
+            module_name: module_name.to_owned(),
+            relative_path: relative_path.to_owned(),
+            source: (operation != Op::Delete).then_some(b"class Test {}".to_vec()),
+        };
+        let intended = vec![
+            change(Op::Add, "AI.Config.Test", "AI/Config/Test.as"),
+            change(Op::Edit, "LevelScripts.Test", "LevelScripts/Test.as"),
+        ];
+        verify_only_changes(&allowed, &intended).unwrap();
+
+        for extra in [
+            change(Op::Edit, "Other.Script", "Other/Script.as"),
+            change(Op::Add, "Other.New", "Other/New.as"),
+            change(Op::Delete, "Other.Gone", "Other/Gone.as"),
+        ] {
+            let mut tampered = intended.clone();
+            tampered.push(extra);
+            let error = verify_only_changes(&allowed, &tampered).unwrap_err();
+            assert!(error.to_string().contains("unexpected"));
+            assert!(error.to_string().contains("Other."));
+        }
+        assert!(verify_only_changes(&allowed, &intended[..1])
+            .unwrap_err()
+            .to_string()
+            .contains("missing"));
+    }
 
     #[test]
     fn compile_module_work_dir_is_resolved_after_validation() {
