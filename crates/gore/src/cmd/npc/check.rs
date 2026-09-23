@@ -240,12 +240,12 @@ pub fn guard_authored_module(
         ))),
         Some(class) => {
             let expected = format!("UCharacterDefinition_Human_{npc_id}");
+            let expected_call = format!("{expected}::StaticClass()");
             let values = assigned(class, chain::AI_CHARACTER_FIELD);
             match values.as_slice() {
-                [value] if defaults::static_class_target(value) == Some(expected.as_str()) => {}
+                [value] if value == &expected_call => {}
                 [value] => findings.push(Finding::blocking(format!(
-                    "m_CharacterDefinition targets {:?} but must target {expected}",
-                    defaults::static_class_target(value)
+                    "m_CharacterDefinition must be exactly {expected_call}, not {value}"
                 ))),
                 [] => findings.push(Finding::blocking(format!(
                     "{config_name} sets no m_CharacterDefinition"
@@ -266,12 +266,12 @@ pub fn guard_authored_module(
             "no class {spawn_name}: the character has no authored spawn definition"
         ))),
         Some(class) => {
+            let expected_call = format!("{config_name}::StaticClass()");
             let values = assigned(class, chain::SPAWN_AI_FIELD);
             match values.as_slice() {
-                [value] if defaults::static_class_target(value) == Some(config_name.as_str()) => {}
+                [value] if value == &expected_call => {}
                 [value] => findings.push(Finding::blocking(format!(
-                    "AIAgentConfigClass targets {:?} but must target {config_name}",
-                    defaults::static_class_target(value)
+                    "AIAgentConfigClass must be exactly {expected_call}, not {value}"
                 ))),
                 [] => findings.push(Finding::blocking(format!(
                     "{spawn_name} sets no AIAgentConfigClass"
@@ -728,6 +728,22 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
             ),
         ] {
             let findings = guard_authored_module(&AUTHORED.replace(from, to), "MINE");
+            assert!(findings.iter().any(|finding| {
+                finding.severity == Severity::Blocking && finding.message.contains(field)
+            }));
+        }
+    }
+
+    #[test]
+    fn authored_spawn_chain_rejects_conditional_static_class_expressions() {
+        for (call, field) in [
+            ("UCharacterDefinition_Human_MINE::StaticClass()", "m_CharacterDefinition"),
+            ("UAIAgentConfig_Human_MINE::StaticClass()", "AIAgentConfigClass"),
+        ] {
+            let source = AUTHORED.replace(call, &format!(
+                "false ? {call} : UOther::StaticClass()"
+            ));
+            let findings = guard_authored_module(&source, "MINE");
             assert!(findings.iter().any(|finding| {
                 finding.severity == Severity::Blocking && finding.message.contains(field)
             }));
