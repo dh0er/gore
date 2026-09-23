@@ -900,6 +900,23 @@ fn voice_of(path: &Path, template: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
+fn ensure_human_template(
+    classes: &BTreeMap<String, defaults::EmittedClass>,
+    from: &str,
+) -> Result<()> {
+    let chain = chain::resolve(classes, &generate::spawn_class(from));
+    let config = format!("UAIAgentConfig_Human_{from}");
+    let definition = format!("UCharacterDefinition_Human_{from}");
+    ensure!(
+        chain.ai_agent_config.as_deref() == Some(config.as_str())
+            && chain.character_definition.as_deref() == Some(definition.as_str())
+            && classes.contains_key(&config)
+            && classes.contains_key(&definition),
+        "--from {from:?} is not a supported human NPC template: its spawn must resolve through {config} to {definition}"
+    );
+    Ok(())
+}
+
 /// `gore npc new` — eine Figur verfassen und das Arbeitsverzeichnis schreiben.
 fn author(
     request: &NewRequest,
@@ -934,6 +951,7 @@ fn author(
             request.from
         );
     }
+    ensure_human_template(&emitted.classes, &request.from)?;
     let new_spawn = generate::spawn_class(&request.id);
     if let Some(guild) = &request.guild {
         let guild_class = format!("UCharacterDefinition_Human_{guild}");
@@ -1000,18 +1018,25 @@ fn author(
     let (spawn_parent, spawn_defaults) =
         derivable_parent(&emitted.classes, counts, &template_spawn);
 
-    // Die Aussehensklasse liegt nicht in der Kette, sondern in einem geteilten Modul. Sie wird
-    // hier einzeln nachgeschlagen; findet sich keine, bleibt die Vorlage stehen und der Compiler
-    // sagt es deutlicher, als eine Vermutung hier es könnte.
+    // Die Aussehensklasse liegt nicht in der Kette, sondern in einem geteilten Modul.
     let visuals_class = format!("UCharacterVisualsDefinition_Human_{}", request.from);
     let mut visuals_classes = emitted.classes.clone();
-    if let Some(i) = module_of_class(&modules, &visuals_class) {
-        if let Some(source) = emit_named_module(&path, &modules[i].name)? {
-            for class in defaults::parse_classes(&source) {
-                visuals_classes.insert(class.name.clone(), class);
-            }
-        }
+    let i = module_of_class(&modules, &visuals_class).with_context(|| {
+        format!(
+            "--from {:?} is not a supported human NPC template: {visuals_class} is missing",
+            request.from
+        )
+    })?;
+    let source = emit_named_module(&path, &modules[i].name)?
+        .with_context(|| format!("no emitted source for {visuals_class}"))?;
+    for class in defaults::parse_classes(&source) {
+        visuals_classes.insert(class.name.clone(), class);
     }
+    ensure!(
+        visuals_classes.contains_key(&visuals_class),
+        "--from {:?} is not a supported human NPC template: {visuals_class} is missing",
+        request.from
+    );
     let (visuals_parent, visuals_defaults) =
         derivable_parent(&visuals_classes, counts, &visuals_class);
 
@@ -2001,6 +2026,43 @@ mod tests {
             &counts,
             "UCharacterDefinition_Human_OC_STT_Diego"
         ));
+    }
+
+    #[test]
+    fn non_human_spawn_chain_is_not_a_new_npc_template() {
+        let source = r#"class USpawnAIAgentDefinition_Creature_Molerat : USpawnAIAgentDefinition
+{
+    default AIAgentConfigClass = UAIAgentConfig_Creature_Molerat::StaticClass();
+}
+class UAIAgentConfig_Creature_Molerat : UAIAgentConfig
+{
+    default m_CharacterDefinition = UCharacterDefinition_Creature_Molerat::StaticClass();
+}
+class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
+{
+}
+"#;
+        let classes = defaults::parse_classes(source)
+            .into_iter()
+            .map(|class| (class.name.clone(), class))
+            .collect();
+        let error = ensure_human_template(&classes, "Creature_Molerat").unwrap_err();
+        assert!(error.to_string().contains("not a supported human NPC template"));
+
+        let human_source = source
+            .replace(
+                "UAIAgentConfig_Creature_Molerat",
+                "UAIAgentConfig_Human_Creature_Molerat",
+            )
+            .replace(
+                "UCharacterDefinition_Creature_Molerat",
+                "UCharacterDefinition_Human_Creature_Molerat",
+            );
+        let human_classes = defaults::parse_classes(&human_source)
+            .into_iter()
+            .map(|class| (class.name.clone(), class))
+            .collect();
+        assert!(ensure_human_template(&human_classes, "Creature_Molerat").is_ok());
     }
 
     #[test]
