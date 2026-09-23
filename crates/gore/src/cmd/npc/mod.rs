@@ -1794,11 +1794,12 @@ fn stage_workspace(
     let game_arg = game.as_ref().map(|path| path.display().to_string());
     let commands = stage::build_commands(
         &manifest,
+        &inspection.module_sources,
         &dir.display().to_string(),
         &tree_display,
         mod_name,
         game_arg.as_deref(),
-    );
+    )?;
 
     println!("wrote {}", spec_path.display());
     println!("now run:");

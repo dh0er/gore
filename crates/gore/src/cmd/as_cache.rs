@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -306,8 +306,9 @@ pub enum AsCmd {
         mini: Option<PathBuf>,
         /// Restrict this compile to exactly these cache-relative changes. Repeat as
         /// `--only-change add:Module.Name:Path/To/Module.as` or `edit:...`.
+        /// Append `:SHA256` to bind an allowed change to its exact source bytes.
         /// The planner checks the entire tree against the sealed game cache before compiling.
-        #[arg(long = "only-change", value_name = "OP:MODULE:PATH")]
+        #[arg(long = "only-change", value_name = "OP:MODULE:PATH[:SHA256]")]
         only_changes: Vec<String>,
         /// Existing private workspace outside the game installation. GORE recreates only its
         /// fixed `tree` child and uses this root for isolated standalone scratch directories.
@@ -384,6 +385,9 @@ pub enum AsCmd {
         /// (64 hex digits, `sha256:` prefix optional). Never selects the base.
         #[arg(long, value_name = "HEX")]
         expect_base_sha256: Option<String>,
+        /// Refuse to compile if the authored source differs from this SHA-256.
+        #[arg(long, value_name = "HEX")]
+        expect_source_sha256: Option<String>,
         /// Disable the optional runtime compiler-diagnostic hook and use the normal generator.
         #[arg(long, conflicts_with = "diagnostics_hook")]
         no_diagnostics: bool,
@@ -2178,17 +2182,29 @@ fn verify_only_changes(
         return Ok(());
     }
     let mut expected = BTreeSet::new();
+    let mut expected_digests = BTreeMap::new();
     for item in allowed {
-        let mut parts = item.splitn(3, ':');
+        let mut parts = item.split(':');
         let (Some(op), Some(module), Some(path)) = (parts.next(), parts.next(), parts.next())
         else {
             bail!("invalid --only-change {item:?}; expected add:Module:Path or edit:Module:Path");
         };
-        if !matches!(op, "add" | "edit") || module.is_empty() || path.is_empty() {
+        let digest = parts.next();
+        if !matches!(op, "add" | "edit")
+            || module.is_empty()
+            || path.is_empty()
+            || parts.next().is_some()
+        {
             bail!("invalid --only-change {item:?}; expected add:Module:Path or edit:Module:Path");
         }
-        if !expected.insert((op.to_owned(), module.to_owned(), path.to_owned())) {
+        let key = (op.to_owned(), module.to_owned(), path.to_owned());
+        if !expected.insert(key.clone()) {
             bail!("duplicate --only-change {item:?}");
+        }
+        if let Some(digest) = digest {
+            let parsed = gore_as::compiler_profile::manifest::Sha256Digest::from_hex(digest)
+                .with_context(|| format!("invalid --only-change source SHA-256 in {item:?}"))?;
+            expected_digests.insert(key, parsed);
         }
     }
     let actual: BTreeSet<_> = changes
@@ -2212,6 +2228,25 @@ fn verify_only_changes(
         bail!(
             "the source tree differs from --only-change scope (unexpected: {unexpected:?}; missing: {missing:?}); no cache was compiled"
         );
+    }
+    for change in changes {
+        let op = match change.operation {
+            FullGraphCompileOperationV1::Add => "add",
+            FullGraphCompileOperationV1::Edit => "edit",
+            FullGraphCompileOperationV1::Delete => "delete",
+        };
+        let key = (op.to_owned(), change.module_name.clone(), change.relative_path.clone());
+        if let Some(expected_digest) = expected_digests.get(&key) {
+            let source = change.source.as_deref().with_context(|| {
+                format!("the planned change {} has no source bytes", change.module_name)
+            })?;
+            if Sha256::digest(source).as_slice() != expected_digest.as_bytes() {
+                bail!(
+                    "the source for {} differs from the staged --only-change SHA-256; no cache was compiled",
+                    change.module_name
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -3742,6 +3777,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             game,
             expect_base,
             expect_base_sha256,
+            expect_source_sha256,
             no_diagnostics,
             diagnostics_hook,
             diagnostics_inject_delay_ms,
@@ -3755,6 +3791,13 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 gore_as::generation_receipt::MAX_GENERATION_SOURCE_FILE_BYTES_V1 as u64,
                 "AS_COMPILE_SOURCE",
             )?;
+            if let Some(expected) = expect_source_sha256 {
+                let digest = gore_as::compiler_profile::manifest::Sha256Digest::from_hex(&expected)
+                    .context("invalid --expect-source-sha256")?;
+                if Sha256::digest(&source_bytes).as_slice() != digest.as_bytes() {
+                    bail!("authored source differs from --expect-source-sha256; no cache was compiled");
+                }
+            }
             let executable_path = compiler_executable_path(&game);
             let shipping_source = compiler_shipping_source(&game)?;
             announce_compiler_shipping_source(&shipping_source);
@@ -6394,6 +6437,22 @@ mod default_cli_tests {
             .unwrap_err()
             .to_string()
             .contains("missing"));
+
+        let digest = format!("{:x}", Sha256::digest(b"class Test {}"));
+        let bound = vec![format!(
+            "add:AI.Config.Test:AI/Config/Test.as:{digest}"
+        )];
+        verify_only_changes(&bound, &intended[..1]).unwrap();
+        let mut edited = intended[0].clone();
+        edited.source = Some(b"class Changed {}".to_vec());
+        assert!(verify_only_changes(&bound, &[edited])
+            .unwrap_err()
+            .to_string()
+            .contains("differs from the staged"));
+        assert!(verify_only_changes(&["add:AI.Config.Test:AI/Config/Test.as:bad".into()], &intended[..1])
+            .unwrap_err()
+            .to_string()
+            .contains("invalid --only-change source SHA-256"));
     }
 
     #[test]

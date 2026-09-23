@@ -9,6 +9,7 @@
 //! Der Voll-Baum kostet einmal rund 19 Minuten. Er wird deshalb neben dem Arbeitsverzeichnis
 //! vorgehalten und an der Cache-Kennung wiedererkannt, statt bei jedem Lauf neu zu entstehen.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -40,7 +41,7 @@ pub const TREE_STAMP_VERSION: u32 = 3;
 pub const STAGED_SOURCE_NAME: &str = ".gore-npc-staged-source.as";
 
 /// Detect accidental edits to a reusable tree. This digest and its stamp are both local; the
-/// stage-generated compile command independently checks the full diff against the sealed cache.
+/// stage-generated compile command checks the scoped source bytes against the sealed cache.
 pub fn tree_sha256(root: &Path) -> Result<String> {
     fn collect(root: &Path, dir: &Path, files: &mut Vec<(String, PathBuf)>) -> Result<()> {
         for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
@@ -173,11 +174,12 @@ pub fn work_dir(dir: &Path) -> PathBuf {
 /// das den ungefragt startet, nimmt dem Nutzer die Entscheidung ab, wann er wartet.
 pub fn build_commands(
     manifest: &Manifest,
+    checked_sources: &BTreeMap<String, String>,
     dir: &str,
     tree: &str,
     mod_name: &str,
     game: Option<&str>,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     let game_arg = match game {
         Some(path) => format!(" --game {}", shell_quote(path)),
         None => String::new(),
@@ -195,15 +197,17 @@ pub fn build_commands(
                 .modules
                 .iter()
                 .map(|edit| {
-                    format!(
+                    let source = checked_sources.get(&edit.source_file).with_context(|| {
+                        format!("the validated NPC source snapshot is missing {}", edit.source_file)
+                    })?;
+                    let digest = format!("{:x}", Sha256::digest(source.as_bytes()));
+                    Ok::<_, anyhow::Error>(format!(
                         " --only-change {}",
-                        shell_quote(&format!(
-                            "{}:{}:{}",
-                            edit.op, edit.module, edit.relative_path
-                        ))
-                    )
+                        shell_quote(&format!("{}:{}:{}:{digest}", edit.op, edit.module, edit.relative_path))
+                    ))
                 })
-                .collect::<String>();
+                .collect::<Result<Vec<_>>>()?
+                .concat();
             out.push(format!(
                 "gore as compile {} -o {} --mini {mini_arg} --work-dir {work_arg} \
                  --backend standalone --expect-base-sha256 {base_arg}{only_changes}{game_arg}",
@@ -215,10 +219,15 @@ pub fn build_commands(
             let edit = manifest
                 .level_edit()
                 .expect("a checkout or suppression always edits a shipped module");
+            let source = checked_sources.get(&edit.source_file).with_context(|| {
+                format!("the validated NPC source snapshot is missing {}", edit.source_file)
+            })?;
+            let source_digest = shell_quote(&format!("{:x}", Sha256::digest(source.as_bytes())));
             out.push(format!(
                 "gore as compile-module --backend standalone --op edit \
                  --module {} --rel-path {} --source {} \
-                 --work-dir {work_arg} -o {mini_arg} --expect-base-sha256 {base_arg}{game_arg}",
+                 --work-dir {work_arg} -o {mini_arg} --expect-base-sha256 {base_arg} \
+                 --expect-source-sha256 {source_digest}{game_arg}",
                 shell_quote(&edit.module),
                 shell_quote(&edit.relative_path),
                 shell_quote(&format!("{dir}/{STAGED_SOURCE_NAME}")),
@@ -230,13 +239,28 @@ pub fn build_commands(
         shell_quote(&format!("{dir}/spec.json")),
         shell_quote(&format!("{dir}/build")),
     ));
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cmd::npc::workspace::{ModuleEdit, Operation};
+
+    fn build_commands(
+        manifest: &Manifest,
+        dir: &str,
+        tree: &str,
+        mod_name: &str,
+        game: Option<&str>,
+    ) -> Vec<String> {
+        let sources = manifest
+            .modules
+            .iter()
+            .map(|edit| (edit.source_file.clone(), "class Test {}".to_string()))
+            .collect();
+        super::build_commands(manifest, &sources, dir, tree, mod_name, game).unwrap()
+    }
 
     fn level_edit() -> ModuleEdit {
         ModuleEdit {
@@ -325,8 +349,10 @@ mod tests {
         assert!(commands[0].starts_with("gore as compile 'tree'"));
         assert!(commands[0].contains("--mini 'ws/MyMod.mini.Cache'"));
         assert!(commands[0].contains("--backend standalone"));
-        assert!(commands[0].contains("--only-change 'add:AI.AIAgent.Human.Config.MINE.MINE:AI/AIAgent/Human/Config/MINE/MINE.as'"));
-        assert!(commands[0].contains("--only-change 'edit:LevelScripts.XardasTower_AI:LevelScripts/XardasTower_AI.as'"));
+        assert!(commands[0].contains("--only-change 'add:AI.AIAgent.Human.Config.MINE.MINE:AI/AIAgent/Human/Config/MINE/MINE.as:"));
+        assert!(commands[0].contains("--only-change 'edit:LevelScripts.XardasTower_AI:LevelScripts/XardasTower_AI.as:"));
+        let digest = format!("{:x}", Sha256::digest(b"class Test {}"));
+        assert_eq!(commands[0].matches(&format!(":{digest}'")).count(), 2);
         assert!(commands[0].contains("--game 'G'"));
     }
 
@@ -337,6 +363,10 @@ mod tests {
         assert!(commands[0].contains("--module 'LevelScripts.XardasTower_AI'"));
         assert!(commands[0].contains("--rel-path 'LevelScripts/XardasTower_AI.as'"));
         assert!(commands[0].contains("--source 'ws/.gore-npc-staged-source.as'"));
+        let digest = format!("{:x}", Sha256::digest(b"class Test {}"));
+        assert!(commands[0].contains(&format!(
+            "--expect-source-sha256 '{digest}'"
+        )));
         assert!(!commands[0].contains("--game"));
     }
 
