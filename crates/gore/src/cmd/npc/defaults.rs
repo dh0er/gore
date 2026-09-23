@@ -15,9 +15,71 @@ pub struct EmittedClass {
     pub calls: Vec<String>,
 }
 
+/// Keep line boundaries while removing comments; quoted comment markers remain literal text.
+fn without_comments(source: &str) -> String {
+    #[derive(Clone, Copy)]
+    enum State {
+        Code,
+        LineComment,
+        BlockComment,
+        Quote(char),
+    }
+
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    let mut state = State::Code;
+    while let Some(ch) = chars.next() {
+        match state {
+            State::Code => {
+                if ch == '/' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    out.push_str("  ");
+                    state = State::LineComment;
+                } else if ch == '/' && chars.peek() == Some(&'*') {
+                    chars.next();
+                    out.push_str("  ");
+                    state = State::BlockComment;
+                } else {
+                    out.push(ch);
+                    if ch == '"' || ch == '\'' {
+                        state = State::Quote(ch);
+                    }
+                }
+            }
+            State::LineComment => {
+                out.push(if ch == '\n' || ch == '\r' { ch } else { ' ' });
+                if ch == '\n' {
+                    state = State::Code;
+                }
+            }
+            State::BlockComment => {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    out.push_str("  ");
+                    state = State::Code;
+                } else {
+                    out.push(if ch == '\n' || ch == '\r' { ch } else { ' ' });
+                }
+            }
+            State::Quote(quote) => {
+                out.push(ch);
+                if ch == '\\' {
+                    if let Some(next) = chars.next() {
+                        out.push(next);
+                    }
+                } else if ch == quote {
+                    state = State::Code;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Jede Klasse eines emittierten Moduls.
 pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
     let mut out: Vec<EmittedClass> = Vec::new();
+    let source = without_comments(source);
     for line in source.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("class ") {
@@ -140,6 +202,40 @@ class UVisualFeatures_OC_STT_Diego : UCharacterVisualFeaturesDefinition
         assert_eq!(
             classes[1].assignments,
             vec![("DirtSettings.HasDirt".to_string(), "false".to_string())]
+        );
+    }
+
+    #[test]
+    fn commented_defaults_and_classes_are_not_live() {
+        let source = r#"/* class UGhost : UBase
+{
+    default m_UniqueName = n"GHOST";
+} */
+class UReal : UBase
+{
+    /*
+    default m_UniqueName = n"GHOST";
+    */
+    default m_UniqueName = n"REAL"; // default m_UniqueName = n"GHOST";
+}
+"#;
+        let classes = parse_classes(source);
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name, "UReal");
+        assert_eq!(
+            classes[0].assignments,
+            vec![("m_UniqueName".to_string(), "n\"REAL\"".to_string())]
+        );
+    }
+
+    #[test]
+    fn comment_markers_inside_a_quoted_default_are_preserved() {
+        let classes = parse_classes(
+            "class UX : UY\n{\n    default m_Text = n\"say /* hi */ and // bye\";\n}\n",
+        );
+        assert_eq!(
+            classes[0].assignments,
+            vec![("m_Text".to_string(), "n\"say /* hi */ and // bye\"".to_string())]
         );
     }
 

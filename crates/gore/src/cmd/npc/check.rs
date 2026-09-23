@@ -277,6 +277,16 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
         .iter()
         .filter(|class| class.super_class.as_deref() == Some("UConversationCharacterSettings"))
         .collect::<Vec<_>>();
+    let expected_settings = format!("UConversationCharacterSettings_Ambient_{npc_id}");
+    if let [settings] = settings.as_slice() {
+        if settings.name != expected_settings {
+            findings.push(Finding::blocking(format!(
+                "conversation settings class {:?} must be named {expected_settings} so dialog and \
+                 voice can find it",
+                settings.name
+            )));
+        }
+    }
     match settings.as_slice() {
         [settings] => match assigned(settings, "ForCharacter").as_slice() {
             [name] if name == npc_id => {}
@@ -578,6 +588,18 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
     }
 
     #[test]
+    fn a_commented_out_unique_name_is_blocking() {
+        let source = AUTHORED.replace(
+            "    default m_UniqueName = n\"MINE\";",
+            "    /*\n    default m_UniqueName = n\"MINE\";\n    */",
+        );
+        let findings = guard_authored_module(&source, "MINE");
+        assert!(findings.iter().any(|finding| {
+            finding.severity == Severity::Blocking && finding.message.contains("m_UniqueName")
+        }));
+    }
+
+    #[test]
     fn duplicate_identity_assignments_are_blocking() {
         for (anchor, duplicate, field) in [
             (
@@ -672,6 +694,21 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
         assert!(findings
             .iter()
             .any(|f| f.severity == Severity::Blocking && f.message.contains("ForCharacter")));
+    }
+
+    #[test]
+    fn a_renamed_conversation_anchor_is_blocking_even_with_the_right_character() {
+        let source = AUTHORED.replace(
+            "UConversationCharacterSettings_Ambient_MINE : UConversationCharacterSettings",
+            "UOtherSettings : UConversationCharacterSettings",
+        );
+        let findings = guard_authored_module(&source, "MINE");
+        assert!(findings.iter().any(|finding| {
+            finding.severity == Severity::Blocking
+                && finding
+                    .message
+                    .contains("UConversationCharacterSettings_Ambient_MINE")
+        }));
     }
 
     #[test]
