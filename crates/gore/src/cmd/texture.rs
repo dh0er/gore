@@ -536,19 +536,13 @@ pub fn run(action: TextureAction) -> Result<()> {
                         "clone output already exists: {output_asset}.{extension}"
                     );
                 }
-                // A new package must not silently override an installed asset of any class.
-                let probe = gore_tex::paths::unique_temp_dir("gore-tex-clone-probe")?;
-                let found = gore_tex::container::unpack_asset(&utoc, &usmap, target, &probe);
-                let _ = std::fs::remove_dir_all(&probe);
-                match found {
-                    Err(gore_tex::TexError::AssetNotFound(_)) => {}
-                    Ok(_) => {
-                        anyhow::bail!("clone destination already exists in the game: {target}")
-                    }
-                    Err(error) => {
-                        return Err(error).context("checking new texture package destination")
-                    }
-                }
+                // UE package IDs ignore case, so exact header-name lookup alone
+                // cannot distinguish a free destination from a case collision.
+                anyhow::ensure!(
+                    !gore_tex::container::installed_package_id_occupied(&utoc, target)
+                        .context("checking new texture package destination")?,
+                    "clone destination already exists in the game: {target}"
+                );
             }
 
             // 2. Load the replacement PNG -> RGBA8 bytes + dims.

@@ -1662,6 +1662,26 @@ pub fn unpack_asset(
     Ok(unpack_asset_verified(utoc, usmap, asset_path, out_dir)?.uasset)
 }
 
+/// A clone destination is occupied whenever any installed package chunk has
+/// its IoStore package ID, even if the header spells the path differently.
+pub fn installed_package_id_occupied(utoc: &Path, asset_path: &str) -> Result<bool> {
+    let store_path = utoc.parent().unwrap_or(utoc);
+    let store = iostore::open(store_path, Arc::new(Config::default()))?;
+    let package_id = package_id_from_asset_path(asset_path);
+    let occupied = store.chunks_all().any(|chunk| {
+        let id = chunk.id();
+        id.get_package_id() == package_id
+            && matches!(
+                id.get_chunk_type(),
+                EIoChunkType::ExportBundleData
+                    | EIoChunkType::BulkData
+                    | EIoChunkType::OptionalBulkData
+                    | EIoChunkType::MemoryMappedBulkData
+            )
+    });
+    Ok(occupied)
+}
+
 /// Snapshot-backed form of [`unpack_asset`]. In addition to the legacy output,
 /// returns every exact IoStore chunk consumed by conversion, including the
 /// winning sibling container and verified TOC BLAKE3 identity. Repeated reads
@@ -4478,6 +4498,43 @@ mod tests {
             ),
             id
         );
+    }
+
+    #[test]
+    fn clone_destination_probe_detects_case_colliding_package_id() {
+        use retoc::iostore_writer::IoStoreWriter;
+        use retoc::version::EngineVersion;
+
+        let base = unique_tmp("clone-case-collision");
+        std::fs::create_dir_all(&base).unwrap();
+        let utoc = base.join("pakchunk0-Windows.utoc");
+        let original = "/Game/Texture/T_Existing";
+        let version = EngineVersion::UE5_4;
+        let mut writer = IoStoreWriter::new(
+            &utoc,
+            version.toc_version(),
+            Some(version.container_header_version()),
+            UEPathBuf::from("../../../"),
+        )
+        .unwrap();
+        writer
+            .write_package_chunk(
+                FIoChunkId::from_package_id(
+                    package_id_from_asset_path(original),
+                    0,
+                    EIoChunkType::ExportBundleData,
+                ),
+                Some(UEPath::new("../../../G1R/Content/Texture/T_Existing.uasset")),
+                b"package bytes need no decoding for the occupancy check",
+                &StoreEntry::default(),
+            )
+            .unwrap();
+        writer.finalize().unwrap();
+
+        assert!(installed_package_id_occupied(&utoc, original).unwrap());
+        assert!(installed_package_id_occupied(&utoc, "/game/texture/t_existing").unwrap());
+        assert!(!installed_package_id_occupied(&utoc, "/Game/Texture/T_Free").unwrap());
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
