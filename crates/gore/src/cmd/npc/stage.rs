@@ -160,6 +160,12 @@ pub fn shell_quote(value: &str) -> String {
     format!("'{escaped}'")
 }
 
+pub fn work_dir(dir: &Path) -> PathBuf {
+    let mut path = dir.components().collect::<PathBuf>().into_os_string();
+    path.push(".work");
+    PathBuf::from(path)
+}
+
 /// Die Kommandos, die diese Arbeit übersetzen und verpacken.
 ///
 /// `stage` führt sie nicht aus. Der Voll-Baum-Lauf dauert eine Viertelstunde, und ein Werkzeug,
@@ -177,8 +183,8 @@ pub fn build_commands(
     };
     // Der Preflight lehnt einen Arbeitsordner unterhalb des Ausgabe-Elternverzeichnisses ab, also
     // liegt er bewusst daneben statt darin.
-    let work = format!("{dir}.work");
-    let work_arg = shell_quote(&work);
+    let work = work_dir(Path::new(dir));
+    let work_arg = shell_quote(&work.display().to_string());
     let mini_arg = shell_quote(&format!("{dir}/{mod_name}.mini.Cache"));
     let mut out = Vec::new();
     match route_of(manifest) {
@@ -344,6 +350,18 @@ mod tests {
     }
 
     #[test]
+    fn trailing_workspace_separator_keeps_work_directory_beside_outputs() {
+        assert_eq!(work_dir(Path::new("ws/")), PathBuf::from("ws.work"));
+        #[cfg(windows)]
+        assert_eq!(work_dir(Path::new("ws\\")), PathBuf::from("ws.work"));
+        for manifest in [authored(), suppression()] {
+            let commands = build_commands(&manifest, "ws/", "tree", "MyMod", None);
+            assert!(commands[0].contains("--work-dir 'ws.work'"));
+            assert!(!commands[0].contains("--work-dir 'ws/.work'"));
+        }
+    }
+
+    #[test]
     fn both_routes_end_with_the_bundle_build() {
         for manifest in [authored(), suppression()] {
             let commands = build_commands(&manifest, "ws", "tree", "MyMod", None);
@@ -365,7 +383,7 @@ mod tests {
             assert!(commands[0].contains(&format!("--game {}", shell_quote(dir))));
             assert!(commands[0].contains(&format!(
                 "--work-dir {}",
-                shell_quote(&format!("{dir}.work"))
+                shell_quote(&work_dir(Path::new(dir)).display().to_string())
             )));
             assert!(commands[1].contains(&format!(
                 "--spec {}",

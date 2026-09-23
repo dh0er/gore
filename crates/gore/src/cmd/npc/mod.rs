@@ -1755,7 +1755,7 @@ fn stage_workspace(
     // Der Compiler verlangt einen **vorhandenen** privaten Arbeitsordner und bricht sonst mit
     // "reading compiler workspace metadata" ab. Ihn hier anzulegen erspart dem Nutzer ein
     // Kommando, das aussieht, als sei es vollständig, und dann scheitert.
-    let work = PathBuf::from(format!("{}.work", dir.display()));
+    let work = stage::work_dir(dir);
     fs::create_dir_all(&work).with_context(|| format!("creating {}", work.display()))?;
 
     let spec = stage::spec_json(&manifest, mod_name);
