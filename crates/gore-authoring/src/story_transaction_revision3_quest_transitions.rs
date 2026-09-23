@@ -1,6 +1,6 @@
 //! Exact-head-bound, filesystem-free editing of one revision-3 Quest transition plan.
 //!
-//! Every Quest retains one generator-v4 semantic plan. No successful result grants artifact,
+//! Every Quest retains one generator-owned semantic plan. No successful result grants artifact,
 //! build, compiler, publication, deployment, save, or runtime authority.
 
 use std::collections::BTreeSet;
@@ -38,10 +38,11 @@ pub struct Revision3QuestTransitionPlanBasisV1 {
 #[derive(Debug, thiserror::Error)]
 pub enum Revision3QuestTransitionPlanBasisErrorV1 {
     #[error(
-        "unsupported Quest generator contract: expected {expected_id}@4, got {actual_id}@{actual_version}"
+        "unsupported Quest generator contract: expected {expected_id}@{expected_version}, got {actual_id}@{actual_version}"
     )]
     UnsupportedGeneratorContract {
         expected_id: &'static str,
+        expected_version: u32,
         actual_id: String,
         actual_version: u32,
     },
@@ -61,6 +62,7 @@ pub fn revision3_quest_transition_plan_basis_v1(
         return Err(
             Revision3QuestTransitionPlanBasisErrorV1::UnsupportedGeneratorContract {
                 expected_id: REVISION3_QUEST_GENERATOR_ID,
+                expected_version: REVISION3_QUEST_GENERATOR_VERSION,
                 actual_id: quest.generator_id.clone(),
                 actual_version: quest.generator_version,
             },
@@ -219,7 +221,7 @@ pub enum Revision3QuestTransitionPlanEditConflictV1 {
         expected: ContentSeal,
         actual: ContentSeal,
     },
-    #[error("generator-v4 Quest transition-plan edit does not change the retained plan")]
+    #[error("Quest transition-plan edit does not change the retained plan")]
     NoChanges,
     #[error("transition-plan edit cannot replace active stable objective slots")]
     ObjectiveSlotsChanged,
