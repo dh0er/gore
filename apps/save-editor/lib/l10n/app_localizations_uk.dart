@@ -2205,7 +2205,7 @@ class AppLocalizationsUk extends AppLocalizations {
   String get tutorialGateDrugs => 'Витратні матеріали та ефекти';
 
   @override
-  String get tutorialGateLockpicking => 'Замки';
+  String get tutorialGateLockpicking => 'Злам замків';
 
   @override
   String get tutorialGateMagic => 'Магія';
@@ -2354,9 +2354,9 @@ class AppLocalizationsUk extends AppLocalizations {
           'Досвід за те, що цього персонажа повалено — незалежно від того, чи він загинув, чи лише втратив свідомість.',
       'Level': 'Рівень персонажа. Зростає з досвідом і дає очки навичок.',
       'LockpickDurability':
-          'Залежить від навички «Замки»: 2 без підготовки, 4 навчений, 6 майстер.',
+          'Залежить від навички «Злам замків»: 2 без підготовки, 4 навчений, 6 майстер.',
       'LockpickPrecision':
-          'Залежить від навички «Замки»: 0 без підготовки, 1 навчений, 2 майстер.',
+          'Залежить від навички «Злам замків»: 0 без підготовки, 1 навчений, 2 майстер.',
       'PickPocketing':
           'Залежить від навички «Кишенькова крадіж»: -30 без підготовки, -10 навчений, +10 майстер.',
       'other': '?',
