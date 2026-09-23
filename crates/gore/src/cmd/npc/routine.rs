@@ -1,7 +1,7 @@
 //! Workspace editing for the bounded, generated daily-routine block.
 
 use super::{
-    edit, generate, read_manifest,
+    defaults, edit, generate, read_manifest,
     routine_plan::{self, Activity, Phase, Plan},
     routine_spots::{needs_interaction_evidence, SpotCatalog},
     workspace::{Manifest, Operation},
@@ -213,6 +213,117 @@ fn block(plan: &Plan, id: &str) -> Result<String> {
     ))
 }
 
+/// Preserve byte offsets while hiding comments and literals from declaration checks. Also
+/// record block comments: the managed `//` marker lines themselves are valid line comments.
+fn masked_script(source: &str) -> (String, Vec<Range<usize>>) {
+    #[derive(Clone, Copy)]
+    enum State {
+        Code,
+        Line,
+        Block(usize),
+        Quote(u8),
+    }
+
+    let bytes = source.as_bytes();
+    let mut masked = bytes.to_vec();
+    let mut blocks = Vec::new();
+    let mut state = State::Code;
+    let mut i = 0;
+    while i < bytes.len() {
+        let next = bytes.get(i + 1).copied();
+        match state {
+            State::Code if bytes[i] == b'/' && next == Some(b'/') => {
+                masked[i..i + 2].fill(b' ');
+                state = State::Line;
+                i += 2;
+            }
+            State::Code if bytes[i] == b'/' && next == Some(b'*') => {
+                masked[i..i + 2].fill(b' ');
+                state = State::Block(i);
+                i += 2;
+            }
+            State::Code if bytes[i] == b'"' || bytes[i] == b'\'' => {
+                masked[i] = b' ';
+                state = State::Quote(bytes[i]);
+                i += 1;
+            }
+            State::Line if bytes[i] == b'\n' => {
+                state = State::Code;
+                i += 1;
+            }
+            State::Block(start) if bytes[i] == b'*' && next == Some(b'/') => {
+                masked[i..i + 2].fill(b' ');
+                blocks.push(start..i + 2);
+                state = State::Code;
+                i += 2;
+            }
+            State::Quote(_) if bytes[i] == b'\\' && next.is_some() => {
+                masked[i..i + 2].fill(b' ');
+                i += 2;
+            }
+            State::Quote(quote) if bytes[i] == quote => {
+                masked[i] = b' ';
+                state = State::Code;
+                i += 1;
+            }
+            State::Code => i += 1,
+            _ => {
+                if bytes[i] != b'\n' && bytes[i] != b'\r' {
+                    masked[i] = b' ';
+                }
+                i += 1;
+            }
+        }
+    }
+    if let State::Block(start) = state {
+        blocks.push(start..bytes.len());
+    }
+    (String::from_utf8(masked).expect("masking preserves UTF-8"), blocks)
+}
+
+fn declares_function(code: &str, name: &str) -> bool {
+    let code = code.to_ascii_lowercase();
+    let name = name.to_ascii_lowercase();
+    code.match_indices(&name).any(|(at, _)| {
+        let before = code[..at].trim_end();
+        let return_type_start = before
+            .rfind(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .map_or(0, |index| index + 1);
+        if return_type_start == before.len()
+            || !code[at + name.len()..].trim_start().starts_with('(') {
+            return false;
+        }
+        // A method inside a class does not share the generated top-level function's scope.
+        let depth = code[..at].bytes().fold(0i32, |depth, byte| match byte {
+            b'{' => depth + 1,
+            b'}' => depth - 1,
+            _ => depth,
+        });
+        depth == 0
+    })
+}
+
+fn ensure_no_generated_collisions(outside: &str, generated: &str, id: &str) -> Result<()> {
+    let (code, _) = masked_script(outside);
+    let existing: std::collections::HashSet<String> = defaults::parse_classes(&code)
+        .into_iter()
+        .map(|class| class.name.to_ascii_lowercase())
+        .collect();
+    for class in defaults::parse_classes(generated) {
+        ensure!(
+            !existing.contains(&class.name.to_ascii_lowercase()),
+            "duplicate routine class outside generated block: {}",
+            class.name
+        );
+    }
+    let helper = routine_plan::activation_function(id);
+    ensure!(
+        !declares_function(&code, &helper),
+        "duplicate routine function outside generated block: {helper}"
+    );
+    Ok(())
+}
+
 struct CurrentRoutine {
     plan: Plan,
     range: Option<Range<usize>>,
@@ -228,6 +339,13 @@ fn current_routine(source: &str, id: &str) -> Result<CurrentRoutine> {
             "routine markers are missing, duplicated or unsupported; restore the generated block before editing");
         let start = source.find(BEGIN).unwrap();
         let end = source.find(END).unwrap() + END.len();
+        let (_, block_comments) = masked_script(source);
+        ensure!(
+            !block_comments
+                .iter()
+                .any(|range| range.contains(&start) || range.contains(&(end - END.len()))),
+            "routine markers are inside a block comment; restore the generated block before editing"
+        );
         ensure!(
             start < end && (start == 0 || source.as_bytes()[start - 1] == b'\n'),
             "invalid routine block boundaries"
@@ -245,10 +363,7 @@ fn current_routine(source: &str, id: &str) -> Result<CurrentRoutine> {
         ensure!(block(&plan, id)? == contents,
             "the generated routine block was manually changed; restore it before using routine commands (changes will not be overwritten)");
         let outside = format!("{}{}", &source[..start], &source[end..]);
-        ensure!(
-            !outside.contains(&format!("class UDailyRoutine_{id}_Start")),
-            "duplicate routine class outside generated block"
-        );
+        ensure_no_generated_collisions(&outside, contents, id)?;
         return Ok(CurrentRoutine {
             plan,
             range: Some(start..end),
@@ -296,6 +411,80 @@ fn current_routine(source: &str, id: &str) -> Result<CurrentRoutine> {
         range: Some(start..start + old.len()),
         managed: false,
     })
+}
+
+#[cfg(test)]
+mod routine_parse_tests {
+    use super::*;
+
+    fn phase(activity: Activity) -> Phase {
+        Phase {
+            time: "08:00".into(),
+            activity,
+            spot: "WP_TEST".into(),
+        }
+    }
+
+    #[test]
+    fn markers_inside_block_comments_are_not_managed() {
+        let generated = block(&Plan { phases: vec![phase(Activity::Stand)] }, "TEST").unwrap();
+        let commented = format!("/*\n{generated}*/\n");
+        assert!(current_routine(&commented, "TEST")
+            .err().unwrap()
+            .to_string()
+            .contains("inside a block comment"));
+        assert!(current_routine(&format!("/* unrelated */\n{generated}"), "TEST")
+            .unwrap()
+            .managed);
+    }
+
+    #[test]
+    fn generated_classes_and_activation_function_cannot_be_redeclared() {
+        let plan = Plan {
+            phases: vec![
+                Phase { time: "00:00".into(), ..phase(Activity::Stand) },
+                Phase { time: "08:00".into(), ..phase(Activity::Read) },
+                Phase { time: "12:00".into(), ..phase(Activity::Drink) },
+            ],
+        };
+        let generated = block(&plan, "TEST").unwrap();
+        for name in [
+            "UAIState_GoreRoutine_TEST_Stand",
+            "UAIState_GoreRoutine_TEST_Activity",
+            "UAIState_GoreRoutine_TEST_Read",
+            "UAIState_GoreRoutine_TEST_Drink",
+            "UDailyRoutine_TEST_Start",
+        ] {
+            let outside = format!("class {name} : UObject\n{{}}\n");
+            assert!(current_routine(&format!("{outside}{generated}"), "TEST").is_err(),
+                "accepted duplicate {name}");
+        }
+        let duplicate = format!("bool GoreApplyRoutine_TEST() {{ return true; }}\n{generated}");
+        assert!(current_routine(&duplicate, "TEST")
+            .err().unwrap()
+            .to_string()
+            .contains("duplicate routine function"));
+        assert!(current_routine(
+            &format!("void GoreApplyRoutine_TEST() {{}}\n{generated}"),
+            "TEST"
+        ).is_err());
+        let reference = format!("void CallRoutine() {{ GoreApplyRoutine_TEST(); }}\n{generated}");
+        assert!(current_routine(&reference, "TEST").is_ok());
+        let comments = format!(
+            "/* class UAIState_GoreRoutine_TEST_Read : UObject {{}} */\n\
+             // bool GoreApplyRoutine_TEST() {{}}\n{generated}"
+        );
+        assert!(current_routine(&comments, "TEST").is_ok());
+    }
+
+    #[test]
+    fn newly_added_phase_checks_new_helper_names() {
+        let original = block(&Plan { phases: vec![phase(Activity::Stand)] }, "TEST").unwrap();
+        let outside = "class UAIState_GoreRoutine_TEST_Read : UObject\n{}\n";
+        assert!(current_routine(&format!("{outside}{original}"), "TEST").is_ok());
+        let next = block(&Plan { phases: vec![phase(Activity::Read)] }, "TEST").unwrap();
+        assert!(ensure_no_generated_collisions(outside, &next, "TEST").is_err());
+    }
 }
 
 fn workspace_file(dir: &Path, relative: &str) -> Result<PathBuf> {
@@ -375,6 +564,13 @@ impl RoutineWorkspace {
 
     fn save(&mut self, plan: Plan) -> Result<()> {
         let mut generated = block(&plan, &self.manifest.npc_id)?;
+        let normalized = self.source_original.replace("\r\n", "\n");
+        let outside = if let Some(range) = &self.current.range {
+            format!("{}{}", &normalized[..range.start], &normalized[range.end..])
+        } else {
+            normalized
+        };
+        ensure_no_generated_collisions(&outside, &generated, &self.manifest.npc_id)?;
         let newline = if self.source_original.contains("\r\n") {
             "\r\n"
         } else {

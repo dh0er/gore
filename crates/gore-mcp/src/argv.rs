@@ -880,7 +880,7 @@ fn derived_target(
         }
         Derived::Extension(extension) => DerivedTarget::At(base.with_extension(extension)),
         Derived::Suffix(suffix) => {
-            let mut path = base.as_os_str().to_os_string();
+            let mut path = base.components().collect::<std::path::PathBuf>().into_os_string();
             path.push(suffix);
             DerivedTarget::At(path.into())
         }
@@ -2674,17 +2674,32 @@ mod tests {
             eprintln!("skipping: this platform/user cannot create directory symlinks");
             return;
         }
-        let args = json!({
-            "dir": workspace_link.to_string_lossy(),
-            "tree": outside.join("tree").to_string_lossy(),
-            "game": game.to_string_lossy()
-        });
-        assert!(asks_about_a_write(question(
-            "gore_npc",
-            "stage",
-            args,
-            &options()
-        )));
+        for dir in [
+            workspace_link.to_string_lossy().to_string(),
+            format!("{}/", workspace_link.display()),
+        ] {
+            let args = json!({
+                "dir": dir,
+                "tree": outside.join("tree").to_string_lossy(),
+                "game": game.to_string_lossy()
+            });
+            assert!(asks_about_a_write(question(
+                "gore_npc",
+                "stage",
+                args,
+                &options()
+            )));
+        }
+    }
+
+    #[test]
+    fn suffix_target_normalizes_a_trailing_separator() {
+        let target = derived_target(
+            &Map::new(),
+            std::path::Path::new("npc-work/"),
+            Derived::Suffix(".work"),
+        );
+        assert!(matches!(target, DerivedTarget::At(path) if path == std::path::Path::new("npc-work.work")));
     }
 
     #[test]
