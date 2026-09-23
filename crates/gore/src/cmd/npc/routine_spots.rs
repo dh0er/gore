@@ -91,7 +91,29 @@ impl SpotCatalog {
 
     /// Fail before a routine is written if its location or action is unproven.
     pub fn validate(&self, activity: Activity, name: &str) -> Result<ValidatedSpot> {
-        let Some(location) = self.locations.resolve(name) else {
+        let exact = self.locations.spots.iter().find(|spot| spot.n == name);
+        let location = if let Some(exact) = exact {
+            Some(exact)
+        } else {
+            let folded: Vec<_> = self
+                .locations
+                .spots
+                .iter()
+                .filter(|spot| spot.n.eq_ignore_ascii_case(name))
+                .collect();
+            if folded.len() > 1 {
+                bail!(
+                    "ambiguous routine spot '{name}': use an exact spelling, such as {}",
+                    folded
+                        .iter()
+                        .map(|spot| spot.n.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                );
+            }
+            folded.first().copied()
+        };
+        let Some(location) = location else {
             let near = self.locations.suggest(name, SUGGESTIONS);
             let suggestion = if near.is_empty() {
                 format!(
@@ -108,7 +130,7 @@ impl SpotCatalog {
         };
         let interaction = if let Some(tag) = interaction_tag(activity) {
             let catalog = self.require_interactions(activity)?;
-            let rows = catalog.resolve(&location.n).with_context(|| {
+            let rows = catalog.resolve(name).with_context(|| {
                 format!(
                     "interaction evidence unavailable for known spot '{}': no entry in {}",
                     location.n,
@@ -558,6 +580,13 @@ mod tests {
                 .x,
             2.0
         );
+        for activity in [Activity::Sit, Activity::Stand] {
+            assert!(differently_cased
+                .validate(activity, "BOX_TOP")
+                .unwrap_err()
+                .to_string()
+                .contains("ambiguous routine spot"));
+        }
         let folded = differently_cased
             .interactions
             .as_ref()
