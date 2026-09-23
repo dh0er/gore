@@ -2449,8 +2449,8 @@ struct NativeApiPropertySnapshot {
     name: String,
     member_offset: i32,
     owner_object_kind: u32,
-    // T7 serializes no value type. This records the independently audited native field type;
-    // admission matches the complete on-wire owner/name/offset tuple and owner object kind.
+    // T7 serializes no value type. This independently audited field type is trusted only when
+    // the compiler's Binds.Cache matches the snapshot seal as well as the on-wire property tuple.
     value_type_full_identity: String,
 }
 
@@ -2543,6 +2543,11 @@ impl NativeApiSnapshot {
             && self.matches_generation(base)
     }
 
+    fn matches_binds(&self, binds: &[u8]) -> bool {
+        self.binds_cache_sha256.as_deref()
+            == Some(format!("{:x}", Sha256::digest(binds)).as_str())
+    }
+
     fn matches_generation(&self, base: &[u8]) -> bool {
         CacheHeader::parse(base).ok().is_some_and(|header| {
             self.pristine_cache_guid_hex.as_deref()
@@ -2625,9 +2630,13 @@ pub(super) struct PristineNativeApiAuthority {
 }
 
 impl PristineNativeApiAuthority {
-    pub(super) fn from_pristine(pristine: &[u8]) -> Self {
+    pub(super) fn from_pristine(pristine: &[u8], binds: &[u8]) -> Self {
+        Self::from_selected(native_api_snapshot_for_base(pristine), binds)
+    }
+
+    fn from_selected(snapshot: Option<Arc<NativeApiSnapshot>>, binds: &[u8]) -> Self {
         Self {
-            snapshot: native_api_snapshot_for_base(pristine),
+            snapshot: snapshot.filter(|snapshot| snapshot.matches_binds(binds)),
         }
     }
 
@@ -9430,7 +9439,7 @@ fn build_allow_new_base_context_with_native_authority(
     )?;
     declarations.native_api = match native_authority {
         Some(authority) => authority.for_running_generation(base),
-        None => native_api_snapshot_for_base(base),
+        None => None,
     };
     Ok(AllowNewBaseContext {
         syms,
@@ -10163,6 +10172,17 @@ pub fn remap_module_to_base_with_options(
     remap_module_with_native_authority(extracted_mini, base, options, None)
 }
 
+/// Allow qualified native declarations only when the compiler used the exact audited Binds.Cache.
+pub fn remap_module_to_base_with_options_and_binds(
+    extracted_mini: &[u8],
+    base: &[u8],
+    binds: &[u8],
+    options: RemapOptions,
+) -> Result<(Vec<u8>, RemapCounts), RemapError> {
+    let authority = PristineNativeApiAuthority::from_pristine(base, binds);
+    remap_module_with_native_authority(extracted_mini, base, options, Some(&authority))
+}
+
 pub(super) fn remap_module_with_native_authority(
     extracted_mini: &[u8],
     base: &[u8],
@@ -10705,6 +10725,44 @@ mod native_api_snapshot_tests {
             NATIVE_API_SNAPSHOT_SHA256,
         )
         .is_none());
+    }
+
+    #[test]
+    fn native_property_authority_requires_the_audited_binds_cache() {
+        let pristine = cache_with_quest_availability_property(false);
+        let output = cache_with_quest_availability_property(true);
+        let embedded: serde_json::Value =
+            serde_json::from_slice(NATIVE_API_SNAPSHOT_BYTES).unwrap();
+        let property = embedded["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "bExternalAvailabilityTrigger")
+            .unwrap();
+        let binds = b"audited synthetic Binds.Cache";
+        let mut document = qualified_document(&pristine);
+        document["types"] = serde_json::json!([]);
+        document["functions"] = serde_json::json!([]);
+        document["properties"] = serde_json::json!([property]);
+        document["binds_cache_sha256"] =
+            serde_json::json!(format!("{:x}", Sha256::digest(binds)));
+        let snapshot = Arc::new(parse_document(&document).unwrap());
+
+        let admitted = PristineNativeApiAuthority::from_selected(Some(Arc::clone(&snapshot)), binds);
+        let admitted_base =
+            build_allow_new_base_context_with_native_authority(&pristine, Some(&admitted))
+                .unwrap();
+        validate_native_admission(&output, &admitted_base).unwrap();
+
+        let foreign = PristineNativeApiAuthority::from_selected(
+            Some(snapshot),
+            b"different Binds.Cache with the same script cache",
+        );
+        let foreign_base =
+            build_allow_new_base_context_with_native_authority(&pristine, Some(&foreign)).unwrap();
+        assert!(validate_native_admission(&output, &foreign_base).is_err());
+        let no_binds = build_allow_new_base_context(&pristine).unwrap();
+        assert!(validate_native_admission(&output, &no_binds).is_err());
     }
 
     fn cache_with_material_parameter_methods(include_methods: bool) -> Vec<u8> {

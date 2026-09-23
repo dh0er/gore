@@ -2589,6 +2589,7 @@ fn compile_full_graph_command(
         Some(mini_path) => match publish_full_graph_mini(
             &artifact,
             &opts.base_cache,
+            &opts.binds_cache,
             &game,
             &work_dir,
             mini_path,
@@ -2694,6 +2695,7 @@ impl PublishedMini {
 fn publish_full_graph_mini(
     artifact: &gore_as::compile::FullGraphCompileArtifactV1,
     base_cache: &[u8],
+    binds_cache: &[u8],
     game: &Path,
     work_dir: &Path,
     mini_path: &Path,
@@ -2717,16 +2719,18 @@ fn publish_full_graph_mini(
     let names: Vec<&str> = authored.iter().map(|(name, _)| *name).collect();
     let extracted = gore_as::cache::splice::extract_modules(&composed, &names)
         .context("extracting the authored modules from the composed cache")?;
-    let (mini, _counts) = gore_as::cache::remap::remap_module_to_base_with_options(
+    let (mini, _counts) = gore_as::cache::remap::remap_module_to_base_with_options_and_binds(
         &extracted,
         base_cache,
+        binds_cache,
         gore_as::cache::remap::RemapOptions {
             allow_new_symbols: true,
         },
     )
     .context("remapping the authored modules to the pristine cache")?;
     // Prove the mini composes back onto the sealed base before publishing it.
-    let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(base_cache)
+    let mut guard =
+        gore_as::cache::splice::SequentialMiniGuard::new_with_binds(base_cache, binds_cache)
         .context("validating the pristine base for the mini-cache self-check")?;
     guard
         .compose_upsert(base_cache, &mini)

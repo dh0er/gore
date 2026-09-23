@@ -520,6 +520,12 @@ impl SequentialMiniGuard {
         Self::new_with_native_authority(base, None)
     }
 
+    /// Admit audited native declarations only with the exact Binds.Cache used by the compiler.
+    pub fn new_with_binds(base: &[u8], binds: &[u8]) -> Result<Self, SpliceError> {
+        let authority = super::remap::PristineNativeApiAuthority::from_pristine(base, binds);
+        Self::new_with_native_authority(base, Some(&authority))
+    }
+
     /// FullGraph keeps original native authority while rebuilding script authority from each
     /// successfully composed running cache. Ordinary callers still authenticate their own base.
     pub(super) fn new_with_native_authority(

@@ -1819,6 +1819,7 @@ fn selective_fullgraph_wakes_strict_consumer_by_inner_provider_identity() {
 
     let output = compose_selective_full_graph(
         &pristine,
+        &[],
         &full_graph,
         vec![
             SelectiveFullGraphChange::add(CONSUMER_OUTER),

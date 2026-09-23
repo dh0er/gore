@@ -2600,6 +2600,7 @@ where
                 let selective_changes = std::mem::take(&mut prepared.selective_changes);
                 let selective = crate::cache::selective_fullgraph::compose_selective_full_graph(
                     &opts.base_cache,
+                    &opts.binds_cache,
                     &bytes,
                     selective_changes,
                 )
@@ -8269,13 +8270,20 @@ where
     // and id-based free-function collision renames are all compile-significant; the old partial
     // setup produced 287 divergent vanilla files on the 1.0.3 cache before the authored overlay
     // was even considered.
-    let native_api = match &opts.binds_override {
-        Some(bytes) => Some(
+    let fallback_binds = opts
+        .binds_override
+        .is_none()
+        .then(|| native_api_bytes(&base_path))
+        .flatten();
+    let binds_bytes = opts.binds_override.as_deref().or(fallback_binds.as_deref());
+    let native_api = match binds_bytes {
+        Some(bytes) if opts.binds_override.is_some() => Some(
             crate::cache::binds::NativeApi::from_bytes(bytes).ok_or_else(|| {
                 CompileError::Other("sealed Binds.Cache override is invalid".to_owned())
             })?,
         ),
-        None => native_api(&base_path),
+        Some(bytes) => crate::cache::binds::NativeApi::from_bytes(bytes),
+        None => None,
     };
     let overlay = std::str::from_utf8(&overlay)
         .map_err(|error| CompileError::Other(format!("source .as is not valid UTF-8: {error}")))?;
@@ -8416,9 +8424,19 @@ where
     let mut mini = {
         let out = splice::extract_module(&regen, &target)
             .map_err(|e| CompileError::Other(format!("extract: {e}")))?;
-        remap::remap_module_to_base_with_options(
+        // The game backend reads the installed Binds.Cache. An environment-selected Binds file
+        // may help source recovery, but it cannot authorize native property types unless its
+        // bytes still match the game's own file after regeneration.
+        let installed_binds = base_path
+            .parent()
+            .and_then(|parent| std::fs::read(parent.join("Binds.Cache")).ok());
+        let admission_binds = binds_bytes
+            .filter(|selected| installed_binds.as_deref() == Some(*selected))
+            .unwrap_or(&[]);
+        remap::remap_module_to_base_with_options_and_binds(
             &out,
             &base,
+            admission_binds,
             remap::RemapOptions {
                 allow_new_symbols: opts.allow_new_symbols,
             },
@@ -8520,11 +8538,9 @@ fn write_compile_overlay(
         .map_err(io("writing overlay"))
 }
 
-/// Load native arities from the `GORE_AS_BINDS` env path if set, else a `Binds.Cache` sitting next
-/// to `cache_file`, if present. Mirrors `as_cache.rs::load_native_api` / gore-ffi's `as_native_api`
-/// so a dev who sets `GORE_AS_BINDS` for the CLI gets the same arities here (no emit/recompile
-/// divergence). Quiet by design (library helper — no logging). Absent/unparsable => None.
-fn native_api(cache_file: &Path) -> Option<crate::cache::binds::NativeApi> {
+/// Load the same Binds.Cache bytes for source recovery and native-property admission.
+/// `GORE_AS_BINDS` overrides the sibling path; absent/unreadable input remains optional.
+fn native_api_bytes(cache_file: &Path) -> Option<Vec<u8>> {
     let path = match std::env::var_os("GORE_AS_BINDS") {
         Some(p) => std::path::PathBuf::from(p),
         None => cache_file.parent()?.join("Binds.Cache"),
@@ -8532,7 +8548,7 @@ fn native_api(cache_file: &Path) -> Option<crate::cache::binds::NativeApi> {
     if !path.exists() {
         return None;
     }
-    crate::cache::binds::NativeApi::load(&path)
+    std::fs::read(&path).ok()
 }
 
 #[derive(Clone, Copy, Debug)]

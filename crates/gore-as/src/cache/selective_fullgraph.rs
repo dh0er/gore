@@ -344,10 +344,11 @@ impl PreparedChange {
 /// by a later module and therefore fail at this fixed point.
 pub(crate) fn compose_selective_full_graph(
     pristine: &[u8],
+    binds: &[u8],
     full_graph: &[u8],
     changes: Vec<SelectiveFullGraphChange>,
 ) -> Result<SelectiveFullGraphOutput, SelectiveFullGraphError> {
-    let native_authority = PristineNativeApiAuthority::from_pristine(pristine);
+    let native_authority = PristineNativeApiAuthority::from_pristine(pristine, binds);
     compose_selective_full_graph_with_native_authority(
         pristine,
         full_graph,
