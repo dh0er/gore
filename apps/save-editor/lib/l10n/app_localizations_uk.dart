@@ -480,7 +480,7 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get traderRestockTitleTooltip =>
-      'Оцінка на основі останньої активності торговця, поточного ігрового часу та складності Resources.';
+      'Оцінка на основі останньої активності торговця, поточного ігрового часу та складності Ресурси.';
 
   @override
   String get traderRestockPending => 'очікує';
@@ -547,7 +547,7 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get traderRestockIntervalTooltip =>
-      'Час очікування залежно від складності Resources: Novice 2, Gothic 3, Hard 5 ігрових днів.';
+      'Час очікування залежно від складності Ресурси: Новачок 2, Gothic 3, Важко 5 ігрових днів.';
 
   @override
   String get traderRestockAutomationLabel => 'Автоматичне поповнення';
