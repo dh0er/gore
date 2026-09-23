@@ -5273,9 +5273,15 @@ fn incoming_public_metadata(payload: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Co
     let Some(custom) = root.properties.iter().find(|p| p.name == "CustomPayload") else {
         return raw_public_properties(payload, &root.properties, 0);
     };
-    let properties::PropertyValue::Map { entries, .. } = &custom.value else {
-        // Older fixtures/saves carry only SaveDataPayload, not a metadata copy.
-        return Ok(Vec::new());
+    let entries = match &custom.value {
+        properties::PropertyValue::Struct(properties::StructValue::Properties(props)) => {
+            return raw_public_properties(payload, props, custom.value_offset);
+        }
+        properties::PropertyValue::Struct(properties::StructValue::Instanced(Some(body))) => {
+            return raw_public_properties(payload, &body.properties, body.data_size_offset + 4);
+        }
+        properties::PropertyValue::Map { entries, .. } => entries,
+        _ => return Ok(Vec::new()),
     };
     let layout = properties::map_layout(payload, custom)?;
     let mut fields = Vec::new();
@@ -18688,6 +18694,54 @@ mod tests {
             "G1R-007",
             parts.public_payload,
         );
+    }
+
+    #[test]
+    fn assign_save_profile_refreshes_struct_custom_payload_metadata() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-005";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let mut inner = str_property("m_SlotName", slot);
+        inner.extend(str_property("m_PlayerSaveName", "Updated name"));
+        inner.extend(str_property("m_MapName", "UpdatedMap"));
+        inner.extend(int_property("m_ChapterID", 4));
+        let payload = [
+            inv_struct_property("CustomPayload", "SaveDataPayload", &inner),
+            fstring("None"),
+        ]
+        .concat();
+        fs::write(
+            &save_path,
+            build_gsav(2, &payload, &minimal_stream(), &[1, 2, 3, 4]),
+        )
+        .unwrap();
+        fs::write(
+            &persistent_path,
+            assignment_persistent_data_list(slot, 0),
+        )
+        .unwrap();
+
+        assign_save_profile(&save_path, None, &persistent_path, 0, true).unwrap();
+
+        let cached = fs::read(&persistent_path).unwrap();
+        let root = parse_profile_file(&cached).unwrap();
+        for (field, value) in [
+            (
+                "m_PlayerSaveName",
+                properties::PropertyValue::Str("Updated name".into()),
+            ),
+            (
+                "m_MapName",
+                properties::PropertyValue::Str("UpdatedMap".into()),
+            ),
+            ("m_ChapterID", properties::PropertyValue::Int(4)),
+        ] {
+            let path = persistent_slot_property_path(&root, slot, field)
+                .unwrap()
+                .unwrap();
+            assert_eq!(properties::resolve(&root.properties, &path).unwrap().value, value);
+        }
     }
 
     #[test]
