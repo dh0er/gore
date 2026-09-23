@@ -430,14 +430,14 @@ impl RoutineWorkspace {
         if let Err(error) = result {
             if level_written {
                 level_file
-                    .restore_if_current(&level, &self.level_original)
+                    .restore_if_current(level.as_bytes(), &self.level_original)
                     .with_context(|| {
                         format!("routine update failed ({error}); restoring level failed")
                     })?;
             }
             if source_written {
                 source_file
-                    .restore_if_current(&source, &self.source_original)
+                    .restore_if_current(source.as_bytes(), &self.source_original)
                     .with_context(|| {
                         format!("routine update failed ({error}); restoring NPC failed")
                     })?;
@@ -529,10 +529,10 @@ impl ClaimedFile {
         Ok(())
     }
 
-    fn read_contents(&mut self) -> Result<String> {
-        let mut current = String::new();
+    fn read_contents(&mut self) -> Result<Vec<u8>> {
+        let mut current = Vec::new();
         self.file.seek(SeekFrom::Start(0))?;
-        self.file.read_to_string(&mut current)?;
+        self.file.read_to_end(&mut current)?;
         Ok(current)
     }
 
@@ -541,7 +541,7 @@ impl ClaimedFile {
         let current = self.read_contents()?;
         self.ensure_current_path()?;
         ensure!(
-            current == expected,
+            current == expected.as_bytes(),
             "workspace file changed while editing: {}; retry the command",
             self.path.display()
         );
@@ -566,7 +566,7 @@ impl ClaimedFile {
         Ok(())
     }
 
-    fn restore_if_current(&mut self, generated: &str, original: &str) -> Result<()> {
+    fn restore_if_current(&mut self, generated: &[u8], original: &str) -> Result<()> {
         // Never roll back a path now owned by an editor, or an in-place edit made later.
         if self.ensure_current_path().is_err() {
             return Ok(());
@@ -583,12 +583,49 @@ impl ClaimedFile {
 
 fn write_or_restore(file: &mut ClaimedFile, content: &str, original: &str) -> Result<()> {
     file.ensure_current_contents(original)?;
-    if let Err(error) = file.write(content) {
-        file.restore_if_current(content, original)
+    file.file.seek(SeekFrom::Start(0))?;
+    let bytes = content.as_bytes();
+    let mut written = 0;
+    let mut resized = false;
+    let result = (|| -> Result<()> {
+        while written < bytes.len() {
+            match file.file.write(&bytes[written..]) {
+                Ok(0) => return Err(std::io::Error::from(std::io::ErrorKind::WriteZero).into()),
+                Ok(count) => written += count,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        file.file.set_len(bytes.len() as u64)?;
+        resized = true;
+        file.file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        // A failed write_all or set_len can leave only a prefix of our new bytes. Restore
+        // the original only when the held file still has exactly those bytes, including a
+        // possible old tail. Otherwise an editor has changed it and owns the current data.
+        let partial = bytes_after_partial_write(original.as_bytes(), bytes, written, resized);
+        file.restore_if_current(&partial, original)
             .with_context(|| format!("writing failed ({error}); safe restore also failed"))?;
         return Err(error);
     }
     file.ensure_current_contents(content)
+}
+
+fn bytes_after_partial_write(
+    original: &[u8],
+    generated: &[u8],
+    written: usize,
+    resized: bool,
+) -> Vec<u8> {
+    if resized {
+        return generated.to_vec();
+    }
+    let mut partial = original.to_vec();
+    partial.resize(original.len().max(written), 0);
+    partial[..written].copy_from_slice(&generated[..written]);
+    partial
 }
 
 #[cfg(test)]
@@ -634,7 +671,7 @@ mod replacement_tests {
         fs::rename(&path, &old).unwrap();
         fs::write(&path, "editor replacement").unwrap();
         assert!(claim.ensure_current_path().is_err());
-        claim.restore_if_current("generated", "original").unwrap();
+        claim.restore_if_current(b"generated", "original").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "editor replacement");
     }
 
@@ -647,8 +684,37 @@ mod replacement_tests {
         let mut claim = ClaimedFile::open(&path, "original").unwrap();
         fs::write(&path, "editor change").unwrap();
         assert!(write_or_restore(&mut claim, "generated", "original").is_err());
-        claim.restore_if_current("generated", "original").unwrap();
+        claim.restore_if_current(b"generated", "original").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "editor change");
+    }
+
+    #[test]
+    fn partial_write_or_failed_truncation_restores_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("npc.as");
+        let original = "original source";
+        let generated = "☀ new source";
+        fs::write(&path, original).unwrap();
+        let mut claim = ClaimedFile::open(&path, original).unwrap();
+        claim.file.seek(SeekFrom::Start(0)).unwrap();
+        claim.file.write_all(&generated.as_bytes()[..1]).unwrap();
+        let partial =
+            bytes_after_partial_write(original.as_bytes(), generated.as_bytes(), 1, false);
+        assert_eq!(claim.read_contents().unwrap(), partial);
+        claim.restore_if_current(&partial, original).unwrap();
+        drop(claim);
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+
+        let mut claim = ClaimedFile::open(&path, original).unwrap();
+        let short = "new";
+        claim.file.seek(SeekFrom::Start(0)).unwrap();
+        claim.file.write_all(short.as_bytes()).unwrap();
+        let untrimmed =
+            bytes_after_partial_write(original.as_bytes(), short.as_bytes(), short.len(), false);
+        assert_eq!(claim.read_contents().unwrap(), untrimmed);
+        claim.restore_if_current(&untrimmed, original).unwrap();
+        drop(claim);
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
     }
 }
 
