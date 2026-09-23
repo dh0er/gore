@@ -270,6 +270,25 @@ pub fn guard_authored_module(source: &str, npc_id: &str) -> Vec<Finding> {
                     values.len()
                 ))),
             }
+            let actor_values = class
+                .assignments
+                .iter()
+                .filter(|(field, _)| field == "AIAgentCharacterClass")
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>();
+            match actor_values.as_slice() {
+                [value] if !matches!(*value, "" | "nullptr" | "n\"\"" | "\"\"") => {}
+                [_] => findings.push(Finding::blocking(format!(
+                    "{spawn_name} needs a non-null AIAgentCharacterClass actor blueprint"
+                ))),
+                [] => findings.push(Finding::blocking(format!(
+                    "{spawn_name} sets no AIAgentCharacterClass actor blueprint"
+                ))),
+                values => findings.push(Finding::blocking(format!(
+                    "{spawn_name} sets AIAgentCharacterClass {} times; the authored spawn needs exactly one actor blueprint",
+                    values.len()
+                ))),
+            }
         }
     }
 
@@ -554,6 +573,7 @@ class UAIAgentConfig_Human_MINE : UAIAgentConfig_Human_OC_STT_Diego
 class USpawnAIAgentDefinition_MINE : USpawnAIAgentDefinition_OC_STT_Diego
 {
     default AIAgentConfigClass = UAIAgentConfig_Human_MINE::StaticClass();
+    default AIAgentCharacterClass = n"Blueprint'/Game/AI/AIAgent/Human/AIAgentCharacter_Human_Base.AIAgentCharacter_Human_Base_C'";
 }
 
 class UCharacterVisualsDefinition_Human_MINE : UCharacterVisualsDefinition_Human_OC_STT_Diego
@@ -638,6 +658,21 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
             let findings = guard_authored_module(&AUTHORED.replace(from, to), "MINE");
             assert!(findings.iter().any(|finding| {
                 finding.severity == Severity::Blocking && finding.message.contains(field)
+            }));
+        }
+    }
+
+    #[test]
+    fn authored_spawn_requires_an_actor_blueprint() {
+        for replacement in ["", "    default AIAgentCharacterClass = nullptr;\n"] {
+            let source = AUTHORED.replace(
+                "    default AIAgentCharacterClass = n\"Blueprint'/Game/AI/AIAgent/Human/AIAgentCharacter_Human_Base.AIAgentCharacter_Human_Base_C'\";\n",
+                replacement,
+            );
+            let findings = guard_authored_module(&source, "MINE");
+            assert!(findings.iter().any(|finding| {
+                finding.severity == Severity::Blocking
+                    && finding.message.contains("AIAgentCharacterClass")
             }));
         }
     }
