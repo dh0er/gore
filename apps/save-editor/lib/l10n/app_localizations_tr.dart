@@ -3275,7 +3275,7 @@ class AppLocalizationsTr extends AppLocalizations {
   String get locksFilterDoors => 'Kapılar';
 
   @override
-  String get locksFilterUnlocked => 'Açık';
+  String get locksFilterUnlocked => 'Kilitsiz';
 
   @override
   String get locksFilterLocked => 'Kilitli';

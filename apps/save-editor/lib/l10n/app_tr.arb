@@ -800,7 +800,7 @@
   "locksShownOfTotal": "{shown} / {total}",
   "locksFilterChests": "Sandıklar",
   "locksFilterDoors": "Kapılar",
-  "locksFilterUnlocked": "Açık",
+  "locksFilterUnlocked": "Kilitsiz",
   "locksFilterLocked": "Kilitli",
   "locksDifficultyLevel": "Zorluk 4 üzerinden {bars} (dahili kademe 7 üzerinden {level})",
   "locksKeyOnly": "Sadece anahtarla",
