@@ -3039,7 +3039,7 @@ class AppLocalizationsTr extends AppLocalizations {
       'Teacher2': 'Öğretmen 2',
       'TeacherInscription': 'Yazıt öğretmeni',
       'TeacherMana': 'Mana öğretmeni',
-      'TeachIchor': 'Maden böceği iksiri çıkarmayı öğret',
+      'TeachIchor': 'Maden böceği salgısı çıkarmayı öğret',
       'TeachMagic': 'Büyü öğret',
       'TeachOrcish': 'Orkça öğret',
       'TeachStats': 'İstatistik öğret',
