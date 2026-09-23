@@ -404,19 +404,45 @@ impl RoutineWorkspace {
         if source == self.source_original && level == self.level_original {
             return Ok(());
         }
-        if source != self.source_original {
-            write_or_restore(&mut source_file, &source, &self.source_original)
-                .context("writing NPC source")?;
-        }
-        if level != self.level_original {
-            if let Err(error) = write_or_restore(&mut level_file, &level, &self.level_original) {
-                if source != self.source_original {
-                    source_file.write(&self.source_original).with_context(|| {
-                        format!("level write failed ({error}); restoring NPC source also failed")
-                    })?;
-                }
-                return Err(error).context("writing level source; NPC source restored");
+        let mut source_written = false;
+        let mut level_written = false;
+        let result = (|| {
+            // Unix advisory locks do not stop an editor's atomic-save rename. Keep checking
+            // that both paths still name the claimed inodes, including after each write.
+            source_file.ensure_current_path()?;
+            level_file.ensure_current_path()?;
+            if source != self.source_original {
+                write_or_restore(&mut source_file, &source, &self.source_original)
+                    .context("writing NPC source")?;
+                source_written = true;
             }
+            source_file.ensure_current_path()?;
+            level_file.ensure_current_path()?;
+            if level != self.level_original {
+                write_or_restore(&mut level_file, &level, &self.level_original)
+                    .context("writing level source")?;
+                level_written = true;
+            }
+            source_file.ensure_current_path()?;
+            level_file.ensure_current_path()?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            if level_written {
+                level_file
+                    .restore_if_current(&level, &self.level_original)
+                    .with_context(|| {
+                        format!("routine update failed ({error}); restoring level failed")
+                    })?;
+            }
+            if source_written {
+                source_file
+                    .restore_if_current(&source, &self.source_original)
+                    .with_context(|| {
+                        format!("routine update failed ({error}); restoring NPC failed")
+                    })?;
+            }
+            return Err(error);
         }
         Ok(())
     }
@@ -438,7 +464,11 @@ fn original_offset(source: &str, normalized_offset: usize) -> usize {
     source.len()
 }
 
-struct ClaimedFile(fs::File);
+struct ClaimedFile {
+    file: fs::File,
+    #[cfg(unix)]
+    path: PathBuf,
+}
 
 #[cfg(windows)]
 fn link_count(file: &fs::File) -> Result<u64> {
@@ -484,14 +514,52 @@ impl ClaimedFile {
             "workspace file changed while editing: {}; retry the command",
             path.display()
         );
-        Ok(Self(file))
+        let claimed = Self {
+            file,
+            #[cfg(unix)]
+            path: path.to_path_buf(),
+        };
+        claimed.ensure_current_path()?;
+        Ok(claimed)
     }
 
     fn write(&mut self, content: &str) -> Result<()> {
-        self.0.seek(SeekFrom::Start(0))?;
-        self.0.write_all(content.as_bytes())?;
-        self.0.set_len(content.len() as u64)?;
-        self.0.sync_all()?;
+        self.file.seek(SeekFrom::Start(0))?;
+        self.file.write_all(content.as_bytes())?;
+        self.file.set_len(content.len() as u64)?;
+        self.file.sync_all()?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn ensure_current_path(&self) -> Result<()> {
+        let held = self.file.metadata()?;
+        let current = fs::symlink_metadata(&self.path)
+            .with_context(|| format!("workspace path disappeared: {}", self.path.display()))?;
+        ensure!(
+            held.dev() == current.dev() && held.ino() == current.ino(),
+            "workspace path was replaced while editing: {}; retry the command",
+            self.path.display()
+        );
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn ensure_current_path(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn restore_if_current(&mut self, generated: &str, original: &str) -> Result<()> {
+        // Never roll back a path now owned by an editor, or an in-place edit made later.
+        if self.ensure_current_path().is_err() {
+            return Ok(());
+        }
+        let mut current = String::new();
+        self.file.seek(SeekFrom::Start(0))?;
+        self.file.read_to_string(&mut current)?;
+        if current == generated {
+            self.write(original)?;
+        }
         Ok(())
     }
 }
@@ -535,6 +603,21 @@ mod replacement_tests {
         fs::hard_link(&path, &peer).unwrap();
         assert!(ClaimedFile::open(&path, "original").is_err());
         assert_eq!(fs::read_to_string(&peer).unwrap(), "original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claimed_write_detects_atomic_save_and_preserves_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("npc.as");
+        let old = dir.path().join("old.as");
+        fs::write(&path, "original").unwrap();
+        let mut claim = ClaimedFile::open(&path, "original").unwrap();
+        fs::rename(&path, &old).unwrap();
+        fs::write(&path, "editor replacement").unwrap();
+        assert!(claim.ensure_current_path().is_err());
+        claim.restore_if_current("generated", "original").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "editor replacement");
     }
 }
 

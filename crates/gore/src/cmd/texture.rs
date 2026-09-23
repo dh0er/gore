@@ -150,7 +150,8 @@ fn mount_dir(mod_dir: &std::path::Path, asset: &str) -> Result<PathBuf> {
 }
 
 /// Publish a cloned package without replacing files that appeared after the early destination
-/// checks. Roll back only paths created by this call if a later component cannot be published.
+/// checks. On failure, report paths this call created: deleting by path could remove another
+/// process's replacement, so the caller must inspect any incomplete output before retrying.
 fn write_clone_outputs(
     uasset_path: &std::path::Path,
     uexp_path: &std::path::Path,
@@ -194,16 +195,14 @@ fn write_clone_outputs(
         Ok(())
     })();
     if let Err(error) = published {
-        let mut leftovers = Vec::new();
-        for path in created.into_iter().rev() {
-            if let Err(cleanup_error) = std::fs::remove_file(path) {
-                leftovers.push(format!("{} ({cleanup_error})", path.display()));
-            }
-        }
-        if !leftovers.is_empty() {
+        if !created.is_empty() {
+            let paths = created
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             return Err(error).context(format!(
-                "clone output cleanup failed: {}",
-                leftovers.join(", ")
+                "clone output incomplete; paths created by this attempt may remain: {paths}. Inspect them before retrying"
             ));
         }
         return Err(error);
@@ -936,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn clone_output_collision_preserves_existing_bulk_and_removes_partial_outputs() {
+    fn clone_output_collision_preserves_existing_bulk_and_reports_partial_outputs() {
         let temp = tempfile::tempdir().unwrap();
         let uasset = temp.path().join("T_New.uasset");
         let uexp = temp.path().join("T_New.uexp");
@@ -945,12 +944,17 @@ mod tests {
 
         let error =
             write_clone_outputs(&uasset, &uexp, &ubulk, b"asset", b"export", b"bulk").unwrap_err();
-        assert!(error.to_string().contains("creating clone output"));
+        assert!(error.to_string().contains("clone output incomplete"));
+        assert!(error.to_string().contains(&uasset.display().to_string()));
+        assert!(error.to_string().contains(&uexp.display().to_string()));
+        assert!(format!("{error:#}").contains("creating clone output"));
         assert_eq!(std::fs::read(&ubulk).unwrap(), b"existing bulk");
-        assert!(!uasset.exists());
-        assert!(!uexp.exists());
+        assert_eq!(std::fs::read(&uasset).unwrap(), b"asset");
+        assert_eq!(std::fs::read(&uexp).unwrap(), b"export");
 
         std::fs::remove_file(&ubulk).unwrap();
+        std::fs::remove_file(&uasset).unwrap();
+        std::fs::remove_file(&uexp).unwrap();
         write_clone_outputs(&uasset, &uexp, &ubulk, b"asset", b"export", b"bulk").unwrap();
         assert_eq!(std::fs::read(&uasset).unwrap(), b"asset");
         assert_eq!(std::fs::read(&uexp).unwrap(), b"export");
@@ -990,12 +994,14 @@ mod tests {
         std::os::windows::fs::symlink_file(&missing_target, &uexp).unwrap();
         let error =
             write_clone_outputs(&uasset, &uexp, &ubulk, b"asset", b"export", b"").unwrap_err();
-        assert!(error.to_string().contains("creating clone output"));
+        assert!(error.to_string().contains("clone output incomplete"));
+        assert!(error.to_string().contains(&uasset.display().to_string()));
+        assert!(format!("{error:#}").contains("creating clone output"));
         assert!(std::fs::symlink_metadata(&uexp)
             .unwrap()
             .file_type()
             .is_symlink());
         assert!(!missing_target.exists());
-        assert!(!uasset.exists());
+        assert_eq!(std::fs::read(&uasset).unwrap(), b"asset");
     }
 }
