@@ -3279,10 +3279,10 @@ class AppLocalizationsHu extends AppLocalizations {
   String get locksFilterDoors => 'Ajtók';
 
   @override
-  String get locksFilterUnlocked => 'Nyitott';
+  String get locksFilterUnlocked => 'Feloldva';
 
   @override
-  String get locksFilterLocked => 'Zárt';
+  String get locksFilterLocked => 'Lezárva';
 
   @override
   String locksDifficultyLevel(int bars, int level) {
