@@ -678,6 +678,32 @@ fn sites_for<'a>(emitted: &'a Emitted, spawn_class: &str) -> Vec<&'a Site> {
         .collect()
 }
 
+fn suppression_scope_finding(
+    emitted: &Emitted,
+    spawn_class: &str,
+    level_module: &str,
+) -> Option<check::Finding> {
+    let modules: BTreeSet<&str> = sites_for(emitted, spawn_class)
+        .into_iter()
+        .map(|site| site.module.as_str())
+        .collect();
+    if modules.len() == 1 && modules.contains(level_module) {
+        return None;
+    }
+    Some(check::Finding {
+        severity: check::Severity::Blocking,
+        message: format!(
+            "the suppression edits {level_module}, but {spawn_class} is placed from {}. A \
+             suppression must cover every shipped spawn module",
+            if modules.is_empty() {
+                "no level scripts".to_string()
+            } else {
+                modules.into_iter().collect::<Vec<_>>().join(", ")
+            }
+        ),
+    })
+}
+
 fn show(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, json: bool) -> Result<()> {
     let spawn_class = format!("USpawnAIAgentDefinition_{npc}");
     let emitted = emit_index(cache, game, Some(&spawn_class))?;
@@ -1360,6 +1386,12 @@ fn workspace_source_findings(
             findings.extend(check::guard_checkout_diff(&pristine, &edited));
         }
         workspace::Operation::Suppress => {
+            let emitted = emit_index(Some(cache.to_path_buf()), None, Some(&spawn_class))?;
+            if let Some(finding) =
+                suppression_scope_finding(&emitted, &spawn_class, &manifest.level_module)
+            {
+                findings.push(finding);
+            }
             findings.extend(check::guard_suppressed_spawn(
                 &pristine,
                 &edited,
@@ -2221,6 +2253,22 @@ mod tests {
             "USpawnAIAgentDefinition_OC_STT_Diego",
         )]);
         assert!(sites_for(&all, "USpawnAIAgentDefinition_Nobody").is_empty());
+    }
+
+    #[test]
+    fn suppression_scope_rejects_partial_or_wrong_level_modules() {
+        let spawn = "USpawnAIAgentDefinition_MINE";
+        let first = "LevelScripts.First";
+        let second = "LevelScripts.Second";
+        let single = emitted(vec![site("UWP_A", first, spawn), site("UWP_B", first, spawn)]);
+        assert!(suppression_scope_finding(&single, spawn, first).is_none());
+        assert!(suppression_scope_finding(&single, spawn, second).is_some());
+
+        let multiple = emitted(vec![site("UWP_A", first, spawn), site("UWP_B", second, spawn)]);
+        let finding = suppression_scope_finding(&multiple, spawn, first).unwrap();
+        assert_eq!(finding.severity, check::Severity::Blocking);
+        assert!(finding.message.contains(first) && finding.message.contains(second));
+        assert!(suppression_scope_finding(&emitted(Vec::new()), spawn, first).is_some());
     }
 
     #[test]
