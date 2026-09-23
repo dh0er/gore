@@ -78,10 +78,48 @@ fn without_comments(source: &str) -> String {
     out
 }
 
+/// Put inline class bodies and successive defaults on separate logical lines. Delimiters inside
+/// quoted values remain untouched, so a default string can contain braces or semicolons.
+fn split_inline_statements(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut quote = None;
+    let mut escaped = false;
+    for ch in source.chars() {
+        if let Some(end) = quote {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == end {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => {
+                quote = Some(ch);
+                out.push(ch);
+            }
+            '{' | '}' => {
+                out.push('\n');
+                out.push(ch);
+                out.push('\n');
+            }
+            ';' => {
+                out.push(ch);
+                out.push('\n');
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 /// Jede Klasse eines emittierten Moduls.
 pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
     let mut out: Vec<EmittedClass> = Vec::new();
-    let source = without_comments(source);
+    let source = split_inline_statements(&without_comments(source));
     let mut depth = 0usize;
     let mut namespaces: Vec<(usize, String)> = Vec::new();
     let mut pending_namespace = None;
@@ -97,12 +135,10 @@ pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
                 .map(str::to_string);
         }
         if let Some(rest) = trimmed.strip_prefix("class ") {
-            let (name, super_class) = match rest.split_once(':') {
-                Some((name, base)) => (
-                    name.trim(),
-                    Some(base.trim().trim_end_matches('{').trim().to_string()),
-                ),
-                None => (rest.trim().trim_end_matches('{').trim(), None),
+            let header = rest.split('{').next().unwrap_or(rest).trim();
+            let (name, super_class) = match header.split_once(':') {
+                Some((name, base)) => (name.trim(), Some(base.trim().to_string())),
+                None => (header, None),
             };
             out.push(EmittedClass {
                 name: name.to_string(),
@@ -239,6 +275,17 @@ class UVisualFeatures_OC_STT_Diego : UCharacterVisualFeaturesDefinition
         assert_eq!(classes[0].name, "UChild");
         assert_eq!(classes[0].super_class.as_deref(), Some("UBase"));
         assert_eq!(classes[0].assignments, vec![("Ready".into(), "true".into())]);
+    }
+
+    #[test]
+    fn parse_classes_reads_compact_inline_defaults() {
+        let classes = parse_classes(
+            "class UChild : UBase { default Ready = n\"{; };\"; default Schedule(1); }",
+        );
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].super_class.as_deref(), Some("UBase"));
+        assert_eq!(classes[0].assignments, vec![("Ready".into(), "n\"{; };\"".into())]);
+        assert_eq!(classes[0].calls, vec!["Schedule(1)".to_string()]);
     }
 
     #[test]

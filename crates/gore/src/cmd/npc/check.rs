@@ -1064,6 +1064,13 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
     }
 
     #[test]
+    fn compact_inline_checkout_preserves_parent_and_defaults() {
+        let pristine = "class UChild : UBase\n{\n    default Ready = true;\n}\n";
+        let edited = "class UChild : UBase { default Ready = true; }\n";
+        assert!(guard_checkout_diff(pristine, edited).is_empty());
+    }
+
+    #[test]
     fn an_unchanged_checked_out_module_is_blocking() {
         let findings = guard_checkout_diff(AUTHORED, AUTHORED);
         assert_eq!(findings.len(), 1);
