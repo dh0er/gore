@@ -800,7 +800,7 @@
   "locksShownOfTotal": "{shown} з {total}",
   "locksFilterChests": "Скрині",
   "locksFilterDoors": "Двері",
-  "locksFilterUnlocked": "Відчинено",
+  "locksFilterUnlocked": "Відімкнено",
   "locksFilterLocked": "Замкнено",
   "locksDifficultyLevel": "Складність {bars} з 4 (внутрішній рівень {level} з 7)",
   "locksKeyOnly": "Лише ключем",

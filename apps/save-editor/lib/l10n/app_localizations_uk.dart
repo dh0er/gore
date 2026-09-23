@@ -3291,7 +3291,7 @@ class AppLocalizationsUk extends AppLocalizations {
   String get locksFilterDoors => 'Двері';
 
   @override
-  String get locksFilterUnlocked => 'Відчинено';
+  String get locksFilterUnlocked => 'Відімкнено';
 
   @override
   String get locksFilterLocked => 'Замкнено';
