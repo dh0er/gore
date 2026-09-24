@@ -529,8 +529,9 @@ It also blocks on:
   shipped one;
 - a level script that did not change at all, which has nothing to build.
 
-An unresolvable waypoint is a warning rather than a block: the character is
-still valid, it simply never goes there.
+An unresolvable routine waypoint blocks `check` and `stage`: the game would
+silently ignore it. Choose a spot from `gore npc routine spots` or
+`gore location resolve` before building.
 
 ### `npc stage` — the build spec and the commands
 

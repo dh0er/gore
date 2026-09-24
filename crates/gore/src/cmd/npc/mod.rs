@@ -1496,24 +1496,30 @@ fn workspace_source_findings(
 
         let spots = gore_catalog::location::LocationCatalog::bundled()
             .context("reading the bundled location catalog")?;
-        for waypoint in check::scheduled_waypoints(&source) {
-            if spots.resolve(&waypoint).is_none() {
-                findings.push(check::Finding {
-                    severity: check::Severity::Warning,
-                    message: format!(
-                        "the routine sends the character to {waypoint:?}, which is not a known \
-                         spot. The game ignores an unknown waypoint without a word, so the \
-                         character would simply never go there"
-                    ),
-                });
-            }
-        }
+        findings.extend(routine_waypoint_findings(&source, &spots));
     }
 
     Ok(WorkspaceSourceInspection {
         findings,
         module_sources,
     })
+}
+
+fn routine_waypoint_findings(
+    source: &str,
+    spots: &gore_catalog::location::LocationCatalog,
+) -> Vec<check::Finding> {
+    check::scheduled_waypoints(source)
+        .into_iter()
+        .filter(|waypoint| spots.resolve(waypoint).is_none())
+        .map(|waypoint| check::Finding {
+            severity: check::Severity::Blocking,
+            message: format!(
+                "the routine sends the character to {waypoint:?}, which is not a known spot. \
+                 The game silently ignores unknown waypoints; choose a spot from `gore npc routine spots`"
+            ),
+        })
+        .collect()
 }
 
 /// Den Quellbaum vorhalten: einmal emittieren, danach an der Cache-Kennung wiedererkennen.
@@ -2172,6 +2178,21 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
             assert!(error.to_string().contains("safe ASCII text"));
             assert!(!out.exists());
         }
+    }
+
+    #[test]
+    fn authored_routine_unknown_waypoint_blocks_staging() {
+        let spots = gore_catalog::location::LocationCatalog::bundled().unwrap();
+        let source = "class UDailyRoutine_Test : UAIState_DailyRoutine_Human\n{\n    default Schedule(0, 0, UAIState_Stand(), n\"NO_SUCH_ROUTINE_SPOT\", 1000.0f, TSubclassOf<UNavArea>(nullptr), nullptr);\n}\n";
+        let findings = routine_waypoint_findings(source, &spots);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, check::Severity::Blocking);
+        assert!(findings[0].message.contains("NO_SUCH_ROUTINE_SPOT"));
+        assert!(routine_waypoint_findings(
+            &source.replace("NO_SUCH_ROUTINE_SPOT", "FP_XT_WAIT_OUTSIDE"),
+            &spots
+        )
+        .is_empty());
     }
 
     #[test]
