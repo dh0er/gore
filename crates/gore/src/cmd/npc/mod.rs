@@ -1670,20 +1670,24 @@ fn stage_tree_copy(tree: &Path, dir: &Path) -> Result<PathBuf> {
     fs::create_dir(&staged)?;
     fs::write(staged.join(STAGED_TREE_MARKER), b"NPC staging copy\n")?;
     copy_tree_contents(&source, &staged)?;
-    Ok(dir.join(STAGED_TREE_DIR))
+    Ok(staged)
+}
+
+fn stage_path_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    let linked = metadata.file_type().is_symlink();
+    #[cfg(windows)]
+    let linked = {
+        use std::os::windows::fs::MetadataExt as _;
+        linked || metadata.file_attributes() & 0x400 != 0
+    };
+    linked
 }
 
 fn validate_stage_output_target(path: &Path, kind: &str) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
-            let linked = metadata.file_type().is_symlink();
-            #[cfg(windows)]
-            let linked = {
-                use std::os::windows::fs::MetadataExt as _;
-                linked || metadata.file_attributes() & 0x400 != 0
-            };
             ensure!(
-                !linked,
+                !stage_path_is_link_or_reparse(&metadata),
                 "NPC stage {kind} output is a link or reparse point: {}",
                 path.display()
             );
@@ -1696,6 +1700,22 @@ fn validate_stage_output_target(path: &Path, kind: &str) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error).context(format!("reading {}", path.display())),
     }
+    Ok(())
+}
+
+fn prepare_stage_work_dir(path: &Path) -> Result<()> {
+    match fs::create_dir(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error).with_context(|| format!("creating {}", path.display())),
+    }
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("reading NPC compiler work directory {}", path.display()))?;
+    ensure!(
+        metadata.is_dir() && !stage_path_is_link_or_reparse(&metadata),
+        "NPC compiler work directory is not a real directory: {}",
+        path.display()
+    );
     Ok(())
 }
 
@@ -1785,7 +1805,7 @@ fn stage_workspace(
     let command_dir = fs::canonicalize(dir)
         .with_context(|| format!("resolving NPC stage workspace {}", dir.display()))?;
     let work = stage::work_dir(&command_dir);
-    fs::create_dir_all(&work).with_context(|| format!("creating {}", work.display()))?;
+    prepare_stage_work_dir(&work)?;
 
     let spec = stage::spec_json(&manifest, mod_name);
     write_stage_output_atomic(
@@ -1812,7 +1832,7 @@ fn stage_workspace(
     }
     println!(
         "then: gore mod deploy --bundle {}",
-        stage::shell_quote(&format!("{}/build/{mod_name}", dir.display()))
+        stage::shell_quote(&command_dir.join("build").join(mod_name).display().to_string())
     );
     println!(
         "offline-prepared only: whether this character appears in game is decided by that run, \
@@ -2229,7 +2249,11 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
         fs::create_dir(&first).unwrap();
         fs::create_dir(&second).unwrap();
 
-        let first_copy = stage_tree_copy(&tree, &first).unwrap();
+        let first_copy = stage_tree_copy(&tree, &first.join(".")).unwrap();
+        assert_eq!(
+            first_copy,
+            fs::canonicalize(&first).unwrap().join(STAGED_TREE_DIR)
+        );
         fs::write(first_copy.join("Level.as"), "first overlay").unwrap();
         let second_copy = stage_tree_copy(&tree, &second).unwrap();
 
@@ -2348,6 +2372,28 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
         let error = stage_workspace(temp.path(), None, "TestMod", None, None).unwrap_err();
         assert!(error.to_string().contains("link or reparse point"), "{error:#}");
         assert_eq!(fs::read(&outside).unwrap(), b"keep this file");
+    }
+
+    #[test]
+    fn stage_rejects_a_linked_compiler_work_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&workspace).unwrap();
+        fs::create_dir(&outside).unwrap();
+        let work = stage::work_dir(&fs::canonicalize(&workspace).unwrap());
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&outside, &work);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_dir(&outside, &work);
+        if let Err(error) = link_result {
+            eprintln!("skip: this account cannot create a directory symlink: {error}");
+            return;
+        }
+
+        let error = prepare_stage_work_dir(&work).unwrap_err();
+        assert!(error.to_string().contains("not a real directory"), "{error:#}");
+        assert!(outside.is_dir());
     }
 
     fn entry(domain: &'static str, id: &str, category: &str, class: Option<&str>) -> CatalogEntry {

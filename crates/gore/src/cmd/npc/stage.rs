@@ -188,7 +188,12 @@ pub fn build_commands(
     // liegt er bewusst daneben statt darin.
     let work = work_dir(Path::new(dir));
     let work_arg = shell_quote(&work.display().to_string());
-    let mini_arg = shell_quote(&format!("{dir}/{mod_name}.mini.Cache"));
+    let mini_arg = shell_quote(
+        &Path::new(dir)
+            .join(format!("{mod_name}.mini.Cache"))
+            .display()
+            .to_string(),
+    );
     let base_arg = shell_quote(&manifest.cache_sha256);
     let mut out = Vec::new();
     match route_of(manifest) {
@@ -212,7 +217,7 @@ pub fn build_commands(
                 "gore as compile {} -o {} --mini {mini_arg} --work-dir {work_arg} \
                  --backend standalone --expect-base-sha256 {base_arg}{only_changes}{game_arg}",
                 shell_quote(tree),
-                shell_quote(&format!("{dir}/full.Cache")),
+                shell_quote(&Path::new(dir).join("full.Cache").display().to_string()),
             ));
         }
         Route::SingleModule => {
@@ -230,14 +235,14 @@ pub fn build_commands(
                  --expect-source-sha256 {source_digest}{game_arg}",
                 shell_quote(&edit.module),
                 shell_quote(&edit.relative_path),
-                shell_quote(&format!("{dir}/{STAGED_SOURCE_NAME}")),
+                shell_quote(&Path::new(dir).join(STAGED_SOURCE_NAME).display().to_string()),
             ));
         }
     }
     out.push(format!(
         "gore mod build --spec {} -o {}",
-        shell_quote(&format!("{dir}/spec.json")),
-        shell_quote(&format!("{dir}/build")),
+        shell_quote(&Path::new(dir).join("spec.json").display().to_string()),
+        shell_quote(&Path::new(dir).join("build").display().to_string()),
     ));
     Ok(out)
 }
@@ -260,6 +265,10 @@ mod tests {
             .map(|edit| (edit.source_file.clone(), "class Test {}".to_string()))
             .collect();
         super::build_commands(manifest, &sources, dir, tree, mod_name, game).unwrap()
+    }
+
+    fn quoted_child(dir: &str, name: &str) -> String {
+        shell_quote(&Path::new(dir).join(name).display().to_string())
     }
 
     fn level_edit() -> ModuleEdit {
@@ -347,7 +356,10 @@ mod tests {
     fn the_full_tree_route_asks_for_a_multi_module_mini() {
         let commands = build_commands(&authored(), "ws", "tree", "MyMod", Some("G"));
         assert!(commands[0].starts_with("gore as compile 'tree'"));
-        assert!(commands[0].contains("--mini 'ws/MyMod.mini.Cache'"));
+        assert!(commands[0].contains(&format!(
+            "--mini {}",
+            quoted_child("ws", "MyMod.mini.Cache")
+        )));
         assert!(commands[0].contains("--backend standalone"));
         assert!(commands[0].contains("--only-change 'add:AI.AIAgent.Human.Config.MINE.MINE:AI/AIAgent/Human/Config/MINE/MINE.as:"));
         assert!(commands[0].contains("--only-change 'edit:LevelScripts.XardasTower_AI:LevelScripts/XardasTower_AI.as:"));
@@ -362,7 +374,10 @@ mod tests {
         assert!(commands[0].starts_with("gore as compile-module"));
         assert!(commands[0].contains("--module 'LevelScripts.XardasTower_AI'"));
         assert!(commands[0].contains("--rel-path 'LevelScripts/XardasTower_AI.as'"));
-        assert!(commands[0].contains("--source 'ws/.gore-npc-staged-source.as'"));
+        assert!(commands[0].contains(&format!(
+            "--source {}",
+            quoted_child("ws", STAGED_SOURCE_NAME)
+        )));
         let digest = format!("{:x}", Sha256::digest(b"class Test {}"));
         assert!(commands[0].contains(&format!(
             "--expect-source-sha256 '{digest}'"
@@ -424,6 +439,14 @@ mod tests {
             "--work-dir {}",
             shell_quote(&work.display().to_string())
         )));
+        assert!(commands[0].contains(&format!(
+            "-o {}",
+            shell_quote(&resolved.join("full.Cache").display().to_string())
+        )));
+        assert!(commands[1].contains(&format!(
+            "--spec {}",
+            shell_quote(&resolved.join("spec.json").display().to_string())
+        )));
     }
 
     #[test]
@@ -431,7 +454,10 @@ mod tests {
         for manifest in [authored(), suppression()] {
             let commands = build_commands(&manifest, "ws", "tree", "MyMod", None);
             assert_eq!(commands.len(), 2);
-            assert!(commands[1].starts_with("gore mod build --spec 'ws/spec.json'"));
+            assert!(commands[1].starts_with(&format!(
+                "gore mod build --spec {}",
+                quoted_child("ws", "spec.json")
+            )));
         }
     }
 
@@ -452,7 +478,7 @@ mod tests {
             )));
             assert!(commands[1].contains(&format!(
                 "--spec {}",
-                shell_quote(&format!("{dir}/spec.json"))
+                quoted_child(dir, "spec.json")
             )));
         }
         let commands = build_commands(&authored(), dir, tree, "MyMod", Some(dir));
@@ -460,7 +486,7 @@ mod tests {
         let commands = build_commands(&suppression(), dir, tree, "MyMod", Some(dir));
         assert!(commands[0].contains(&format!(
             "--source {}",
-            shell_quote(&format!("{dir}/{STAGED_SOURCE_NAME}"))
+            quoted_child(dir, STAGED_SOURCE_NAME)
         )));
     }
 
