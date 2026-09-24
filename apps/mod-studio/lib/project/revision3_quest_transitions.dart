@@ -975,7 +975,7 @@ final class AuthoringRevision3QuestTransitionV1 {
   String get stableKey => '${node.stableKey}:${edge.wireName}';
 }
 
-/// Closed, bounded semantic lifecycle plan used by Quest generator version 4.
+/// Closed, bounded semantic lifecycle plan used by Quest generator version 6.
 final class AuthoringRevision3QuestTransitionPlanV1 {
   AuthoringRevision3QuestTransitionPlanV1({
     required List<int> objectiveSlots,

@@ -2718,7 +2718,7 @@ mod tests {
             ),
             (
                 13_276,
-                "8d7e2bec782d30c375a87397ea2cba1e2d028e6a268278cdafc41922dbdb0538".to_owned()
+                "47ba79222b6bb5af58c77f3269348578b53604b13c12eecac93e069d370bf537".to_owned()
             )
         );
         assert!(v2.receipt().closure.snapshot_objects > 1);

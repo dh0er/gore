@@ -1,0 +1,94 @@
+LevelScripts.XardasTower_AI.UWP_WarningFlock_XT_01::OnWorldStart  SEMANTIC-DIFF  (v=13 ops, r=25 ops)
+---- bytediff scoreboard ----
+aligned functions : 16
+  IDENTICAL       : 14
+  BENIGN-DIFF     : 0
+  SEMANTIC-DIFF   : 2
+alignment loss    : 0 module(s) only-in-vanilla, 2 only-in-regen, 0 func(s) only-in-vanilla, 0 only-in-regen
+B1 byte-faithful  : 87.50%  (IDENTICAL+BENIGN / aligned)
+normalizer fires  : N1:refs=0 N2:slots=0 N3:jumps=0 N4:consts=0 N5:scope=0 N6:reguard=0
+    hint: residual divergence survived N1–N4 — inspect the window (candidate: arg-order swap #0, cross-block carry #4, or struct-ctor grouping #5)
+    vanilla:
+      [0000] PshC4          i4:1088421888
+      [0001] PshC4          i4:1117782016
+      [0002] PshC4          i4:4
+      [0003] CALL           LevelScripts.AmbientLifeConfig::StaticClass
+      [0004] STOREOBJ       v2
+      [0005] PshVPtr        v2
+      [0006] PSF            v8
+      [0007] CALLSYS        ::$beh0
+      [0008] PSF            v8
+      [0009] PSF            v10
+      [0010] PshVPtr        v0
+      [0011] CALLSYS        ::SpawnWarningFlock
+      [0012] RET            w2
+    regen:
+      [0000] CALL           AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UDailyRoutine_GORE_TEST_A_Start
+      [0001] STOREOBJ       v2
+      [0002] PshVPtr        v2
+      [0003] CALL           AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass
+      [0004] STOREOBJ       v4
+      [0005] PshVPtr        v4
+      [0006] PSF            v6
+      [0007] CALLSYS        ::$beh0
+      [0008] PSF            v6
+      [0009] PSF            v8
+      [0010] PshVPtr        v0
+      [0011] CALLSYS        ::SpawnAIAgent
+      [0012] PshC4          i4:1088421888
+      [0013] PshC4          i4:1117782016
+      [0014] PshC4          i4:4
+      [0015] CALL           LevelScripts.AmbientLifeConfig::StaticClass
+      [0016] STOREOBJ       v4
+      [0017] PshVPtr        v4
+      [0018] PSF            v10
+      [0019] CALLSYS        ::$beh0
+      [0020] PSF            v10
+      [0021] PSF            v8
+      [0022] PshVPtr        v0
+      [0023] CALLSYS        ::SpawnWarningFlock
+      [0024] RET            w2
+LevelScripts.XardasTower_AI.UWP_WarningFlock_XT_02::OnWorldStart  SEMANTIC-DIFF  (v=13 ops, r=25 ops)
+    hint: residual divergence survived N1–N4 — inspect the window (candidate: arg-order swap #0, cross-block carry #4, or struct-ctor grouping #5)
+    vanilla:
+      [0000] PshC4          i4:1073741824
+      [0001] PshC4          i4:1125515264
+      [0002] PshC4          i4:3
+      [0003] CALL           LevelScripts.AmbientLifeConfig::StaticClass
+      [0004] STOREOBJ       v2
+      [0005] PshVPtr        v2
+      [0006] PSF            v8
+      [0007] CALLSYS        ::$beh0
+      [0008] PSF            v8
+      [0009] PSF            v10
+      [0010] PshVPtr        v0
+      [0011] CALLSYS        ::SpawnWarningFlock
+      [0012] RET            w2
+    regen:
+      [0000] CALL           AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UDailyRoutine_GORE_TEST_B_Start
+      [0001] STOREOBJ       v2
+      [0002] PshVPtr        v2
+      [0003] CALL           AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass
+      [0004] STOREOBJ       v4
+      [0005] PshVPtr        v4
+      [0006] PSF            v6
+      [0007] CALLSYS        ::$beh0
+      [0008] PSF            v6
+      [0009] PSF            v8
+      [0010] PshVPtr        v0
+      [0011] CALLSYS        ::SpawnAIAgent
+      [0012] PshC4          i4:1073741824
+      [0013] PshC4          i4:1125515264
+      [0014] PshC4          i4:3
+      [0015] CALL           LevelScripts.AmbientLifeConfig::StaticClass
+      [0016] STOREOBJ       v4
+      [0017] PshVPtr        v4
+      [0018] PSF            v10
+      [0019] CALLSYS        ::$beh0
+      [0020] PSF            v10
+      [0021] PSF            v8
+      [0022] PshVPtr        v0
+      [0023] CALLSYS        ::SpawnWarningFlock
+      [0024] RET            w2
+ONLY-IN-REGEN module: AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B
+ONLY-IN-REGEN module: AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A

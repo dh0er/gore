@@ -1,0 +1,192 @@
+# NPC-Testpakete: restliche Faelle
+
+Stand 2026-09-22: **Die Spieltests aller sechs Pakete sind abgeschlossen.** Der Kopf-/Barttest
+ist bestanden. Beim Sprachtest sind Begruessungen, Alltagszeilen von B/C und Bs
+Routine sowie der vollstaendige Neustart ohne erneuten Aufbau bestaetigt.
+Die Lehrerpruefungen einschliesslich Neustart sowie Kaufen/Verkaufen/Abbrechen
+und die Bestands-Persistenz sind bestanden. Die doppelte Vergabe wurde mit dem
+nativen Anfangsbestand behoben; beide Ladepruefungen in0.1.3 sind bestaetigt.
+Die Feldrollen einschliesslich Flucht und Wiederbelebung sind bestanden.
+Auch die gesamte Questliste ist bestanden: eigenes Journal, automatische Ziele,
+einmalige Abgabe/Belohnung, Erfolg, Abbruch und alle Neustarts.
+Siehe [Questergebnis](quest/runtime-0.1.2.json). Die Queststaende einschliesslich
+Start071 sind [ausserhalb der Spielliste archiviert](profile-cleanup-after-quest-complete.json).
+Die erledigten Kopf-/Voice-Starts und Ergebnisse sind ausserhalb des Spiels
+archiviert. Zuletzt wurden **003 „npc natuerlich - beobachtet“**, **022 „npc
+natuerlich - start“** und **066 „NPC 02 Voice - START“** aus der Spielliste
+entfernt; siehe [Voice-Archivierung](profile-cleanup-after-voice.json).
+Die erledigten Lehrerstarts und Wirtschaftsergebnisse003/022–027/068/069 liegen
+jetzt ebenfalls [im externen Archiv](profile-cleanup-after-economy.json).
+067 und die drei erfolgreichen Ladeergebnisse sind ebenfalls
+[extern archiviert](profile-cleanup-after-economy-reload.json).
+Der bisher getestete Stand ist mit `6848e475` gesichert; `117be93d` korrigiert
+die Save-Bereinigung und `7ac45595` die benoetigte native API-Komposition.
+Siehe [Build-/Paketpruefung](build-checks.json) und
+[veroeffentlichte Startstaende](start-saves.json).
+
+**Aktiv ist NpcTraderRestockTest 0.1.0**; Manager-Status `in_sync`.
+Profil4 ist leer; alle sechs Nachschub-START/Ergebnisstaende sind
+[ausserhalb des Spiels archiviert](profile-cleanup-after-restock-complete.json).
+Die [Nachschub-Testliste](roles/restock/FIELD-TEST.md) ist bestanden:
+spaetere Lieferung, erneutes Melden derselben Lieferung, Kauf und zwei Neustarts.
+Fuenf Saves bestaetigen den [Erfolg](roles/restock/runtime-0.1.0.json), zuletzt
+A4 Kaese/15 Pfeile/127 Erz und Held1 Kaese/43 Erz ohne weitere Vergabe.
+Alle anderen Testpakete und Barttexturen sind deaktiviert. Die
+[vorherige Quest-Aktivierung](quest/hotfix-0.1.2.json) verwendete bereits die neue Spielbasis25168047 und
+den aktuellen Decompiler von main. Questinhalt und Start071 blieben unveraendert;
+0.1.1 hatte bereits die Ereignisbindungen des Quest-Builds korrigiert.
+Quest- und Nachschubpaket wurden fuer diesen Hotfix gebaut. Die bisherigen
+Spielbestaetigungen der anderen vier Pakete beziehen sich auf die vorige Spielversion.
+In0.1.0 blieb As Dialogmenue aus; neue Dialog-, Quest- und Journalmethoden waren
+nicht als native Ereignisse registriert. **[Deutsche Testliste fuer Paket5](quest/FIELD-TEST.md)**.
+Der [Fluchtabschluss](roles/field-runtime-0.1.3.json) dokumentiert den erfolgreichen
+Nachtest und die gespeicherten Bewegungswerte. Die Feld-Starts070/072 und der
+letzte Ergebnisstand sind [extern archiviert](profile-cleanup-after-field-complete.json).
+Der [Wirtschaftsabschluss](roles/economy-runtime-0.1.3.json) bestaetigt den
+nativen Anfangsbestand ohne doppelte Vergabe. Die spaetere Bestandsvergabe per
+eigenem Ereignis hat inzwischen den separaten Nachtest bestanden; der fruehere
+0.1.2-Ladefehler bleibt als anderer Initialisierungspfad dokumentiert.
+Der [Barttest 0.1.3](heads/beard-runtime-0.1.3.json)
+und der [Bericht zur Sprach-Aufbaukorrektur](voice/setup-fix.json) bleiben
+dokumentiert. In0.1.1 blieb der Ortswechsel
+von Held und A trotz „04 Bereit“ aus; die Teleports stehen nun vor dem Gespraechsende.
+Der fehlgeschlagene [Barttest 0.1.2](heads/beard-runtime-0.1.2.json) und die
+[VT-Build-](beard-vt-build-checks.json) / [Deploymentbelege](beard-vt-deployment.json)
+bleiben als Historie erhalten.
+Die bisherigen [Tageslicht-](daylight-build-checks.json) und
+[Deploymentberichte](daylight-deployment.json) bleiben als Historie erhalten.
+
+Die Testpakete werden **einzeln** aktiviert; zum Kopf-Test gehoert zusaetzlich
+das Textur-Begleitpaket. Zum Paketwechsel das Spiel vollstaendig
+beenden und den zugehoerigen START-Stand laden. Ergebnisse anderer Pakete nicht
+als Ausgangspunkt verwenden. Die benoetigten Startstaende bleiben erhalten; Ergebnisse unter
+den unten verlinkten Testnamen neu speichern. Spieltests macht der Benutzer.
+
+| Reihenfolge | Paket | Startstaende in Profil 4 | Abdeckung |
+|---|---|---|---|
+| 1 | NpcHeadPaletteTest | 065: NPC 01 Koepfe - START (archiviert) | Bestanden: Gesicht, Haare, Haarfarbe, Bartvarianten, Originale und Neustart |
+| 2 | NpcNaturalVoiceTest | 066: NPC 02 Voice - START (archiviert) | Begruessung/Alltagsstimme B und C, Routine, Neustart und hoerbare Diego-/Lares-Zuordnung bestanden; kurze Sprechblase offen |
+| 3 | NpcEconomyRolesTest | Starts/Ergebnisse archiviert | Lehrer, Handel und Bestand nach wiederholtem Laden bestanden |
+| 4 | NpcFieldRolesTest | Starts070/072 und Ergebnisse archiviert | Folgen/Warten, Feindschaft/Gilde, Flucht, Niederlage/Tod und Wiederbelebung bestanden; Waffenwahl-Ursache offen |
+| 5 | NpcQuestCallbacksTest | Start071 und Ergebnisse archiviert | Bestanden: eigenes Journal, zwei automatische Ziele, Abgabe, einmalige Belohnung, Erfolg/Abbruch und Neustarts |
+| 6 | NpcTraderRestockTest | Start067 und Ergebnisse archiviert | Bestanden: spaeterer Nachschub, doppelte Ausloesung ohne Mehrfachvergabe, Kauf und zwei Neustarts |
+
+## 1. Koepfe
+
+Der abgeschlossene Kopf-Test verwendete065, A und **H0 Aufbau** vor Xardas' Turm.
+Dieser Startstand ist jetzt archiviert und muss nicht erneut getestet werden.
+Die bestandene [Bart-Checkliste](heads/README.md) beschreibt den Nachtest:
+H2/H5 fuer rasierten Heldenkopf, H6 fuer Originalbart; H1/H6 fuer Flex mit Bart,
+H5 fuer Flex ohne Bart. Beide neuen Auswahlen speichern/neu starten, danach H9.
+Die neue Texturzuordnung betrifft nur Cs Materialinstanzen. Der Nutzer bestaetigt
+auch den vollstaendigen 0.1.3-Nachtest. Kopf-/Barttests sind damit fuer diese
+Varianten abgeschlossen; der folgende Sprachtest wurde inzwischen ebenfalls durchgefuehrt.
+
+## 2. Natuerliche Stimme
+
+Der [Spielbericht zu 0.1.2](voice/runtime-result-0.1.2.json) bestaetigt B/Cs
+Begruessungen und wiederholte Alltagszeilen sowie Bs Weg mit einer gesprochenen
+Zeile unterwegs. Zweimal sehr kurz sichtbare Sprechblasen bleiben als
+Auffaelligkeit unbekannter Ursache offen. Der Neustart ohne erneuten Aufbau
+ist ebenfalls bestaetigt. Am2026-09-22 bestaetigt der Benutzer zudem die
+hoerbaren Stimmen: B wie Diego, C wie Lares. Dafuer ist kein Nachtest erforderlich.
+
+Alle acht START-Saves stehen jetzt auf 12:00 Uhr; der [Tageslichtbericht](daylight-starts.json)
+haelt die Aenderung mit Backups fest. Kopf- und Sprach-Aufbau setzen ebenfalls
+Mittag. Beim Sprachtest liegen die optionalen Wechsel jetzt bei 14:00/16:00 Uhr.
+
+Zur spaeteren Reproduktion nach Wiederherstellung und Aktivierung des Sprachpakets066 laden und bei A
+**01 Natuerliche Stimmen: Aufbau mit B und C** waehlen. Zuerst pruefen, dass
+Held und A unten vor dem Turm stehen; erst dann vor der Annaeherung speichern
+und B und C ohne Dialog annaehern.
+Die [Stimmenliste](voice/README.md) trennt Begruessung, selbststaendiges Murmeln
+und Neustart. Sie enthaelt klare Beobachtungsfristen; Stille ist ein Ergebnis.
+
+## 3. Handel und Lehrer
+
+**Die Lehrerfaelle unten sind bestanden und muessen nicht wiederholt werden.**
+Auch der [Lade-Nachtest0.1.3](roles/economy-runtime-0.1.3.json) ist bestanden:
+A behaelt2 Kaese/10 Pfeile/108 Erz und den Grundbestand3/10/100; der Held
+behaelt1 Kaese/42 Erz. Die folgenden alten Lehrerablaeufe dienen nur als
+Referenz, die Starts068/069 und Ergebnisse sind archiviert.
+
+1. 067 laden. Vor Testmitteln oder Handel **03 Lernen** probieren:
+   0 LP/50 Erz, daher keine Veraenderung und keine gelernte Faehigkeit.
+   Danach 01/02 fuer Kaufen, Verkaufen und Handelsabbruch verwenden.
+2. 068 laden. **03 Lernen** probieren: 5 LP/0 Erz, ebenfalls kein Abzug/Erfolg.
+3. 069 laden: 15 LP/200 Erz. Tauchen lernen kostet genau 5 LP/30 Erz.
+   Erneut versuchen: trotz ausreichender Mittel kein zweiter Abzug.
+   Speichern, vollstaendig neu starten und pruefen, dass Tauchen bekannt bleibt.
+
+**04 Testmittel** ist fuer diese vorbereiteten Starts nicht erforderlich.
+Weitere Inventar- und Neustartpruefungen: [Rollenliste](roles/README.md).
+
+## 4. Begleiter, Kampf und Lebenszyklus
+
+**Abgeschlossen.** Die folgenden Angaben sind Referenz fuer die archivierten
+Feldtests; [Anleitung und Abschluss](roles/FIELD-TEST.md).
+
+070 beginnt auf der bereits erprobten freien Flaeche vor dem Alten Lager;
+B steht vor dem Helden. A bleibt am Tor, etwa 30 Meter entfernt. Fuer die
+Steueroptionen zuerst zurueck zu A gehen. Die Diagnose 30 laeuft 60 Sekunden;
+danach direkt zu B zurueck und den bekannten Waffenwechsel reproduzieren.
+Auf Wunsch sind 070 und 072 seit 2026-09-13 leichter: **Held 10.000 Leben und 1.000 Staerke,
+B 50 Leben und 0 koerperlicher Schutz**, jeweils base/current, Leben auch maximal.
+Waffen und Kampfregeln bleiben erhalten; die Originale sind extern archiviert:
+[Lebenswerte](roles/field-health-starts.json), [Staerke/Schutz](roles/field-damage-starts.json).
+
+072 ist fuer die positiven Sieg-/Tod-Tests bestimmt: gleicher frischer
+NPC-Ausgangspunkt, aber weiterhin zusaetzlich erhoehte Schutzwerte des Helden. Die Ressourcen
+stehen im abschliessenden Startstandbericht. Beide Starts haben nun bewusst
+angepasste Kampfwerte. A soll am Tor bleiben; falls er oder eine
+andere Figur eingreift, dies getrennt notieren.
+
+Die [Rollenliste](roles/README.md) beschreibt 20–31 und die getrennten Zweige.
+Zwischen Feindschaft, Gilde, Flucht und Tod jeweils den sauberen Start neu laden.
+Wiederbelebung ist eine explizit gewaehlte native Tagesablauf-Regel nach Tod,
+kein automatisch nachgespawnter zweiter B. Der Benutzer hat Wiederbelebung und
+den Flucht-Nachtest bestaetigt; die Ursache der Waffenwahl bleibt separat offen.
+
+## 5. Quest
+
+**Die gesamte [deutsche Questliste](quest/FIELD-TEST.md) ist bestanden.**
+Der Nutzer bestaetigt Q1–Q7 einschliesslich Neustarts im Zwischenstand sowie auf
+Erfolgs- und Abbruchpfad. Die Belohnung sind einmalig25 Erz fuer zwei Kaese;
+Q3 liefert den Testvorrat genau einmal. Siehe [Ergebnis](quest/runtime-0.1.2.json).
+Zur spaeteren Reproduktion zuerst den archivierten Start071 wiederherstellen.
+Die separaten [offenen Punkte](../../../docs/guide/npc-open-items.md) bleiben
+dokumentiert, insbesondere Waffenwahl, spaete Haendlerbestandsvergabe und
+die noch nicht eindeutig eingeordneten Sprachbeobachtungen.
+
+## Profil 4 und Rueckmeldungen
+
+Nach Abschluss von Paket5 sind auch die Queststaende samt Start071 extern
+gesichert und aus Profil4 entfernt: [letzte Bereinigung](profile-cleanup-after-quest-complete.json).
+Die zuvor abgeschlossenen Feld-Starts070/072 und `rolle-flucht-v4` bleiben
+[extern gesichert](profile-cleanup-after-field-complete.json).
+Die folgenden Zahlen beschreiben fruehere Bereinigungen.
+
+Nach dem bestandenen Kopf-/Barttest wurden auf Wunsch des Benutzers weitere
+**18 Saves aus Profil 4 archiviert**. Im Spiel bleiben nur die **sieben kommenden
+STARTs066–072**; auch bewahrte Vergleichs-/Beweissaves und Kopf-Start065 stehen
+jetzt ausschliesslich im Archiv. Die vollstaendige Sicherung dieses Durchlaufs
+(25 Saves plus Profildatei und Hashmanifest) liegt dauerhaft ausserhalb des
+Worktrees unter `C:\Users\Daniel\Documents\GORE\Savegame-Archiv\npc-tests-20260911T174130Z`.
+Andere Profile und die sieben behaltenen Saves sind bytegleich.
+Siehe [Folgearchivierung](profile-cleanup-after-heads.json).
+
+Historie der ersten Bereinigung:
+
+31 ueberholte Teststaende wurden mit dem korrigierten Save-Core aus Profil 4
+entfernt. Die elf damals behaltenen Vergleichsstaende waren 023, 027, 030, 048, 052, 054,
+060, 061, 062, 063 und 064. Alle urspruenglichen 42 Saves und die Profildatei sind
+archiviert; andere Profile und behaltene Saves wurden per Hash geprueft.
+Unmittelbar nach der Bereinigung waren es mit den acht Starts 19 Saves;
+spaetere Ergebnissaves kommen hinzu. Die Vollsicherung
+liegt lokal unter `work/npc-batch-tests/cleanup/archive-20260911T094051Z`.
+Siehe [Bereinigungsbericht](profile-cleanup.json).
+
+Bitte pro Paket die Beobachtungen und benannten Saves melden. Wir unterscheiden
+sicht-/hoerbares Spielverhalten von gespeicherten Steuerflags. Guide und offene
+Punkte werden anhand dieser Ergebnisse fortgeschrieben; ein gebautes Paket ist
+noch kein bestandener Spieltest. Line-spezifischer Lip Sync bleibt ausgenommen.

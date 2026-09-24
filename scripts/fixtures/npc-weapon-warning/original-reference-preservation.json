@@ -1,0 +1,242 @@
+{
+  "all_original_reference_targets_preserved": true,
+  "base_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "diego_defaults": {
+    "comparison_fixture_only": "Cancel exactly PshC4 540-to-1234 operands at dwords 96 and 111 in memory; no cache file written. Product byte-semantic oracle compares remaining delta with N1/N2/N3/N4 only, N5/N6 disabled.",
+    "dword_length": 649,
+    "expected_HP_changes_verified": true,
+    "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego.UCharacterDefinition_Human_OC_STT_Diego::__InitDefaults",
+    "no_remaining_semantic_difference": true,
+    "oracle": [
+      {
+        "base_ops": 4,
+        "full_ops": 4,
+        "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego::UCharacterDefinition_Human_OC_STT_Diego",
+        "normalizers_fired": [],
+        "verdict": "Identical",
+        "window": null
+      },
+      {
+        "base_ops": 6,
+        "full_ops": 6,
+        "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego::StaticClass",
+        "normalizers_fired": [],
+        "verdict": "Identical",
+        "window": null
+      },
+      {
+        "base_ops": 368,
+        "full_ops": 368,
+        "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego.UCharacterDefinition_Human_OC_STT_Diego::__InitDefaults",
+        "normalizers_fired": [
+          "N1:refs",
+          "N2:slots"
+        ],
+        "verdict": "Benign",
+        "window": null
+      },
+      {
+        "base_ops": 5,
+        "full_ops": 5,
+        "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego.UCharacterDefinition_Human_OC_STT_Diego::UCharacterDefinition_Human_OC_STT_Diego",
+        "normalizers_fired": [],
+        "verdict": "Identical",
+        "window": null
+      },
+      {
+        "base_ops": 3,
+        "full_ops": 3,
+        "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego.UCharacterDefinition_Human_OC_STT_Diego::~UCharacterDefinition_Human_OC_STT_Diego",
+        "normalizers_fired": [],
+        "verdict": "Identical",
+        "window": null
+      }
+    ],
+    "raw_changed_dwords": 59
+  },
+  "full_sha256": "87e9995cff198592975578366fa317ca589548dc6f00f4e7f1ed006c8907dc42",
+  "operation": "read-only exact original-to-full reference-row preservation and Diego defaults bytecode comparison",
+  "selected_original_function_metadata": {
+    "all_21_pass": true,
+    "functions": [
+      {
+        "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego::UCharacterDefinition_Human_OC_STT_Diego",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego::StaticClass",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego.UCharacterDefinition_Human_OC_STT_Diego::__InitDefaults",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego.UCharacterDefinition_Human_OC_STT_Diego::UCharacterDefinition_Human_OC_STT_Diego",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego.UCharacterDefinition_Human_OC_STT_Diego::~UCharacterDefinition_Human_OC_STT_Diego",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI::UOW_XT_DEMON_LESSER_SPAWN_WP",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI::UWP_WarningFlock_XT_01",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI::UWP_WarningFlock_XT_02",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI::UXT_Skeleton_SPAWN_WP",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI::StaticClass",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI::StaticClass",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI::StaticClass",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI::StaticClass",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI.UOW_XT_DEMON_LESSER_SPAWN_WP::OnWorldStart",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI.UOW_XT_DEMON_LESSER_SPAWN_WP::UOW_XT_DEMON_LESSER_SPAWN_WP",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI.UWP_WarningFlock_XT_01::OnWorldStart",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI.UWP_WarningFlock_XT_01::UWP_WarningFlock_XT_01",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI.UWP_WarningFlock_XT_02::OnWorldStart",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI.UWP_WarningFlock_XT_02::UWP_WarningFlock_XT_02",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI.UXT_Skeleton_SPAWN_WP::OnWorldStart",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      },
+      {
+        "function": "LevelScripts.XardasTower_AI.UXT_Skeleton_SPAWN_WP::UXT_Skeleton_SPAWN_WP",
+        "traits_and_method_table_membership_and_full_ufunction_metadata_identical": true
+      }
+    ]
+  },
+  "specific_warning_refs": {
+    "all_equal": true,
+    "full": {
+      "function_id_0x145a6": "GetCharacterOfInterest",
+      "function_id_0x145ef": "GetSensedLivingEnemies",
+      "function_id_0x22e52": "AssessEndWarning",
+      "function_pointer_0x1d3c1e028c0": "AssessEvent",
+      "global_pointer_0x1d3ba565bc8": "AIEvent_Threat_AllWarningsDone",
+      "member_type_0x800626b_offset_2449": "bEndAssessmentDone"
+    },
+    "original": {
+      "function_id_0x145a6": "GetCharacterOfInterest",
+      "function_id_0x145ef": "GetSensedLivingEnemies",
+      "function_id_0x22e52": "AssessEndWarning",
+      "function_pointer_0x1d3c1e028c0": "AssessEvent",
+      "global_pointer_0x1d3ba565bc8": "AIEvent_Threat_AllWarningsDone",
+      "member_type_0x800626b_offset_2449": "bEndAssessmentDone"
+    }
+  },
+  "tail_tables": [
+    {
+      "all_original_keys_and_raw_rows_preserved": true,
+      "base_count": 37195,
+      "base_duplicate_keys": 0,
+      "changed_keys": [],
+      "full_count": 37259,
+      "full_duplicate_keys": 0,
+      "missing_keys": [],
+      "original_entries_byte_exact_prefix": true,
+      "table": "TypeReferences"
+    },
+    {
+      "all_original_keys_and_raw_rows_preserved": true,
+      "base_count": 37195,
+      "base_duplicate_keys": 0,
+      "changed_keys": [],
+      "full_count": 37259,
+      "full_duplicate_keys": 0,
+      "missing_keys": [],
+      "original_entries_byte_exact_prefix": true,
+      "table": "TypeIdReferenceToPointer"
+    },
+    {
+      "all_original_keys_and_raw_rows_preserved": true,
+      "base_count": 105782,
+      "base_duplicate_keys": 0,
+      "changed_keys": [],
+      "full_count": 105976,
+      "full_duplicate_keys": 0,
+      "missing_keys": [],
+      "original_entries_byte_exact_prefix": true,
+      "table": "FunctionReferences"
+    },
+    {
+      "all_original_keys_and_raw_rows_preserved": true,
+      "base_count": 105782,
+      "base_duplicate_keys": 0,
+      "changed_keys": [],
+      "full_count": 105976,
+      "full_duplicate_keys": 0,
+      "missing_keys": [],
+      "original_entries_byte_exact_prefix": true,
+      "table": "FunctionIdReferenceToPointer"
+    },
+    {
+      "all_original_keys_and_raw_rows_preserved": true,
+      "base_count": 134713,
+      "base_duplicate_keys": 0,
+      "changed_keys": [],
+      "full_count": 134780,
+      "full_duplicate_keys": 0,
+      "missing_keys": [],
+      "original_entries_byte_exact_prefix": true,
+      "table": "GlobalReferences"
+    },
+    {
+      "base_count": 23197,
+      "full_count": 23269,
+      "original_entries_byte_exact_prefix": true,
+      "original_indices_preserved": true,
+      "table": "StaticNames"
+    },
+    {
+      "all_original_keys_and_raw_rows_preserved": true,
+      "base_count": 13246,
+      "base_duplicate_keys": 0,
+      "changed_keys": [],
+      "full_count": 13281,
+      "full_duplicate_keys": 0,
+      "missing_keys": [],
+      "original_entries_byte_exact_prefix": true,
+      "table": "PropertyReferences"
+    }
+  ]
+}

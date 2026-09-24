@@ -1,0 +1,680 @@
+{
+  "format": "gore-native-api-fresh-mid-qualification-v1",
+  "qualified": true,
+  "scope": "Exactly Material::CreateDynamicMaterialInstance, UMaterialInstanceDynamic::CopyParameterOverrides, and EMIDCreationFlags native enum leaf. No template, property, wildcard, or runtime policy expansion.",
+  "source_snapshot_sha256": "1b7cd9228f621b25a307f77ddaa8bab72e7c2c048d7db34855d39329d555b4dd",
+  "previous_qualification": {
+    "path": "scripts/fixtures/npc-batch-tests/heads/beard-native-api-qualification.json",
+    "sha256": "2fe15b6a453b2d0f339157a9fbd0bddb5405717f961c574ce93f78e97b293371"
+  },
+  "pristine_cache_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "pristine_cache_guid_hex": "7835bcc09c5eee488d72cb5ffb0fb0c3",
+  "profile_file_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
+  "authority_file_sha256": {
+    "registration-trace.json": "17f374a632eadb354207aad9de7512367cad72e1c4c7a3253a3f68d9e075999c",
+    "post-bind-snapshot.json": "e355aeead72953582c31a2c1b933d08f87c4daa20f4cd55ae71db1f51713d4c5",
+    "reflected-type-graph.bin": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2"
+  },
+  "qualification_script_sha256": "e20d3c543af812d724bc4026cebf1ecbbef298d303ea413f96d2dd774e6dfda1",
+  "audit_script_sha256": "f82c74264a50247a10668fe001f98840383d9f04f0b820c53470fbf4aeadaa10",
+  "datatype_flag_order": [
+    "IsReference",
+    "IsObjectConst",
+    "IsObjectHandle",
+    "IsReadOnly",
+    "IsAuto",
+    "HasIfHandleThenConst"
+  ],
+  "functions": [
+    {
+      "full_identity": "6:global0:8:Material0:29:CreateDynamicMaterialInstance1:0201:6:object1:51:01:01:11:018:0:0:7:UObject1:00:,6:object1:51:01:01:11:030:0:0:18:UMaterialInterface1:00:,6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:01:029:0:0:17:EMIDCreationFlags1:00:,62:6:object1:51:01:01:11:036:0:0:24:UMaterialInstanceDynamic1:00:",
+      "expected_t3": {
+        "full_identity": "6:global0:8:Material0:29:CreateDynamicMaterialInstance1:0201:6:object1:51:01:01:11:018:0:0:7:UObject1:00:,6:object1:51:01:01:11:030:0:0:18:UMaterialInterface1:00:,6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:01:029:0:0:17:EMIDCreationFlags1:00:,62:6:object1:51:01:01:11:036:0:0:24:UMaterialInstanceDynamic1:00:",
+        "name": "CreateDynamicMaterialInstance",
+        "owner_full_identity": "",
+        "is_const": false,
+        "is_method": false,
+        "is_imported": false,
+        "type_dependencies": [
+          {
+            "full_identity": "0:0:7:UObject1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:018:0:0:7:UObject1:00:"
+          },
+          {
+            "full_identity": "0:0:18:UMaterialInterface1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:030:0:0:18:UMaterialInterface1:00:"
+          },
+          {
+            "full_identity": "0:0:5:FName1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+          },
+          {
+            "full_identity": "0:0:17:EMIDCreationFlags1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:029:0:0:17:EMIDCreationFlags1:00:"
+          },
+          {
+            "full_identity": "0:0:24:UMaterialInstanceDynamic1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:036:0:0:24:UMaterialInstanceDynamic1:00:"
+          }
+        ]
+      },
+      "trace": {
+        "kind": "global_function",
+        "ordinal": 106112,
+        "registration_id": 106112,
+        "context": {
+          "namespace": "Material",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58211,
+        "declaration": "UMaterialInstanceDynamic CreateDynamicMaterialInstance(UObject WorldContextObject,UMaterialInterface Parent,FName OptionalName = NAME_None,EMIDCreationFlags CreationFlags = EMIDCreationFlags::None)",
+        "call_convention": "cdecl",
+        "callable_stub_id": 9657,
+        "auxiliary_object_stub_id": null
+      },
+      "post_bind": {
+        "kind": "global_function",
+        "engine_function_id": 59525
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58211,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": 0,
+        "hidden_argument_default": "__WorldContext",
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "binds_methods": [
+        {
+          "declaration": "UMaterialInstanceDynamic CreateDynamicMaterialInstance(UObject WorldContextObject,UMaterialInterface Parent,FName OptionalName = NAME_None,EMIDCreationFlags CreationFlags = EMIDCreationFlags::None)",
+          "unreal_path": "CreateDynamicMaterialInstance",
+          "static_in_unreal": true,
+          "static_in_script": true,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": 0,
+          "determines_output_type_argument": -1,
+          "class_name": "Material",
+          "script_name": ""
+        }
+      ],
+      "peer_evidence": {
+        "path": "work/npc-batch-tests/beard-switch/materials/fresh-mid-factory-native-check.json",
+        "sha256": "eeae78126ffb75e84864c62548774dcbb7c0490bc8109f68bd010d25f07c84ed"
+      },
+      "origin": "Independently registrar-derived, not claimed as observed regenerated T3/T4."
+    },
+    {
+      "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:22:CopyParameterOverrides1:056:6:object1:51:01:01:11:029:0:0:17:UMaterialInstance1:00:,27:9:primitive2:821:01:01:01:0",
+      "expected_t3": {
+        "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:22:CopyParameterOverrides1:056:6:object1:51:01:01:11:029:0:0:17:UMaterialInstance1:00:,27:9:primitive2:821:01:01:01:0",
+        "name": "CopyParameterOverrides",
+        "owner_full_identity": "0:0:24:UMaterialInstanceDynamic1:00:",
+        "is_const": false,
+        "is_method": true,
+        "is_imported": false,
+        "type_dependencies": [
+          {
+            "full_identity": "0:0:17:UMaterialInstance1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:029:0:0:17:UMaterialInstance1:00:"
+          },
+          {
+            "full_identity": null,
+            "token": 82,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:821:01:01:01:0"
+          }
+        ]
+      },
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 106595,
+        "registration_id": 106595,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58694,
+        "owner_type_id": 3680,
+        "declaration": "void CopyParameterOverrides(UMaterialInstance MaterialInstance)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8703,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140854380,
+        "engine_function_id": 60018
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58694,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "binds_methods": [
+        {
+          "declaration": "void CopyParameterOverrides(UMaterialInstance MaterialInstance)",
+          "unreal_path": "CopyParameterOverrides",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ],
+      "peer_evidence": {
+        "path": "work/npc-batch-tests/beard-switch/materials/copy-mid-overrides-native-check.json",
+        "sha256": "f8f5b03df663c7b938dc3ee0062f8c828f933a7b9a51463877cdd64147e70194"
+      },
+      "origin": "Independently registrar-derived, not claimed as observed regenerated T3/T4."
+    }
+  ],
+  "type_dependencies": [
+    {
+      "full_identity": "0:0:7:UObject1:00:",
+      "pristine_t1_present": true,
+      "previous_snapshot_type": null,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 14600,
+        "registration_id": 14600,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 2109,
+        "declaration": "UObject",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140852809
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 2109,
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": null,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      }
+    },
+    {
+      "full_identity": "0:0:18:UMaterialInterface1:00:",
+      "pristine_t1_present": true,
+      "previous_snapshot_type": null,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 15869,
+        "registration_id": 15869,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 3378,
+        "declaration": "UMaterialInterface",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140854078
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 3378,
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 2109,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      }
+    },
+    {
+      "full_identity": "0:0:5:FName1:00:",
+      "pristine_t1_present": true,
+      "previous_snapshot_type": null,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 28768,
+        "registration_id": 28768,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 12959,
+        "declaration": "FName",
+        "byte_size": 8,
+        "alignment": 8,
+        "flags": 778,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 4,
+            "is_object_pointer": false
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 67121835
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 12959,
+        "byte_size": 8,
+        "alignment": 4,
+        "flags": 778,
+        "base_type_id": null,
+        "shadow_type_id": null,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      }
+    },
+    {
+      "full_identity": "0:0:17:EMIDCreationFlags1:00:",
+      "pristine_t1_present": false,
+      "previous_snapshot_type": null,
+      "trace": {
+        "kind": "enum",
+        "ordinal": 5614,
+        "registration_id": 5614,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 762,
+        "declaration": "EMIDCreationFlags",
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": false,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": true,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 1,
+            "value_alignment": 1,
+            "is_object_pointer": false
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "enum",
+        "engine_type_id": 774
+      },
+      "final_state": null
+    },
+    {
+      "full_identity": "0:0:24:UMaterialInstanceDynamic1:00:",
+      "pristine_t1_present": true,
+      "previous_snapshot_type": null,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 16171,
+        "registration_id": 16171,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 3680,
+        "declaration": "UMaterialInstanceDynamic",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140854380
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 3680,
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 3677,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      }
+    },
+    {
+      "full_identity": "0:0:17:UMaterialInstance1:00:",
+      "pristine_t1_present": false,
+      "previous_snapshot_type": {
+        "full_identity": "0:0:17:UMaterialInstance1:00:",
+        "object_kind": 67108864
+      },
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 16168,
+        "registration_id": 16168,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 3677,
+        "declaration": "UMaterialInstance",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140854377
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 3677,
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 3378,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      }
+    }
+  ],
+  "new_types": [
+    {
+      "full_identity": "0:0:17:EMIDCreationFlags1:00:",
+      "pristine_t1_present": false,
+      "previous_snapshot_type": null,
+      "trace": {
+        "kind": "enum",
+        "ordinal": 5614,
+        "registration_id": 5614,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 762,
+        "declaration": "EMIDCreationFlags",
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": false,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": true,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 1,
+            "value_alignment": 1,
+            "is_object_pointer": false
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "enum",
+        "engine_type_id": 774
+      },
+      "final_state": null
+    }
+  ],
+  "enum_values": [
+    {
+      "kind": "enum_value",
+      "ordinal": 5615,
+      "registration_id": 5615,
+      "context": {
+        "namespace": "",
+        "config_group": null,
+        "access_mask": 4294967295
+      },
+      "owner_type_id": 762,
+      "name": "None",
+      "value": 0
+    },
+    {
+      "kind": "enum_value",
+      "ordinal": 5616,
+      "registration_id": 5616,
+      "context": {
+        "namespace": "",
+        "config_group": null,
+        "access_mask": 4294967295
+      },
+      "owner_type_id": 762,
+      "name": "Transient",
+      "value": 1
+    },
+    {
+      "kind": "enum_value",
+      "ordinal": 5617,
+      "registration_id": 5617,
+      "context": {
+        "namespace": "",
+        "config_group": null,
+        "access_mask": 4294967295
+      },
+      "owner_type_id": 762,
+      "name": "EMIDCreationFlags_MAX",
+      "value": 2
+    }
+  ],
+  "proof_limit": "Sealed declaration/admission authority only; captured compiler T3/T4, unique MID allocation and visible material restoration require separate checks."
+}

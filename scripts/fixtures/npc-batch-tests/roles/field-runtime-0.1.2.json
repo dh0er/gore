@@ -1,0 +1,51 @@
+{
+  "schema": "gore.npc-batch.field-runtime.v1",
+  "date": "2026-09-13",
+  "bundle": "NpcFieldRolesTest",
+  "version": "0.1.2",
+  "user_results": {
+    "flee": false,
+    "report": "B did nothing again. User pressed31, then27, then31."
+  },
+  "save": {
+    "slot": "G1R-003",
+    "title": "rolle-flucht-v3",
+    "file": {
+      "bytes": 1048335,
+      "sha256": "65c1eb3ef0f19c01a0a4fc5a1c4a0cecea4978861d8549970084f717afb741bf"
+    },
+    "global_id": "GORE_TEST_B-WP_WarningFlock_XT_02",
+    "one_saved_B": true,
+    "is_dead": false,
+    "routine_after_stop": "/Script/Angelscript.DailyRoutine_GoreRoleWait",
+    "markers": {
+      "gore_role_old_flee_mode": 2.0,
+      "gore_role_flee_entered": 0.0,
+      "gore_role_flee_attempts": 0.0,
+      "gore_role_flee_moved_cm": 0.0,
+      "gore_role_flee_distance": -1.0,
+      "gore_role_flee_exit": 2.0,
+      "gore_role_flee_override": 0.0,
+      "gore_role_dead": 0.0,
+      "gore_role_defeated": 0.0,
+      "gore_role_health": 50.0,
+      "gore_role_enemy": 0.0,
+      "gore_role_relationship": 3.0,
+      "gore_role_flee": 0.0,
+      "gore_role_follow": 0.0
+    },
+    "readback_sha256": "6bb027e3271e1e0e3fb251c44af37a86b2b50ae4640cf55892cca50b2ca60782"
+  },
+  "diagnosis": {
+    "observed": "No first task-body entry marker, target distance, movement attempt or movement was recorded.27 did not clear these values;31 only snapshots current role state.",
+    "not_observed": "The task body did not reach its first marker; pathfinding and the unbounded UndrawWeapon call have not been shown to run. A final save after27 cannot reconstruct every prior native state.",
+    "event_binding": "Livecache DoTask and OnGracefulExitRequested have the same override/event metadata as the proven GoreScheduledActivity.",
+    "candidate": "Flee explicitly sets bSupportsSimulatedSteps=false; base/activity/TestGotoWP/TestRunToWP and checked stock Fear/Disengage use true.0.1.3 aligns the flag.",
+    "limit": "The native scheduling gate is not exposed in the script source. This difference is a focused candidate, not a proven runtime root cause.",
+    "exit": "0.1.2 choice27 overwrote prior exit codes with2.0.1.3 preserves nonzero codes."
+  },
+  "archive_report": "../profile-cleanup-after-flee-v3.json",
+  "prior_results": "field-runtime-0.1.1.json",
+  "correction": "field-fix-0.1.3.json",
+  "next_test": "Fresh072 ->26 -> approach B unarmed within10m -> after flight or20-30s stillness27 ->31 -> save rolle-flucht-v4. No revival retest."
+}

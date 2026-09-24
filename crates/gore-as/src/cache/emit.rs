@@ -56109,7 +56109,7 @@ mod literal_value_lifetime_tests {
             row
         }).collect();
         Func { name: "Fixture".into(), param_defaults: Vec::new(), namespace: String::new(),
-            ret: DataType::default(), params: Vec::new(), bytecode, obj_locals: Vec::new(),
+            ret: DataType::default(), params: Vec::new(), bytecode, variable_space: 0, obj_locals: Vec::new(),
             is_ufunction: false, traits: 0 }
     }
 

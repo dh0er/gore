@@ -1,0 +1,938 @@
+# Characters (NPCs)
+
+`gore npc` reads the game's characters — which ones exist, what one of them is
+made of, and which world points spawn it — and writes the AngelScript that adds
+a new character to the world or stops a shipped one being placed. Everything on
+this page happens offline. The authoring commands write source, a manifest and a
+build spec; compiling, packaging and deploying are separate steps you run
+afterwards, and this group launches nothing.
+
+The read commands are proven offline. Authored NPC bodies, a shipped NPC's
+health edit, and an invented NPC's voice, quest, knowledge and relationship
+across game sessions have also been observed in game. Read
+[What is proven, and what is not](#what-is-proven-and-what-is-not) before you
+build anything on it.
+
+Open implementation and game-test work is tracked in
+[NPC modding: open work](npc-open-items.md), in the user's order: heads, objects,
+voice triggers, then NPC roles.
+
+## The class chain
+
+A character in Gothic 1 Remake is not a data record. It is a chain of
+AngelScript classes, and each link names the next one through a class-scope
+`default`:
+
+```
+USpawnAIAgentDefinition_<ID>          the spawn handle
+  default AIAgentConfigClass    ->  UAIAgentConfig_Human_<ID>
+                                      default m_CharacterDefinition -> UCharacterDefinition_Human_<ID>
+                                        default m_UniqueName = n"<ID>"
+                                        its SUPER CLASS is the faction (16 guild bases)
+```
+
+The faction is not a field. A character definition **derives** from one of the
+16 guild base classes, so "which guild is this NPC in" is answered by its super
+class, not by reading a value out of it.
+
+The shipped cache declares 658 character definitions, 621 agent configs and
+1053 spawn definitions, plus the surrounding parts a character refers to:
+1923 daily routines, 1091 conversation settings and 846 visual definitions.
+The NPC catalog compiled into `gore.exe` has 1095 rows.
+
+## Placement lives in the level scripts
+
+Placement is not part of that chain. A character appears in the world because a
+**level script** — one world section's script module — calls `SpawnAIAgent`
+from a world point:
+
+```angelscript
+class UWP_EZ_START_DIEGO_SPAWN : UWorldPointScript
+{
+    UFUNCTION()
+    void OnWorldStart()
+    {
+        this.SpawnAIAgent(TSubclassOf<USpawnAIAgentDefinition>(USpawnAIAgentDefinition_OC_STT_Diego::StaticClass()), nullptr);
+    }
+}
+```
+
+There are 1764 such calls across 3939 `UWorldPointScript` classes. 14 of the
+1764 pass the definition as a bare class reference, without the
+`TSubclassOf<>(…::StaticClass())` wrapper — all of them creatures in the
+Ancient Fortress and the Free Mine. `gore npc sites` reads both forms, so
+neither shape is invisible.
+
+Seventeen world sections carry characters. Pick the one you mean here, then
+pass its module to `gore npc sites --level`:
+
+| World section | Level script module | Characters |
+|---|---|---|
+| Old Camp | `LevelScripts.Map_x2_y1_OldCamp_AI_script` | 401 |
+| Exchange Zone | `LevelScripts.Map_x2_y2_ExchangeZone_AI_script` | 242 |
+| Ancient Fortress | `LevelScripts.Map_x1_y1_AncientFortress_AI_script` | 229 |
+| New Camp | `LevelScripts.Map_x3_y2_NewCamp_AI_script` | 159 |
+| Swamp Camp | `LevelScripts.Map_x0_y1_SwampCamp_AI_script` | 140 |
+| Free Mine | `LevelScripts.Map_x3_y1_FreeMine_AI_script` | 139 |
+| Monastery Ruins | `LevelScripts.Map_x1_y2_MonasteryRuins_AI_script` | 131 |
+| Old Mine | `LevelScripts.Old_Mine_AI_script` | 114 |
+| Sleeper Temple | `LevelScripts.SleeperTemple_AI_script` | 105 |
+| Tundra | `LevelScripts.Tundra_AI` | 34 |
+| Orc Graveyard | `LevelScripts.OrcGraveyard_AI` | 20 |
+| Sleeper Dream | `LevelScripts.Map_SleeperDream_AI_script` | 20 |
+| Shipwreck | `LevelScripts.ShipWreck_AI` | 13 |
+| In Extremo (Old Camp) | `LevelScripts.Map_OldCamp_IE_script` | 7 |
+| Stonehenge | `LevelScripts.StoneHenge_AI` | 5 |
+| Sunken Tower | `LevelScripts.SunkenTower_OldCamp_AI_script` | 3 |
+| Xardas' Tower | `LevelScripts.XardasTower_AI` | 2 |
+
+`--level` matches on the module name, so a distinctive fragment such as
+`XardasTower` or `OldCamp` is enough.
+
+## `npc list` — the ids the game ships
+
+```
+$ gore npc list diego
+human    OC_STT_Diego  CharacterDefinition_Human_OC_STT_Diego
+human    OC_STT_Diego_Sleeper  CharacterDefinition_Human_OC_STT_Diego_Sleeper
+2 of 2 shown
+```
+
+The filter is one positional word matched against the id and the class name.
+`--category <human|creature|other>` narrows further, `--max <N>` caps the
+printed rows (50 by default) while the final line still reports how many
+matched, and `--json` returns the same rows as one document.
+
+`list` answers from the catalog compiled into `gore.exe`. **It needs no game
+installation**, which makes it the right first step when you only want the
+exact id to hand to `show`.
+
+## `npc show` — the whole chain and its spawn sites
+
+```
+$ gore npc show OC_STT_Diego
+OC_STT_Diego
+  spawn definition       USpawnAIAgentDefinition_OC_STT_Diego
+  ai agent config        UAIAgentConfig_Human_OC_STT_Diego
+  character definition   UCharacterDefinition_Human_OC_STT_Diego
+  guild base             UCharacterDefinition_Human_OldCamp_Shadow
+  unique name            OC_STT_Diego
+spawns at 2 site(s):
+  UWP_INTRO_FALL3  in LevelScripts.Map_x2_y2_ExchangeZone_AI_script
+    translation: measured, no known difference
+  UWP_EZ_START_DIEGO_SPAWN  in LevelScripts.Map_x2_y2_ExchangeZone_AI_script
+    translation: measured, no known difference
+```
+
+`show` takes the **exact** id, not a filter; it resolves
+`USpawnAIAgentDefinition_<ID>` and walks the chain from there. A link it cannot
+resolve prints as `—` rather than being dropped, so a gap in the chain never
+looks like a character without a guild.
+
+Unlike `list`, `show` reads the installed script cache. `--cache <PATH>` reads
+an exact cache instead, `--game <ROOT>` picks the install; without either, the
+configured game path is used and then Steam auto-detect. `--json` returns the
+chain, the sites and the translation judgement as one document.
+
+`show` deliberately emits only the modules it needs — the 29 modules in the
+`LevelScripts.` namespace plus the few that declare the classes in the chain.
+That is not an optimisation detail you can ignore: one shipped module,
+`Map.MainMap.WorldPointManagerConfig_MainMap`, needs over five minutes on its
+own to recover its class defaults, against about two seconds for an ordinary
+module. A command that emitted the whole tree would not answer.
+
+## `npc sites` — where the level scripts spawn
+
+```
+$ gore npc sites --level XardasTower
+UOW_XT_DEMON_LESSER_SPAWN_WP  USpawnAIAgentDefinition_XT_XardasDemon  LevelScripts.XardasTower_AI
+UXT_Skeleton_SPAWN_WP  USpawnAIAgentDefinition_Skeleton_XardasServant  LevelScripts.XardasTower_AI
+2 of 2 shown
+```
+
+Each row is the world point, the spawn definition it names, and the level
+script it lives in. `--level <TEXT>` keeps the sites whose module contains that
+text, `--npc <ID>` keeps only the sites that spawn one character, `--max <N>`
+caps the printed rows, and `--json` returns them as one document. Like `show`,
+it reads the installed cache and takes `--cache` / `--game`.
+
+## Reading the `translation:` verdict
+
+Every site `show` prints carries one line about its level script. It reports
+what is known about **recompiling that module** — because changing where a
+character stands means recompiling the level script that places it. There are
+exactly three states, and they must not be conflated:
+
+| Line | What it means |
+|---|---|
+| `translation: measured, no known difference` | Somebody measured this module on this game version, and its recompile produced no known difference. |
+| `translation: N divergent function(s), M behaviour risk(s)` | Measured, and the recompile is known to differ. `N` functions came back different; `M` of those differences are behaviour risks. |
+| `translation: NOT MEASURED for this game version` | **Nobody measured this module on this game build.** This is an absence of evidence, not a clean bill of health. Do not read it as reassurance. |
+
+The judgement is keyed to the exact cache and Binds seals, so a game update
+turns measured lines into `NOT MEASURED` rather than silently carrying an old
+verdict forward. `--json` returns the same three states as
+`{"measured": false}` or `{"measured": true, "divergent_functions": …,
+"behaviour_risks": …}`, so a caller does not have to parse the sentence.
+
+The same risk model backs `gore as emit` and `gore as compile-module`; the
+module-level detail is in [Scripts (AngelScript)](scripts.md).
+
+## Authoring a character
+
+Four commands make one path, and each one prints the next:
+
+| Command | What it does |
+|---|---|
+| `gore npc new <ID> --from <NPC> --at <POINT> -o <DIR>` | Write a workspace: the new character's module, and the level script one spawn line longer. |
+| `gore npc delete <NPC> -o <DIR>` | The other opening move: take a shipped character's spawn line out again. |
+| `gore npc check <DIR>` | Read that workspace back and refuse anything outside the contract. |
+| `gore npc stage <DIR>` | Write the build spec, and print the commands that compile and package it. |
+
+`gore npc text` stands beside them and writes the display name. None of the four
+compiles, packages, deploys or launches anything — `stage` prints the commands
+that do, and you run them.
+
+### `npc new` — derive a character and place it
+
+```
+$ gore npc new GORE_TEST_NPC --from OC_STT_Diego --at UOW_XT_DEMON_LESSER_SPAWN_WP --waypoint FP_OC_SMALLTALK_33 -o work/npc
+authored GORE_TEST_NPC in work/npc
+  GORE_TEST_NPC.as  the character, 6 classes
+  XardasTower_AI.as  one added spawn line at UOW_XT_DEMON_LESSER_SPAWN_WP
+  translation: measured, no known difference
+next: gore npc check work/npc
+```
+
+The workspace it writes:
+
+```
+work/npc/
+  GORE_TEST_NPC.as                 the character: all its classes in one module
+  XardasTower_AI.as                the level script, one line longer
+  pristine/XardasTower_AI.as       the untouched copy check compares against
+  gore-npc-edit.json               the manifest
+```
+
+The six classes are the chain from the top of this page plus the parts hanging
+off it: character definition, visuals, AI agent config, spawn definition, the
+conversation settings the voice comes from, and — with `--waypoint` — a daily
+routine. Vanilla spreads those across four modules plus two shared ones
+(`Spawning/SpawningDefinition_Human.as`, `InteractiveObjects/NpcVisualLibrary.as`).
+Putting all six in one module of the character's own is what keeps the mod off
+those shared files, and it costs nothing: AngelScript registers classes
+globally, so which module a class lives in is free.
+
+`-o` must name a directory that does not exist. `--at` takes a world point from
+`gore npc sites`; an unknown one is refused, with the nearest names it was not.
+
+**`--from` takes a character, not a guild.** The 16 guild bases carry the
+faction and nothing else — no model, no stats, no voice — so a character derived
+straight from one would stand in the world with no appearance at all. `--from`
+is what gives the new character its looks, stats and voice. `--guild <BASE>`
+then swaps *only* the faction, by changing which class the character definition
+derives from: `--from OC_STT_Diego --guild OldCamp_Guard` is Diego's body in the
+guards' faction.
+
+**The appearance is borrowed, not built.** 817 shipped characters carry a
+prebaked model and not one of them assembles its looks from parts at runtime. A
+new id has no prebaked model of its own, so the generated visuals class keeps
+the template's — `default m_PreBakedName = "OC_STT_Diego"`. `--modular-visuals`
+takes the other path instead. The first runtime test produced a working body
+with the Hero's appearance, rather than the template's. See the remaining
+limits below before choosing it.
+
+`--trader` adds an empty trader configuration. `--waypoint` gives the character
+a daily routine with one all-day task at one spot; without it, the character has
+no routine at all. This does not create multiple daily phases. The generated
+`WhenOutOfBounds` teleport mode is conditional and does not guarantee placement
+at that spot. Choose a reachable target near the spawn. `check` looks that
+waypoint up in the bundled location catalog, because the game ignores an unknown
+one without a word; catalog membership does not prove a navigable route.
+
+### Editing a daily schedule
+
+`npc routine` adds multiple phases to a workspace from `npc new` or `npc clone`:
+
+```powershell
+gore npc routine spots --activity guard --area OC
+gore npc routine spots --activity sit --area OC
+gore npc routine set work/my-npc --time 08:00 --activity guard --spot BreadcrumbActor_OC_NIGHTWATCH_GUARD10_5
+gore npc routine set work/my-npc --time 18:00 --activity sit --spot IO_OC_CHAIR_81
+gore npc routine show work/my-npc
+gore npc routine remove work/my-npc --time 18:00
+```
+
+Times use `HH:MM`, from `00:00` to `23:59`. Each phase lasts until the next;
+the last wraps to the following day. A single phase lasts all day. Setting an
+existing time replaces that entry. Removing an entry extends the previous
+phase; removing the last entry is refused. If the workspace already has the
+original `--waypoint` routine, its `00:00 stand` phase is retained on the first
+edit. Replace or remove that phase explicitly if it is not wanted.
+
+Activities are `stand`, `read`, `drink`, `sit`, `sleep`, `guard` and `alchemy`.
+The generated schedule has zero random time offsets and teleport mode `Never`:
+the character walks between reachable targets. Stand/read/drink navigate to a
+known location directly; reading and drinking repeat the tested short actions
+with a two-second pause. The other four activities use the shipped object/guard
+states. `routine spots` checks their advertised action tags and restrictions in
+the installed `G1R/Script/Map/MainMap/InteractionSpots.json`. Use `--game` or the
+configured game path. Restricted, ambiguous or unsupported objects are refused
+rather than guessed from names. Direct activities need only the bundled location
+catalog. Both lookup modes offer `--area`, `--prefix`, `--max` and `--json`.
+Known action compatibility does not prove that a route is navigable or an object
+is free at runtime. Pick nearby places in the same accessible area.
+
+The CLI keeps its plan and generated script together in a marked block inside
+the NPC's authored module, and wires the level's existing spawn call to it.
+Other source stays intact. Handwritten routines and manual changes inside that
+block are refused by the editor; arbitrary AngelScript remains editable directly.
+This convenience path does not rewrite routines spread across a shipped NPC's
+checkout modules. `npc check` and `npc stage` validate managed blocks and their
+spots before the usual compile/build/deploy steps.
+
+Already-spawned NPCs retain their saved AI state. Editing or deploying the source
+does not automatically replace it. The generated `GoreApplyRoutine_MY_NPC()`
+helper resolves the NPC and calls `ExchangeDailyRoutineToClass` without moving
+the actor or changing the clock; it returns `false` if the NPC does not exist.
+Call it explicitly from your test dialog or setup script **after** spawning the
+NPC. Reapplying the helper starts the new routine again. Do the change before
+ending the topic, and avoid switching the conversation owner's AI in the middle
+of effects that still need to run. `routine show` prints the exact helper name;
+`--json` exposes the phases for tools. Quest-dependent alternate schedules remain
+handwritten. The activities reuse the campaign's runtime-tested paths; a newly
+generated combination still needs its own in-game route/save-load check.
+
+### Trader stock uses the global shop record
+
+`npc new --trader` supplies an empty config, not goods. Define stock in its
+`UTraderConfigBase` subclass with `AddTraderItemAllDifficulties(ItemClass, Count,
+EventName)`, as shipped configs do. Use `OnWorldStart` for initial stock. Shipped
+configs also use chapter and dedicated global events. The initial-plus-late
+batch path now has a successful save/load test; see the evidence below.
+
+Do not seed a shop with `AddItemToInventory(..., EInventoryTypes::Trader)`:
+that writes an NPC container. Native trading uses the matching row in
+`m_GenericData["GameStateDataBase"].m_Traders`: `m_Items` holds goods and ore,
+`m_DefaultItems` the restock baseline, and `m_GeneratedEvents` processed batches.
+The [failed economy test](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.1.json)
+proved the distinction: the NPC container had3/10/100, but the global shop maps
+were empty. Explicit region/type alone did not fix it.
+
+The [0.1.2 result](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.2.json)
+passed buying/selling/cancel. However, its manually called custom event filled
+current stock while the default map stayed empty; the first reload populated
+defaults and added the same batch again. Both the event ledger and menu marker
+were preserved. This is a measured failure of that fixture path, not proof that
+all custom events or vanilla trading are broken. Do not reuse it as a qualified
+recipe for persistent late stock grants.
+
+The [0.1.3 result](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.3.json)
+passes normal initial stock and two loads after a purchase. All three saves
+retain A's2 cheese/10 arrows/108 ore, defaults3/10/100, and Hero's1 cheese/42 ore.
+The manual event call is removed. Test from an untouched input; an old save with missing defaults
+or duplicated items cannot prove clean initialization. Read **both** global stock
+maps after a trade and repeated load; a grant marker alone is not stock proof. Difficulty multipliers
+in `UTraderConfigBase` can change quantities; this fixture fixes the relevant
+ore/arrow multipliers to1 for reproducible counts. Preserve the shipped helper
+bytecode rather than recompiling a semantically unqualified decompilation.
+
+The [late-stock follow-up](../../scripts/fixtures/npc-batch-tests/roles/restock/runtime-0.1.0.json)
+passes on25168047. Register initial and later batches in the same config before
+initializing the shop; use `OnWorldStart` for the initial batch, then dispatch
+the distinct later event through `UWorldPointManager::CallGlobalEvent`.
+In this test3/10/100 becomes5/15/120. Sending the same event again does not
+grant it twice. One cheese purchase and two full restarts leave A4/15/127 and
+Hero1 cheese/43 ore, matching all five inspected saves and the user's checklist.
+
+Saved defaults remain3/10/100 immediately after the late delivery and become
+5/15/120 after restart, without adding the batch again to current stock.
+Do not manually repair this normal baseline update. The older0.1.2 path and
+game version differ; an empty initial baseline has not been established as
+its sole failure cause. This qualifies one later batch and replay protection,
+not unlimited time-based stock replenishment or every shop configuration.
+
+### `npc delete` — stop a shipped character being placed
+
+```
+$ gore npc delete XT_XardasDemon -o work/demon
+XT_XardasDemon will no longer be placed, from work/demon
+  removed from UOW_XT_DEMON_LESSER_SPAWN_WP
+  translation: measured, no known difference
+  NOTE: this only stops future placement. A save that already spawned XT_XardasDemon still carries that body
+next: gore npc check work/demon
+```
+
+Read that note literally. Removing the spawn line changes what the level script
+does at world start; it does not reach into a save. A character a save has
+already seen is a body in that save and stays one. Only a new game starts
+without it.
+
+A character placed from more than one level script is refused rather than half
+removed — one bundle entry carries one edited level script, so that would take
+one mod per script — and the message names the scripts.
+
+### Why an authored character does not derive from its template
+
+A character's own class is almost always a leaf: nothing in the shipped game
+derives from `UCharacterDefinition_Human_OC_STT_Diego`. The compiler declares
+the generated `__InitDefaults()` of such a class **final**, and a subclass that
+brings its own `default` statements needs its own `__InitDefaults`. So the
+obvious shape does not compile:
+
+```
+GORE_AS_COMPILER_ERROR: Method 'void UCharacterDefinition_Human_OC_STT_Diego::__InitDefaults()'
+declared as final and cannot be overridden
+```
+
+`new` and `clone` therefore climb from the template to the nearest ancestor
+that has siblings, and write everything skipped along the way into the file.
+For Diego that ancestor is `UCharacterDefinition_Human_OldCamp_Shadow`, which
+29 characters share, and the file carries his 44 values.
+
+That is why the generated header says `derived from OC_STT_Diego` while the
+class line names the guild base: the character is Diego's, the parent is what
+the compiler allows.
+
+One class needs no climb — `UCharacterVisualsDefinition_Human_OC_STT_Diego` is
+not a leaf, because Diego's Sleeper variant derives from it. That single
+difference is what separated the one class that compiled from the three that
+did not, the first time this was built for real.
+
+### `npc clone` — the same character, with its numbers on the table
+
+`new` derives: the generated class states its identity and inherits everything
+else without saying so. That is right for a fresh character, and useless when
+the point is to change something, because nothing is there to change.
+
+```
+$ gore npc clone OC_STT_Diego --id DIEGO_TWIN --at UOW_XT_DEMON_LESSER_SPAWN_WP -o work/twin
+authored DIEGO_TWIN in work/twin
+  DIEGO_TWIN.as  the character, 5 classes
+  XardasTower_AI.as  one added spawn line at UOW_XT_DEMON_LESSER_SPAWN_WP
+```
+
+`clone` writes the template's resolved defaults into the file — 51 lines for
+Diego: his level, his health, every resistance, his whole starting inventory,
+his skills, his personality, his combat AI. Change what you want and leave the
+rest.
+
+```angelscript
+class UCharacterDefinition_Human_DIEGO_TWIN : UCharacterDefinition_Human_OC_STT_Diego
+{
+    default m_UniqueName = n"DIEGO_TWIN";
+    default m_CharacterVisualsDefinition = UCharacterVisualsDefinition_Human_DIEGO_TWIN::StaticClass();
+    default m_CharacterType = GameplayTag::AIAgent_Human_Shadow;
+    default m_InitialGuildEffect = UGE_Guild_Human_OldCamp_ShadowLeader::StaticClass();
+    default m_Personality = UGothicCharacterPersonality_Brave_Archer_Patient::StaticClass();
+    default SetAttributeValue("AttributeSet_LevelProgression.Level", 100.0f, TSubclassOf<UDifficultySettings>(nullptr));
+    …
+}
+```
+
+The two identity lines stay the generator's. Copying `m_UniqueName` across
+would give the clone the template's name, and the save keys a character by that
+name.
+
+### `npc checkout` — change a shipped character's values
+
+```
+$ gore npc checkout OC_STT_Diego -o work/diego
+checked OC_STT_Diego out into work/diego
+  CharacterDefinition_OC_STT_Diego.as  1 classes from AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego
+  translation: measured, no known difference
+  edit the values; class names and their parents have to stay as they are, because they are the character's identity in the cache
+next: gore npc check work/diego
+```
+
+What comes out is the module that declares the character's
+`CharacterDefinition` — its level, health, resistances, strength and dexterity,
+its starting inventory, its guild parent, its skills, its personality and its
+combat AI. For Diego that is 44 `default` statements. Edit the values and run
+`check`.
+
+Two parts of a character are deliberately **not** checked out: its appearance
+lives in `InteractiveObjects/NpcVisualLibrary.as` and its spawn definition in
+`Spawning/SpawningDefinition_Human.as`, each shared by hundreds of characters.
+Replacing one of those to change a single character would put a module every
+other character depends on into your mod.
+
+The guard here is the mirror image of the one for authoring. Values may change
+freely — that is the whole point. Class names and their parent classes may not:
+
+```
+$ gore npc check work/diego
+  [blocking] class UCharacterDefinition_Human_OC_STT_Diego is gone. A shipped class may change its values, but removing or renaming it produces a different symbol that no longer matches the base cache
+  [blocking] class UCharacterDefinition_Human_RENAMED is new. Checking a shipped character out is for changing its values; a new class needs `gore npc new`, which carries the contract for one
+```
+
+A checkout builds through the single-module standalone route. After editing a
+value, run:
+
+```powershell
+gore npc check work/diego
+gore npc stage work/diego --mod-name ToughDiego
+# Run the printed compile-module and mod build commands.
+```
+
+No emitted full tree is needed for this one-module edit. Both compiler routes
+require every shipped default target to remain at least as often in the source
+and in the regenerated module. Keep all 44 Diego defaults when changing his
+health or inventory; removing an existing assignment or call is refused.
+
+The default-target proof distinguishes temporary values from member writes:
+`STOREOBJ` and `CpyRtoV8` are accepted only when their entire destination lies
+inside the function's local frame. `REFCPY` must resolve a member chain rooted
+in `this`, and that member counts as a preserved target. Unknown destinations
+still refuse. The four other previously unsupported copy opcodes remain
+unsupported; none occurs in the measured shipped initializers.
+
+`check` validates the workspace and class structure; the compiler performs the
+bytecode preservation proof before publishing a result. A successful offline
+build alone does not prove that the edited values appeared in a new game.
+
+The `ToughDiego` fixture crossed that boundary on 2026-09-06, BuildID `24878692`:
+checkout, edit both health defaults from 540 to 1234, compile-module, build,
+inspect, deploy, then a new game played and saved by the user. Reading that save
+with `private.npc.attributes` found `Health` and `MaxHealth` both at **1234**,
+for both base and current values, under
+`OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN`. The user subsequently loaded that save
+(`G1R-002.sav`) and saved to `G1R-028.sav`; both retain all four values at 1234.
+This proves the tested health edit through runtime, serialization and reload;
+other defaults still need their own runtime evidence. See the
+[session results](../../scripts/fixtures/npc-session/RESULTS.md).
+
+### `npc check` — the diff guard
+
+```
+$ gore npc check work/npc
+translation: measured, no known difference
+no problems found in work/npc
+offline-checked only: that this character appears, keeps its routine and survives a save is not proven in game
+next: gore npc stage work/npc
+```
+
+The guard exists because of the company a spawn line keeps. The Old Camp level
+script places 401 characters, and splicing recompiles the whole module — so a
+line that moved by accident would surface in game as somebody else's character
+misbehaving, a long way from anything you edited. `check` diffs the edited
+level script against the `pristine/` copy line by line and blocks on every
+change that is not a spawn line of the character being authored, naming the
+line number and quoting what was on it.
+
+It also blocks on:
+
+- a workspace authored against a different script cache than the installed one
+  — a game patch, or a different `--cache`. Checking against the wrong cache is
+  not checking;
+- an id the game already ships, whose authored module would collide with the
+  shipped one;
+- a level script that did not change at all, which has nothing to build.
+
+An unresolvable routine waypoint blocks `check` and `stage`: the game would
+silently ignore it. Choose a spot from `gore npc routine spots` or
+`gore location resolve` before building.
+
+### `npc stage` — the build spec and the commands
+
+```
+$ gore npc stage work/npc --tree work/tree --mod-name GoreTestNpc
+reusing the source tree in work/tree (7317 modules)
+wrote work/npc/spec.json
+now run:
+  gore as compile "work/npc/.gore-npc-staged-tree" -o "work/npc/full.Cache" --mini "work/npc/GoreTestNpc.mini.Cache" --work-dir "work/npc.work" --backend standalone --game "<resolved game path>"
+  gore mod build --spec "work/npc/spec.json" -o "work/npc/build"
+then: gore mod deploy --bundle work/npc/build/GoreTestNpc
+```
+
+**There are two speed classes, and `stage` picks — you do not.** A new
+character touches two modules, one new and one shipped, and the shipped one
+refers to the new one. Separate mini-caches cannot depend on each other, so
+those two have to be compiled together, which is the complete-tree route above.
+A suppression touches exactly one shipped module and goes through
+`gore as compile-module`, which is many times faster and needs no tree at all:
+
+```
+$ gore npc stage work/demon --mod-name NoDemon
+wrote work/demon/spec.json
+now run:
+  gore as compile-module --backend standalone --op edit --module "LevelScripts.XardasTower_AI" --rel-path "LevelScripts/XardasTower_AI.as" --source "work/demon/XardasTower_AI.as" --work-dir "work/demon.work" -o "work/demon/NoDemon.mini.Cache"
+  gore mod build --spec "work/demon/spec.json" -o "work/demon/build"
+then: gore mod deploy --bundle work/demon/build/NoDemon
+```
+
+That is why `--tree` is required for a new character and pointless for a
+suppression. Emitting all 7317 modules takes around 19 minutes, nearly all of it
+one module (`Map.MainMap.WorldPointManagerConfig_MainMap`). The tree is
+therefore written once per game version, stamped with the cache it came from,
+and reused — which is what the `reusing` line reports. `stage` checks the
+selected and installed caches against the workspace, then copies that pristine
+tree into the workspace before applying its edits. This keeps later NPC
+workspaces from inheriting those edits. A tree stamped with a different cache
+or an older format is refused rather than quietly mixed with a newer one.
+
+`stage` runs neither command itself. A quarter of an hour is not something a
+tool should start without being asked.
+
+### `npc text` — the name above the lines
+
+A character's localization id is its id in lowercase, so the display name needs
+no lookup and no installation:
+
+```
+$ gore npc text GORE_TEST_NPC --name "Hannes" -o work/name.json
+wrote work/name.json
+  gore_test_npc -> "Hannes" in both German columns
+next: gore loc import --edits work/name.json
+```
+
+```json
+{
+  "gore_test_npc": {
+    "german": "Hannes",
+    "german_new": "Hannes"
+  }
+}
+```
+
+Both German columns, deliberately. Where `german_new` exists it wins over
+`german`, so a document that sets only `german` is a silent no-op — a mistake
+that has cost this project time before. `--english <NAME>` fills the three
+English columns the same way. The file goes into the game through
+`gore loc import --edits`, like any other text edit; see
+[Text & dialogs](text-and-dialogs.md).
+
+### Two NPC mods for the same world section do not run together
+
+Every authored character carries its own compiled copy of one level script, and
+that script is the whole world section. Two mods that both place a character in
+the Old Camp each carry a complete version of the same module, so installing
+both would mean taking one copy and discarding the other, silently losing
+whichever character lost. The Manager refuses that rather than installing the
+mix: a mini that would keep only some of the modules it carries is rejected with
+*a multi-module mini composes as one unit*. `gore mgr analyze` names the shared
+module as a hard conflict before it gets that far. Two NPC mods in *different*
+world sections touch different modules and coexist normally — see
+[Running many mods](mod-manager.md).
+
+## What is proven, and what is not
+
+Read this before you build on it.
+
+| | |
+|---|---|
+| **The three read commands** | Everything `list`, `show` and `sites` report is proven and produced entirely offline. `list` needs no installation at all; `show` and `sites` read a script cache and launch nothing. |
+| **What `check` verifies** | Proven, offline, about the workspace in front of it: that the edited level script differs from its pristine copy in nothing but spawn lines of the character being authored, that the workspace was authored against the installed script cache, that the id is not one the game already ships, and that the routine's waypoint is a spot the bundled catalog knows. That is a statement about source text, not about the game. |
+| **Recompiling a level script does not disturb its neighbours** | On the measured game build, BuildID `24878692`, the complete script tree emitted and recompiled unchanged produces a **byte-identical** cache: SHA-256 `7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511`, 124,459,412 bytes, 7317 modules. On that build, recompiling a level script therefore cannot change code the author did not touch. |
+| **Per-module translation** | Whether one particular level script survives its own recompile is the separate, per-module judgement the `translation:` line reports. Byte-identity of the whole tree does not answer it for a build nobody measured. |
+
+### Observed in game
+
+On 2026-09-05, on BuildID `24878692`, two authored characters were built,
+deployed and watched. Both were derived from Diego and placed at free world
+points at Xardas' Tower; they differed in one field, the appearance mode.
+
+| | |
+|---|---|
+| **A character that never shipped appears in the world** | Both stood at their world points after a load. |
+| **It has a body** | Both animate like any shipped NPC, can be focused, and can be spoken to. In the initial body test, each answered *"Nicht jetzt"*, the expected refusal before adding a conversation. |
+| **The borrowed look works** | `A`, carrying Diego's prebaked model, looks like Diego. |
+| **The save records it** | Both appear in the save under `GORE_TEST_A-WP_WarningFlock_XT_01` and `GORE_TEST_B-WP_WarningFlock_XT_02` — `<unique name>-<world point script without its leading U>`, exactly the shape a shipped character uses. |
+| **Nothing else moved** | In an earlier run the character was added to a world point that already spawned Xardas' lesser demon. The demon was still there, unchanged. |
+
+What that took, and what each cost, is worth knowing before authoring:
+
+- **`AIAgentCharacterClass` is not optional.** It names the actor blueprint that
+  gives a character its skeleton, animation, collision and focus. Without it the
+  agent still spawns and still reaches the save, but has no body: stock still, no
+  animation, unfocusable, and gone as the player walks up. `new` carries it from
+  the template; nothing else has to be done.
+- **Two characters at one world point stand inside each other.** Only one can be
+  focused and the other flickers with the viewing angle. Use `sites --free`.
+
+### Invented identity across sessions
+
+The focused [session fixture](../../scripts/fixtures/npc-session/README.md)
+passed on 2026-09-06, BuildID `24878692`. `GORE_TEST_A` received its first
+conversation inside the combined module emitted by `npc new`. The user
+completed the game campaign, including full restarts, and supplied screenshots
+of the active and completed quest with `<GORE_TEST_A>` as giver.
+
+Read-only verification independently confirmed these saved states:
+
+| Reload pair | Verified result |
+|---|---|
+| `G1R-023.sav` → `G1R-026.sav` | Quest remains `Running`; A retains its start marker and Friend relationship towards Hero. |
+| `G1R-025.sav` → `G1R-027.sav` | Quest remains `Succeeded`; A retains both markers and the same relationship. |
+
+Both pairs preserve exact A/B identities, inventories and attributes. Neither
+B, Hero nor Diego owns A's fixture knowledge. One stable Story modifier belongs
+to A and targets Hero; startup code does not recreate it. The
+[results](../../scripts/fixtures/npc-session/RESULTS.md) distinguish user
+observations from save inspection and retain artifact and evidence hashes.
+
+### Authored quest with automatic progression
+
+The user completed every step of [NpcQuestCallbacksTest0.1.2](../../scripts/fixtures/npc-batch-tests/quest/README.md)
+on2026-09-21, Steam build25168047. The quest has its own journal document and
+two objectives. Native callbacks advance from agreement to delivery, consume
+exactly two cheese and award25 ore once. Repeated final dialogue grants nothing
+further. The alternate cancellation path consumes nothing and grants no reward.
+Intermediate, successful and failed states survive the requested full restarts.
+See the [runtime result](../../scripts/fixtures/npc-batch-tests/quest/runtime-0.1.2.json).
+
+This extends the earlier direct-start/direct-success session evidence to this
+handwritten callback-driven quest. It does not qualify every generated quest
+graph or arbitrary branching. Completed start and result saves are archived
+outside the game's save list for later reproduction.
+
+### Voice on an invented identity
+
+The [voice campaign](../../scripts/fixtures/npc-voice/RESULTS.md) passed on
+2026-09-06, BuildID `24878692`, based on the user's completed game tests.
+`GORE_TEST_A` played shipped recordings and new recordings with new subtitle
+IDs. New Vorbis audio worked at 48 kHz mono, 44.1 kHz mono and 48 kHz stereo;
+an A → Hero → A exchange kept the correct speakers. Generic `Address_Call` and
+`DailyRoutine_Mumble` requests used the assigned Diego Voice05 subset, proving
+that selection separately from explicitly named recordings.
+
+Repeat playback, skipping and replay after a full restart worked. The diagnostic
+line without an audio file continued to the next recorded line. Save inspection
+of `G1R-029.sav` → `G1R-030.sav` found all eight selected topics on A and retained
+the completed quest, fixture knowledge, relationship, identities, inventories
+and attributes. Audible playback and the restart are user observations, not
+inferences from those saved topic markers. Lip sync was excluded; natural
+combat/routine triggers and other voice profiles were not qualified by this test.
+
+The later natural-voice0.1.2 campaign qualifies B/C greetings and everyday speech,
+including B speaking once while walking and continuation after full restart.
+The user explicitly confirms the audible B/Diego and C/Lares identities
+on2026-09-22. See the [voice result](../../scripts/fixtures/npc-batch-tests/voice/runtime-result-0.1.2.json).
+Two briefly flashing speech bubbles remain an observation of unknown cause.
+
+A later natural reaction was observed on invented B during the sitting/watch
+campaign0.1.11: B warned Hero to leave another camp member's hut, without a
+scripted generic-voice request. Save56 contains B's witness records for Hero
+trespassing in Hut31, owned by Digger26_531. B can react while seated as well
+as while watching. Visibility, owner context and conflict state affect that
+path; the reason warnings differed between the four saved situations is not
+established. See the [analysis](../../scripts/fixtures/npc-seat-guard/TRESPASSING.md).
+This qualifies a natural intrusion warning, not all everyday/combat triggers.
+
+The follow-up on2026-09-09 used bare fists. B's threat warning and voice worked,
+and lowering fists after the first warning ended it. After the second completed
+line, however, B stayed in the warning pose and saving was blocked until the
+user moved away. Saves57/58 were made after recovery or moving away. This is
+a partial pass with an open cleanup defect, not complete threat-AI coverage.
+The [investigation](../../scripts/fixtures/npc-weapon-warning/README.md) verifies
+that original warning modules and their reference targets were preserved; an
+original-code cleanup gate is a candidate, not a confirmed runtime diagnosis.
+The subsequent [0.1.12 correction](../../scripts/fixtures/npc-weapon-warning/RECOVERY.md)
+places a guarded end-assessment retry in a B-only subclass selected through
+`SetAIStateClassForType`; original warning modules stay byte-preserved. C's
+definition explicitly retains the old AI to prevent inheriting B's change.
+The custom AI inherits Diego's parent `UGameplayAbility_CharacterAI_Human`
+and retains Diego's sole extra default, ZombieBias target scoring at10000.
+Direct inheritance from Diego was rejected by its final defaults initializer;
+that restriction does not prevent selecting an authored AI for a new NPC.
+Compilation, override-slot checks and installed-cache verification passed.
+On2026-09-10 the user confirmed all focused0.1.12 tests. Saves59/60 contain both
+activation and recovery markers; warning cleanup, nearby saving and normal
+watch after loading work. Raising fists again after loading the second-warning
+save makes B attack immediately, so cleanup retains the observed escalation.
+This qualifies the tested bare-fists path, not every weapon or combat voice.
+
+The next [equipped-sword/combat-voice test](../../scripts/fixtures/npc-weapon-voice/README.md)
+uses separate slot61, `npc voice - waffentest start`, copied from54 with one
+usable sword. Its initial import was invisible: public identity copies disagreed
+and the central slot list omitted61. The save-library import path and live test
+input were repaired with backups on2026-09-10. The user then confirmed B attacks
+and speaks at combat onset. Save62 is `npc voice - schwertwarnung`; the latest
+report did not separately describe cleanup after sheathing. Frequent bow drawing
+at point-blank range, sometimes followed by a sword switch, remains an open
+[weapon-selection observation](../../scripts/fixtures/npc-weapon-voice/WEAPON-SELECTION.md).
+B has Diego's archer personality and both usable weapons. The successful voice
+trigger does not establish correct combat tactics or vanilla behavior.
+The user repeated the test on open ground in64 on2026-09-11: B draws his sword
+during the warning, then switches to the bow at combat escalation. This also
+occurs with his daily routine disabled. Cached bytecode confirms separate
+warning and combat item selection; the actual winning combat scores remain unknown.
+
+### Follow, combat roles and death
+
+The user completed the field-role tests on2026-09-13. Follow, stop, resume and
+reload worked; so did training defeat/recovery, temporary enmity ending after
+defeat, a Guild_None/ShadowLeader roundtrip and death persisting after reload.
+The [eleven result saves](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.0.json)
+retain the same single B identity, the selected routines and actual guild effects.
+The two starts used deliberately increased Hero health/strength and reduced B
+health/protection, so this is functional role evidence under easier combat conditions.
+
+Two authored cases failed. Setting `ModeOfFleeOnUnfavorableCombat` to `Always`
+and introducing enmity does not guarantee an immediate retreat: assessment rules
+still apply. The stock flee target collector also filters out the same species,
+and its ordinary method is final in the shipped ABI. An explicit authored
+retreat must use supported state/task entry points instead of overriding it.
+
+Timed revival must match the actual saved death memory. A finishing blow in the
+tested sequence records `Memory.Character.Defeated.Kill` and `Memory.Execution`,
+not `Memory.Conflict.Killed.*`. The initial test accepted only the latter and
+left B dead82.7 game minutes after execution despite the saved revival routine.
+Native clock subscription and simulation gates remain runtime qualification
+points; positive health or a command marker alone does not prove resurrection.
+The registered `SubscribeToReviveClockEventIfNeeded` method has no exact native
+reference in this pristine cache, so selective composition rejects an explicit
+call. The corrected fixture keeps the existing routine-exchange path and fixes
+the death filter; it does not bypass the native-membership guard.
+The user subsequently confirmed that revival works with0.1.1. This qualifies
+the tested execution-save workflow; other death types and arbitrary streaming
+conditions still need their own evidence. No new post-revival save was read back.
+
+The0.1.1 authored retreat stopped attacking but did not move. Discarded
+`FAbilityTaskExecutor` temporaries are not by themselves a bug: the shipped
+walking and successfully tested reading/drinking code use the same destructor
+execution pattern.0.1.2 instead uses the proven routine entry path, resolves
+the player explicitly and sends nearby retreat goals through `GotoPosition`.
+The0.1.2 result save records entry0, attempts0, distance-1 and movement0: the
+first marker in the task body was not reached. The user's31/27/31 sequence did
+not clear those values. Live-cache metadata binds DoTask and graceful exit just
+like the working activity state, but the authored template explicitly disabled
+simulated steps while the base, walking and activity states enable them.
+Version0.1.3 enables that support and preserves previous exit/error codes on27.
+The0.1.3 user test passed; the result save records entry1,41 movement attempts,
+5381.774cm cumulative movement and the wait routine after stopping. The native
+scheduling gate is not exposed in the script source; the test qualifies the
+corrected authored flight/stop path rather than all fear/streaming behavior.
+The last recorded exit is-1 (AI/body unavailable on an invocation), so the
+retained diagnostics are not a claim that every invocation had a physical body.
+See the [successful result](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.3.json)
+and [original field checklist](../../scripts/fixtures/npc-batch-tests/roles/FIELD-TEST.md).
+
+### Remaining limits
+
+- **`--modular-visuals` does not reproduce the template's look.** `B` was built
+  that way and came out looking like the player character, not like Diego. The
+  path produces a working body — so it is no longer unproven in the sense of
+  "might not render" — but it does not carry the parts across.
+
+  Worth knowing for anyone who picks this up: the data is demonstrably present.
+  `B`'s visuals class derives from Diego's and overrides nothing but
+  `m_HasPreBakedSK`, so it inherits `Person`, `BodyType`, `Clothes = "Shadow"`,
+  `Shirt_01`, `Armor_01` and the rest. The runtime simply does not use them on
+  that path. Which asset it does use is not visible from the script side — the
+  base classes name `m_MutableAsset` (`MO_Player` on the human base,
+  `MO_Characters` on the male-NPC base). On build 24878692, exact asset extraction
+  cannot find `/Game/Assets/Characters/Humans/Mutables/MO_Characters`.
+  `MO_Player` at the same directory does extract: its cooked parameter data has
+  only `Hero` under `Person`, plus clothing/part options such as `GuardArmor`,
+  `NoviceArmor`, `Shirt_01` and `Boots_02`. The subsequent explicit-parameter
+  experiment passed its appearance test: B's Guard clothing and C's Novice
+  clothing rendered correctly and survived loading. Both retained the Hero
+  head. Shipped NPC face/hair fields and indexed GTO presets establish useful
+  authoring targets, but not independent face/clothing recombination. See the
+  [runtime results](../../scripts/fixtures/npc-appearance-routine/RESULTS.md).
+- **The tested Flex head now works with Novice clothing.** Earlier versions
+  exposed pose, neck-join and restoration problems. In 0.1.5,
+  the user observed severe stretching when C turned; restoring the Hero head
+  with option 15 worked. Slot 43 confirms asset loading and matching bone names,
+  but only six hidden material/LOD pairs from 31 matched materials. In 0.1.6,
+  slot 44 confirms all 186 expected pairs hidden, yet the head still deforms;
+  restoring the Hero head continues to work. Matching
+  bone names alone does not establish compatible animation. The rigid attachment
+  in 0.1.7 renders a normal head, but leaves an open neck gap (slot 45). Restoration
+  and repeated option 14 pass. The 0.1.8 experiment copies the body animation into
+  a poseable head and resets its facial descendants. The user confirms a correct
+  neck join (slot 46), but option 15 crashed in that version. Version 0.1.9
+  excludes only C from the BFG tick optimizer implicated by the dump. The user
+  confirms its full checklist passes: restoration without a crash, repeated
+  application without duplicates, full restart and restoration after loading.
+  Slots 47/48 retain restored/active selections. This qualifies the tested
+  Flex/Novice combination, not arbitrary independent face/hair/color editing. See the
+  [head fixture](../../scripts/fixtures/npc-head/README.md).
+- **Scheduled noon walking is now proven; the original ambient fixture failed.**
+  In the original fixture both stayed at their world
+  point; `location` and `spawnLocation` in the save were identical. The routine
+  compiles and the character carries it, but nothing observed it running.
+  Investigation found that value `1` of `TeleportToCurrentTaskWhen` means
+  `WhenOutOfBounds`, B's spawn is 24.6 metres above its scheduled target, and the
+  10-metre waypoint radius can hide motion between nearby targets. Human routines
+  also offset schedule times by up to ten game minutes. These make the old
+  fixture insufficient to establish that routines cannot work.
+
+The [appearance and routine fixture](../../scripts/fixtures/npc-appearance-routine/README.md)
+retains the successful quest/voice campaign. Its corrected setup successfully
+replaces saved routines and places actors; the user confirmed clothing, loading,
+and C without duplicates. Saves031–034 preserve the new routines and clock
+changes, but B's target selection and walking failed. The ambient tasks had no
+compatible action spots within their radius. The next focused fixture uses
+direct `GotoPreferredLocation` tasks between two observed outdoor points.
+On2026-09-07 the user confirmed B visibly walked to the expected point at the
+natural noon transition. Slot036, `npc lauf - mittag`, records12:02:43, the
+assigned routine and B's changed position, with A/C and C's unique identity
+preserved. Clock controls use `AdvanceToClockTime` without explicitly moving B.
+This proves the tested noon walk; evening/morning returns, a restart from036,
+and Guard/Drink animations are not separately qualified by that pass.
+
+The next fixture, `NpcActivitiesProof` 0.1.3, used scheduled reading and drinking
+after the same direct walk. Both selected interactions are explicitly registered
+with `bPossibleAnywhere`, unlike the original ambient Guard/Drink tasks. The
+activity state includes graceful exit, and the evening control stops at17:59 so
+the user can observe a natural18:00 transition. Its game test failed: neither
+activities nor walking occurred, and saves037–039 retain B's exact setup position.
+Binary inspection found that the new class's callbacks had no native event
+binding. Version0.1.4 corrects only the two declarations to explicit
+`UFUNCTION(BlueprintOverride)` with unsuffixed event names; see
+[engine callbacks in new classes](scripts.md#engine-callbacks-in-new-classes).
+The corrected native event flags are checked directly in the cache. On2026-09-07
+the user confirmed the complete0.1.4 test: reading after setup, walking to drink
+at noon, drinking after a full restart without setup, walking back to read in
+the evening, and reading the next morning. These are repeated short conversation
+actions: the user observed about three seconds of activity per action, with
+the script waiting two seconds before trying again. The20-second argument to
+`TryInteractionWithoutSpot` is a maximum duration per call, not a forced
+animation length. This proves the tested free activities and schedule;
+continuous ambient animations and furniture-based tasks were not qualified by that pass.
+See the [passed test and results](../../scripts/fixtures/npc-appearance-routine/README.md).
+
+The [object fixture](../../scripts/fixtures/npc-objects/README.md) 0.1.10 passed
+the user's bed/alchemy campaign with exact named spots and shipped states from
+Xardas' bedroom routine. Zero schedule offsets and disabled scheduled teleporting
+let the user observe entry, walking and graceful exit. Full restart and continued
+sleep at08:00 also passed. Saves49–52 retain the routine, clock and matching
+positions. This qualifies that particular object pair; other spots still need
+availability and reachability checks. Alchemy here covers object use and
+animation, not recipe processing or crafted output.
+
+The [sitting/watch fixture](../../scripts/fixtures/npc-seat-guard/README.md)0.1.11
+also passed the full user checklist: sitting on a real stool, walking to a
+nearby stationary watch point at noon, returning at18:00, full restart and
+continued sitting the next morning. Saves53–56 preserve the schedule and
+matching positions. The stool is inside Hut31 near the Old Camp north gate.
+An interaction spot without custom requirements is not necessarily in a public
+area: ordinary trespassing reactions still apply to that privately owned hut.
+
+Changing a shipped character's values is `npc checkout`, described above. The
+Diego health edit has been verified in a user-created new-game save and after
+loading that save in another session; broader value edits remain untested.
+What checkout does not reach either: visuals and the spawn definition, which
+live in modules hundreds of characters share, and what a character says. Use the
+surfaces that do:
+[Dialog authoring](dialog-authoring.md) for what a character says,
+[Offline default patching](angelscript-defaults.md) for a single class default,
+and [Scripts (AngelScript)](scripts.md) for the general emit/recompile/splice
+route with its own risk reporting.
+
+## Related
+
+- [Reading and editing dialog trees](dialog-trees.md) — what a character says
+- [Dialog authoring](dialog-authoring.md) — authoring that conversation
+- [Scripts (AngelScript)](scripts.md) — emit, recompile and splice a module,
+  and the risk report behind the `translation:` line
+- [Bundling & deploying](bundles.md) — what `stage` writes a spec for, and what
+  `gore mod build` and `gore mod deploy` then do with it
+- [Running many mods](mod-manager.md) — load order and the conflict report that
+  names two mods over one level script
+- [Text & dialogs](text-and-dialogs.md) — where an `npc text` document goes
+- [Finding things](find.md) — `gore find --domain npc` searches the same
+  catalog `npc list` reads, alongside every other id namespace
+- [Catalogs & data models](catalogs-and-models.md) — regenerating that catalog

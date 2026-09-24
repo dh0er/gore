@@ -1,0 +1,23 @@
+{
+  "schema": "gore.npc-batch.beard-runtime.v1",
+  "date": "2026-09-11",
+  "bundle": "NpcHeadPaletteTest",
+  "version": "0.1.3",
+  "companion": "NpcBeardTextures013",
+  "tested_by": "user",
+  "user_report": "funktioniert alles einwandfrei",
+  "scope": "Unqualified confirmation of the immediately preceding complete 0.1.3 game checklist, following the earlier successful head/hair/color tests.",
+  "passed": true,
+  "confirmed": [
+    "Hero head without beard has normal skin; H6 restores the original beard",
+    "Flex head with beard has normal skin; H5 restores the clean face",
+    "New variants save and load after a full game restart",
+    "H9 restores the original appearance after loading"
+  ],
+  "agent_played_game": false,
+  "save_files_inspected_for_this_result": false,
+  "limits": "Qualifies the tested Hero/Flex short-beard texture variants and restoration; not every shipped head/material combination or arbitrary new beard geometry.",
+  "previous_failure": "beard-runtime-0.1.2.json",
+  "implementation_commit": "a3114e47d401835a8129e5398b37d52a85250548",
+  "next": "NpcNaturalVoiceTest 0.1.1, Profile4 START066 at noon"
+}

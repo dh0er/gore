@@ -1,0 +1,57 @@
+{
+  "schema": "gore.npc-batch.profile-cleanup-after-voice.v1",
+  "date": "2026-09-12",
+  "displayed_profile": 4,
+  "internal_profile_id": 2,
+  "stored_profile_name": "3",
+  "passed": true,
+  "operation": "live",
+  "archive": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-voice-20260912T084519Z",
+  "manifest_sha256": "8f44f4cc46e84596f0c2e3a5edf279b28f5df6237df567479da32982e6fb8ea1",
+  "deleted_count": 3,
+  "retained_count": 6,
+  "retained": [
+    "G1R-067",
+    "G1R-068",
+    "G1R-069",
+    "G1R-070",
+    "G1R-071",
+    "G1R-072"
+  ],
+  "removed": [
+    "G1R-003",
+    "G1R-022",
+    "G1R-066"
+  ],
+  "profile_before": {
+    "bytes": 36505,
+    "sha256": "589ed565c29ccb6b91633a1e56bce6b7a9a23ecd7b2d3afa683e9fc6cb7cfd85"
+  },
+  "profile_after": {
+    "bytes": 33616,
+    "sha256": "e62d0d2da11706907165ee78d1f8b9cb0611426ca29b52a3cfe628ebb42b637e"
+  },
+  "dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "titles": {
+    "G1R-066": "NPC 02 Voice - START",
+    "G1R-067": "NPC 03 Handel - LP fehlt",
+    "G1R-068": "NPC 03 Lehrer - Erz fehlt",
+    "G1R-069": "NPC 03 Lehrer - bereit",
+    "G1R-070": "NPC 04 Rollen - START",
+    "G1R-071": "NPC 05 Quest - START",
+    "G1R-072": "NPC 04 Rollen - Kampf bereit",
+    "G1R-003": "npc natuerlich - beobachtet",
+    "G1R-022": "npc natuerlich - start"
+  },
+  "paired_backups_verified": true,
+  "other_profiles_byte_identical": true,
+  "retained_saves_byte_identical": true,
+  "other_live_files_unchanged": true,
+  "live_unchanged_during_preview": false,
+  "global_registry_exact_filtered_order": true,
+  "no_removed_slot_reference": true,
+  "archive_hashes_reverified": true
+}

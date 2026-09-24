@@ -5,6 +5,7 @@ use gore_authoring::{
     DraftQuestSkeletonInput, DraftQuestTransitionStatus, EntityId, GameGenerationAnchor,
     QuestTransitionPlanV1, Sha256Digest, DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION,
     MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES, MAX_DRAFT_QUEST_DESCRIPTION_BYTES,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 
 const MODULE: &str = "GoreMods.Probe.AsghanMiniQuest";
@@ -158,7 +159,7 @@ fn single_objective_source_is_rendered_exactly() {
 
 class UQuest_GORE_PROBE_ASGHAN_MINI : UG1RQuest
 {
-    default ParentQuestClass = UQuest_SwampCamp_SCCHAPTER2::StaticClass();
+    default ParentQuestClass = TSubclassOf<UQuest>(UQuest_SwampCamp_SCCHAPTER2::StaticClass());
     default QuestKind = EQuestKind::Side;
     default InvolvedCharacters.Add(n"Hero");
     default InvolvedCharacters.Add(n"OM_GRD_Asghan_263");
@@ -187,7 +188,7 @@ UQuest_GORE_PROBE_ASGHAN_MINI GetGoreProbeAsghanMini()
 
 class UQuest_GORE_PROBE_ASGHAN_MINI_OBJ_DONE : UG1RQuest
 {
-    default ParentQuestClass = UQuest_GORE_PROBE_ASGHAN_MINI::StaticClass();
+    default ParentQuestClass = TSubclassOf<UQuest>(UQuest_GORE_PROBE_ASGHAN_MINI::StaticClass());
     default QuestKind = EQuestKind::Subobjective;
     default NameText = GoreProbeAsghanText(n"Talk to Asghan once more");
     default bExternalStartTrigger = true;
@@ -211,10 +212,10 @@ UQuest_GORE_PROBE_ASGHAN_MINI_OBJ_DONE GetGoreProbeAsghanMiniObjective()
 }
 "#;
     assert_eq!(generated.source, expected);
-    assert_eq!(generated.source.len(), 2_008);
+    assert_eq!(generated.source.len(), 2_050);
     assert_eq!(
         generated.source_sha256.to_string(),
-        "eb38bf814685485977113cf67a679d4b4cb309a2dbcd229fae3a6d57f2a4ae82"
+        "ff4fa26159c31d1a244aaedc06941eeb7439e9e8ee5a8ccb5cfedc1b3a2d03ed"
     );
     assert_ne!(
         generated.input_fingerprint,
@@ -228,7 +229,12 @@ UQuest_GORE_PROBE_ASGHAN_MINI_OBJ_DONE GetGoreProbeAsghanMiniObjective()
 fn capability_is_always_offline_and_runtime_unqualified() {
     let generated = DraftQuestSkeleton::new(input()).unwrap().generate();
     assert_eq!(generated.generator_id, DRAFT_QUEST_GENERATOR_ID);
-    assert_eq!(DRAFT_QUEST_GENERATOR_VERSION, 4);
+    assert_eq!(DRAFT_QUEST_GENERATOR_VERSION, 6);
+    assert_eq!(DRAFT_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_ID);
+    assert_eq!(
+        DRAFT_QUEST_GENERATOR_VERSION,
+        REVISION3_QUEST_GENERATOR_VERSION
+    );
     assert_eq!(generated.generator_version, DRAFT_QUEST_GENERATOR_VERSION);
     assert_eq!(
         generated.status.authoring,

@@ -196,6 +196,8 @@ impl Class {
 pub enum Derived {
     /// `Path::with_extension(_)` — `texture extract` writes `out` and `out` + `.png.json`.
     Extension(&'static str),
+    /// Append a literal to the whole path — `npc stage` writes `<dir>.work` beside its workspace.
+    Suffix(&'static str),
     /// `Path::join(_)` — `dump-mod` writes the `gore-dump/` folder inside the directory it is given.
     Child(&'static str),
     /// `Path::join(<value of the named argument>)` — `scaffold` writes `<out>/<mod_name>/`.
@@ -501,7 +503,7 @@ pub enum JsonSupport {
 /// One leaf command.
 #[derive(Clone, Copy, Debug)]
 pub struct CommandSpec {
-    /// The clap subcommand spelling.
+    /// The clap subcommand path, space separated for deeper leaves such as `routine set`.
     pub sub: &'static str,
     /// First line of the clap doc comment.
     pub summary: &'static str,
@@ -637,7 +639,7 @@ impl CommandSpec {
 /// Whether a group corresponds to a real CLI subcommand or is a synthetic bundle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupShape {
-    /// `gore <cli> <sub> …`
+    /// `gore <cli> <sub-path> …`
     Nested,
     /// `gore <sub> …` — the group exists only to keep the tool list navigable.
     Flat,
@@ -657,6 +659,16 @@ pub struct GroupSpec {
 }
 
 impl GroupSpec {
+    /// Literal CLI tokens for a table-owned subcommand path. Argument values are never split.
+    pub fn command_path<'a>(&self, sub: &'a str) -> Vec<&'a str> {
+        let mut path = Vec::new();
+        if self.shape == GroupShape::Nested {
+            path.push(self.cli);
+        }
+        path.extend(sub.split_whitespace());
+        path
+    }
+
     pub fn command(&self, sub: &str) -> Option<&'static CommandSpec> {
         self.commands.iter().find(|command| command.sub == sub)
     }
@@ -721,6 +733,7 @@ pub const GROUPS: &[GroupSpec] = &[
     groups::core::CATALOG,
     groups::core::LOCATION,
     groups::core::DIALOG,
+    groups::core::NPC,
     groups::core::PROJECT,
     groups::files::LOC,
     groups::files::AUDIO,
@@ -740,7 +753,7 @@ pub const GROUPS: &[GroupSpec] = &[
 ///
 /// A literal, not a computed value: it is a claim about the CLI, and the integration test compares
 /// it against what clap actually exposes. Changing it should be a deliberate act.
-pub const EXPECTED_LEAF_COUNT: usize = 99;
+pub const EXPECTED_LEAF_COUNT: usize = 114;
 
 pub fn group(tool: &str) -> Option<&'static GroupSpec> {
     GROUPS.iter().find(|group| group.tool == tool)
@@ -772,7 +785,7 @@ mod tests {
     #[test]
     fn the_table_covers_every_leaf_of_the_cli() {
         assert_eq!(leaf_count(), EXPECTED_LEAF_COUNT);
-        assert_eq!(GROUPS.len(), 19);
+        assert_eq!(GROUPS.len(), 20);
     }
 
     #[test]
@@ -1326,6 +1339,14 @@ mod tests {
                         pointer: "/meta/name",
                     },
                 )],
+            ),
+            (
+                "gore_npc",
+                "stage",
+                &[
+                    ("dir", Derived::Child("spec.json")),
+                    ("dir", Derived::Suffix(".work")),
+                ],
             ),
             (
                 "gore_project",

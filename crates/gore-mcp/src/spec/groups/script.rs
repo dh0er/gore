@@ -367,6 +367,14 @@ const EXPECT_BASE_SHA256: ArgSpec = ArgSpec::new(
     false,
 );
 
+const EXPECT_SOURCE_SHA256: ArgSpec = ArgSpec::new(
+    "expect_source_sha256",
+    Long("expect-source-sha256"),
+    Hex,
+    "Refuse to compile if the authored source differs from this SHA-256.",
+    false,
+);
+
 const COMPILE_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "src",
@@ -392,6 +400,14 @@ const COMPILE_ARGS: &[ArgSpec] = &[
         "Also publish a deployable multi-module mini-cache holding only the authored Add/Edit \
          modules, remapped to the pristine cache. Point a bundle spec's `scripts[].mini_cache` \
          at it when a mod spans several modules.",
+        false,
+    ),
+    ArgSpec::new(
+        "only_changes",
+        LongRepeated("only-change"),
+        StrList,
+        "Require the complete source-tree diff to match these add:Module:Path or \
+         edit:Module:Path entries before compiling; append :SHA256 to bind source bytes.",
         false,
     ),
     ArgSpec::new(
@@ -476,6 +492,7 @@ const COMPILE_MODULE_ARGS: &[ArgSpec] = &[
     GAME,
     EXPECT_BASE,
     EXPECT_BASE_SHA256,
+    EXPECT_SOURCE_SHA256,
     ArgSpec::new(
         "backend",
         Long("backend"),
@@ -563,6 +580,14 @@ const STANDALONE_COMPILE_ARGS: &[ArgSpec] = &[
         false,
     ),
     ArgSpec::new(
+        "only_changes",
+        LongRepeated("only-change"),
+        StrList,
+        "Require the complete source-tree diff to match these add:Module:Path or \
+         edit:Module:Path entries before compiling; append :SHA256 to bind source bytes.",
+        false,
+    ),
+    ArgSpec::new(
         "work_dir",
         Long("work-dir"),
         Path,
@@ -634,6 +659,7 @@ const STANDALONE_COMPILE_MODULE_ARGS: &[ArgSpec] = &[
     GAME,
     EXPECT_BASE,
     EXPECT_BASE_SHA256,
+    EXPECT_SOURCE_SHA256,
     ArgSpec::new(
         "generation_receipt",
         Long("generation-receipt"),

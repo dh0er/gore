@@ -1,0 +1,112 @@
+{
+  "schema": "gore.npc-batch.beard-vt-deployment.v1",
+  "recorded_at": "2026-09-11T16:27:03.292370+00:00",
+  "active": "NpcHeadPaletteTest",
+  "version": "0.1.3",
+  "companion": "NpcBeardTextures013",
+  "state": "in_sync",
+  "cli": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe",
+  "cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+  "apply_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "reset_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "source_bundles": [
+    "work/npc-batch-tests/packages-vt/NpcHeadPaletteTest",
+    "work/npc-batch-tests/packages-vt/NpcBeardTextures013"
+  ],
+  "preflight": "Dedicated preflight verified game closed, selected two entries and no recovery blocker. Pending replacement expected. Analyzer reports no recognized conflicts with two advisory foreign triplets; strict per-triplet identity/readback checks completed before Apply.",
+  "status": {
+    "loadout": [
+      {
+        "enabled": true,
+        "id": "npcheadpalettetest-12307539"
+      },
+      {
+        "enabled": true,
+        "id": "npcbeardtextures013-a9ae1f2e"
+      }
+    ],
+    "manager_owned": {
+      "additive": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\Paks\\~mods\\zzz_gm001_GoreBeard_flex_013_2_P.pak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\Paks\\~mods\\zzz_gm001_GoreBeard_flex_013_2_P.ucas",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\Paks\\~mods\\zzz_gm001_GoreBeard_flex_013_2_P.utoc",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\Paks\\~mods\\zzz_gm001_GoreBeard_hero_013_2_P.pak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\Paks\\~mods\\zzz_gm001_GoreBeard_hero_013_2_P.ucas",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\Paks\\~mods\\zzz_gm001_GoreBeard_hero_013_2_P.utoc"
+        ],
+        "total": 6,
+        "truncated": false
+      },
+      "backups": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip.gore-bak"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "live": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "recovery": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\gore-mod.deployed.json"
+        ],
+        "total": 1,
+        "truncated": false
+      },
+      "ue4ss": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      }
+    },
+    "state": "in_sync"
+  },
+  "deployed_assets": [
+    {
+      "path": "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\Paks\\~mods\\zzz_gm001_GoreBeard_flex_013_2_P.pak",
+      "sha256": "75e7144577253917f6da7312ef5e585b12fb728226a22b0938323751a6b555cd",
+      "equals_verified_triplet": true
+    },
+    {
+      "path": "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\Paks\\~mods\\zzz_gm001_GoreBeard_flex_013_2_P.ucas",
+      "sha256": "b67e8e1906c2423f6db2ae3f887c9bf66fde42c735b0fab840520f6747aaa7df",
+      "equals_verified_triplet": true
+    },
+    {
+      "path": "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\Paks\\~mods\\zzz_gm001_GoreBeard_flex_013_2_P.utoc",
+      "sha256": "ded61d7bc9b6eaf6e5acddb1419efe540e9fe2ba9768d6b7826ee468b60d0049",
+      "equals_verified_triplet": true
+    },
+    {
+      "path": "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\Paks\\~mods\\zzz_gm001_GoreBeard_hero_013_2_P.pak",
+      "sha256": "75e7144577253917f6da7312ef5e585b12fb728226a22b0938323751a6b555cd",
+      "equals_verified_triplet": true
+    },
+    {
+      "path": "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\Paks\\~mods\\zzz_gm001_GoreBeard_hero_013_2_P.ucas",
+      "sha256": "38e4c570dc99e4f3bbf9bc0755cfdf1d116dca4f397ee7687d51ed4ff6a7e74a",
+      "equals_verified_triplet": true
+    },
+    {
+      "path": "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\Paks\\~mods\\zzz_gm001_GoreBeard_hero_013_2_P.utoc",
+      "sha256": "2740a5fcb469627e59306b4e62610ff265abef59f3f72349397b6b44a7b0bece",
+      "equals_verified_triplet": true
+    }
+  ],
+  "old_png_pak_removed": true,
+  "original_backup_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "apply_log_sha256": "8017d8fc56ed4a8a1a23928a114796b74ee24aae19f03ddb1179bfa0cd309839",
+  "saves_modified": false,
+  "runtime_tested": false,
+  "retest_start": "Full game restart, Profile4 START065 at noon; do not start from an old black-face result."
+}

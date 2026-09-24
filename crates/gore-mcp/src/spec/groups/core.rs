@@ -13,9 +13,10 @@
 //! comment so that a reviewer can diff this file against `crates/gore/src/main.rs` by eye.
 
 use crate::spec::{
-    ArgForm::{Long, Positional, PositionalRepeated},
-    ArgKind::{Enum, Int, Path, Str, StrList},
-    ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST, T_NORMAL,
+    ArgForm::{Long, Positional, PositionalRepeated, Switch},
+    ArgKind::{Bool, Enum, Int, Path, Str, StrList},
+    ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST, T_LONG,
+    T_NORMAL,
 };
 
 /// The single validated config key, from the `ConfigKey` value enum. clap renders variants in
@@ -986,6 +987,581 @@ pub const DIALOG: GroupSpec = GroupSpec {
               save-state behavior.",
     shape: GroupShape::Nested,
     commands: DIALOG_COMMANDS,
+};
+
+// ---------------------------------------------------------------------------------------------
+// gore_npc
+// ---------------------------------------------------------------------------------------------
+
+/// Shared by every leaf that reads the script cache. Two are not among them: `list` answers from
+/// the catalog bundled in this binary, and `text` only writes the document it is handed a name for.
+/// Neither looks at an installation.
+const NPC_CACHE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "cache",
+        Long("cache"),
+        Path,
+        "Read this script cache instead of the installed one",
+        false,
+    )
+    .with_default("the script cache of the resolved game install"),
+    // No `with_default` here, unlike `DIALOG_CACHE_ARGS`: this help text already names the
+    // fallback chain, and a hint would render the same sentence twice in a row.
+    ArgSpec::new(
+        "game",
+        Long("game"),
+        Path,
+        "Game install root. Falls back to configured path, then Steam auto-detect",
+        false,
+    ),
+];
+
+const NPC_LIST_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "filter",
+        Positional { order: 0 },
+        Str,
+        "Keep only entries whose id or class contains this text",
+        false,
+    ),
+    ArgSpec::new(
+        "category",
+        Long("category"),
+        Str,
+        "Keep only one category (human, creature, other)",
+        false,
+    ),
+    ArgSpec::new(
+        "max",
+        Long("max"),
+        Int {
+            min: Some(0),
+            max: None,
+        },
+        "Max rows to print",
+        false,
+    )
+    .with_default("50"),
+];
+
+const NPC_SHOW_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "Exact NPC id, for example OC_STT_Diego",
+        true,
+    ),
+    NPC_CACHE_ARGS[0],
+    NPC_CACHE_ARGS[1],
+];
+
+const NPC_SITES_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "level",
+        Long("level"),
+        Str,
+        "Keep only sites whose level-script module contains this text",
+        false,
+    ),
+    ArgSpec::new(
+        "free",
+        Switch("free"),
+        Bool,
+        "Keep only world points nobody is spawned at",
+        false,
+    ),
+    ArgSpec::new(
+        "occupied",
+        Switch("occupied"),
+        Bool,
+        "Keep only world points that already spawn somebody",
+        false,
+    ),
+    ArgSpec::new(
+        "npc",
+        Long("npc"),
+        Str,
+        "Keep only sites that spawn this character",
+        false,
+    ),
+    ArgSpec::new(
+        "max",
+        Long("max"),
+        Int {
+            min: Some(0),
+            max: None,
+        },
+        "Max rows to print",
+        false,
+    )
+    .with_default("50"),
+    NPC_CACHE_ARGS[0],
+    NPC_CACHE_ARGS[1],
+];
+
+const NPC_NEW_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "id",
+        Positional { order: 0 },
+        Str,
+        "Id of the new character, for example MY_NPC",
+        true,
+    ),
+    ArgSpec::new(
+        "from",
+        Long("from"),
+        Str,
+        "The shipped character to derive from: its looks, stats and voice",
+        true,
+    ),
+    ArgSpec::new(
+        "guild",
+        Long("guild"),
+        Str,
+        "Replace the faction with this guild base, for example OldCamp_Guard",
+        false,
+    ),
+    ArgSpec::new(
+        "at",
+        Long("at"),
+        Str,
+        "World point to spawn at, from `gore npc sites`",
+        true,
+    ),
+    ArgSpec::new(
+        "waypoint",
+        Long("waypoint"),
+        Str,
+        "Waypoint for the daily routine",
+        false,
+    ),
+    ArgSpec::new(
+        "trader",
+        crate::spec::ArgForm::Switch("trader"),
+        crate::spec::ArgKind::Bool,
+        "Add an empty trader configuration",
+        false,
+    ),
+    ArgSpec::new(
+        "modular_visuals",
+        crate::spec::ArgForm::Switch("modular-visuals"),
+        crate::spec::ArgKind::Bool,
+        "Build the looks from parts at runtime instead of borrowing a prebaked model. No shipped \
+         character does this; unproven",
+        false,
+    ),
+    NPC_CACHE_ARGS[0],
+    NPC_CACHE_ARGS[1],
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output workspace directory; must not exist",
+        true,
+    ),
+];
+
+const NPC_DELETE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "The character to remove",
+        true,
+    ),
+    NPC_CACHE_ARGS[0],
+    NPC_CACHE_ARGS[1],
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output workspace directory; must not exist",
+        true,
+    ),
+];
+
+const NPC_CLONE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "source",
+        Positional { order: 0 },
+        Str,
+        "The shipped character to copy",
+        true,
+    ),
+    ArgSpec::new(
+        "id",
+        Long("id"),
+        Str,
+        "Id of the new character, for example MY_NPC",
+        true,
+    ),
+    ArgSpec::new(
+        "guild",
+        Long("guild"),
+        Str,
+        "Replace the faction with this guild base, for example OldCamp_Guard",
+        false,
+    ),
+    ArgSpec::new(
+        "at",
+        Long("at"),
+        Str,
+        "World point to spawn at, from `gore npc sites`",
+        true,
+    ),
+    ArgSpec::new(
+        "waypoint",
+        Long("waypoint"),
+        Str,
+        "Waypoint for the daily routine",
+        false,
+    ),
+    ArgSpec::new(
+        "trader",
+        Switch("trader"),
+        Bool,
+        "Add an empty trader configuration",
+        false,
+    ),
+    NPC_CACHE_ARGS[0],
+    NPC_CACHE_ARGS[1],
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output workspace directory; must not exist",
+        true,
+    ),
+];
+
+const NPC_CHECKOUT_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "The character to edit, for example OC_STT_Diego",
+        true,
+    ),
+    NPC_CACHE_ARGS[0],
+    NPC_CACHE_ARGS[1],
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output workspace directory; must not exist",
+        true,
+    ),
+];
+
+const NPC_CHECK_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "dir",
+        Positional { order: 0 },
+        Path,
+        "The workspace directory written by `new` or `delete`",
+        true,
+    ),
+    NPC_CACHE_ARGS[0],
+    NPC_CACHE_ARGS[1],
+];
+
+const NPC_STAGE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "dir",
+        Positional { order: 0 },
+        Path,
+        "The workspace directory written by `new` or `delete`",
+        true,
+    ),
+    ArgSpec::new(
+        "tree",
+        Long("tree"),
+        Path,
+        "Where to keep the emitted source tree between runs. Required for a new character",
+        false,
+    ),
+    ArgSpec::new(
+        "mod_name",
+        Long("mod-name"),
+        Str,
+        "Name of the mod being built",
+        false,
+    )
+    .with_default("MyNpcMod"),
+    NPC_CACHE_ARGS[0],
+    NPC_CACHE_ARGS[1],
+];
+
+const NPC_TEXT_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "id",
+        Positional { order: 0 },
+        Str,
+        "The character id, for example MY_NPC",
+        true,
+    ),
+    ArgSpec::new(
+        "name",
+        Long("name"),
+        Str,
+        "The name to show above the character's dialog lines",
+        true,
+    ),
+    ArgSpec::new(
+        "english",
+        Long("english"),
+        Str,
+        "Also set the English columns to this name",
+        false,
+    ),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output file; must not exist",
+        true,
+    ),
+];
+
+const NPC_ROUTINE_ACTIVITIES: &[&str] =
+    &["stand", "read", "drink", "sit", "sleep", "guard", "alchemy"];
+
+const NPC_ROUTINE_DIR: ArgSpec = ArgSpec::new(
+    "dir",
+    Positional { order: 0 },
+    Path,
+    "The existing workspace from npc new or clone",
+    true,
+);
+
+const NPC_ROUTINE_TIME: ArgSpec = ArgSpec::new(
+    "time",
+    Long("time"),
+    Str,
+    "Exact 24-hour time, HH:MM. The phase lasts until the next entry",
+    true,
+);
+
+const NPC_ROUTINE_ACTIVITY: ArgSpec = ArgSpec::new(
+    "activity",
+    Long("activity"),
+    Enum(NPC_ROUTINE_ACTIVITIES),
+    "The scheduled activity; object activities require a compatible interaction spot",
+    true,
+);
+
+const NPC_ROUTINE_GAME: ArgSpec = ArgSpec::new(
+    "game",
+    Long("game"),
+    Path,
+    "Game install for checking object actions (sit/sleep/guard/alchemy)",
+    false,
+);
+
+const NPC_ROUTINE_SET_ARGS: &[ArgSpec] = &[
+    NPC_ROUTINE_DIR,
+    NPC_ROUTINE_TIME,
+    NPC_ROUTINE_ACTIVITY,
+    ArgSpec::new(
+        "spot",
+        Long("spot"),
+        Str,
+        "A named location; use routine spots to find compatible targets",
+        true,
+    ),
+    NPC_ROUTINE_GAME,
+];
+
+const NPC_ROUTINE_SHOW_ARGS: &[ArgSpec] = &[NPC_ROUTINE_DIR];
+const NPC_ROUTINE_REMOVE_ARGS: &[ArgSpec] = &[NPC_ROUTINE_DIR, NPC_ROUTINE_TIME, NPC_ROUTINE_GAME];
+
+const NPC_ROUTINE_SPOTS_ARGS: &[ArgSpec] = &[
+    NPC_ROUTINE_ACTIVITY,
+    ArgSpec::new("area", Long("area"), Str, "Filter by area", false),
+    ArgSpec::new(
+        "prefix",
+        Long("prefix"),
+        Str,
+        "Filter by spot name prefix",
+        false,
+    ),
+    ArgSpec::new(
+        "max",
+        Long("max"),
+        Int {
+            min: Some(0),
+            max: None,
+        },
+        "Max rows to print",
+        false,
+    )
+    .with_default("50"),
+    NPC_ROUTINE_GAME,
+];
+
+const NPC_COMMANDS: &[CommandSpec] = &[
+    // Answered from the catalog compiled into this binary, like `find`, so it needs no install.
+    CommandSpec::new(
+        "list",
+        "List the characters the game ships",
+        NPC_LIST_ARGS,
+        Safety::read(),
+        T_FAST,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("npc-authoring"),
+    // Resolves the class chain out of the emitted source, which means emitting the few modules
+    // that carry it — seconds, not the minutes a whole-tree emit would cost.
+    CommandSpec::new(
+        "show",
+        "Print one character in full: its class chain, where it spawns, and what it inherits",
+        NPC_SHOW_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "sites",
+        "List the world points the level scripts can place characters at",
+        NPC_SITES_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .at_most_one(&[&["free", "occupied"]])
+    .json(JsonSupport::Stdout)
+    .guide("npc-authoring"),
+    // A workspace under a caller-picked directory: the character's own module, the level script one
+    // spawn line longer, an untouched copy of that script, and the manifest. The install is only
+    // read, and the CLI refuses a directory that already exists, so there is nothing to ask about.
+    CommandSpec::new(
+        "new",
+        "Author a new character derived from a shipped one",
+        NPC_NEW_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "delete",
+        "Stop a shipped character from being placed in the world",
+        NPC_DELETE_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "clone",
+        "Clone a shipped character. Same result as `new`, named for what it does",
+        NPC_CLONE_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "checkout",
+        "Check out a shipped character's own module for edits that preserve its existing default targets",
+        NPC_CHECKOUT_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "check",
+        "Check an authored workspace against the current compile contract",
+        NPC_CHECK_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .guide("npc-authoring"),
+    // One build spec inside the directory `new` or `delete` already created — and, for a new
+    // character, the emitted source tree in `--tree` first. That emit is around 19 minutes on the
+    // first run of a game version and is reused afterwards, which is why this leaf carries the long
+    // budget rather than the one its siblings share.
+    CommandSpec::new(
+        "stage",
+        "Build the source tree and print the commands that compile an authored character",
+        NPC_STAGE_ARGS,
+        Safety::write()
+            .also_writes(&[
+                ("dir", Derived::Child("spec.json")),
+                ("dir", Derived::Suffix(".work")),
+            ])
+            .writes_into(&["dir", "tree"]),
+        T_LONG,
+    )
+    .guide("npc-authoring"),
+    // One edits document at a path the caller picks. Reads nothing at all: the localization id of a
+    // character is its id in lowercase, so the document is derivable from the arguments alone.
+    CommandSpec::new(
+        "text",
+        "Write a character's display name as a `gore loc import --edits` document",
+        NPC_TEXT_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_FAST,
+    )
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "routine set",
+        "Insert or replace a daily phase in a workspace from npc new/clone",
+        NPC_ROUTINE_SET_ARGS,
+        Safety::mutate(),
+        T_FAST,
+    )
+    .gated_because("rewrites the generated routine and spawn wiring in the existing NPC workspace")
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "routine show",
+        "Show the daily phases and the explicit helper for an already-spawned NPC",
+        NPC_ROUTINE_SHOW_ARGS,
+        Safety::read(),
+        T_FAST,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "routine remove",
+        "Remove a phase; its predecessor then lasts until the next remaining phase",
+        NPC_ROUTINE_REMOVE_ARGS,
+        Safety::mutate(),
+        T_FAST,
+    )
+    .gated_because("rewrites the generated daily schedule in the existing NPC workspace")
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "routine spots",
+        "Find named locations compatible with an activity",
+        NPC_ROUTINE_SPOTS_ARGS,
+        Safety::read(),
+        T_FAST,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("npc-authoring"),
+];
+
+/// The character surface. A character is not a record in this game but a chain of AngelScript
+/// classes — a spawn definition names an AI config, which names a character definition — so the
+/// question "what is this NPC" is only answerable by walking that chain, and `show` is where it
+/// gets walked. `sites` answers the other half, where the level scripts place them; `new` and
+/// `delete` write that placement, and `check` and `stage` are what stands between an authored
+/// workspace and a compile.
+pub const NPC: GroupSpec = GroupSpec {
+    tool: "gore_npc",
+    title: "gore character reader and authoring guard",
+    cli: "npc",
+    summary: "Read the game's characters from the class chain the script cache declares — which \
+              ones exist, what one of them inherits from its AI config and character definition, \
+              and which world points the level scripts spawn it from — then author a new one, or \
+              stop a shipped one from being placed. `list` answers from the catalog bundled in \
+              this binary and needs no installation, `text` writes a localization document from \
+              its arguments alone. `routine set/show/remove` edit or inspect an authored workspace; \
+              `routine spots` finds compatible targets, using installed interaction evidence for \
+              object activities. The other commands read the script cache. Authoring produces \
+              a workspace and a build spec: compiling, packaging, deploying, and any evidence that \
+              the character actually appears in game are separate steps this group does not take.",
+    shape: GroupShape::Nested,
+    commands: NPC_COMMANDS,
 };
 
 // ---------------------------------------------------------------------------------------------

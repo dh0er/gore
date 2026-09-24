@@ -1,0 +1,239 @@
+{
+  "format": "gore-native-api-quest-availability-property-qualification-v1",
+  "qualified": true,
+  "scope": "Exactly UQuest.bExternalAvailabilityTrigger at byte offset 322 with native bool datatype; no new types or functions.",
+  "source_snapshot_sha256": "44e6fddc7db877e17a732b1b769d04e0dea460aa5b8a4d904ddf9cdc564c81d3",
+  "previous_qualification": {
+    "path": "scripts/fixtures/npc-head/native-material-parameter-api-qualification.json",
+    "sha256": "1d55e019e849f7b0ce7fe7be6fdf9d3b190f31ace47c0e2cbb69e9442764102e"
+  },
+  "pristine_cache_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "pristine_cache_guid_hex": "7835bcc09c5eee488d72cb5ffb0fb0c3",
+  "pristine_tail_offset": 88127207,
+  "pristine_t4_end": 111948149,
+  "pristine_t7_count": 13246,
+  "pristine_tail_eof": 124459412,
+  "profile_file_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
+  "authority_file_sha256": {
+    "registration-trace.json": "17f374a632eadb354207aad9de7512367cad72e1c4c7a3253a3f68d9e075999c",
+    "post-bind-snapshot.json": "e355aeead72953582c31a2c1b933d08f87c4daa20f4cd55ae71db1f51713d4c5",
+    "reflected-type-graph.bin": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2"
+  },
+  "audit_script_sha256": "f82c74264a50247a10668fe001f98840383d9f04f0b820c53470fbf4aeadaa10",
+  "tail_reader_sha256": "96d35c4b297f45a8051d71d8b13d3350f686add84a1a171648c11edb76d556ec",
+  "qualification_script_sha256": "c185e76ac2bbdb565df4736d15c01cccb56f4a158e54f0050ba02ddb876adb34",
+  "owner": {
+    "trace": {
+      "kind": "object_type",
+      "ordinal": 18165,
+      "registration_id": 18165,
+      "context": {
+        "namespace": "",
+        "config_group": null,
+        "access_mask": 4294967295
+      },
+      "type_id": 5674,
+      "declaration": "UQuest",
+      "byte_size": 0,
+      "alignment": 8,
+      "flags": 1310721,
+      "type_operations": {
+        "kind": "fixed",
+        "operations": {
+          "can_create_property": true,
+          "never_requires_gc": false,
+          "requires_property": false,
+          "can_be_template_subtype": true,
+          "can_construct": true,
+          "need_construct": true,
+          "can_destruct": true,
+          "need_destruct": false,
+          "can_copy": true,
+          "need_copy": false,
+          "can_compare": true,
+          "can_hash_value": true,
+          "value_size": 8,
+          "value_alignment": 8,
+          "is_object_pointer": true
+        }
+      }
+    },
+    "post_bind": {
+      "kind": "object_type",
+      "engine_type_id": 1140856374
+    },
+    "final_state": {
+      "kind": "object_type",
+      "type_id": 5674,
+      "byte_size": 0,
+      "alignment": 8,
+      "flags": 1310721,
+      "base_type_id": null,
+      "shadow_type_id": 2109,
+      "interface_type_ids": [],
+      "interface_vft_offsets": [],
+      "has_implicit_constructors": false,
+      "accepts_value_subtype": true,
+      "accepts_reference_subtype": true,
+      "is_invalid_generated_type": false
+    },
+    "pristine_t1_present": true
+  },
+  "candidate": {
+    "owner_full_identity": "0:0:6:UQuest1:00:",
+    "name": "bExternalAvailabilityTrigger",
+    "member_offset": 322,
+    "owner_object_kind": 67108864,
+    "key": "0x28408002c6d"
+  },
+  "snapshot_entry": {
+    "owner_full_identity": "0:0:6:UQuest1:00:",
+    "name": "bExternalAvailabilityTrigger",
+    "member_offset": 322,
+    "owner_object_kind": 67108864,
+    "value_type_full_identity": "9:primitive2:651:01:01:01:0"
+  },
+  "evidence": {
+    "trace": {
+      "kind": "object_property",
+      "ordinal": 134064,
+      "registration_id": 134064,
+      "context": {
+        "namespace": "",
+        "config_group": null,
+        "access_mask": 4294967295
+      },
+      "property_id": 33925,
+      "owner_type_id": 5674,
+      "declaration": "bool bExternalAvailabilityTrigger",
+      "byte_offset": 322,
+      "composite_offset": 0,
+      "is_composite_indirect": false,
+      "accessor_type": 255,
+      "is_protected": false
+    },
+    "post_bind": {
+      "kind": "object_property",
+      "owner_engine_type_id": 1140856374,
+      "property_index": 6
+    },
+    "final_state": {
+      "kind": "object_property",
+      "property_id": 33925,
+      "byte_offset": 322,
+      "access_mask": 4294967295,
+      "composite_offset": 0,
+      "is_composite_indirect": false,
+      "is_private": false,
+      "is_protected": false,
+      "is_app_bind_property": true,
+      "exposed_type": 255
+    },
+    "binds_property": {
+      "declaration": "bool bExternalAvailabilityTrigger",
+      "unreal_path": "bExternalAvailabilityTrigger",
+      "can_write": false,
+      "can_read": false,
+      "can_edit": false,
+      "generated_getter": false,
+      "generated_setter": false,
+      "generated_name": "",
+      "generated_handle": false,
+      "generated_unresolved_object": false
+    },
+    "value_type_full_identity": null,
+    "value_datatype": {
+      "full_identity": null,
+      "token": 65,
+      "flags": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "datatype_identity": "9:primitive2:651:01:01:01:0"
+    }
+  },
+  "pristine_owner_properties": [
+    {
+      "key": "0x1f008002c6d",
+      "name": "BelongsToStory",
+      "owner_type_id": 67114550,
+      "member_offset": 248
+    },
+    {
+      "key": "0x26008002c6d",
+      "name": "InvolvedCharacters",
+      "owner_type_id": 67114550,
+      "member_offset": 304
+    },
+    {
+      "key": "0x43008002c6d",
+      "name": "ParentQuestClass",
+      "owner_type_id": 67114550,
+      "member_offset": 536
+    },
+    {
+      "key": "0x28608002c6d",
+      "name": "bExternalStartTrigger",
+      "owner_type_id": 67114550,
+      "member_offset": 323
+    },
+    {
+      "key": "0x35008002c6d",
+      "name": "DescriptionText",
+      "owner_type_id": 67114550,
+      "member_offset": 424
+    },
+    {
+      "key": "0x33008002c6d",
+      "name": "NameText",
+      "owner_type_id": 67114550,
+      "member_offset": 408
+    },
+    {
+      "key": "0x42808002c6d",
+      "name": "QuestKind",
+      "owner_type_id": 67114550,
+      "member_offset": 532
+    },
+    {
+      "key": "0x41808002c6d",
+      "name": "QuestGiverCharacterUniqueName",
+      "owner_type_id": 67114550,
+      "member_offset": 524
+    },
+    {
+      "key": "0x28a08002c6d",
+      "name": "bExternalSuccessTrigger",
+      "owner_type_id": 67114550,
+      "member_offset": 325
+    },
+    {
+      "key": "0x28208002c6d",
+      "name": "bSucceedParent",
+      "owner_type_id": 67114550,
+      "member_offset": 321
+    },
+    {
+      "key": "0x28808002c6d",
+      "name": "bExternalFailTrigger",
+      "owner_type_id": 67114550,
+      "member_offset": 324
+    },
+    {
+      "key": "0x28008002c6d",
+      "name": "bIsOptional",
+      "owner_type_id": 67114550,
+      "member_offset": 320
+    }
+  ],
+  "native_compiled_source_sha256": "c7943e2b04c0817c0f883644a60e8b5038210a9a30bb2f6f5c7e60bd4728768d",
+  "native_compile_composition_log": {
+    "path": "work/npc-batch-tests/builds/quest-v4/compile.log",
+    "sha256": "57550fc074fca1c2eff73e60a15a8363a845b8cb09e874c3e8919c5e9f521a74"
+  },
+  "proof_limit": "T7 serializes owner/name/offset, not the field datatype. Bool is independently pinned by registrar and Binds and protected by the snapshot content seal. This qualifies a direct public binding; it does not infer the native CDO default or prove runtime quest transitions."
+}

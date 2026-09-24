@@ -104,6 +104,20 @@ const TEXTURE_REPLACE_ARGS: &[ArgSpec] = &[
         "Output mod dir; rewritten cooked files land under <mod_dir>/G1R/Content/…",
         true,
     ),
+    ArgSpec::new(
+        "as_asset",
+        Long("as-asset"),
+        Str,
+        "Create a separate Texture2D package at this new /Game path; do not override the source",
+        false,
+    ),
+    ArgSpec::new(
+        "fit_original",
+        Switch("fit-original"),
+        Bool,
+        "Resample the input atlas to the original top-mip dimensions before encoding (required for differently sized VT input)",
+        false,
+    ),
 ];
 
 const TEXTURE_PACK_ARGS: &[ArgSpec] = &[
@@ -163,7 +177,44 @@ const TEXTURE_UNDEPLOY_ARGS: &[ArgSpec] = &[
     ),
 ];
 
+/// `texture story-images` reads a plain directory, so it shares nothing with the container args.
+const TEXTURE_STORY_IMAGES_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "game",
+        Long("game"),
+        Str,
+        "Path to the game install dir (contains G1R/Content/Paks/…)",
+        false,
+    ),
+    ArgSpec::new(
+        "filter",
+        Long("filter"),
+        Str,
+        "Keep only paths containing this substring (case-insensitive), e.g. `Glossary/Creatures`",
+        false,
+    ),
+    ArgSpec::new(
+        "absolute",
+        Switch("absolute"),
+        Bool,
+        "Print the absolute file path instead of the name below the images dir",
+        false,
+    ),
+];
+
 const TEXTURE_COMMANDS: &[CommandSpec] = &[
+    // The loose side of the same question `list` answers for containers: glossary portraits,
+    // tutorial pictures and loading-screen art are plain files under `G1R/Story/Conversation`,
+    // and `list` will never show them.
+    CommandSpec::new(
+        "story-images",
+        "List the game's loose story images (glossary portraits, tutorial pictures, writings, \
+         loading-screen art)",
+        TEXTURE_STORY_IMAGES_ARGS,
+        Safety::read(),
+        T_FAST,
+    )
+    .guide("textures"),
     CommandSpec::new(
         "list",
         "List Texture2D assets in the game container",
@@ -854,7 +905,7 @@ mod tests {
 
     #[test]
     fn the_group_sizes_match_the_cli() {
-        assert_eq!(TEXTURE.commands.len(), 8);
+        assert_eq!(TEXTURE.commands.len(), 9);
         assert_eq!(ASSET.commands.len(), 4);
         assert_eq!(MOD.commands.len(), 4);
         assert_eq!(MOD_INSPECT.commands.len(), 1);

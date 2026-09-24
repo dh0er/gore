@@ -1,0 +1,47 @@
+[
+  {
+    "id": "GORE_NPCVOICE_A_48M_01",
+    "voice": "Microsoft David Desktop",
+    "text": "Voice test three. This is the new character speaking. Forty eight kilohertz, mono.",
+    "subtitle": "Sprachtest drei. Hier spricht der neue Charakter. 48 Kilohertz, Mono.",
+    "sample_rate": 48000,
+    "channels": 1,
+    "leading_silence_ms": 0
+  },
+  {
+    "id": "GORE_NPCVOICE_A_44M_01",
+    "voice": "Microsoft David Desktop",
+    "text": "Voice test four. A second new recording. Forty four point one kilohertz, mono.",
+    "subtitle": "Sprachtest vier. Eine zweite neue Aufnahme. 44,1 Kilohertz, Mono.",
+    "sample_rate": 44100,
+    "channels": 1,
+    "leading_silence_ms": 0
+  },
+  {
+    "id": "GORE_NPCVOICE_A_48S_01",
+    "voice": "Microsoft David Desktop",
+    "text": "Voice test five. The new character is speaking in stereo.",
+    "subtitle": "Sprachtest fuenf. Der neue Charakter spricht in Stereo.",
+    "sample_rate": 48000,
+    "channels": 2,
+    "leading_silence_ms": 0
+  },
+  {
+    "id": "GORE_NPCVOICE_HERO_REPLY_01",
+    "voice": "Microsoft Zira Desktop",
+    "text": "This is the hero speaking. The reply belongs to me.",
+    "subtitle": "Hier spricht der Held. Diese Antwort gehoert mir.",
+    "sample_rate": 48000,
+    "channels": 1,
+    "leading_silence_ms": 100
+  },
+  {
+    "id": "GORE_NPCVOICE_A_END_01",
+    "voice": "Microsoft David Desktop",
+    "text": "The new character answers again. The conversation is complete.",
+    "subtitle": "Der neue Charakter antwortet wieder. Das Gespraech ist beendet.",
+    "sample_rate": 48000,
+    "channels": 1,
+    "leading_silence_ms": 0
+  }
+]

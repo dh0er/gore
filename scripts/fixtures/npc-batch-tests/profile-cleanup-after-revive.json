@@ -1,0 +1,76 @@
+{
+  "schema": "gore.npc-batch.profile-cleanup-after-revive.v1",
+  "date": "2026-09-13",
+  "displayed_profile": 4,
+  "internal_profile_id": 2,
+  "stored_profile_name": "3",
+  "passed": true,
+  "operation": "live",
+  "archive": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-revive-complete-20260913T131430Z",
+  "manifest_sha256": "cf9b0f6a368aac4785369fae854a98b6d9748bf0509a27d3736fb9b85927b955",
+  "deleted_count": 1,
+  "retained_count": 3,
+  "retained": [
+    "G1R-070",
+    "G1R-071",
+    "G1R-072"
+  ],
+  "removed": [
+    "G1R-030"
+  ],
+  "profile_before": {
+    "bytes": 31674,
+    "sha256": "4ab22febe8ffbd54108eae505bbc0948f8032edc14fd81a688ab548154b81293"
+  },
+  "profile_after": {
+    "bytes": 30725,
+    "sha256": "63b780b96cbff5feef5c398b4b59307f8154e67e1ba59de856e832ef14a487a4"
+  },
+  "dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "titles": {
+    "G1R-070": "NPC 04 Rollen - START",
+    "G1R-071": "NPC 05 Quest - START",
+    "G1R-072": "NPC 04 Rollen - Kampf bereit",
+    "G1R-030": "rolle-tod"
+  },
+  "previous_030_archive": {
+    "path": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-field-results-20260913T101218Z\\G1R-030.sav",
+    "bytes": 1047266,
+    "sha256": "addca3838d2b701cf5988183bb722afaeb13a12efac89e039b967fc2772706ba"
+  },
+  "current_profile_snapshot_used": true,
+  "retained_save_hashes": {
+    "G1R-070": {
+      "bytes": 1035034,
+      "sha256": "60dd5ac6cebab1cd62f1005ae0fa47618161b6db6d83cda1ca88868f445922b4"
+    },
+    "G1R-071": {
+      "bytes": 1018879,
+      "sha256": "aee18515288dc09ebc1f4687fc3da21cccdec946596b2744f2028ccdfaf68db5"
+    },
+    "G1R-072": {
+      "bytes": 1035056,
+      "sha256": "5feb135c3a3e689e38976823c1ee70d1c5ae57c4292a79e2aa9c8bbd605e6451"
+    }
+  },
+  "removed_original_hashes": {
+    "G1R-030": {
+      "bytes": 1047266,
+      "sha256": "addca3838d2b701cf5988183bb722afaeb13a12efac89e039b967fc2772706ba"
+    }
+  },
+  "exact_current_titles_and_source_hashes_verified": true,
+  "paired_backups_verified": true,
+  "other_profiles_byte_identical": true,
+  "retained_saves_byte_identical": true,
+  "other_live_files_unchanged": true,
+  "live_unchanged_during_preview": true,
+  "global_registry_exact_filtered_order": true,
+  "no_removed_slot_reference": true,
+  "archive_hashes_reverified": true,
+  "copied_pdl_preview_passed": true,
+  "preview_evidence_sha256": "60a28f7e94fc5de93d0500deab1005d85252bc68951862ce8684c36515b30128"
+}

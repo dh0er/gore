@@ -1,0 +1,285 @@
+{
+  "schema": "gore.npc-batch.daylight-builds.v1",
+  "date": "2026-09-11",
+  "passed": true,
+  "bundles": [
+    {
+      "kind": "heads",
+      "build": "heads-v3",
+      "bundle": "work/npc-batch-tests/packages-daylight/NpcHeadPaletteTest",
+      "version": "0.1.1",
+      "receipt_sha256": "23e8a097ee356e72313068cd00effb4588c27796464b9a92b3e8602eb3e008ec",
+      "full_sha256": "80c723b131eaf83d1658189f113ceef8bdb8edc5343e0ffab13b2546139a99c3",
+      "mini_sha256": "b2b7f859d886984441ca3b4700d32cc0b1d858f161d0934614e6d04c88bb4528",
+      "preservation": {
+        "operation": "product module_ranges exact serialized module span comparison",
+        "mini_modules": 4,
+        "full_modules": 7319,
+        "pristine_modules": 7317,
+        "unselected_pristine_modules_byte_identical": 7315,
+        "exact_selected_module_set": true,
+        "diego_bytes_unchanged_from_0_1_11": false,
+        "tower_bytes_unchanged_from_0_1_11": true,
+        "passed": true
+      },
+      "unchanged_Diego_Tower_emission": {
+        "operation": "product PreparedEmit with exact Binds and class defaults enabled",
+        "modules": [
+          {
+            "module": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+            "exactly_unchanged": true,
+            "prior_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+            "current_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+          },
+          {
+            "module": "LevelScripts.XardasTower_AI",
+            "exactly_unchanged": true,
+            "prior_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f",
+            "current_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f"
+          }
+        ]
+      },
+      "inspection": {
+        "report_format": 1,
+        "source_kind": "directory",
+        "bundle_format": 1,
+        "mod": {
+          "name": "NpcHeadPaletteTest",
+          "version": "0.1.1",
+          "author": ""
+        },
+        "component_count": 3,
+        "components": [
+          {
+            "type": "loc_patch",
+            "path": "loc/edits.json",
+            "target_count": 42,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "voice_archive_patch",
+            "path": "voice",
+            "target_count": 5,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "angel_script_patch",
+            "path": "scripts",
+            "target_count": 4,
+            "footprint_coverage": "exact"
+          }
+        ],
+        "file_count": 10,
+        "directory_count": 4,
+        "total_file_bytes": 453383,
+        "manifest_sha256": "ff0df5ebde10f771366c241af7c9abf88c7df158cdc070b69531a431a3bcc0ea",
+        "tree_sha256": "130472ebcf97457d0720c3e88c0b8bd5f37f0533b48d041c6efb68bdffcde5f3",
+        "evidence": {
+          "verified": [
+            "bounded non-link materialization of the selected directory or ZIP",
+            "root manifest format plus every declared component manifest and referenced payload",
+            "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+            "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+          ],
+          "not_verified": [
+            "compatibility with any particular game installation or game build",
+            "whether named game-side assets, samples, localization ids, or script edit targets exist",
+            "cross-mod conflicts, load order, or deployment readiness",
+            "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+          ]
+        }
+      },
+      "core_route": {
+        "base_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+        "binds_sha256": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2",
+        "changed_paths": [
+          "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+          "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+          "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+          "LevelScripts/XardasTower_AI.as"
+        ],
+        "final_source_manifest_sha256": "32a8430ea3b2a7a5e8dbfc6e52572aa6a391e59db490d368f30ae661b7f44969",
+        "frozen_build": "\\\\?\\C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\builds\\heads-v2",
+        "frozen_manifest_sha256": "f58ee74b46256cbee966684cf918932bef756e1b80e3888437352aa353e28515",
+        "helper_sha256": "80ee4c2b1c91c868a3b5ff5329d49202ee0d8531c3d224c652e03720f312b37c",
+        "overlay_sha256": {
+          "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as": "100dfd89787dbb64df1b072c9f987bc26be7705cacea16b986841d02cf0df2dc",
+          "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as": "637a06baf3cd51b086772c2af2dec5630d6477849c2d893d9a7f05360952e5f2"
+        },
+        "pristine_source_manifest_sha256": "18ba4561d63639f4a78ccba1a8d93c5d7eb99f995a2adcd9ce788c118c281679",
+        "product_package": {
+          "catalog_sha256": "de2a2820193eb81f3032e3731d469a02dbd9ea05942f0ef48ebab58966a46e64",
+          "compatibility_id": "gore-as-standalone-semantic-v2",
+          "manifest_byte_len": 5023,
+          "manifest_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
+          "profile_sha256": "264c06884f7d54db2da35cc9c057529be4ccbf208cf577370e4da5199aaf9ab3",
+          "request_version": 2,
+          "response_version": 1,
+          "sidecar_byte_len": 2233608,
+          "sidecar_sha256": "abceb0a495074852441da1b3370122a5bf6d24d4e8096c23596caff2a8ed6ee2",
+          "target": {
+            "pe_codeview": {
+              "age": 1,
+              "guid": "c2ca4ada-4878-d963-e567-717dc2c483a2"
+            },
+            "target": {
+              "architecture": "x86_64",
+              "build_configuration": "shipping",
+              "depot_id": 1297901,
+              "depot_manifest_gid": 382135126159906494,
+              "platform": "windows",
+              "steam_app_id": 1297900,
+              "steam_build_id": 24878692
+            }
+          }
+        },
+        "route": "compile_full_graph_standalone_v1_with_target",
+        "source_modules": 7319,
+        "source_planner": "frozen source inventory compared with prior verified pristine emission; no repeated original emit"
+      }
+    },
+    {
+      "kind": "voice",
+      "build": "voice-v2",
+      "bundle": "work/npc-batch-tests/packages-daylight/NpcNaturalVoiceTest",
+      "version": "0.1.1",
+      "receipt_sha256": "0825ca559ef4b6c858c87ca1ab1fc1225abb60b0ea5b04aa6d92a0f5d47a926d",
+      "full_sha256": "d014c4fd46ddf968d43ae2061cdc619fc8408a21110f43dcd9dfb9c1b5c897ed",
+      "mini_sha256": "59dcf01e1d368e51e177a7d6090491bb75480e3039a32f78e97e5ae2dc44c6e7",
+      "preservation": {
+        "operation": "product module_ranges exact serialized module span comparison",
+        "mini_modules": 4,
+        "full_modules": 7319,
+        "pristine_modules": 7317,
+        "unselected_pristine_modules_byte_identical": 7315,
+        "exact_selected_module_set": true,
+        "diego_bytes_unchanged_from_0_1_11": false,
+        "tower_bytes_unchanged_from_0_1_11": true,
+        "passed": true
+      },
+      "unchanged_Diego_Tower_emission": {
+        "operation": "product PreparedEmit with exact Binds and class defaults enabled",
+        "modules": [
+          {
+            "module": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+            "exactly_unchanged": true,
+            "prior_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+            "current_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+          },
+          {
+            "module": "LevelScripts.XardasTower_AI",
+            "exactly_unchanged": true,
+            "prior_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f",
+            "current_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f"
+          }
+        ]
+      },
+      "inspection": {
+        "report_format": 1,
+        "source_kind": "directory",
+        "bundle_format": 1,
+        "mod": {
+          "name": "NpcNaturalVoiceTest",
+          "version": "0.1.1",
+          "author": ""
+        },
+        "component_count": 3,
+        "components": [
+          {
+            "type": "loc_patch",
+            "path": "loc/edits.json",
+            "target_count": 42,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "voice_archive_patch",
+            "path": "voice",
+            "target_count": 5,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "angel_script_patch",
+            "path": "scripts",
+            "target_count": 4,
+            "footprint_coverage": "exact"
+          }
+        ],
+        "file_count": 10,
+        "directory_count": 4,
+        "total_file_bytes": 440345,
+        "manifest_sha256": "1b1d03a66ed4b3170b3c276abfdb447a1bba1314839abfde7021687119605fac",
+        "tree_sha256": "9afb05b909b32c6d770793b0043549b15055cb664a5a9f17c5214dcacbf19331",
+        "evidence": {
+          "verified": [
+            "bounded non-link materialization of the selected directory or ZIP",
+            "root manifest format plus every declared component manifest and referenced payload",
+            "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+            "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+          ],
+          "not_verified": [
+            "compatibility with any particular game installation or game build",
+            "whether named game-side assets, samples, localization ids, or script edit targets exist",
+            "cross-mod conflicts, load order, or deployment readiness",
+            "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+          ]
+        }
+      },
+      "core_route": {
+        "base_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+        "binds_sha256": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2",
+        "changed_paths": [
+          "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+          "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+          "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+          "LevelScripts/XardasTower_AI.as"
+        ],
+        "final_source_manifest_sha256": "89f3740efbc85b3157f0020ad1ab40a5c3846e6512059ad99d15a2013d0897f3",
+        "frozen_build": "\\\\?\\C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\builds\\voice-v1",
+        "frozen_manifest_sha256": "5d88c3d02e85306f832597cb8cc34767de2b538fcc2d2601e04785ee1367a393",
+        "helper_sha256": "80ee4c2b1c91c868a3b5ff5329d49202ee0d8531c3d224c652e03720f312b37c",
+        "overlay_sha256": {
+          "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as": "93da6eca99399bca5dc8338c42499b93f80b3f9b0d8dcd5a9a8e8adca12b4f14",
+          "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as": "b62c1cf2147eee80f899c3c813dde9ac95d3186dff58dbc660ef5392e9c1c353"
+        },
+        "pristine_source_manifest_sha256": "18ba4561d63639f4a78ccba1a8d93c5d7eb99f995a2adcd9ce788c118c281679",
+        "product_package": {
+          "catalog_sha256": "de2a2820193eb81f3032e3731d469a02dbd9ea05942f0ef48ebab58966a46e64",
+          "compatibility_id": "gore-as-standalone-semantic-v2",
+          "manifest_byte_len": 5023,
+          "manifest_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
+          "profile_sha256": "264c06884f7d54db2da35cc9c057529be4ccbf208cf577370e4da5199aaf9ab3",
+          "request_version": 2,
+          "response_version": 1,
+          "sidecar_byte_len": 2233608,
+          "sidecar_sha256": "abceb0a495074852441da1b3370122a5bf6d24d4e8096c23596caff2a8ed6ee2",
+          "target": {
+            "pe_codeview": {
+              "age": 1,
+              "guid": "c2ca4ada-4878-d963-e567-717dc2c483a2"
+            },
+            "target": {
+              "architecture": "x86_64",
+              "build_configuration": "shipping",
+              "depot_id": 1297901,
+              "depot_manifest_gid": 382135126159906494,
+              "platform": "windows",
+              "steam_app_id": 1297900,
+              "steam_build_id": 24878692
+            }
+          }
+        },
+        "route": "compile_full_graph_standalone_v1_with_target",
+        "source_modules": 7319,
+        "source_planner": "frozen source inventory compared with prior verified pristine emission; no repeated original emit"
+      }
+    }
+  ],
+  "save_changes": {
+    "report": "daylight-starts.json",
+    "sha256": "ca54aad62fa66c9e2cdb28789b875b9d6d81ce493ca6d6146771cec633c38be1",
+    "count": 8,
+    "clock": "12:00"
+  },
+  "runtime": "Head0.1.0 user passed except beard, recorded in heads/runtime-result.json. Updated0.1.1 voice runtime test is next.",
+  "inspection_note": "Installed MCP CLI lacks multi-module minis; both dedicated inspections refused that format. Current product CLI validates both bundles."
+}

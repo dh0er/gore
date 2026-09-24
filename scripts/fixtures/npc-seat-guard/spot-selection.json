@@ -1,0 +1,195 @@
+{
+  "source_save": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-052.sav",
+    "sha256": "04f01a99e7e306e06e3d7ba869d3dbe516235ad3fdb715305e5872ad9e7c4b1f",
+    "bytes": 1103807
+  },
+  "selected_guard_records": [
+    {
+      "request": {
+        "command": "private.characters.list",
+        "payload": {
+          "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-sit-guard-investigation\\G1R-052.sav",
+          "query": "OC_GRD_Guard10_226"
+        }
+      },
+      "response": {
+        "data": {
+          "characters": [
+            {
+              "globalId": "OC_GRD_Guard10_226-OC_Spawnpoint_Guard10_226",
+              "hasEvents": true,
+              "hasInventory": true,
+              "hasKnowledge": false,
+              "isDead": false,
+              "isTrader": false,
+              "personalRelationship": null,
+              "uniqueName": "OC_GRD_Guard10_226"
+            }
+          ],
+          "total": 1
+        },
+        "ok": true
+      }
+    },
+    {
+      "request": {
+        "command": "private.npc.position",
+        "payload": {
+          "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-sit-guard-investigation\\G1R-052.sav",
+          "id": "OC_GRD_Guard10_226-OC_Spawnpoint_Guard10_226"
+        }
+      },
+      "response": {
+        "data": {
+          "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+          "pose": {
+            "compact": false,
+            "location": {
+              "x": 114190.82990242275,
+              "y": -100964.92947729427,
+              "z": -4096.537256578241
+            },
+            "locationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{OC_GRD_Guard10_226-OC_Spawnpoint_Guard10_226}",
+              "CharacterLocation"
+            ],
+            "rotation": {
+              "pitch": 0.0,
+              "roll": 0.0,
+              "yaw": 39.306614140795205
+            },
+            "rotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{OC_GRD_Guard10_226-OC_Spawnpoint_Guard10_226}",
+              "CharacterRotation"
+            ],
+            "spawnLocation": {
+              "x": 110210.0,
+              "y": -100980.0,
+              "z": -3760.0
+            },
+            "spawnLocationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{OC_GRD_Guard10_226-OC_Spawnpoint_Guard10_226}",
+              "SpawnLocation"
+            ],
+            "spawnRotation": {
+              "pitch": 0.0,
+              "roll": 0.0,
+              "yaw": 89.99999999999999
+            },
+            "spawnRotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{OC_GRD_Guard10_226-OC_Spawnpoint_Guard10_226}",
+              "SpawnRotation"
+            ]
+          },
+          "routineClass": "/Script/Angelscript.DailyRoutine_OC_GRD_Guard10_226_Start",
+          "routineClassPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "DailyRoutineByGlobalId",
+            "{OC_GRD_Guard10_226-OC_Spawnpoint_Guard10_226}",
+            "DailyRoutineClass"
+          ],
+          "undo": null
+        },
+        "ok": true
+      }
+    }
+  ],
+  "selected_spot_queries": [
+    {
+      "request": {
+        "command": "search_typed_properties",
+        "payload": {
+          "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-sit-guard-investigation\\G1R-052.sav",
+          "source": "private",
+          "includeNodes": true,
+          "query": "IO_OC_CHAIR_81",
+          "offset": 0,
+          "limit": 25
+        }
+      },
+      "response": {
+        "data": {
+          "count": 0,
+          "limit": 25,
+          "offset": 0,
+          "query": "IO_OC_CHAIR_81",
+          "results": [],
+          "source": "private",
+          "summary": {
+            "editable": 0,
+            "kinds": {},
+            "readOnly": 0,
+            "sources": {
+              "private": 0
+            },
+            "typedSources": [
+              "private"
+            ],
+            "types": {}
+          },
+          "total": 0,
+          "warnings": []
+        },
+        "ok": true
+      }
+    },
+    {
+      "request": {
+        "command": "search_typed_properties",
+        "payload": {
+          "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-sit-guard-investigation\\G1R-052.sav",
+          "source": "private",
+          "includeNodes": true,
+          "query": "BreadcrumbActor_OC_NIGHTWATCH_GUARD10_5",
+          "offset": 0,
+          "limit": 25
+        }
+      },
+      "response": {
+        "data": {
+          "count": 0,
+          "limit": 25,
+          "offset": 0,
+          "query": "BreadcrumbActor_OC_NIGHTWATCH_GUARD10_5",
+          "results": [],
+          "source": "private",
+          "summary": {
+            "editable": 0,
+            "kinds": {},
+            "readOnly": 0,
+            "sources": {
+              "private": 0
+            },
+            "typedSources": [
+              "private"
+            ],
+            "types": {}
+          },
+          "total": 0,
+          "warnings": []
+        },
+        "ok": true
+      }
+    }
+  ],
+  "limit": "No saved references and current guard position do not prevent later opportunistic occupancy; user runtime test remains required."
+}

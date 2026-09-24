@@ -1,0 +1,106 @@
+{
+  "schema": "gore.npc-batch.deployment.v1",
+  "recorded_at": "2026-09-11T11:30:35.756601+00:00",
+  "active": "NpcHeadPaletteTest",
+  "state": "in_sync",
+  "previous_disabled": "npcwarningrecovery-4e0db7e6",
+  "cli": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-palette-v4.exe",
+  "cli_sha256": "3e16d37f2c04361e6c80764295a648837a91273c6bef792ac14990c9758c9ada",
+  "game": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake",
+  "apply_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-palette-v4.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "reset_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-palette-v4.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "preflight": {
+    "tool": "gore_mgr_preflight",
+    "game_closed": true,
+    "loadout_metadata_ready": true,
+    "install_mutation_clear": true,
+    "deployment_changes_pending": "expected switch from NpcWarningRecovery to NpcHeadPaletteTest; completed by Apply"
+  },
+  "conflicts": false,
+  "imports": [
+    {
+      "name": "NpcHeadPaletteTest",
+      "id": "npcheadpalettetest-9f52703d",
+      "enabled": true,
+      "source": "work/npc-batch-tests/packages/NpcHeadPaletteTest",
+      "tree_sha256": "1bb59eca8717ddc7f5e4f78af48fff404b8f461c791b22791a15e30a5fe50c7c"
+    },
+    {
+      "name": "NpcNaturalVoiceTest",
+      "id": "npcnaturalvoicetest-4c2f50b2",
+      "enabled": false,
+      "source": "work/npc-batch-tests/packages/NpcNaturalVoiceTest",
+      "tree_sha256": "2a5a51318ed9d62a838c6d18727dda5a080bf36764eeb39903237bb25ced31cb"
+    },
+    {
+      "name": "NpcEconomyRolesTest",
+      "id": "npceconomyrolestest-9e89ec20",
+      "enabled": false,
+      "source": "work/npc-batch-tests/packages/NpcEconomyRolesTest",
+      "tree_sha256": "45735db5d7a129863aff53c89c00b694e9634ae48fb9b4928bb37a54915985da"
+    },
+    {
+      "name": "NpcFieldRolesTest",
+      "id": "npcfieldrolestest-3d1bf76b",
+      "enabled": false,
+      "source": "work/npc-batch-tests/packages/NpcFieldRolesTest",
+      "tree_sha256": "627f40f47f398d7f4613bc863447c8bedec79346d8889c52b9d83e7b2a83abdf"
+    },
+    {
+      "name": "NpcQuestCallbacksTest",
+      "id": "npcquestcallbackstest-43e8193f",
+      "enabled": false,
+      "source": "work/npc-batch-tests/packages/NpcQuestCallbacksTest",
+      "tree_sha256": "c9aba85b4aed34a85202919132218d7dcac142770ef4f10c12756e8478bd49b1"
+    }
+  ],
+  "original_cache_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "live_cache_sha256": "f9408b7c8e98e091b181e2a36a24b75102dedb4c1bf78d7cf535b7c097bdbb06",
+  "status": {
+    "loadout": [
+      {
+        "enabled": true,
+        "id": "npcheadpalettetest-9f52703d"
+      }
+    ],
+    "manager_owned": {
+      "additive": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      },
+      "backups": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip.gore-bak"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "live": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "recovery": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\gore-mod.deployed.json"
+        ],
+        "total": 1,
+        "truncated": false
+      },
+      "ue4ss": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      }
+    },
+    "state": "in_sync"
+  },
+  "game_tested": false
+}

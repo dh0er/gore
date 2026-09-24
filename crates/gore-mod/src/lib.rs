@@ -3065,6 +3065,15 @@ fn read_regular_file_limited(path: &Path, label: &str, max_bytes: u64) -> Result
     Ok(bytes)
 }
 
+/// Native script rows require the installed Binds.Cache for this exact pristine cache.
+/// Missing or mismatched evidence leaves normal script composition available, but cannot
+/// authorize native properties.
+pub(crate) fn qualified_native_binds_for_base(cache_path: &Path, base: &[u8]) -> Option<Vec<u8>> {
+    let path = cache_path.parent()?.join("Binds.Cache");
+    let binds = read_regular_file_limited(&path, "native Binds.Cache", 128 * 1024 * 1024).ok()?;
+    gore_as::cache::remap::qualified_native_api_binds_match(base, &binds).then_some(binds)
+}
+
 fn metadata_is_link(metadata: &std::fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
@@ -8328,8 +8337,13 @@ fn prepare(
 
                 // Pass 3 verifies each generated tempfile's length and SHA-256, then composes that
                 // exact Vec. Consuming the candidates releases their disk footprint incrementally.
+                let binds = qualified_native_binds_for_base(&cache_path, &pristine);
                 let mut script_merge_guard =
-                    gore_as::cache::splice::SequentialMiniGuard::new(&pristine).map_err(|err| {
+                    gore_as::cache::splice::SequentialMiniGuard::new_with_binds(
+                        &pristine,
+                        binds.as_deref().unwrap_or(&[]),
+                    )
+                    .map_err(|err| {
                         ModError::Other(format!("prepare script composition: {err}"))
                     })?;
                 let mut running = pristine;

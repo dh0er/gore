@@ -753,7 +753,7 @@ Revision3ContentIndex _fixture({
         'origin': <String, Object?>{
           'type': 'generated',
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': 4,
+          'generator_version': 6,
           'owner': <String, Object?>{
             'project_id': revision3VoiceContentProjectId,
             'entity_id': _questId,
@@ -764,7 +764,7 @@ Revision3ContentIndex _fixture({
           'kind': 'script_module',
           'data': <String, Object?>{
             'generator_id': 'gore-authoring.draft-quest-skeleton',
-            'generator_version': 4,
+            'generator_version': 6,
             'module_namespace': 'PROJECT.QUESTS.FIXTURE_QUEST',
             'module_relative_path': 'Project/Quests/FixtureQuest.as',
             'status': <String, Object?>{

@@ -8,7 +8,7 @@ import 'revision3_story_entity_workbench.dart';
 const _npcDraftGeneratorId = 'gore-authoring.logical-npc-clone-draft';
 const _npcDraftGeneratorVersion = 1;
 const _questDraftGeneratorId = 'gore-authoring.draft-quest-skeleton';
-const _questDraftGeneratorVersion = 4;
+const _questDraftGeneratorVersion = 6;
 
 typedef Revision3StoryWorkspaceLoader =
     Future<Revision3ContentIndex> Function();

@@ -1,0 +1,197 @@
+{
+  "schema": "gore.npc-batch.beard-vt-build.v1",
+  "date": "2026-09-11",
+  "bundle": "NpcHeadPaletteTest",
+  "version": "0.1.3",
+  "passed": true,
+  "runtime_verified": false,
+  "build": {
+    "build": "heads-v5",
+    "source_tree_unchanged": true,
+    "authored_modules": [
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+        "disposition": "added",
+        "source": {
+          "byte_len": 41314,
+          "sha256": "9a455ad067305b28d264594fe68825ed887cfe18e1540eba6100b46d2b56e60c"
+        }
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+        "disposition": "added",
+        "source": {
+          "byte_len": 37541,
+          "sha256": "f4570f525c247ef074797c25729b9e4306166ade7a7901c38725995a8de461be"
+        }
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+        "relative_path": "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+        "disposition": "edited",
+        "source": {
+          "byte_len": 5203,
+          "sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+        }
+      },
+      {
+        "module_name": "LevelScripts.XardasTower_AI",
+        "relative_path": "LevelScripts/XardasTower_AI.as",
+        "disposition": "edited",
+        "source": {
+          "byte_len": 1814,
+          "sha256": "ee74734e29cafb76445abe5000bc662d2c9e79d3cd6b88a989a17f81d42056eb"
+        }
+      }
+    ],
+    "preservation": {
+      "operation": "product module_ranges exact serialized module span comparison",
+      "mini_modules": 4,
+      "full_modules": 7319,
+      "pristine_modules": 7317,
+      "unselected_pristine_modules_byte_identical": 7315,
+      "exact_selected_module_set": true,
+      "diego_bytes_unchanged_from_0_1_11": false,
+      "tower_bytes_unchanged_from_0_1_11": true,
+      "passed": true
+    },
+    "unchanged_Diego_Tower_emission": {
+      "operation": "product PreparedEmit with exact Binds and class defaults enabled",
+      "modules": [
+        {
+          "module": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+          "exactly_unchanged": true,
+          "prior_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+          "current_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+        },
+        {
+          "module": "LevelScripts.XardasTower_AI",
+          "exactly_unchanged": true,
+          "prior_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f",
+          "current_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f"
+        }
+      ]
+    },
+    "mini_sha256": "07cfa7ba97721f5e97a12db0a90cbd797239302a7ee500f0218d676609983f17",
+    "full_sha256": "780de5283fe6266baaea2dd25d857b7fff79d3f93815f6a97a80c884c8e07c32",
+    "generation_receipt_sha256": "0044d6266879a8814f328600971f0acbf333382deaae38c78ad2389fd09495bf"
+  },
+  "inspection": {
+    "report_format": 1,
+    "source_kind": "directory",
+    "bundle_format": 1,
+    "mod": {
+      "name": "NpcHeadPaletteTest",
+      "version": "0.1.3",
+      "author": ""
+    },
+    "component_count": 3,
+    "components": [
+      {
+        "type": "loc_patch",
+        "path": "loc/edits.json",
+        "target_count": 42,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "voice_archive_patch",
+        "path": "voice",
+        "target_count": 5,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "angel_script_patch",
+        "path": "scripts",
+        "target_count": 4,
+        "footprint_coverage": "exact"
+      }
+    ],
+    "file_count": 10,
+    "directory_count": 4,
+    "total_file_bytes": 463906,
+    "manifest_sha256": "6f713a82092fad95b2506c9c963ac2714aea878d6d4f2e39a0548fc764ce8cf1",
+    "tree_sha256": "3b4b7813ecc4019589836d55b9c777e9738f367d437feec8fa1d771a330e56e4",
+    "evidence": {
+      "verified": [
+        "bounded non-link materialization of the selected directory or ZIP",
+        "root manifest format plus every declared component manifest and referenced payload",
+        "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+        "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+      ],
+      "not_verified": [
+        "compatibility with any particular game installation or game build",
+        "whether named game-side assets, samples, localization ids, or script edit targets exist",
+        "cross-mod conflicts, load order, or deployment readiness",
+        "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+      ]
+    }
+  },
+  "inspection_tool_note": "Installed connector CLI v0.3.0 rejects the existing four-module mini pattern. Dedicated inspection attempted; current qualified product CLI inspection succeeded. This is a version mismatch, not an approval refusal.",
+  "cli": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe",
+  "cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+  "core_helper": {
+    "route": "Existing productive FullGraph Core API; direct rustc link against qualified product Release library",
+    "command": "rustc",
+    "arguments": [
+      "--edition=2021",
+      "-C",
+      "opt-level=3",
+      "work/npc-batch-tests/core-build.rs",
+      "--crate-name",
+      "npc_batch_core_build",
+      "-L",
+      "dependency=C:/sbx/goresave/target/release/deps",
+      "-L",
+      "native=C:/Users/Daniel/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/windows_x86_64_msvc-0.48.5/lib",
+      "--extern",
+      "gore_as=C:/sbx/goresave/target/release/deps/libgore_as-0a303f6a95c2be37.rlib",
+      "--extern",
+      "gore_mod=C:/sbx/goresave/target/release/deps/libgore_mod-826075152e8cbff4.rlib",
+      "--extern",
+      "serde_json=C:/sbx/goresave/target/release/deps/libserde_json-408aeb98b879f5ad.rlib",
+      "--extern",
+      "sha2=C:/sbx/goresave/target/release/deps/libsha2-aafecd3af9485a2d.rlib",
+      "--extern",
+      "anyhow=C:/sbx/goresave/target/release/deps/libanyhow-f743ab8a597f82a4.rlib",
+      "-o",
+      "work/npc-batch-tests/core-build-beard-v2.exe"
+    ],
+    "source_sha256": "e1a8db1069d12eaa197afae2c0e65b647ac2c0670ed5ad3d95d755d2b2855285",
+    "helper_sha256": "327dc32a1e4959a448ba690706e7eabcf8b4557eb91aedb5623b75d5e614d43a",
+    "gore_as_rlib_sha256": "fc11f840ce0aeb58a92e94c3fd30c75068797094fb8d2f6936ddedc15be19619",
+    "embedded_catalog_sha256": "de2a2820193eb81f3032e3731d469a02dbd9ea05942f0ef48ebab58966a46e64",
+    "product_host_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+    "native_api_snapshot_sha256": "e1c3b72c4641b9e0fa5df8ca8d67b91266f13ab68ebae94a30a40dbf6c1a5c78"
+  },
+  "tests": [
+    {
+      "command": "cargo test -p gore-tex --lib clone_texture --target-dir C:/sbx/goresave/target",
+      "passed": 3,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p gore-as --lib native_api_snapshot_tests --target-dir C:/sbx/goresave/target -- --nocapture",
+      "passed": 7,
+      "ignored": 1,
+      "failed": 0
+    }
+  ],
+  "cli_negative_checks": [
+    {
+      "case": "existing-output",
+      "refused": true,
+      "output_unchanged": true,
+      "stderr": "error: clone output already exists: /Game/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D.uasset"
+    },
+    {
+      "case": "existing-stock-destination",
+      "refused": true,
+      "output_unchanged": true,
+      "stderr": "error: clone destination already exists in the game: /Game/Assets/Characters/Humans/TierC/Flex/Textures/T_OC_IE_Flex_Head_D"
+    }
+  ],
+  "texture_checks": "heads/beard-virtual-textures.json",
+  "native_qualification": "heads/fresh-mid-native-api-qualification.json"
+}

@@ -15,6 +15,15 @@ uses the matching version section as the GitHub release notes.
   backup.
 - `--expect-base <CACHE>` / `--expect-base-sha256 <HEX>` on `gore as compile`
   and `compile-module` refuse to compile against any original but the given one.
+- `gore npc list|show|sites`: read the game's characters, their class chain,
+  and where they spawn.
+- `gore npc new|clone|checkout|delete|check|stage|text`: author a character,
+  clone one, change a shipped one, or stop one being placed. An authored
+  character was built, deployed and seen in game: it stands, animates, can be
+  focused and spoken to, and the save records it under its own identity.
+  `checkout` edits shipped character defaults through the single-module standalone
+  route. Local temporary stores are proved within their frame bounds and object
+  member stores retain their default targets; unproven writes still refuse.
 - Support multi-module mini-caches: `gore as compile --mini` publishes the
   authored modules as one deployable mini, and build, deploy, the Manager and
   `as splice --upsert` compose it as one unit. Qualified in game with a

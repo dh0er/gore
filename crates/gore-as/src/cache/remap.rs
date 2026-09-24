@@ -2412,6 +2412,253 @@ struct PristinePropertyIdentity {
     member_offset: i32,
 }
 
+// Build-specific qualification artifact: exact identities audited against the sealed native
+// registrar/Binds evidence. Extending it requires repeating the audit and updating this seal.
+const NATIVE_API_SNAPSHOT_BYTES: &[u8] = include_bytes!("../../data/npc-head-native-api-v1.json");
+const NATIVE_API_SNAPSHOT_SHA256: &str =
+    "e1c3b72c4641b9e0fa5df8ca8d67b91266f13ab68ebae94a30a40dbf6c1a5c78";
+const NATIVE_API_SNAPSHOT_25168047_BYTES: &[u8] =
+    include_bytes!("../../data/npc-head-native-api-25168047-v1.json");
+const NATIVE_API_SNAPSHOT_25168047_SHA256: &str =
+    "0495bbc238aea629d3c1c611823167e659d4b17df43b017676431804e41fb962";
+const NATIVE_API_SNAPSHOTS: &[(&[u8], &str)] = &[
+    (NATIVE_API_SNAPSHOT_BYTES, NATIVE_API_SNAPSHOT_SHA256),
+    (
+        NATIVE_API_SNAPSHOT_25168047_BYTES,
+        NATIVE_API_SNAPSHOT_25168047_SHA256,
+    ),
+];
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeApiTypeSnapshot {
+    full_identity: String,
+    object_kind: u32,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeApiFunctionSnapshot {
+    full_identity: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeApiPropertySnapshot {
+    owner_full_identity: String,
+    name: String,
+    member_offset: i32,
+    owner_object_kind: u32,
+    // T7 serializes no value type. This independently audited field type is trusted only when
+    // the compiler's Binds.Cache matches the snapshot seal as well as the on-wire property tuple.
+    value_type_full_identity: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeApiSnapshot {
+    format: String,
+    qualified: bool,
+    pristine_cache_sha256: Option<String>,
+    pristine_cache_guid_hex: Option<String>,
+    binds_cache_sha256: Option<String>,
+    compiler_profile_sha256: Option<String>,
+    registration_trace_sha256: Option<String>,
+    post_bind_snapshot_sha256: Option<String>,
+    qualification_evidence: Option<String>,
+    types: Vec<NativeApiTypeSnapshot>,
+    functions: Vec<NativeApiFunctionSnapshot>,
+    properties: Vec<NativeApiPropertySnapshot>,
+}
+
+impl NativeApiSnapshot {
+    fn from_sealed_bytes(bytes: &[u8], expected_sha256: &str) -> Option<Self> {
+        if format!("{:x}", Sha256::digest(bytes)) != expected_sha256 {
+            return None;
+        }
+        let snapshot: Self = serde_json::from_slice(bytes).ok()?;
+        if snapshot.format != "gore-native-api-snapshot-v1" {
+            return None;
+        }
+        if !snapshot.qualified {
+            return (snapshot.types.is_empty()
+                && snapshot.functions.is_empty()
+                && snapshot.properties.is_empty())
+            .then_some(snapshot);
+        }
+        let valid_hex = |value: Option<&str>, len: usize| {
+            value.is_some_and(|value| {
+                value.len() == len
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+        };
+        if !valid_hex(snapshot.pristine_cache_guid_hex.as_deref(), 32)
+            || [
+                snapshot.pristine_cache_sha256.as_deref(),
+                snapshot.binds_cache_sha256.as_deref(),
+                snapshot.compiler_profile_sha256.as_deref(),
+                snapshot.registration_trace_sha256.as_deref(),
+                snapshot.post_bind_snapshot_sha256.as_deref(),
+            ]
+            .into_iter()
+            .any(|seal| !valid_hex(seal, 64))
+            || snapshot
+                .qualification_evidence
+                .as_deref()
+                .is_none_or(str::is_empty)
+        {
+            return None;
+        }
+        let mut types = HashSet::new();
+        let mut functions = HashSet::new();
+        let mut properties = HashSet::new();
+        if snapshot.types.iter().any(|row| {
+            row.full_identity.is_empty()
+                || !matches!(row.object_kind, 0 | 0x0400_0000)
+                || !types.insert(row.full_identity.as_str())
+        }) || snapshot.functions.iter().any(|row| {
+            row.full_identity.is_empty() || !functions.insert(row.full_identity.as_str())
+        }) || snapshot.properties.iter().any(|row| {
+            row.owner_full_identity.is_empty()
+                || row.name.is_empty()
+                || row.value_type_full_identity.is_empty()
+                || !matches!(row.owner_object_kind, 0 | 0x0400_0000)
+                || !properties.insert((
+                    row.owner_full_identity.as_str(),
+                    row.name.as_str(),
+                    row.member_offset,
+                ))
+        }) {
+            return None;
+        }
+        Some(snapshot)
+    }
+
+    fn matches_base(&self, base: &[u8]) -> bool {
+        self.qualified
+            && self.pristine_cache_sha256.as_deref()
+                == Some(format!("{:x}", Sha256::digest(base)).as_str())
+            && self.matches_generation(base)
+    }
+
+    fn matches_binds(&self, binds: &[u8]) -> bool {
+        self.binds_cache_sha256.as_deref()
+            == Some(format!("{:x}", Sha256::digest(binds)).as_str())
+    }
+
+    fn matches_generation(&self, base: &[u8]) -> bool {
+        CacheHeader::parse(base).ok().is_some_and(|header| {
+            self.pristine_cache_guid_hex.as_deref()
+                == Some(
+                    header
+                        .hash
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                        .as_str(),
+                )
+        })
+    }
+
+    fn allows_type(&self, row: &TypeRowMeta, meta: &TailMetadata, syms: &SymTables) -> bool {
+        // No template instances, template sentinels, or script declarations gain authority here.
+        row.module.is_empty()
+            && row.type_deps.is_empty()
+            && syms.type_id_of_ptr.get(&row.key).is_some_and(|identity| {
+                unique_type_id_row(meta, row.key)
+                    .ok()
+                    .is_some_and(|type_id| {
+                        self.types.iter().any(|approved| {
+                            &approved.full_identity == identity
+                                && approved.object_kind == type_id.id as u32 & TYPE_ID_OBJECT_MASK
+                        })
+                    })
+            })
+    }
+
+    fn allows_function(&self, row: &FuncRowMeta, identity: &Ident) -> bool {
+        row.module.is_empty()
+            && !row.is_imported
+            && self
+                .functions
+                .iter()
+                .any(|approved| approved.full_identity == identity.full)
+    }
+
+    fn allows_property(&self, row: &PropertyRowMeta, owner_identity: &str) -> bool {
+        self.properties.iter().any(|approved| {
+            approved.owner_full_identity == owner_identity
+                && approved.name == row.name
+                && approved.member_offset == row.member_offset
+                && approved.owner_object_kind == row.old_type_id as u32 & TYPE_ID_OBJECT_MASK
+        })
+    }
+}
+
+fn native_api_snapshot_for_base(base: &[u8]) -> Option<Arc<NativeApiSnapshot>> {
+    static SNAPSHOTS: std::sync::OnceLock<Vec<Arc<NativeApiSnapshot>>> = std::sync::OnceLock::new();
+    let snapshots = SNAPSHOTS.get_or_init(|| {
+        NATIVE_API_SNAPSHOTS
+            .iter()
+            .filter_map(|(bytes, seal)| NativeApiSnapshot::from_sealed_bytes(bytes, seal))
+            .map(Arc::new)
+            .collect()
+    });
+    select_native_api_snapshot(base, snapshots)
+}
+
+/// True only when both the pristine script cache and Binds.Cache match one audited snapshot.
+pub fn qualified_native_api_binds_match(base: &[u8], binds: &[u8]) -> bool {
+    native_api_snapshot_for_base(base).is_some_and(|snapshot| snapshot.matches_binds(binds))
+}
+
+fn select_native_api_snapshot(
+    base: &[u8],
+    snapshots: &[Arc<NativeApiSnapshot>],
+) -> Option<Arc<NativeApiSnapshot>> {
+    snapshots
+        .iter()
+        .find(|snapshot| {
+            // Reject other generations before hashing the complete pristine cache.
+            snapshot.matches_generation(base) && snapshot.matches_base(base)
+        })
+        .cloned()
+}
+
+/// Native declarations authenticated against the original cache, retained while FullGraph folds
+/// authored modules onto it. Running caches supply their own script declarations; they never
+/// authenticate a new native snapshot merely by retaining the original generation GUID.
+pub(super) struct PristineNativeApiAuthority {
+    snapshot: Option<Arc<NativeApiSnapshot>>,
+}
+
+impl PristineNativeApiAuthority {
+    pub(super) fn from_pristine(pristine: &[u8], binds: &[u8]) -> Self {
+        Self::from_selected(native_api_snapshot_for_base(pristine), binds)
+    }
+
+    fn from_selected(snapshot: Option<Arc<NativeApiSnapshot>>, binds: &[u8]) -> Self {
+        Self {
+            snapshot: snapshot.filter(|snapshot| snapshot.matches_binds(binds)),
+        }
+    }
+
+    pub(super) fn matches_pristine(&self, pristine: &[u8]) -> bool {
+        self.snapshot
+            .as_ref()
+            .is_none_or(|snapshot| snapshot.matches_base(pristine))
+    }
+
+    fn for_running_generation(&self, running: &[u8]) -> Option<Arc<NativeApiSnapshot>> {
+        self.snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.matches_generation(running))
+            .cloned()
+    }
+}
+
 #[derive(Debug)]
 struct PristineDeclarationAuthority {
     declarations: DeclarationInventory,
@@ -2420,6 +2667,7 @@ struct PristineDeclarationAuthority {
     properties: HashSet<PristinePropertyIdentity>,
     orphan_functions: HashSet<i64>,
     script_owners: ScriptOwnerIndex,
+    native_api: Option<Arc<NativeApiSnapshot>>,
 }
 
 #[derive(Debug, Default)]
@@ -2600,6 +2848,7 @@ impl PristineDeclarationAuthority {
             properties,
             orphan_functions,
             script_owners,
+            native_api: None,
         })
     }
 }
@@ -2860,11 +3109,18 @@ fn validate_novel_declaration_membership(
                 }
             }
         } else if row.module.is_empty() || row.module == "$__T__" {
-            if !exact_pristine {
+            let qualified_native = pristine
+                .native_api
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.allows_type(row, meta, syms));
+            if !exact_pristine && !qualified_native {
                 return Err(missing_declaration_membership(
                     0,
                     row.key,
-                    "engine/native and $__T__ type rows require an exact pristine TypeReferences identity",
+                    format!(
+                        "engine/native and $__T__ type rows require an exact pristine TypeReferences identity (module {:?}, namespace {:?}, type {:?})",
+                        row.module, row.namespace, row.name
+                    ),
                 ));
             }
         } else {
@@ -2939,11 +3195,21 @@ fn validate_novel_declaration_membership(
                     "method/native function matches more than one namespace-tolerant declaration",
                 ));
             }
-            if declaration_match == FunctionDeclarationMatch::Missing && !exact_pristine {
+            let qualified_native = pristine
+                .native_api
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.allows_function(row, identity));
+            if declaration_match == FunctionDeclarationMatch::Missing
+                && !exact_pristine
+                && !qualified_native
+            {
                 return Err(missing_declaration_membership(
                     2,
                     row.key,
-                    "method/native function has neither an exact current/pristine function record nor an exact pristine FunctionReferences identity",
+                    format!(
+                        "method/native function {}::{} in module {:?} has neither an exact current/pristine function record nor an exact pristine FunctionReferences identity: {identity:?}",
+                        row.namespace, row.name, row.module
+                    ),
                 ));
             }
         } else {
@@ -3109,7 +3375,11 @@ fn validate_novel_property_membership(
                     owner_identity: owner_identity.clone(),
                     name: row.name.clone(),
                     member_offset: row.member_offset,
-                })
+                }) || (descriptor.kind == TypeDeclarationKind::EngineLeaf
+                    && pristine
+                        .native_api
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.allows_property(row, owner_identity)))
             });
             if !exact {
                 return Err(missing_declaration_membership(
@@ -3665,8 +3935,17 @@ pub(super) struct ReferenceContribution {
 
 impl EffectiveReferenceBase {
     pub(super) fn build(base: &[u8]) -> Result<Self, RemapError> {
+        Self::build_with_native_authority(base, None)
+    }
+
+    pub(super) fn build_with_native_authority(
+        base: &[u8],
+        native_authority: Option<&PristineNativeApiAuthority>,
+    ) -> Result<Self, RemapError> {
         preflight_cache_module_work(base)?;
-        Self::from_allow_new_base(Arc::new(build_allow_new_base_context(base)?))
+        Self::from_allow_new_base(Arc::new(
+            build_allow_new_base_context_with_native_authority(base, native_authority)?,
+        ))
     }
 
     fn from_allow_new_base(base: Arc<AllowNewBaseContext>) -> Result<Self, RemapError> {
@@ -4426,11 +4705,7 @@ fn static_name_operand_dw(
     is_static_name_call: impl Fn(&Instr) -> bool,
 ) -> Option<usize> {
     let current = instrs.get(pos)?;
-    if current.op.name == "PshC4"
-        && instrs
-            .get(pos + 1)
-            .is_some_and(&is_static_name_call)
-    {
+    if current.op.name == "PshC4" && instrs.get(pos + 1).is_some_and(&is_static_name_call) {
         return Some(current.offset_dw + 1);
     }
     if current.op.name != "SetV4" {
@@ -5423,6 +5698,7 @@ impl FinalDeclarationQueries {
         self,
         declarations: &DeclarationInventory,
         syms: &SymTables,
+        meta: &TailMetadata,
         pristine: Option<&PristineDeclarationAuthority>,
         comparison_budget: &mut IdentityComparisonBudget,
     ) -> Result<(), RemapError> {
@@ -5476,7 +5752,12 @@ impl FinalDeclarationQueries {
                     match_function_declarations(&[declarations], identity, comparison_budget)?;
                 if declaration_match == FunctionDeclarationMatch::Unique
                     || (declaration_match == FunctionDeclarationMatch::Missing
-                        && pristine.orphan_functions.contains(&row_key))
+                        && (pristine.orphan_functions.contains(&row_key)
+                            || pristine.native_api.as_ref().is_some_and(|snapshot| {
+                                // Qualified native APIs need no script module function record.
+                                meta.func_row(row_key)
+                                    .is_some_and(|row| snapshot.allows_function(row, identity))
+                            })))
                 {
                     continue;
                 }
@@ -5597,7 +5878,13 @@ fn validate_composed_module_records_with_pristine(
             }
         }
     }
-    declaration_queries.validate(&declarations, &syms, pristine, &mut comparison_budget)?;
+    declaration_queries.validate(
+        &declarations,
+        &syms,
+        &meta,
+        pristine,
+        &mut comparison_budget,
+    )?;
     Ok(())
 }
 
@@ -9113,6 +9400,13 @@ struct AllowNewBaseContext {
 }
 
 fn build_allow_new_base_context(base: &[u8]) -> Result<AllowNewBaseContext, RemapError> {
+    build_allow_new_base_context_with_native_authority(base, None)
+}
+
+fn build_allow_new_base_context_with_native_authority(
+    base: &[u8],
+    native_authority: Option<&PristineNativeApiAuthority>,
+) -> Result<AllowNewBaseContext, RemapError> {
     let syms = SymTables::build(base)?;
     let meta = TailMetadata::build(base)?;
     let identity_summaries = SymbolIdentitySummaries {
@@ -9142,12 +9436,16 @@ fn build_allow_new_base_context(base: &[u8]) -> Result<AllowNewBaseContext, Rema
         module_function_ids.insert(site.identity, id);
         occupied_module_function_ids.insert(id);
     }
-    let declarations = PristineDeclarationAuthority::build(
+    let mut declarations = PristineDeclarationAuthority::build(
         &meta,
         &syms,
         declaration_inventory,
         &mut comparison_budget,
     )?;
+    declarations.native_api = match native_authority {
+        Some(authority) => authority.for_running_generation(base),
+        None => None,
+    };
     Ok(AllowNewBaseContext {
         syms,
         meta,
@@ -9706,6 +10004,7 @@ pub(super) fn remap_module_to_base_with_loadout_plan(
 fn remap_module_allow_new(
     extracted_mini: &[u8],
     base: &[u8],
+    native_authority: Option<&PristineNativeApiAuthority>,
 ) -> Result<(Vec<u8>, RemapCounts), RemapError> {
     if super::walk_modules::module_count(extracted_mini) == 0 {
         return Err(RemapError::NotSingle(0));
@@ -9713,7 +10012,7 @@ fn remap_module_allow_new(
     preflight_mini_module_work(extracted_mini)?;
     preflight_cache_module_work(base)?;
 
-    let base_context = build_allow_new_base_context(base)?;
+    let base_context = build_allow_new_base_context_with_native_authority(base, native_authority)?;
     let mut analyzed = analyze_new_symbol_mini(extracted_mini, &base_context)?;
     allocate_new_pointer_keys(&mut analyzed.plan, &analyzed.regen, &base_context.syms)?;
     allocate_engine_ids(
@@ -9875,8 +10174,28 @@ pub fn remap_module_to_base_with_options(
     base: &[u8],
     options: RemapOptions,
 ) -> Result<(Vec<u8>, RemapCounts), RemapError> {
+    remap_module_with_native_authority(extracted_mini, base, options, None)
+}
+
+/// Allow qualified native declarations only when the compiler used the exact audited Binds.Cache.
+pub fn remap_module_to_base_with_options_and_binds(
+    extracted_mini: &[u8],
+    base: &[u8],
+    binds: &[u8],
+    options: RemapOptions,
+) -> Result<(Vec<u8>, RemapCounts), RemapError> {
+    let authority = PristineNativeApiAuthority::from_pristine(base, binds);
+    remap_module_with_native_authority(extracted_mini, base, options, Some(&authority))
+}
+
+pub(super) fn remap_module_with_native_authority(
+    extracted_mini: &[u8],
+    base: &[u8],
+    options: RemapOptions,
+    native_authority: Option<&PristineNativeApiAuthority>,
+) -> Result<(Vec<u8>, RemapCounts), RemapError> {
     if options.allow_new_symbols {
-        remap_module_allow_new(extracted_mini, base)
+        remap_module_allow_new(extracted_mini, base, native_authority)
     } else {
         remap_module_to_base(extracted_mini, base)
     }
@@ -10067,6 +10386,974 @@ impl RefIdentity {
 #[cfg(test)]
 #[path = "remap_loadout_plan_tests.rs"]
 mod loadout_plan_tests;
+
+#[cfg(test)]
+mod native_api_snapshot_tests {
+    use super::*;
+
+    fn empty_cache() -> Vec<u8> {
+        let mut bytes = vec![1; 16];
+        bytes.extend_from_slice(&super::super::header::CACHE_MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&[0; 32]); // no modules and seven empty tail tables
+        bytes
+    }
+
+    fn qualified_document(base: &[u8]) -> serde_json::Value {
+        serde_json::json!({
+            "format": "gore-native-api-snapshot-v1",
+            "qualified": true,
+            "pristine_cache_sha256": format!("{:x}", Sha256::digest(base)),
+            "pristine_cache_guid_hex": "01".repeat(16),
+            "binds_cache_sha256": "a".repeat(64),
+            "compiler_profile_sha256": "b".repeat(64),
+            "registration_trace_sha256": "c".repeat(64),
+            "post_bind_snapshot_sha256": "d".repeat(64),
+            "qualification_evidence": "synthetic test fixture only",
+            "types": [{"full_identity": "native type identity", "object_kind": 0x0400_0000}],
+            "functions": [{"full_identity": "native function signature"}],
+            "properties": [{
+                "owner_full_identity": "native type identity", "name": "Value",
+                "member_offset": 16, "owner_object_kind": 0x0400_0000,
+                "value_type_full_identity": "audited float32"
+            }]
+        })
+    }
+
+    fn parse_document(document: &serde_json::Value) -> Option<NativeApiSnapshot> {
+        let bytes = serde_json::to_vec(document).unwrap();
+        NativeApiSnapshot::from_sealed_bytes(&bytes, &format!("{:x}", Sha256::digest(&bytes)))
+    }
+
+    fn cache_with_native_api(pointer_shift: i64) -> Vec<u8> {
+        let owner = 0x100 + pointer_shift;
+        let function = 0x200 + pointer_shift;
+        let owner_id = 0x0400_000c_i32;
+        let mut bytes = empty_cache();
+        bytes.truncate(CacheHeader::SIZE); // zero modules, followed by our native tail
+        bytes.extend_from_slice(&1_i32.to_le_bytes()); // T1
+        bytes.extend_from_slice(&owner.to_le_bytes());
+        for value in ["NativeOwner", "", ""] {
+            append_canonical_sia(&mut bytes, value).unwrap();
+        }
+        bytes.extend_from_slice(&0_i32.to_le_bytes()); // no template subtypes
+        bytes.extend_from_slice(&1_i32.to_le_bytes()); // T2
+        bytes.extend_from_slice(&owner_id.to_le_bytes());
+        bytes.extend_from_slice(&owner.to_le_bytes());
+        bytes.extend_from_slice(&1_i32.to_le_bytes()); // T3
+        bytes.extend_from_slice(&function.to_le_bytes());
+        for value in ["GetBoneName", "", ""] {
+            append_canonical_sia(&mut bytes, value).unwrap();
+        }
+        for value in [1_i32, 0, 1] {
+            // const, imported, method
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes.extend_from_slice(&owner.to_le_bytes());
+        bytes.extend_from_slice(&0_i32.to_le_bytes()); // no parameters
+        for flag in [0_i32, 0, 1, 0, 0, 0] {
+            // synthetic object-handle return
+            bytes.extend_from_slice(&flag.to_le_bytes());
+        }
+        bytes.extend_from_slice(&owner.to_le_bytes());
+        bytes.extend_from_slice(&5_i32.to_le_bytes());
+        bytes.extend_from_slice(&1_i32.to_le_bytes()); // T4
+        bytes.extend_from_slice(&12_i32.to_le_bytes());
+        bytes.extend_from_slice(&function.to_le_bytes());
+        bytes.extend_from_slice(&0_i32.to_le_bytes()); // T5
+        bytes.extend_from_slice(&0_i32.to_le_bytes()); // T6
+        bytes.extend_from_slice(&1_i32.to_le_bytes()); // T7
+        bytes.extend_from_slice(&property_key(owner_id, 16).to_le_bytes());
+        append_canonical_sia(&mut bytes, "Parent").unwrap();
+        bytes.extend_from_slice(&owner_id.to_le_bytes());
+        bytes
+    }
+
+    fn validate_native_admission(
+        bytes: &[u8],
+        base: &AllowNewBaseContext,
+    ) -> Result<(), RemapError> {
+        let meta = TailMetadata::build(bytes)?;
+        let syms = SymTables::build(bytes)?;
+        let current = DeclarationInventory::default();
+        let mut budget = IdentityComparisonBudget::new(bytes.len());
+        validate_novel_declaration_membership(
+            &meta,
+            &syms,
+            &base.syms,
+            &base.declarations,
+            &current,
+            |_| false,
+            |_| true,
+            |_| true,
+            |_| true,
+            &mut budget,
+        )?;
+        validate_novel_property_membership(
+            &meta,
+            &syms,
+            &base.syms,
+            &base.declarations,
+            &current,
+            |_| true,
+            &mut budget,
+        )
+    }
+
+    #[test]
+    fn native_snapshot_authority_survives_final_composition() {
+        let pristine = empty_cache();
+        let output = cache_with_native_api(0);
+        let syms = SymTables::build(&output).unwrap();
+        let mut document = qualified_document(&pristine);
+        document["types"][0]["full_identity"] = serde_json::json!(syms.type_id_of_ptr[&0x100]);
+        document["functions"][0]["full_identity"] = serde_json::json!(syms.func_id_of_ptr[&0x200]);
+        document["properties"][0]["owner_full_identity"] =
+            serde_json::json!(syms.type_id_of_ptr[&0x100]);
+        document["properties"][0]["name"] = serde_json::json!("Parent");
+        let mut base = build_allow_new_base_context(&pristine).unwrap();
+        assert!(validate_native_admission(&output, &base).is_err());
+        let error =
+            validate_composed_module_records_with_pristine(&output, Some(&base.declarations))
+                .unwrap_err();
+        assert!(
+            error.to_string().contains("no exact function record"),
+            "{error}"
+        );
+        let snapshot = parse_document(&document).unwrap();
+        assert!(snapshot.matches_base(&pristine));
+        base.declarations.native_api = Some(Arc::new(snapshot));
+
+        // Rebased pointers preserve the audited native type, function and Parent tuple.
+        for output in [&output, &cache_with_native_api(0x1000)] {
+            validate_native_admission(output, &base).unwrap();
+            validate_composed_module_records_with_pristine(output, Some(&base.declarations))
+                .unwrap();
+        }
+
+        let meta = TailMetadata::build(&output).unwrap();
+        let return_flags = meta.funcs[0].type_deps[0].off - 24;
+        for flag in 0..4 {
+            // all runtime-effective return qualifiers stay part of the seal
+            let mut changed = output.clone();
+            let off = return_flags + flag * 4;
+            let toggled = 1 - i32::from_le_bytes(changed[off..off + 4].try_into().unwrap());
+            changed[off..off + 4].copy_from_slice(&toggled.to_le_bytes());
+            assert!(
+                validate_native_admission(&changed, &base).is_err(),
+                "flag {flag}"
+            );
+            assert!(
+                validate_composed_module_records_with_pristine(&changed, Some(&base.declarations))
+                    .is_err(),
+                "flag {flag}"
+            );
+        }
+        let mut unknown = output.clone();
+        unknown[meta.funcs[0].start + 12] = b'X'; // same length, unqualified method name
+        assert!(validate_native_admission(&unknown, &base).is_err());
+        assert!(
+            validate_composed_module_records_with_pristine(&unknown, Some(&base.declarations))
+                .is_err()
+        );
+
+        // T1/T7 retain their admission contract; final validation does not invent new authority.
+        let mut changed_kind = output.clone();
+        let off = meta.type_ids[0].start;
+        changed_kind[off..off + 4].copy_from_slice(&0x0800_000c_i32.to_le_bytes());
+        assert!(validate_native_admission(&changed_kind, &base).is_err());
+        let mut changed_owner = output.clone();
+        changed_owner[meta.types[0].start + 12] = b'X';
+        assert!(validate_native_admission(&changed_owner, &base).is_err());
+        let mut changed_offset = output.clone();
+        let off = meta.properties[0].start;
+        changed_offset[off..off + 8].copy_from_slice(&property_key(0x0400_000c, 20).to_le_bytes());
+        assert!(validate_native_admission(&changed_offset, &base).is_err());
+
+        // bIfHandleThenConst is intentionally ignored by the existing runtime identity oracle.
+        let mut equivalent = output.clone();
+        let off = return_flags + 5 * 4;
+        equivalent[off..off + 4].copy_from_slice(&1_i32.to_le_bytes());
+        validate_native_admission(&equivalent, &base).unwrap();
+        validate_composed_module_records_with_pristine(&equivalent, Some(&base.declarations))
+            .unwrap();
+    }
+
+    #[test]
+    fn embedded_native_api_snapshot_has_an_exact_source_seal() {
+        for (bytes, seal) in NATIVE_API_SNAPSHOTS {
+            let snapshot = NativeApiSnapshot::from_sealed_bytes(bytes, seal).expect(
+                "embedded native qualification data must match its checked-in seal and schema",
+            );
+            assert!(!snapshot.matches_base(&empty_cache()));
+        }
+        let old: serde_json::Value = serde_json::from_slice(NATIVE_API_SNAPSHOT_BYTES).unwrap();
+        let hotfix: serde_json::Value =
+            serde_json::from_slice(NATIVE_API_SNAPSHOT_25168047_BYTES).unwrap();
+        for field in ["types", "functions", "properties"] {
+            assert_eq!(old[field], hotfix[field], "hotfix must not widen {field}");
+        }
+        assert_ne!(
+            old["pristine_cache_sha256"],
+            hotfix["pristine_cache_sha256"]
+        );
+        assert_ne!(
+            old["pristine_cache_guid_hex"],
+            hotfix["pristine_cache_guid_hex"]
+        );
+    }
+
+    #[test]
+    fn native_snapshot_selection_preserves_exact_generation_and_pristine_binding() {
+        let old = empty_cache();
+        let mut hotfix = old.clone();
+        hotfix[..16].fill(2);
+        let old_document = qualified_document(&old);
+        let mut hotfix_document = qualified_document(&hotfix);
+        hotfix_document["pristine_cache_guid_hex"] = serde_json::json!("02".repeat(16));
+        let snapshots = [
+            Arc::new(parse_document(&old_document).unwrap()),
+            Arc::new(parse_document(&hotfix_document).unwrap()),
+        ];
+        for (index, pristine) in [&old, &hotfix].into_iter().enumerate() {
+            let selected = select_native_api_snapshot(pristine, &snapshots).unwrap();
+            assert!(Arc::ptr_eq(&selected, &snapshots[index]));
+        }
+        let mut changed = hotfix.clone();
+        *changed.last_mut().unwrap() = 1;
+        assert!(select_native_api_snapshot(&changed, &snapshots).is_none());
+        let mut unknown = hotfix.clone();
+        unknown[..16].fill(3);
+        assert!(select_native_api_snapshot(&unknown, &snapshots).is_none());
+
+        // Only authority already captured from the pristine cache survives composition;
+        // retaining a GUID must never authenticate a fresh snapshot from changed bytes.
+        let retained = PristineNativeApiAuthority {
+            snapshot: Some(Arc::clone(&snapshots[1])),
+        };
+        assert!(retained.matches_pristine(&hotfix));
+        assert!(!retained.matches_pristine(&changed));
+        assert!(retained.for_running_generation(&changed).is_some());
+        assert!(retained.for_running_generation(&old).is_none());
+        assert!(retained.for_running_generation(&unknown).is_none());
+    }
+
+    fn cache_with_quest_availability_property(include_property: bool) -> Vec<u8> {
+        let mut bytes = empty_cache();
+        bytes.truncate(CacheHeader::SIZE);
+        bytes.extend_from_slice(&2_i32.to_le_bytes()); // T1: both owners already pristine
+        for (pointer, name) in [(0x100_i64, "UQuest"), (0x110, "UQuestSubsystem")] {
+            bytes.extend_from_slice(&pointer.to_le_bytes());
+            for value in [name, "", ""] {
+                append_canonical_sia(&mut bytes, value).unwrap();
+            }
+            bytes.extend_from_slice(&0_i32.to_le_bytes());
+        }
+        bytes.extend_from_slice(&2_i32.to_le_bytes()); // T2
+        for (id, pointer) in [(0x0400_1636_i32, 0x100_i64), (0x0400_000c, 0x110)] {
+            bytes.extend_from_slice(&id.to_le_bytes());
+            bytes.extend_from_slice(&pointer.to_le_bytes());
+        }
+        bytes.extend_from_slice(&[0; 16]); // T3 through T6
+        bytes.extend_from_slice(&i32::from(include_property).to_le_bytes()); // T7
+        if include_property {
+            bytes.extend_from_slice(&property_key(0x0400_1636, 322).to_le_bytes());
+            append_canonical_sia(&mut bytes, "bExternalAvailabilityTrigger").unwrap();
+            bytes.extend_from_slice(&0x0400_1636_i32.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn quest_availability_snapshot_admits_only_the_exact_bool_property() {
+        let pristine = cache_with_quest_availability_property(false);
+        let output = cache_with_quest_availability_property(true);
+        let embedded: serde_json::Value =
+            serde_json::from_slice(NATIVE_API_SNAPSHOT_BYTES).unwrap();
+        let property = embedded["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "bExternalAvailabilityTrigger")
+            .unwrap();
+        assert_eq!(property["owner_full_identity"], "0:0:6:UQuest1:00:");
+        assert_eq!(property["member_offset"], 322);
+        assert_eq!(property["owner_object_kind"], 0x0400_0000);
+        assert_eq!(
+            property["value_type_full_identity"],
+            "9:primitive2:651:01:01:01:0"
+        );
+
+        let mut document = qualified_document(&pristine);
+        document["types"] = serde_json::json!([]);
+        document["functions"] = serde_json::json!([]);
+        document["properties"] = serde_json::json!([property]);
+        let mut base = build_allow_new_base_context(&pristine).unwrap();
+        assert!(validate_native_admission(&output, &base).is_err());
+        base.declarations.native_api = Some(Arc::new(parse_document(&document).unwrap()));
+        validate_native_admission(&output, &base).unwrap();
+        validate_composed_module_records_with_pristine(&output, Some(&base.declarations)).unwrap();
+
+        let meta = TailMetadata::build(&output).unwrap();
+        assert_eq!(meta.properties[0].key, 0x28408002c6d);
+        let start = meta.properties[0].start;
+        let owner_offset = meta.properties[0].end - 4;
+        let mut changed_name = output.clone();
+        changed_name[start + 12] = b'X';
+        assert!(validate_native_admission(&changed_name, &base).is_err());
+        let mut changed_offset = output.clone();
+        changed_offset[start..start + 8]
+            .copy_from_slice(&property_key(0x0400_1636, 323).to_le_bytes());
+        assert!(validate_native_admission(&changed_offset, &base).is_err());
+        let mut changed_owner = output.clone();
+        changed_owner[start..start + 8]
+            .copy_from_slice(&property_key(0x0400_000c, 322).to_le_bytes());
+        changed_owner[owner_offset..owner_offset + 4]
+            .copy_from_slice(&0x0400_000c_i32.to_le_bytes());
+        assert!(validate_native_admission(&changed_owner, &base).is_err());
+        let mut changed_kind = output.clone();
+        changed_kind[start..start + 8]
+            .copy_from_slice(&property_key(0x0800_1636, 322).to_le_bytes());
+        changed_kind[owner_offset..owner_offset + 4]
+            .copy_from_slice(&0x0800_1636_i32.to_le_bytes());
+        assert!(validate_native_admission(&changed_kind, &base).is_err());
+
+        // T7 has no value datatype. The independent bool audit is protected by the source seal.
+        let source = std::str::from_utf8(NATIVE_API_SNAPSHOT_BYTES).unwrap();
+        let bool_type = "\"value_type_full_identity\": \"9:primitive2:651:01:01:01:0\"";
+        assert_eq!(source.matches(bool_type).count(), 1);
+        let altered_type = source.replace(
+            bool_type,
+            "\"value_type_full_identity\": \"9:primitive2:681:01:01:01:0\"",
+        );
+        assert!(NativeApiSnapshot::from_sealed_bytes(
+            altered_type.as_bytes(),
+            NATIVE_API_SNAPSHOT_SHA256,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn native_property_authority_requires_the_audited_binds_cache() {
+        let pristine = cache_with_quest_availability_property(false);
+        let output = cache_with_quest_availability_property(true);
+        let embedded: serde_json::Value =
+            serde_json::from_slice(NATIVE_API_SNAPSHOT_BYTES).unwrap();
+        let property = embedded["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "bExternalAvailabilityTrigger")
+            .unwrap();
+        let binds = b"audited synthetic Binds.Cache";
+        let mut document = qualified_document(&pristine);
+        document["types"] = serde_json::json!([]);
+        document["functions"] = serde_json::json!([]);
+        document["properties"] = serde_json::json!([property]);
+        document["binds_cache_sha256"] =
+            serde_json::json!(format!("{:x}", Sha256::digest(binds)));
+        let snapshot = Arc::new(parse_document(&document).unwrap());
+
+        let admitted = PristineNativeApiAuthority::from_selected(Some(Arc::clone(&snapshot)), binds);
+        let admitted_base =
+            build_allow_new_base_context_with_native_authority(&pristine, Some(&admitted))
+                .unwrap();
+        validate_native_admission(&output, &admitted_base).unwrap();
+
+        let foreign = PristineNativeApiAuthority::from_selected(
+            Some(snapshot),
+            b"different Binds.Cache with the same script cache",
+        );
+        let foreign_base =
+            build_allow_new_base_context_with_native_authority(&pristine, Some(&foreign)).unwrap();
+        assert!(validate_native_admission(&output, &foreign_base).is_err());
+        let no_binds = build_allow_new_base_context(&pristine).unwrap();
+        assert!(validate_native_admission(&output, &no_binds).is_err());
+    }
+
+    fn cache_with_material_parameter_methods(include_methods: bool) -> Vec<u8> {
+        let mut bytes = empty_cache();
+        bytes.truncate(CacheHeader::SIZE);
+        bytes.extend_from_slice(&3_i32.to_le_bytes()); // T1: already pristine types
+        for (pointer, name) in [
+            (0x100_i64, "UMaterialInstanceDynamic"),
+            (0x110, "FName"),
+            (0x120, "FLinearColor"),
+        ] {
+            bytes.extend_from_slice(&pointer.to_le_bytes());
+            for value in [name, "", ""] {
+                append_canonical_sia(&mut bytes, value).unwrap();
+            }
+            bytes.extend_from_slice(&0_i32.to_le_bytes());
+        }
+        bytes.extend_from_slice(&3_i32.to_le_bytes()); // T2
+        for (index, pointer) in [0x100_i64, 0x110, 0x120].into_iter().enumerate() {
+            bytes.extend_from_slice(&(0x0400_0001_i32 + index as i32).to_le_bytes());
+            bytes.extend_from_slice(&pointer.to_le_bytes());
+        }
+        let count = if include_methods { 2_i32 } else { 0 };
+        bytes.extend_from_slice(&count.to_le_bytes()); // T3
+        for index in 0..count {
+            bytes.extend_from_slice(&(0x200_i64 + i64::from(index)).to_le_bytes());
+            let name = if index == 0 {
+                "GetVectorParameterValue"
+            } else {
+                "SetVectorParameterValue"
+            };
+            for value in [name, "", ""] {
+                append_canonical_sia(&mut bytes, value).unwrap();
+            }
+            for flag in [0_i32, 0, 1] {
+                // non-const, non-imported method
+                bytes.extend_from_slice(&flag.to_le_bytes());
+            }
+            bytes.extend_from_slice(&0x100_i64.to_le_bytes());
+            bytes.extend_from_slice(&(index + 1).to_le_bytes());
+            let parameters_and_return = if index == 0 {
+                vec![(0x110_i64, 5_i32), (0x120, 5)]
+            } else {
+                vec![(0x110_i64, 5_i32), (0x120, 5), (0, 0x52)]
+            };
+            for (pointer, token) in parameters_and_return {
+                bytes.extend_from_slice(&[0; 24]); // unqualified by-value datatypes
+                bytes.extend_from_slice(&pointer.to_le_bytes());
+                bytes.extend_from_slice(&token.to_le_bytes());
+            }
+        }
+        bytes.extend_from_slice(&count.to_le_bytes()); // T4
+        for index in 0..count {
+            bytes.extend_from_slice(&(12_i32 + index).to_le_bytes());
+            bytes.extend_from_slice(&(0x200_i64 + i64::from(index)).to_le_bytes());
+        }
+        bytes.extend_from_slice(&[0; 12]); // T5/T6/T7
+        bytes
+    }
+
+    #[test]
+    fn material_parameter_snapshot_admits_only_the_two_exact_methods() {
+        let pristine = cache_with_material_parameter_methods(false);
+        let output = cache_with_material_parameter_methods(true);
+        let mut base = build_allow_new_base_context(&pristine).unwrap();
+        assert!(validate_native_admission(&output, &base).is_err());
+
+        // Keep synthetic base authority separate from the real build-specific base seal.
+        // The tested method identities themselves must come from the embedded audit.
+        let embedded: serde_json::Value =
+            serde_json::from_slice(NATIVE_API_SNAPSHOT_BYTES).unwrap();
+        let methods: Vec<_> = embedded["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| {
+                row["full_identity"]
+                    .as_str()
+                    .unwrap()
+                    .contains("GetVectorParameterValue")
+                    || row["full_identity"]
+                        .as_str()
+                        .unwrap()
+                        .contains("SetVectorParameterValue")
+            })
+            .cloned()
+            .collect();
+        assert_eq!(methods.len(), 2);
+        let mut document = qualified_document(&pristine);
+        document["types"] = serde_json::json!([]);
+        document["properties"] = serde_json::json!([]);
+        document["functions"] = serde_json::json!(methods);
+        base.declarations.native_api = Some(Arc::new(parse_document(&document).unwrap()));
+        validate_native_admission(&output, &base).unwrap();
+        validate_composed_module_records_with_pristine(&output, Some(&base.declarations)).unwrap();
+
+        let meta = TailMetadata::build(&output).unwrap();
+        let refused = |changed: &[u8]| {
+            assert!(validate_native_admission(changed, &base).is_err());
+            assert!(validate_composed_module_records_with_pristine(
+                changed,
+                Some(&base.declarations)
+            )
+            .is_err());
+        };
+        for function in &meta.funcs {
+            let mut unknown_name = output.clone();
+            unknown_name[function.start + 12] = b'X';
+            refused(&unknown_name);
+
+            let mut cursor = Cursor::at(&output, function.start + 8);
+            for _ in 0..3 {
+                cursor.read_sia().unwrap();
+            }
+            let mut wrong_const = output.clone();
+            wrong_const[cursor.pos()..cursor.pos() + 4].copy_from_slice(&1_i32.to_le_bytes());
+            refused(&wrong_const);
+
+            let mut wrong_owner = output.clone();
+            wrong_owner[cursor.pos() + 12..cursor.pos() + 20]
+                .copy_from_slice(&0x110_i64.to_le_bytes());
+            refused(&wrong_owner);
+
+            for dependency in function
+                .type_deps
+                .iter()
+                .filter(|dependency| dependency.ptr != 0)
+            {
+                for flag in 0..3 {
+                    // reference, object const, handle
+                    let mut changed = output.clone();
+                    let offset = dependency.off - 24 + flag * 4;
+                    changed[offset..offset + 4].copy_from_slice(&1_i32.to_le_bytes());
+                    refused(&changed);
+                }
+            }
+        }
+    }
+
+    fn cache_with_beard_texture_bindings(include_bindings: bool) -> Vec<u8> {
+        let mut bytes = empty_cache();
+        bytes.truncate(CacheHeader::SIZE);
+        let types = [
+            (0x100_i64, "UObject"),
+            (0x110, "FString"),
+            (0x120, "UTexture2D"),
+            (0x130, "UMaterialInstanceDynamic"),
+            (0x140, "FName"),
+            (0x160, "UPrimitiveComponent"),
+            (0x170, "UMaterialInterface"),
+            (0x180, "UMaterialInstance"),
+            (0x150, "UTexture"),
+            (0x190, "EMIDCreationFlags"),
+        ];
+        let type_count = if include_bindings { 10 } else { 8 };
+        bytes.extend_from_slice(&(type_count as i32).to_le_bytes());
+        for &(pointer, name) in &types[..type_count] {
+            bytes.extend_from_slice(&pointer.to_le_bytes());
+            for value in [name, "", ""] {
+                append_canonical_sia(&mut bytes, value).unwrap();
+            }
+            bytes.extend_from_slice(&0_i32.to_le_bytes());
+        }
+        bytes.extend_from_slice(&(type_count as i32).to_le_bytes());
+        for (index, &(pointer, _)) in types[..type_count].iter().enumerate() {
+            let object_kind = if pointer == 0x190 { 0 } else { 0x0400_0000 };
+            bytes.extend_from_slice(&(object_kind + 1_i32 + index as i32).to_le_bytes());
+            bytes.extend_from_slice(&pointer.to_le_bytes());
+        }
+        type Data = (i64, [i32; 6], i32);
+        let value = |pointer| (pointer, [0; 6], 5);
+        let handle = |pointer| (pointer, [0, 0, 1, 0, 0, 0], 5);
+        let string_ref = (0x110, [1, 1, 0, 1, 0, 0], 5);
+        let functions: [(&str, &str, i64, Vec<Data>, Data); 7] = [
+            (
+                "ImportFileAsTexture2D",
+                "Rendering",
+                0,
+                vec![handle(0x100), string_ref],
+                handle(0x120),
+            ),
+            (
+                "SetTextureParameterValue",
+                "",
+                0x130,
+                vec![value(0x140), handle(0x150)],
+                (0, [0; 6], 0x52),
+            ),
+            ("ProjectContentDir", "FPaths", 0, vec![], value(0x110)),
+            (
+                "ConvertRelativePathToFull",
+                "FPaths",
+                0,
+                vec![string_ref],
+                value(0x110),
+            ),
+            (
+                "SetMaterial",
+                "",
+                0x160,
+                vec![(0, [0; 6], 0x44), handle(0x170)],
+                (0, [0; 6], 0x52),
+            ),
+            (
+                "CreateDynamicMaterialInstance",
+                "Material",
+                0,
+                vec![handle(0x100), handle(0x170), value(0x140), value(0x190)],
+                handle(0x130),
+            ),
+            (
+                "CopyParameterOverrides",
+                "",
+                0x130,
+                vec![handle(0x180)],
+                (0, [0; 6], 0x52),
+            ),
+        ];
+        let count = if include_bindings { functions.len() } else { 0 };
+        bytes.extend_from_slice(&(count as i32).to_le_bytes());
+        for (index, (name, namespace, owner, parameters, result)) in
+            functions[..count].iter().enumerate()
+        {
+            bytes.extend_from_slice(&(0x200_i64 + index as i64).to_le_bytes());
+            for text in [*name, "", *namespace] {
+                append_canonical_sia(&mut bytes, text).unwrap();
+            }
+            for flag in [0_i32, 0, i32::from(*owner != 0)] {
+                bytes.extend_from_slice(&flag.to_le_bytes());
+            }
+            bytes.extend_from_slice(&owner.to_le_bytes());
+            bytes.extend_from_slice(&(parameters.len() as i32).to_le_bytes());
+            for (pointer, flags, token) in parameters.iter().chain(std::iter::once(result)) {
+                for flag in flags {
+                    bytes.extend_from_slice(&flag.to_le_bytes());
+                }
+                bytes.extend_from_slice(&pointer.to_le_bytes());
+                bytes.extend_from_slice(&token.to_le_bytes());
+            }
+        }
+        bytes.extend_from_slice(&(count as i32).to_le_bytes());
+        for index in 0..count {
+            bytes.extend_from_slice(&(12_i32 + index as i32).to_le_bytes());
+            bytes.extend_from_slice(&(0x200_i64 + index as i64).to_le_bytes());
+        }
+        bytes.extend_from_slice(&[0; 12]); // T5/T6/T7
+        bytes
+    }
+
+    #[test]
+    fn beard_material_snapshot_admits_only_exact_texture_path_and_factory_bindings() {
+        let pristine = cache_with_beard_texture_bindings(false);
+        let output = cache_with_beard_texture_bindings(true);
+        let mut base = build_allow_new_base_context(&pristine).unwrap();
+        assert!(validate_native_admission(&output, &base).is_err());
+        let embedded: serde_json::Value =
+            serde_json::from_slice(NATIVE_API_SNAPSHOT_BYTES).unwrap();
+        let names = [
+            "ImportFileAsTexture2D",
+            "SetTextureParameterValue",
+            "ProjectContentDir",
+            "ConvertRelativePathToFull",
+            "SetMaterial",
+            "CreateDynamicMaterialInstance",
+            "CopyParameterOverrides",
+        ];
+        let functions: Vec<_> = embedded["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| {
+                names
+                    .iter()
+                    .any(|name| row["full_identity"].as_str().unwrap().contains(name))
+            })
+            .cloned()
+            .collect();
+        assert_eq!(functions.len(), 7);
+        let types: Vec<_> = embedded["types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| {
+                row["full_identity"] == "0:0:8:UTexture1:00:"
+                    || row["full_identity"] == "0:0:17:EMIDCreationFlags1:00:"
+            })
+            .cloned()
+            .collect();
+        assert_eq!(types.len(), 2);
+        assert_eq!(types[0]["object_kind"], 0x0400_0000);
+        assert_eq!(types[1]["object_kind"], 0);
+        let mut document = qualified_document(&pristine);
+        document["functions"] = serde_json::json!(functions);
+        document["types"] = serde_json::json!([]);
+        document["properties"] = serde_json::json!([]);
+        base.declarations.native_api = Some(Arc::new(parse_document(&document).unwrap()));
+        assert!(
+            validate_native_admission(&output, &base).is_err(),
+            "UTexture needs its own exact native type authority"
+        );
+        document["types"] = serde_json::json!([types[0]]);
+        base.declarations.native_api = Some(Arc::new(parse_document(&document).unwrap()));
+        assert!(
+            validate_native_admission(&output, &base).is_err(),
+            "EMIDCreationFlags independently needs its exact native enum authority"
+        );
+        document["types"] = serde_json::json!(types);
+        base.declarations.native_api = Some(Arc::new(parse_document(&document).unwrap()));
+        validate_native_admission(&output, &base).unwrap();
+        validate_composed_module_records_with_pristine(&output, Some(&base.declarations)).unwrap();
+        let refused = |bytes: &[u8]| {
+            assert!(validate_native_admission(bytes, &base).is_err());
+            assert!(validate_composed_module_records_with_pristine(
+                bytes,
+                Some(&base.declarations)
+            )
+            .is_err());
+        };
+        let meta = TailMetadata::build(&output).unwrap();
+        for function in &meta.funcs {
+            let mut unknown_name = output.clone();
+            unknown_name[function.start + 12] = b'X';
+            refused(&unknown_name);
+            let mut cursor = Cursor::at(&output, function.start + 8);
+            cursor.read_sia().unwrap();
+            cursor.read_sia().unwrap();
+            let namespace_pos = cursor.pos();
+            cursor.read_sia().unwrap();
+            let mut wrong_const = output.clone();
+            wrong_const[cursor.pos()..cursor.pos() + 4].copy_from_slice(&1_i32.to_le_bytes());
+            refused(&wrong_const);
+            if !function.namespace.is_empty() {
+                let mut wrong_namespace = output.clone();
+                wrong_namespace[namespace_pos + 4] = b'X';
+                refused(&wrong_namespace);
+            }
+            if function.is_method {
+                let mut wrong_owner = output.clone();
+                let offset = function.owner_dep.0;
+                wrong_owner[offset..offset + 8].copy_from_slice(&0x100_i64.to_le_bytes());
+                refused(&wrong_owner);
+            }
+            for dependency in function
+                .type_deps
+                .iter()
+                .filter(|dependency| dependency.ptr != 0)
+            {
+                for flag in 0..3 {
+                    // runtime-effective reference/const/handle semantics
+                    let mut changed = output.clone();
+                    let offset = dependency.off - 24 + flag * 4;
+                    let old = i32::from_le_bytes(changed[offset..offset + 4].try_into().unwrap());
+                    changed[offset..offset + 4].copy_from_slice(&(old ^ 1).to_le_bytes());
+                    refused(&changed);
+                }
+            }
+        }
+        let texture_id = meta.type_ids.iter().find(|row| row.ptr == 0x150).unwrap();
+        let mut wrong_kind = output.clone();
+        wrong_kind[texture_id.start..texture_id.start + 4]
+            .copy_from_slice(&0x0800_0008_i32.to_le_bytes());
+        assert!(validate_native_admission(&wrong_kind, &base).is_err());
+        let enum_id = meta.type_ids.iter().find(|row| row.ptr == 0x190).unwrap();
+        let mut wrong_enum_kind = output.clone();
+        wrong_enum_kind[enum_id.start..enum_id.start + 4]
+            .copy_from_slice(&0x0400_000a_i32.to_le_bytes());
+        assert!(validate_native_admission(&wrong_enum_kind, &base).is_err());
+    }
+
+    #[test]
+    fn native_snapshot_requires_qualification_seals_and_exact_base_bytes() {
+        let base = empty_cache();
+        let document = qualified_document(&base);
+        let snapshot = parse_document(&document).unwrap();
+        assert!(snapshot.matches_base(&base));
+        let mut changed = base.clone();
+        changed.push(0); // same GUID, different bytes
+        assert!(!snapshot.matches_base(&changed));
+        let mut wrong_guid = document.clone();
+        wrong_guid["pristine_cache_guid_hex"] = serde_json::json!("02".repeat(16));
+        assert!(!parse_document(&wrong_guid).unwrap().matches_base(&base));
+        for field in [
+            "binds_cache_sha256",
+            "compiler_profile_sha256",
+            "registration_trace_sha256",
+            "post_bind_snapshot_sha256",
+        ] {
+            let mut unsealed = document.clone();
+            unsealed[field] = serde_json::Value::Null;
+            assert!(parse_document(&unsealed).is_none(), "{field}");
+        }
+        let mut unqualified = document.clone();
+        unqualified["qualified"] = serde_json::json!(false);
+        assert!(parse_document(&unqualified).is_none());
+        let bytes = serde_json::to_vec(&document).unwrap();
+        assert!(NativeApiSnapshot::from_sealed_bytes(&bytes, &"0".repeat(64)).is_none());
+    }
+
+    #[test]
+    fn native_snapshot_matches_exact_leaf_kinds_and_function_and_property_identities() {
+        let base = empty_cache();
+        let snapshot = parse_document(&qualified_document(&base)).unwrap();
+        let mut syms = SymTables::build(&base).unwrap();
+        syms.type_id_of_ptr
+            .insert(1, "native type identity".to_owned());
+        let mut meta = TailMetadata::build(&base).unwrap();
+        meta.type_ids.push(IdPtrRowMeta {
+            start: 0,
+            end: 0,
+            id: 0x0400_000c,
+            ptr: 1,
+        });
+        meta.type_id_by_ptr.insert(1, UniqueRowIndex::Unique(0));
+        let mut row = TypeRowMeta {
+            start: 0,
+            end: 0,
+            key: 1,
+            name: "NativeType".to_owned(),
+            module: String::new(),
+            namespace: String::new(),
+            type_deps: vec![],
+        };
+        assert!(snapshot.allows_type(&row, &meta, &syms));
+        meta.type_ids[0].id = 0x0800_000c;
+        assert!(!snapshot.allows_type(&row, &meta, &syms));
+        meta.type_ids[0].id = 0x0400_000c;
+        for module in ["$__T__", "Authored"] {
+            row.module = module.to_owned();
+            assert!(!snapshot.allows_type(&row, &meta, &syms));
+        }
+        row.module.clear();
+        syms.type_id_of_ptr
+            .insert(1, "different namespace/type identity".to_owned());
+        assert!(!snapshot.allows_type(&row, &meta, &syms));
+
+        let mut function = FuncRowMeta {
+            start: 0,
+            end: 0,
+            key: 2,
+            name: "Method".to_owned(),
+            module: String::new(),
+            namespace: String::new(),
+            owner_dep: (0, 1),
+            is_imported: false,
+            is_method: true,
+            type_deps: vec![],
+        };
+        let mut identity = Ident {
+            full: "native function signature".to_owned(),
+            ..Default::default()
+        };
+        assert!(snapshot.allows_function(&function, &identity));
+        identity.full.push_str(" altered return or parameter");
+        assert!(!snapshot.allows_function(&function, &identity));
+        identity.full = "native function signature".to_owned();
+        function.is_imported = true;
+        assert!(!snapshot.allows_function(&function, &identity));
+
+        let mut property = PropertyRowMeta {
+            index: 0,
+            start: 0,
+            end: 0,
+            key: 3,
+            name: "Value".to_owned(),
+            old_type_id: 0x0400_000c,
+            member_offset: 16,
+        };
+        assert!(snapshot.allows_property(&property, "native type identity"));
+        property.member_offset += 4;
+        assert!(!snapshot.allows_property(&property, "native type identity"));
+        property.member_offset = 16;
+        assert!(!snapshot.allows_property(&property, "foreign owner"));
+        property.old_type_id = 0x0800_000c;
+        assert!(!snapshot.allows_property(&property, "native type identity"));
+    }
+
+    /// Investigation only: this exports candidates, never an admission snapshot. Qualification
+    /// must compare these runtime identities with independently authenticated native evidence.
+    #[test]
+    #[ignore = "requires GORE_NATIVE_REGEN, GORE_NATIVE_BASE, GORE_NATIVE_CANDIDATES paths"]
+    fn dump_native_api_snapshot_candidates() {
+        let path = |name| std::path::PathBuf::from(std::env::var_os(name).expect(name));
+        let regen = std::fs::read(path("GORE_NATIVE_REGEN")).unwrap();
+        let base = std::fs::read(path("GORE_NATIVE_BASE")).unwrap();
+        let syms = SymTables::build(&regen).unwrap();
+        let base_syms = SymTables::build(&base).unwrap();
+        let meta = TailMetadata::build(&regen).unwrap();
+        let base_meta = TailMetadata::build(&base).unwrap();
+        let types = meta
+            .types
+            .iter()
+            .filter_map(|row| {
+                let full = syms.type_id_of_ptr.get(&row.key)?;
+                if !row.module.is_empty()
+                    || !row.type_deps.is_empty()
+                    || base_syms.type_ptr_of_id.contains_key(full)
+                {
+                    return None;
+                }
+                let kinds: BTreeSet<_> = meta
+                    .type_ids
+                    .iter()
+                    .filter(|id| id.ptr == row.key)
+                    .map(|id| id.id as u32 & TYPE_ID_OBJECT_MASK)
+                    .collect();
+                Some(serde_json::json!({
+                    "key": format!("{:#x}", row.key), "module": row.module,
+                    "namespace": row.namespace, "name": row.name, "full_identity": full,
+                    "object_kinds": kinds,
+                    "raw_type_ids": meta.type_ids.iter().filter(|id| id.ptr == row.key).map(|id| id.id).collect::<Vec<_>>()
+                }))
+            })
+            .collect::<Vec<_>>();
+        let functions = meta.funcs.iter().filter_map(|row| {
+            let identity = syms.func_ident_of_ptr.get(&row.key)?;
+            if !row.module.is_empty() || row.is_imported || base_syms.func_ptr_of_id.contains_key(&identity.full) {
+                return None;
+            }
+            let dependencies = row.type_deps.iter().map(|dep| {
+                let flags = (0..6).map(|index| {
+                    let off = dep.off - 24 + index * 4;
+                    u32::from_le_bytes(regen[off..off + 4].try_into().unwrap())
+                }).collect::<Vec<_>>();
+                serde_json::json!({"full_identity": syms.type_id_of_ptr.get(&dep.ptr), "token": dep.token, "flags": flags})
+            }).collect::<Vec<_>>();
+            let mut cursor = Cursor::at(&regen, row.start + 8);
+            for _ in 0..3 { cursor.read_sia().unwrap(); }
+            let is_const = cursor.read_bool4().unwrap();
+            Some(serde_json::json!({
+                "key": format!("{:#x}", row.key), "module": row.module,
+                "namespace": row.namespace, "name": row.name, "full_identity": identity.full,
+                "display": identity.display,
+                "owner_full_identity": syms.type_id_of_ptr.get(&row.owner_dep.1),
+                "is_method": row.is_method, "is_imported": row.is_imported, "is_const": is_const,
+                "raw_function_ids": meta.func_ids.iter().filter(|id| id.ptr == row.key).map(|id| id.id).collect::<Vec<_>>(),
+                "type_dependencies": dependencies
+            }))
+        }).collect::<Vec<_>>();
+        let property_identity = |row: &PropertyRowMeta, symbols: &SymTables| {
+            let owner = symbols.typeid_to_ptr.get(&row.old_type_id)?;
+            Some((
+                symbols.type_id_of_ptr.get(owner)?.clone(),
+                row.name.clone(),
+                row.member_offset,
+            ))
+        };
+        let base_properties: HashSet<_> = base_meta
+            .properties
+            .iter()
+            .filter_map(|row| property_identity(row, &base_syms))
+            .collect();
+        let properties = meta
+            .properties
+            .iter()
+            .filter_map(|row| {
+                let identity = property_identity(row, &syms)?;
+                let owner = syms.typeid_to_ptr.get(&row.old_type_id)?;
+                let owner_row = meta.type_row(*owner)?;
+                if !owner_row.module.is_empty()
+                    || !owner_row.type_deps.is_empty()
+                    || base_properties.contains(&identity)
+                {
+                    return None;
+                }
+                Some(serde_json::json!({
+                    "key": format!("{:#x}", row.key), "owner_full_identity": identity.0,
+                    "name": row.name, "member_offset": row.member_offset,
+                    "owner_object_kind": row.old_type_id as u32 & TYPE_ID_OBJECT_MASK
+                }))
+            })
+            .collect::<Vec<_>>();
+        let header = CacheHeader::parse(&base).unwrap();
+        let document = serde_json::json!({
+            "format": "gore-native-api-candidates-unqualified-v1",
+            "base_sha256": format!("{:x}", Sha256::digest(&base)),
+            "base_guid_hex": header.hash.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+            "regen_sha256": format!("{:x}", Sha256::digest(&regen)),
+            "types": types, "functions": functions, "properties": properties
+        });
+        std::fs::write(
+            path("GORE_NATIVE_CANDIDATES"),
+            serde_json::to_vec_pretty(&document).unwrap(),
+        )
+        .unwrap();
+    }
+}
 
 #[cfg(test)]
 mod bytediff_n1_tests {
@@ -10418,6 +11705,7 @@ mod bytediff_n1_tests {
             properties: HashSet::new(),
             orphan_functions: HashSet::new(),
             script_owners: ScriptOwnerIndex::default(),
+            native_api: None,
         };
         let mut template_budget = fixed_comparison_budget(64 * 1024);
         assert_eq!(

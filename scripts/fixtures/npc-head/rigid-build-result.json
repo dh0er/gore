@@ -1,0 +1,377 @@
+{
+  "schema": "gore.npc-head.build-result.v1",
+  "package": "NpcHeadRigidFix",
+  "version": "0.1.7",
+  "game_build_id": 24878692,
+  "backend": "standalone",
+  "change": "Keep Flex in static reference pose; clear LeaderPose and attach to body head with inverse accumulated Flex reference transform. Retain verified material hiding and restore.",
+  "artifacts": {
+    "NpcHeadRigidFix.full.Cache": {
+      "bytes": 124608674,
+      "sha256": "c430596c6dbcf5a3a0b10e3f521b02ef91f910729a03bcf442aaaa35ffc49c44"
+    },
+    "NpcHeadRigidFix.mini.Cache": {
+      "bytes": 160004,
+      "sha256": "7937487a81df6ea37ff46f03ce1e347ef09fb9c9d785f4adb5f953641ec9d516"
+    },
+    "GoreHeadRigidB.mini.Cache": {
+      "bytes": 64923,
+      "sha256": "d1aa350860d84981f5c4cf893cf7b5bc7dde99822b0891a7fbba3353b40b8d8b"
+    },
+    "generation-receipt.json": {
+      "bytes": 1434,
+      "sha256": "d2d0e707a896ea1982d41940d6a6e4bd108c6b792d7ccdae04367a599479f9ea"
+    },
+    "joint-composition.json": {
+      "bytes": 3220,
+      "sha256": "28c3bb8779b40cff57bbd3d1140b99381bfcf3611330ea038821f7c00574c0c9"
+    },
+    "spec.json": {
+      "bytes": 4087,
+      "sha256": "60377bb70d4151b6f5514a6019168a370063d3cc74412da53b7294821c8cd2e7"
+    }
+  },
+  "generation_receipt_scope": "Standalone single B-module compilation; final four-module bundle is qualified by joint_composition.",
+  "joint_composition": {
+    "base": {
+      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache.gore-bak",
+      "sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511"
+    },
+    "checks": {
+      "all_compositions_guarded": true,
+      "all_unselected_pristine_modules_byte_identical": true,
+      "create_new_outside_game": true,
+      "four_module_names_exact": true,
+      "joint_plan_binds_exact_inputs": true,
+      "joint_plan_exact_pristine": true,
+      "other_three_authored_module_emissions": [
+        {
+          "emitted_source_sha256": "69045c008c62eff7d26977e29846fa7f3e7d17b813f1e194a2d918de0eeb3622",
+          "exactly_unchanged": true,
+          "module": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A"
+        },
+        {
+          "emitted_source_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+          "exactly_unchanged": true,
+          "module": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego"
+        },
+        {
+          "emitted_source_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f",
+          "exactly_unchanged": true,
+          "module": "LevelScripts.XardasTower_AI"
+        }
+      ],
+      "unselected_pristine_module_count": 7315
+    },
+    "full": {
+      "byte_len": 124608674,
+      "module_count": 7319,
+      "path": "\\\\?\\C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-rigid-fix\\artifacts\\NpcHeadRigidFix.full.Cache",
+      "sha256": "c430596c6dbcf5a3a0b10e3f521b02ef91f910729a03bcf442aaaa35ffc49c44"
+    },
+    "mini": {
+      "byte_len": 160004,
+      "module_count": 4,
+      "path": "\\\\?\\C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-rigid-fix\\artifacts\\NpcHeadRigidFix.mini.Cache",
+      "sha256": "7937487a81df6ea37ff46f03ce1e347ef09fb9c9d785f4adb5f953641ec9d516"
+    },
+    "new_b_mini": {
+      "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-rigid-fix\\artifacts\\GoreHeadRigidB.mini.Cache",
+      "sha256": "d1aa350860d84981f5c4cf893cf7b5bc7dde99822b0891a7fbba3353b40b8d8b"
+    },
+    "operation": "joint pristine loadout plan(prior4,newB), compose prior4, compose_edit B, extract4, remap, final pristine compose_upsert",
+    "prior_full": {
+      "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-visibility-fix\\artifacts\\NpcHeadVisibilityFix.selected.full.Cache",
+      "sha256": "f1ea40a8c03aecefef47d43040b036a90a73218135d59983ac8232b5ac6f0254"
+    },
+    "prior_mini": {
+      "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-visibility-fix\\artifacts\\NpcHeadVisibilityFix.selected.mini.Cache",
+      "sha256": "61e6bda8f631366f5c4bb4b69f915560a3913e90b1b4aa61ff501332021d8275"
+    },
+    "prior_selection_receipt_sha256": "8076f6e4284268cc226acbca21dc76b56387e038d6c130f40cfefe48041e1c04",
+    "replaced_module": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+    "schema": "gore.joint-composition-provenance-v1",
+    "selected_module_names": [
+      "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+      "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+      "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+      "LevelScripts.XardasTower_AI"
+    ]
+  },
+  "compiled_native_qualification": {
+    "format": "gore-rigid-head-compiled-t3-check-v1",
+    "qualified": true,
+    "cache": {
+      "path": "work\\npc-head-rigid-fix\\artifacts\\GoreHeadRigidB.mini.Cache",
+      "sha256": "d1aa350860d84981f5c4cf893cf7b5bc7dde99822b0891a7fbba3353b40b8d8b",
+      "tail_offset": 45297,
+      "t4_end": 61378
+    },
+    "base_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+    "cli_sha256": "32526ec06d6abe1215a8f79dd72ca815eef7baf9db5efb35416c2085e6bfd4c0",
+    "checker_sha256": "96d35c4b297f45a8051d71d8b13d3350f686add84a1a171648c11edb76d556ec",
+    "expected_audits": [
+      {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-probe\\native-rigid-head-audit.json",
+        "sha256": "f676926ba4f7844dc4b2b75f229fd8fe15e104ac3513ffd5e81b8143f1dd3718"
+      },
+      {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-probe\\native-rigid-head-v2-audit.json",
+        "sha256": "8a1fc8f30074f2dad93d5f475a46a250603b1e1321ba607c0a63c42b91c1ef6a"
+      }
+    ],
+    "functions": [
+      {
+        "name": "SetRenderStatic",
+        "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:15:SetRenderStatic1:028:9:primitive2:651:01:01:01:0,27:9:primitive2:821:01:01:01:0",
+        "t3_key": "0x6db9a3f1853bcd90",
+        "t3_offset": 57665,
+        "actual_parameter_and_return_datatypes": [
+          {
+            "full_identity": null,
+            "token": 65,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:651:01:01:01:0"
+          },
+          {
+            "full_identity": null,
+            "token": 82,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:821:01:01:01:0"
+          }
+        ],
+        "actual_t4_ids_linked_to_t3_key": [
+          1422955300
+        ],
+        "registrar_engine_function_id": 56342,
+        "id_note": "T4 IDs are cache OldReference IDs; remapping can change them. Exact identity and all six datatype flags are checked.",
+        "qualified": true
+      },
+      {
+        "name": "GetRefPoseTransform",
+        "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:19:GetRefPoseTransform1:128:9:primitive2:681:01:01:01:0,48:6:object1:51:01:01:01:022:0:0:10:FTransform1:00:",
+        "t3_key": "0x6329b00d505753f8",
+        "t3_offset": 57926,
+        "actual_parameter_and_return_datatypes": [
+          {
+            "full_identity": null,
+            "token": 68,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:681:01:01:01:0"
+          },
+          {
+            "full_identity": "0:0:10:FTransform1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:022:0:0:10:FTransform1:00:"
+          }
+        ],
+        "actual_t4_ids_linked_to_t3_key": [
+          1551837816
+        ],
+        "registrar_engine_function_id": 56321,
+        "id_note": "T4 IDs are cache OldReference IDs; remapping can change them. Exact identity and all six datatype flags are checked.",
+        "qualified": true
+      },
+      {
+        "name": "GetParentBone",
+        "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:13:GetParentBone1:143:6:object1:51:01:01:01:016:0:0:5:FName1:00:,42:6:object1:51:01:01:01:016:0:0:5:FName1:00:",
+        "t3_key": "0x685111938a614378",
+        "t3_offset": 58184,
+        "actual_parameter_and_return_datatypes": [
+          {
+            "full_identity": "0:0:5:FName1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+          },
+          {
+            "full_identity": "0:0:5:FName1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+          }
+        ],
+        "actual_t4_ids_linked_to_t3_key": [
+          282981430
+        ],
+        "registrar_engine_function_id": 56318,
+        "id_note": "T4 IDs are cache OldReference IDs; remapping can change them. Exact identity and all six datatype flags are checked.",
+        "qualified": true
+      },
+      {
+        "name": "opMul",
+        "full_identity": "6:method0:0:22:0:0:10:FTransform1:00:5:opMul1:149:6:object1:51:11:11:01:022:0:0:10:FTransform1:00:,48:6:object1:51:01:01:01:022:0:0:10:FTransform1:00:",
+        "t3_key": "0x66dc7e304a07a798",
+        "t3_offset": 58062,
+        "actual_parameter_and_return_datatypes": [
+          {
+            "full_identity": "0:0:10:FTransform1:00:",
+            "token": 5,
+            "flags": [
+              1,
+              1,
+              0,
+              1,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:11:11:01:022:0:0:10:FTransform1:00:"
+          },
+          {
+            "full_identity": "0:0:10:FTransform1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:022:0:0:10:FTransform1:00:"
+          }
+        ],
+        "actual_t4_ids_linked_to_t3_key": [
+          1944484553
+        ],
+        "registrar_engine_function_id": 3844,
+        "id_note": "T4 IDs are cache OldReference IDs; remapping can change them. Exact identity and all six datatype flags are checked.",
+        "qualified": true
+      },
+      {
+        "name": "Inverse",
+        "full_identity": "6:method0:0:22:0:0:10:FTransform1:00:7:Inverse1:10:48:6:object1:51:01:01:01:022:0:0:10:FTransform1:00:",
+        "t3_key": "0x60c02b41bfbdb8b0",
+        "t3_offset": 58612,
+        "actual_parameter_and_return_datatypes": [
+          {
+            "full_identity": "0:0:10:FTransform1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:022:0:0:10:FTransform1:00:"
+          }
+        ],
+        "actual_t4_ids_linked_to_t3_key": [
+          1122607878
+        ],
+        "registrar_engine_function_id": 3841,
+        "id_note": "T4 IDs are cache OldReference IDs; remapping can change them. Exact identity and all six datatype flags are checked.",
+        "qualified": true
+      }
+    ],
+    "scope": "Five T3 signatures and raw T4 links; no runtime or visual correctness claim."
+  },
+  "source": {
+    "GORE_TEST_B.as": {
+      "bytes": 19161,
+      "sha256": "a419179142317b081856243f45f308213d7ce03f94f57689c3965eff0ce8be70"
+    },
+    "head-component.as": {
+      "bytes": 8690,
+      "sha256": "65cd85135294f17ee15fc42fd72046a07c6ee5d14cbb6b3f9d5dad2f63c9c2b1"
+    }
+  },
+  "deployment": {
+    "manager_status": "in_sync",
+    "loadout": [
+      {
+        "enabled": true,
+        "id": "npcheadrigidfix-1c3c4149"
+      }
+    ],
+    "files": {
+      "shipping": {
+        "bytes": 124608674,
+        "sha256": "c430596c6dbcf5a3a0b10e3f521b02ef91f910729a03bcf442aaaa35ffc49c44",
+        "backup_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511"
+      },
+      "localization": {
+        "bytes": 37095936,
+        "sha256": "f3c6948bac217b69c457afeed4346bd99540ed47935d52d47db70efc268057d1",
+        "backup_sha256": "e9bc9a0e87b722f62fb352adfeec26dacdaa42630d16aef2cb2abc6975c8dd03"
+      },
+      "voice": {
+        "bytes": 915865276,
+        "sha256": "da44012393ca5dfaeb37ae37625c054a1e9b07d86aacf6e68344e3ff066339c9",
+        "backup_sha256": "ff7aa5b219c2e0ec9840570e42597d3ea3053a7ad592cf7cfa5b61dd895ecd29"
+      }
+    },
+    "compiled_installed_A_B_exact": true,
+    "native_event_metadata_exact": true,
+    "original_voice_crc_size_preserved": 33323,
+    "voice_payloads_exact": 5,
+    "localization_matches_passed_voice_campaign": true,
+    "loc_rows": 43904,
+    "baseline_saves_unchanged": [
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44
+    ],
+    "game_launched_by_agent": false,
+    "runtime_proven": false
+  },
+  "runtime": "partial: head shape, restore15, repeated14 passed; open neck join failed; restart not established. See rigid-runtime-result.json.",
+  "prior_runtime_result": "visibility-runtime-result.json: 0.1.6 still deformed, all186 visibility pairs hidden, restore15 passed"
+}

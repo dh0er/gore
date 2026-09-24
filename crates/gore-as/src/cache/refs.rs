@@ -816,7 +816,8 @@ impl RefResolver {
     /// `FPerceptionHandler::AddEvent(1)` versus the unrelated Binds-only
     /// `UTimelineComponent::AddEvent(2)` is the concrete over-count this gate prevents.
     /// Ownerless namespace calls reject a conflicting by-name arity; the exact cache
-    /// declaration remains the fallback. Unnamespaced calls retain the historical lookup.
+    /// declaration remains the fallback. Unnamespaced calls retain the historical lookup,
+    /// except for the qualified two-argument LoadObject global's zero-argument name collision.
     pub fn native_arity_by_ptr(&self, ptr: i64, name: &str) -> Option<usize> {
         // batch-20 Class C: natives whose tail-table FunctionReferences param list UNDERCOUNTS
         // the live game API (proven by the in-game error candidates). Keyed (owner, name); the
@@ -865,6 +866,17 @@ impl RefResolver {
             }),
             None => {
                 let arity = n.arity_by_name(name)?;
+                // The qualified global LoadObject(UObject, const FString&) is absent from
+                // Binds, which only records UGroundTruthData::LoadObject(). Preserve this
+                // exact two-argument cache frame without changing other globals' fallback.
+                if name == "LoadObject"
+                    && arity == 0
+                    && !self.is_method_by_ptr(ptr)
+                    && !self.func_ns.contains_key(&ptr)
+                    && self.func_params.get(&ptr).is_some_and(|p| p.len() == 2)
+                {
+                    return Some(2);
+                }
                 // A global actor factory has a name/bool/level tail absent from
                 // an unrelated task method's three-argument Binds declaration.
                 // Its complete typed cache signature owns both frame and arity.
@@ -6464,7 +6476,7 @@ impl RefResolver {
             r.func_by_ptr.insert(ptr,"Speak".into());r.func_module.insert(ptr,module.into());r.funcid_to_ptr.insert(ptr as i32,ptr);r.func_ret.insert(ptr,value(1));r.func_params.insert(ptr,params.clone());
             let mut defaults=vec![String::new();params.len()];defaults[4]=default.into();*defaults.last_mut().unwrap()="FGameplayTag::Empty".into();
             let f=Func{name:"Speak".into(),namespace:String::new(),ret:value(1),traits:0x820,is_ufunction:false,param_defaults:defaults,
-                params:params.into_iter().enumerate().map(|(i,ty)|Param{name:format!("arg{i}"),flags:if ty.is_reference{3}else{0},ty}).collect(),bytecode:vec![],obj_locals:vec![]};
+                params:params.into_iter().enumerate().map(|(i,ty)|Param{name:format!("arg{i}"),flags:if ty.is_reference{3}else{0},ty}).collect(),bytecode:vec![],variable_space:0,obj_locals:vec![]};
             mods.push(Module{name:module.into(),file:String::new(),functions:vec![f],classes:vec![],enums:vec![],globals:vec![]});
         }
         for (ptr,name,owner,ret,args,constant) in [(10,"$beh0","FAbilityTaskExecutor",void.clone(),vec![],false),(11,"$beh2","FAbilityTaskExecutor",void,vec![],false),
@@ -8556,7 +8568,7 @@ impl RefResolver {
         r.func_params.insert(101,vec![plain(0x44)]); r.static_names.push("Different::Check".into());
         r.global_by_ptr.insert(994,"Distance to target too close to required distance to move".into()); r.global_is_string.insert(994);
         let getter=super::model::Func {name:"GetMeasure".into(),param_defaults:vec![],namespace:String::new(),ret:plain(0x51),params:vec![],
-            bytecode:vec![],obj_locals:vec![],is_ufunction:false,traits:0x204};
+            bytecode:vec![],variable_space:0,obj_locals:vec![],is_ufunction:false,traits:0x204};
         let class=super::model::Class {name:"UMeasured".into(),namespace:String::new(),super_class:None,fields:vec![],methods:vec![getter],ctors:vec![],flags:0};
         let mut mods=vec![super::model::Module {name:"Fixture".into(),file:String::new(),functions:vec![],classes:vec![class],enums:vec![],globals:vec![]}];
         match fault {
@@ -12738,7 +12750,7 @@ mod tests {
                 functions.push(Func{name:name.into(),namespace:String::new(),ret:ret.clone(),traits:0x820,is_ufunction:character==2,
                     param_defaults:types.iter().map(|t| if t.is_reference {"FInGameTime ( )".into()}else{String::new()}).collect(),
                     params:types.into_iter().enumerate().map(|(i,ty)| Param{name:format!("arg{i}"),flags:if ty.is_reference {3}else{0},ty}).collect(),
-                    bytecode:vec![],obj_locals:vec![]});
+                    bytecode:vec![],variable_space:0,obj_locals:vec![]});
             }
             (r,Module{name:"History".into(),file:String::new(),functions,classes:vec![],enums:vec![],globals:vec![]})
         };
@@ -12790,7 +12802,7 @@ mod tests {
                 let mut defaults=vec![String::new();types.len()];*defaults.last_mut().unwrap()=default.into();
                 functions.push(Func{name:name.into(),namespace:String::new(),ret:ret.clone(),traits:0x820,is_ufunction:true,param_defaults:defaults,
                     params:types.into_iter().enumerate().map(|(i,ty)| Param{name:format!("arg{i}"),flags:if ty.is_reference {3}else{0},ty}).collect(),
-                    bytecode:vec![],obj_locals:vec![]});
+                    bytecode:vec![],variable_space:0,obj_locals:vec![]});
             }
             (r,Module{name:"Visibility".into(),file:String::new(),functions,classes:vec![],enums:vec![],globals:vec![]})
         };
@@ -12837,7 +12849,7 @@ mod tests {
                 r.func_ret.insert(ptr,value(1));r.func_params.insert(ptr,params.clone());
                 functions.push(Func {name:"Speak".into(),namespace:String::new(),ret:value(1),traits:0x820,is_ufunction:false,
                     param_defaults:vec![String::new();params.len()],params:params.into_iter().enumerate().map(|(i,ty)| Param {
-                        name:format!("arg{i}"),flags:if ty.is_reference {3}else{0},ty}).collect(),bytecode:vec![],obj_locals:vec![]});
+                        name:format!("arg{i}"),flags:if ty.is_reference {3}else{0},ty}).collect(),bytecode:vec![],variable_space:0,obj_locals:vec![]});
             }
             (r,Module {name:"Speech".into(),file:String::new(),functions,classes:vec![],enums:vec![],globals:vec![]})
         };
@@ -12874,7 +12886,7 @@ mod tests {
             let ret = DataType { token: 0x41, ..Default::default() };
             let f = Func { name: "CanObserve".into(), namespace: String::new(), param_defaults: vec![],
                 params: ["Self", "Other"].into_iter().map(|n| Param { name: n.into(), ty: ty.clone(), flags: 0 }).collect(),
-                ret: ret.clone(), bytecode: vec![], obj_locals: vec![], is_ufunction: true, traits: 0x820 };
+                ret: ret.clone(), bytecode: vec![], variable_space: 0, obj_locals: vec![], is_ufunction: true, traits: 0x820 };
             let module = Module { name: "Predicates".into(), file: String::new(), functions: vec![f], classes: vec![], enums: vec![], globals: vec![] };
             for ptr in 1..=4 {
                 refs.funcid_to_ptr.insert(ptr as i32 + 10, ptr);
@@ -13106,6 +13118,36 @@ mod tests {
         assert_eq!(refs.native_arity_by_ptr(12, "LogInfo"), Some(1));
         // Missing cache params provide no contradictory count; don't alter that fallback.
         assert_eq!(refs.native_arity_by_ptr(13, "LogInfo"), Some(2));
+    }
+
+    #[test]
+    fn global_native_arity_keeps_exact_t3_args_over_unrelated_zero_arg_method() {
+        let mut refs = RefResolver::default();
+        refs.func_params
+            .insert(10, vec![DataType::default(), DataType::default()]);
+        refs.func_owner.insert(11, "UGroundTruthData".to_string());
+        refs.func_params.insert(13, vec![DataType::default(); 2]);
+        refs.func_params.insert(14, vec![DataType::default()]);
+        refs.func_params.insert(15, vec![DataType::default(); 2]);
+        refs.func_ns.insert(15, "Other".into());
+        refs.func_params.insert(16, vec![DataType::default(); 2]);
+        refs.func_is_method.insert(16);
+        refs.native = Some(super::super::binds::NativeApi::from_test_arities(
+            &[("UGroundTruthData", "LoadObject", 0)],
+            &[("LoadObject", Some(0)), ("Unrelated", Some(0))],
+        ));
+
+        // The native global's T3 record declares (UObject, const FString&). The only
+        // Binds declaration is an unrelated zero-argument method with the same name.
+        assert_eq!(refs.native_arity_by_ptr(10, "LoadObject"), Some(2));
+        assert_eq!(refs.native_arity_by_ptr(11, "LoadObject"), Some(0));
+        // Preserve the existing fallback when no exact pointer-specific signature exists.
+        assert_eq!(refs.native_arity_by_ptr(12, "LoadObject"), Some(0));
+        // Keep main's behavior for other globals, signatures, namespaces and methods.
+        assert_eq!(refs.native_arity_by_ptr(13, "Unrelated"), Some(0));
+        assert_eq!(refs.native_arity_by_ptr(14, "LoadObject"), Some(0));
+        assert_eq!(refs.native_arity_by_ptr(15, "LoadObject"), None);
+        assert_eq!(refs.native_arity_by_ptr(16, "LoadObject"), Some(0));
     }
 
     #[test]

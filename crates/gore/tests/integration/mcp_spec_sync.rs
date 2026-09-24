@@ -11,7 +11,7 @@
 //!
 //! When this fails, the table is wrong until proven otherwise — clap is the source of truth.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use assert_cmd::Command;
 use gore_mcp::spec::{self, GroupShape, GroupSpec, JsonSupport};
@@ -33,10 +33,7 @@ fn help(argv: &[&str]) -> String {
 
 /// The command path a leaf lives at, e.g. `["config", "set"]` or `["dump"]`.
 fn path<'a>(group: &'a GroupSpec, sub: &'a str) -> Vec<&'a str> {
-    match group.shape {
-        GroupShape::Nested => vec![group.cli, sub],
-        GroupShape::Flat => vec![sub],
-    }
+    group.command_path(sub)
 }
 
 /// Long flags **declared** by clap, as opposed to merely mentioned in help prose.
@@ -348,6 +345,87 @@ fn the_table_covers_the_expected_number_of_leaves() {
 /// strictly better access to the same pages through the `gore_guide` tool, and cannot read the file
 /// it would produce, so exposing it would add surface for no capability.
 const UNEXPOSED_TOP_LEVEL: &[&str] = &["mcp", "guide", "help"];
+
+/// The names listed in a `--help` output's `Commands:` section.
+///
+/// Shared by the two coverage tests below, which are the only ones that walk from the CLI towards
+/// the table rather than the other way round.
+fn help_subcommands(help_text: &str) -> BTreeSet<String> {
+    let mut in_commands_section = false;
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    for line in help_text.lines() {
+        if line.starts_with("Commands:") {
+            in_commands_section = true;
+            continue;
+        }
+        if in_commands_section {
+            // The section ends at the first unindented line (`Options:`).
+            if !line.starts_with("  ") {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                break;
+            }
+            if let Some(name) = line.split_whitespace().next() {
+                if name.starts_with('-') {
+                    continue;
+                }
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+/// Subcommands `clap` offers that carry no MCP leaf, per nested group.
+///
+/// `help` is clap's own and never a capability of ours.
+const UNEXPOSED_SUBCOMMANDS: &[&str] = &["help"];
+
+#[test]
+fn no_subcommand_of_an_exposed_family_is_missing_from_the_table() {
+    // The gap the per-leaf tests and `no_top_level_command_family_is_missing_from_the_table`
+    // between them still left open: those walk the table, and that one only checks the top level.
+    // A subcommand added to an exposed family and never added to the table was invisible to all of
+    // them — which is exactly what happened when `gore npc` grew its authoring commands.
+    //
+    // Coverage is summed per CLI family, not per group: several families are split across more
+    // than one tool (`gore as` across `gore_as`, `gore_as_compile` and `gore_as_compile_module`,
+    // `gore mod` and `gore mgr` across their plain and their direct-argument tools), so asking any
+    // single group to cover a whole family would be wrong.
+    let mut covered: BTreeMap<Vec<&str>, BTreeSet<&str>> = BTreeMap::new();
+    for group in spec::GROUPS {
+        if !matches!(group.shape, GroupShape::Nested) || group.cli.is_empty() {
+            continue;
+        }
+        for command in group.commands {
+            let path = group.command_path(command.sub);
+            // Every intermediate parent is checked, including e.g. `npc routine`, so a new
+            // unlisted leaf cannot hide behind an already-covered top-level family.
+            for index in 1..path.len() {
+                covered
+                    .entry(path[..index].to_vec())
+                    .or_default()
+                    .insert(path[index]);
+            }
+        }
+    }
+
+    let mut missing: Vec<String> = Vec::new();
+    for (path, subs) in &covered {
+        for name in help_subcommands(&help(path)) {
+            if UNEXPOSED_SUBCOMMANDS.contains(&name.as_str()) || subs.contains(name.as_str()) {
+                continue;
+            }
+            missing.push(format!("`gore {} {name}`", path.join(" ")));
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "these subcommands exist in the CLI but no MCP leaf reaches them: {}",
+        missing.join(", ")
+    );
+}
 
 #[test]
 fn no_top_level_command_family_is_missing_from_the_table() {

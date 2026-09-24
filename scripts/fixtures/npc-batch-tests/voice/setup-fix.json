@@ -1,0 +1,208 @@
+{
+  "schema": "gore.npc-batch.voice-setup-fix.v1",
+  "recorded_at": "2026-09-11T18:18:48.745328+00:00",
+  "bundle": "NpcNaturalVoiceTest",
+  "version": "0.1.2",
+  "runtime_verified": false,
+  "change": "Move Hero teleport and final A routine/teleport before EndConversation, matching the tested head setup.",
+  "source_files": [
+    "voice/GORE_TEST_A.as",
+    "voice/voice-choices.as"
+  ],
+  "B_source_unchanged": true,
+  "build": {
+    "build": "voice-v3",
+    "source_tree_unchanged": true,
+    "authored_modules": [
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+        "disposition": "added",
+        "source": {
+          "byte_len": 36971,
+          "sha256": "9d5379545c320583303d9fb09a712dbebe0ff8aac48576469969218880df9633"
+        }
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+        "disposition": "added",
+        "source": {
+          "byte_len": 28815,
+          "sha256": "b62c1cf2147eee80f899c3c813dde9ac95d3186dff58dbc660ef5392e9c1c353"
+        }
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+        "relative_path": "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+        "disposition": "edited",
+        "source": {
+          "byte_len": 5203,
+          "sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+        }
+      },
+      {
+        "module_name": "LevelScripts.XardasTower_AI",
+        "relative_path": "LevelScripts/XardasTower_AI.as",
+        "disposition": "edited",
+        "source": {
+          "byte_len": 1814,
+          "sha256": "ee74734e29cafb76445abe5000bc662d2c9e79d3cd6b88a989a17f81d42056eb"
+        }
+      }
+    ],
+    "preservation": {
+      "operation": "product module_ranges exact serialized module span comparison",
+      "mini_modules": 4,
+      "full_modules": 7319,
+      "pristine_modules": 7317,
+      "unselected_pristine_modules_byte_identical": 7315,
+      "exact_selected_module_set": true,
+      "diego_bytes_unchanged_from_0_1_11": false,
+      "tower_bytes_unchanged_from_0_1_11": true,
+      "passed": true
+    },
+    "unchanged_Diego_Tower_emission": {
+      "operation": "product PreparedEmit with exact Binds and class defaults enabled",
+      "modules": [
+        {
+          "module": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+          "exactly_unchanged": true,
+          "prior_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+          "current_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+        },
+        {
+          "module": "LevelScripts.XardasTower_AI",
+          "exactly_unchanged": true,
+          "prior_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f",
+          "current_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f"
+        }
+      ]
+    },
+    "mini_sha256": "8432f46d6c4b1dbb13ddeda5752be17b5823aa2f07a521255543d4bdc592300e",
+    "full_sha256": "52f17a294b0fcc9ccbb7f39f73ca7669506be8436cfdab0a70e3274d600435c6",
+    "generation_receipt_sha256": "716be097f79469747a8c0efa7bbb7572951fcdab856f6a150b22f6e54510a898"
+  },
+  "inspection": {
+    "report_format": 1,
+    "source_kind": "directory",
+    "bundle_format": 1,
+    "mod": {
+      "name": "NpcNaturalVoiceTest",
+      "version": "0.1.2",
+      "author": ""
+    },
+    "component_count": 3,
+    "components": [
+      {
+        "type": "loc_patch",
+        "path": "loc/edits.json",
+        "target_count": 42,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "voice_archive_patch",
+        "path": "voice",
+        "target_count": 5,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "angel_script_patch",
+        "path": "scripts",
+        "target_count": 4,
+        "footprint_coverage": "exact"
+      }
+    ],
+    "file_count": 10,
+    "directory_count": 4,
+    "total_file_bytes": 440345,
+    "manifest_sha256": "9370a53e85318f65399fe0d406556fc673a01dae6514fa34ce4667ac464813bb",
+    "tree_sha256": "5573d3472b6f3bbc3df8d250d613473f47fb4d5c9aa5ef94efa97d508f36f078",
+    "evidence": {
+      "verified": [
+        "bounded non-link materialization of the selected directory or ZIP",
+        "root manifest format plus every declared component manifest and referenced payload",
+        "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+        "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+      ],
+      "not_verified": [
+        "compatibility with any particular game installation or game build",
+        "whether named game-side assets, samples, localization ids, or script edit targets exist",
+        "cross-mod conflicts, load order, or deployment readiness",
+        "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+      ]
+    }
+  },
+  "unchanged_payloads": [
+    {
+      "component": "loc",
+      "files": 1,
+      "all_payloads_byte_identical": true
+    },
+    {
+      "component": "voice",
+      "files": 6,
+      "all_payloads_byte_identical": true
+    }
+  ],
+  "previous_failure": "runtime-setup-0.1.1.json",
+  "cli": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe",
+  "cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+  "helper": "work/npc-batch-tests/core-build-beard-v2.exe",
+  "helper_sha256": "327dc32a1e4959a448ba690706e7eabcf8b4557eb91aedb5623b75d5e614d43a",
+  "pristine_backup_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "preflight": "Dedicated preflight confirms closed game, no recovery blocker and one enabled entry. Analyzer reports no recognized conflicts.",
+  "state": {
+    "loadout": [
+      {
+        "enabled": true,
+        "id": "npcnaturalvoicetest-cfebf456"
+      }
+    ],
+    "manager_owned": {
+      "additive": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      },
+      "backups": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip.gore-bak"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "live": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "recovery": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\gore-mod.deployed.json"
+        ],
+        "total": 1,
+        "truncated": false
+      },
+      "ue4ss": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      }
+    },
+    "state": "in_sync"
+  },
+  "apply_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "reset_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "apply_log_sha256": "5645d058d926c055711d771abd1c619fef642063fb7ae22060eea989c0432b42",
+  "start066_unchanged": true,
+  "start066_sha256": "553c7a9e4d2fafd5d0e444d669642e89ec3d38640e125a063af0aa0df9785ba5",
+  "saves_modified": false,
+  "next_test": "Restart game, load START066, choose01 and first confirm Hero/A are outside below the tower. Then proceed to greeting/mumble checklist."
+}

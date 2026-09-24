@@ -1,0 +1,247 @@
+{
+  "schema": "gore.npc-batch.quest-runtime.v1",
+  "date": "2026-09-21",
+  "bundle": "NpcQuestCallbacksTest",
+  "version": "0.1.2",
+  "game_build": 25168047,
+  "passed": true,
+  "user_report": "bin durch mit der liste. alles hat perfekt funktioniert.",
+  "user_confirmed": [
+    "All seven FIELD-TEST.md steps",
+    "Own journal title, description, objectives and paragraphs",
+    "Automatic progression from agreement to delivery",
+    "One-time two-cheese supply",
+    "Two-cheese hand-in and exactly-once 25-ore reward",
+    "Repeated final dialogue grants nothing further",
+    "Cancellation consumes nothing and gives no reward",
+    "All prescribed full game restarts at intermediate, success and cancellation states"
+  ],
+  "saves": [
+    {
+      "slot": "G1R-022",
+      "title": "quest-absprache",
+      "bytes": 1036975,
+      "sha256": "7d39bf9f03e1ab00b3ff09233368702e80bb5c4df68eb3444b2e42267d36ce8f",
+      "quests": {
+        "Quest_GORE_BATCH_PROVISIONS": "EQuestState::Running",
+        "Quest_GORE_BATCH_PROVISIONS_AGREE": "EQuestState::Running",
+        "Quest_GORE_BATCH_PROVISIONS_DELIVER": "EQuestState::Available"
+      },
+      "hero_inventory": {
+        "cheese": 0,
+        "ore": 0
+      },
+      "A_inventory": {
+        "cheese": 1,
+        "ore": 18
+      },
+      "hero_knowledge": [
+        "gore_batch_quest_accepted"
+      ]
+    },
+    {
+      "slot": "G1R-025",
+      "title": "quest-lieferung",
+      "bytes": 1037644,
+      "sha256": "11063696b9b7f1e42dd234269befe7fbbae53f3759f8e0ed2c7f18b5f6a93262",
+      "quests": {
+        "Quest_GORE_BATCH_PROVISIONS": "EQuestState::Running",
+        "Quest_GORE_BATCH_PROVISIONS_AGREE": "EQuestState::Succeeded",
+        "Quest_GORE_BATCH_PROVISIONS_DELIVER": "EQuestState::Running"
+      },
+      "hero_inventory": {
+        "cheese": 2,
+        "ore": 0
+      },
+      "A_inventory": {
+        "cheese": 1,
+        "ore": 18
+      },
+      "hero_knowledge": [
+        "gore_batch_quest_accepted",
+        "gore_batch_quest_agreed",
+        "gore_batch_quest_supplied"
+      ]
+    },
+    {
+      "slot": "G1R-026",
+      "title": "quest-erfolg",
+      "bytes": 1037853,
+      "sha256": "587cbbfafe06eae261da1c8d0490df667cece64aa8244aed7253c80a10899fa6",
+      "quests": {
+        "Quest_GORE_BATCH_PROVISIONS": "EQuestState::Succeeded",
+        "Quest_GORE_BATCH_PROVISIONS_AGREE": "EQuestState::Succeeded",
+        "Quest_GORE_BATCH_PROVISIONS_DELIVER": "EQuestState::Succeeded"
+      },
+      "hero_inventory": {
+        "cheese": 0,
+        "ore": 25
+      },
+      "A_inventory": {
+        "cheese": 3,
+        "ore": 18
+      },
+      "hero_knowledge": [
+        "gore_batch_quest_accepted",
+        "gore_batch_quest_agreed",
+        "gore_batch_quest_supplied",
+        "gore_batch_quest_handed_in",
+        "gore_batch_quest_rewarded"
+      ]
+    },
+    {
+      "slot": "G1R-027",
+      "title": "quest-erfolg-neustart",
+      "bytes": 1037618,
+      "sha256": "1620642a7fcf11bb2b2ef03cb089d78996e08807e5ec4b3b8c22cc67d51eeab9",
+      "quests": {
+        "Quest_GORE_BATCH_PROVISIONS": "EQuestState::Succeeded",
+        "Quest_GORE_BATCH_PROVISIONS_AGREE": "EQuestState::Succeeded",
+        "Quest_GORE_BATCH_PROVISIONS_DELIVER": "EQuestState::Succeeded"
+      },
+      "hero_inventory": {
+        "cheese": 0,
+        "ore": 25
+      },
+      "A_inventory": {
+        "cheese": 3,
+        "ore": 18
+      },
+      "hero_knowledge": [
+        "gore_batch_quest_accepted",
+        "gore_batch_quest_agreed",
+        "gore_batch_quest_supplied",
+        "gore_batch_quest_handed_in",
+        "gore_batch_quest_rewarded"
+      ]
+    },
+    {
+      "slot": "G1R-029",
+      "title": "quest-abbruch",
+      "bytes": 1035385,
+      "sha256": "e6958713ab41fab4650e9bee2532fc9cf4e9b8b73f65ec6e70e73deb19d26b90",
+      "quests": {
+        "Quest_GORE_BATCH_PROVISIONS": "EQuestState::Failed",
+        "Quest_GORE_BATCH_PROVISIONS_AGREE": "EQuestState::Succeeded",
+        "Quest_GORE_BATCH_PROVISIONS_DELIVER": "EQuestState::Failed"
+      },
+      "hero_inventory": {
+        "cheese": 2,
+        "ore": 0
+      },
+      "A_inventory": {
+        "cheese": 1,
+        "ore": 18
+      },
+      "hero_knowledge": [
+        "gore_batch_quest_accepted",
+        "gore_batch_quest_agreed",
+        "gore_batch_quest_supplied",
+        "gore_batch_quest_cancelled"
+      ]
+    },
+    {
+      "slot": "G1R-030",
+      "title": "quest-abbruch-neustart",
+      "bytes": 1042249,
+      "sha256": "522bcbf799d80a8f92866deba688f18b8afdc74cbcdd8e166c59c30df7cf5939",
+      "quests": {
+        "Quest_GORE_BATCH_PROVISIONS": "EQuestState::Failed",
+        "Quest_GORE_BATCH_PROVISIONS_AGREE": "EQuestState::Succeeded",
+        "Quest_GORE_BATCH_PROVISIONS_DELIVER": "EQuestState::Failed"
+      },
+      "hero_inventory": {
+        "cheese": 2,
+        "ore": 0
+      },
+      "A_inventory": {
+        "cheese": 1,
+        "ore": 18
+      },
+      "hero_knowledge": [
+        "gore_batch_quest_accepted",
+        "gore_batch_quest_agreed",
+        "gore_batch_quest_supplied",
+        "gore_batch_quest_cancelled"
+      ]
+    },
+    {
+      "slot": "G1R-071",
+      "title": "NPC 05 Quest - START",
+      "bytes": 1018879,
+      "sha256": "aee18515288dc09ebc1f4687fc3da21cccdec946596b2744f2028ccdfaf68db5",
+      "quests": {},
+      "hero_inventory": {
+        "cheese": 0,
+        "ore": 0
+      },
+      "A_inventory": {
+        "cheese": 1,
+        "ore": 18
+      },
+      "hero_knowledge": []
+    }
+  ],
+  "save_comparisons": {
+    "success_pair": [
+      "G1R-026",
+      "G1R-027"
+    ],
+    "failure_pair": [
+      "G1R-029",
+      "G1R-030"
+    ],
+    "success_and_failure_pairs_match_quest_states_knowledge_and_item_totals": true,
+    "delivery_to_success_hero_delta": {
+      "cheese": -2,
+      "ore": 25
+    },
+    "delivery_to_success_A_delta": {
+      "cheese": 2,
+      "ore": 0
+    },
+    "delivery_to_failure_item_deltas": {
+      "hero_cheese": 0,
+      "hero_ore": 0,
+      "A_cheese": 0,
+      "A_ore": 0
+    }
+  },
+  "readback": {
+    "archive_path": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-quest-complete-20260921T213016Z\\quest-save-evidence.json",
+    "sha256": "ff1c14c867c5e6865ffc3e057c9e4f0d9d6e0174abfed91d0aa4f7fefd1c1a0e",
+    "checks_passed": 44,
+    "reader": {
+      "dll": "C:\\sbx\\goresave\\target\\debug\\gore_save.dll",
+      "bytes": 17931264,
+      "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14",
+      "commands": [
+        "inspect_save",
+        "private.characters.list",
+        "private.npc.inventory",
+        "query_progression"
+      ],
+      "inventorySource": "inspect_save.private.inventory: controlled player; private.npc.inventory: exact NPC GlobalId"
+    },
+    "limits": [
+      "Save bytes establish stored state, identities, inventory counts and knowledge; they do not independently prove a separate engine process/restart or visible journal/menu behavior. Those are user-confirmed.",
+      "Saved item deltas match the scripted transfer/reward; saves alone cannot prove the exact sequence of player actions or rule out unrelated actions between saves.",
+      "Missing cheese/ore stack is reported as zero within the selected actor inventory.",
+      "Automatic/quick-save titles are retained verbatim, not used to infer checklist phases."
+    ]
+  },
+  "autosave_notes": [
+    "G1R-003 is an automatic save between delivery completion and root success/reward callback: DELIVER Succeeded, root Running, handed_in present, rewarded absent, Hero cheese0/ore0, NPC cheese3. Later named completion saves contain final succeeded/rewarded state.",
+    "G1R-023 and G1R-024 use automatic titles and match completed/cancelled stored facts respectively; their names do not establish a checklist step."
+  ],
+  "qualification_limit": "This handwritten two-objective quest and tested branches on Steam25168047. Not all generated graphs, arbitrary branch structures or other builds. Game restarts/menu/journal rendering are user evidence, not inferred from saves.",
+  "deployment": "hotfix-0.1.2.json",
+  "manager_status": "in_sync",
+  "manager_status_sha256": "4e55a1d8937e0bfa01d99bd2cab8772fb2f2be818c50186f5bbc06033a233a8f",
+  "game_launched_by_agent": false,
+  "gameplay_source_changed": false,
+  "archive_report": "../profile-cleanup-after-quest-complete.json",
+  "archive": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-quest-complete-20260921T213016Z",
+  "next_required_test": null,
+  "remaining_work": "../../../../docs/guide/npc-open-items.md"
+}

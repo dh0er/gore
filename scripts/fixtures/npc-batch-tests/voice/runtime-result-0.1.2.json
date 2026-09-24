@@ -1,0 +1,120 @@
+{
+  "schema": "gore.npc-batch.natural-voice-runtime.v1",
+  "date": "2026-09-12",
+  "bundle": "NpcNaturalVoiceTest",
+  "version": "0.1.2",
+  "evidence_kind": "user_game_observation",
+  "bundle_tree_sha256": "5573d3472b6f3bbc3df8d250d613473f47fb4d5c9aa5ef94efa97d508f36f078",
+  "passed_observations": {
+    "B_greeted": true,
+    "C_greeted": true,
+    "B_periodic_everyday_lines": true,
+    "C_periodic_everyday_lines": true,
+    "B_routine_walk": true,
+    "B_everyday_line_during_walk_observed_once": true,
+    "full_restart_without_repeating_setup": true,
+    "B_audibly_Diego": true,
+    "C_audibly_Lares": true
+  },
+  "limits": [
+    "The very short routine path does not guarantee speech on each traversal.",
+    "No timings, exact voice lines, or audio recordings were supplied in this report."
+  ],
+  "open_observation": {
+    "occurrences_reported": 2,
+    "symptom": "Everyday speech bubble appeared for a tiny fraction of a second and immediately disappeared.",
+    "speaker": null,
+    "wording": null,
+    "audio_also_interrupted": null,
+    "cause": "unknown",
+    "attributed_to_vanilla": false,
+    "attributed_to_mod": false,
+    "next_if_reproduced": "Record the speaker, line if visible, and whether voice continues after the bubble disappears."
+  },
+  "code_change_from_this_feedback": false,
+  "next_fixture": "NpcEconomyRolesTest 0.1.0; activation recorded in ../roles/economy-deployment.json",
+  "prior_setup_report": "runtime-setup-0.1.1.json",
+  "build_and_deployment_report": "setup-fix.json",
+  "save_evidence": {
+    "inspection": "Read-only inspection of copied saves; no live recovery scan or mutation.",
+    "inventory_path": "work/npc-batch-tests/voice/runtime-results-review-20260912T084142Z/inventory.json",
+    "inventory_sha256": "8855976be2c04edfe2b0ce314d5a426107420ced22fda4d84bd198c9a02d6a7b",
+    "profile_id": 2,
+    "displayed_profile": 4,
+    "saves": [
+      {
+        "slot": "G1R-003",
+        "title": "npc natuerlich - beobachtet",
+        "file": {
+          "bytes": 1063574,
+          "sha256": "c310f75477a2e64ec144ab5fe899db38938d8d5a79554d05aa476a292c944c84"
+        },
+        "modified_utc": "2026-09-12T08:31:09.849547+00:00",
+        "setup_ready_marker": 2,
+        "characters": [
+          {
+            "globalId": "GORE_TEST_A-WP_WarningFlock_XT_01",
+            "isDead": false,
+            "personalRelationship": "Friend",
+            "uniqueName": "GORE_TEST_A"
+          },
+          {
+            "globalId": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "isDead": false,
+            "personalRelationship": "Friend",
+            "uniqueName": "GORE_TEST_B"
+          },
+          {
+            "globalId": "GORE_TEST_C-Character_GORE_TEST_A-WP_WarningFlock_XT_01",
+            "isDead": false,
+            "personalRelationship": "Friend",
+            "uniqueName": "GORE_TEST_C"
+          }
+        ]
+      },
+      {
+        "slot": "G1R-022",
+        "title": "npc natuerlich - start",
+        "file": {
+          "bytes": 1025358,
+          "sha256": "e8fdf61284cd64a9afba88a63848165f06a6e247f68d7237a11f80e48b02c7f2"
+        },
+        "modified_utc": "2026-09-12T08:31:49.561006+00:00",
+        "setup_ready_marker": 2,
+        "characters": [
+          {
+            "globalId": "GORE_TEST_A-WP_WarningFlock_XT_01",
+            "isDead": false,
+            "personalRelationship": "Friend",
+            "uniqueName": "GORE_TEST_A"
+          },
+          {
+            "globalId": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "isDead": false,
+            "personalRelationship": "Friend",
+            "uniqueName": "GORE_TEST_B"
+          },
+          {
+            "globalId": "GORE_TEST_C-Character_GORE_TEST_A-WP_WarningFlock_XT_01",
+            "isDead": false,
+            "personalRelationship": "Friend",
+            "uniqueName": "GORE_TEST_C"
+          }
+        ]
+      }
+    ],
+    "limit": "Saved ready state and NPC records establish persistence in the file, not a successful application restart."
+  },
+  "restart_confirmation": {
+    "date": "2026-09-12",
+    "user_report": "neustart hat funktioniert. mach nächstes paket jetzt."
+  },
+  "save_archive_report": "../profile-cleanup-after-voice.json",
+  "audible_identity_confirmation": {
+    "date": "2026-09-22",
+    "user_quote": "hm, hatte ich nicht schon gesagt dass sich B wie diego und C wie lares anhört? kannst mal im transkript dieser session nachgreppen wenn du dir nicht sicher bist",
+    "applies_to": "User clarification of the completed voice test, not a new game run.",
+    "transcript_review": "Current session UUID01a07599-d23b-7093-8dc2-e0ebcb08e1d9 searched in full. Earlier user pass on2026-09-12 covers both greetings/everyday speech; current clarification explicitly supplies the audible Diego/Lares identities.",
+    "retest_needed": false
+  }
+}

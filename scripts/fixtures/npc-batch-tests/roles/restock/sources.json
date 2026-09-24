@@ -1,0 +1,26 @@
+{
+  "schema": "gore.npc-restock.sources.v1",
+  "parent": "NpcEconomyRolesTest 0.1.3",
+  "input_sha256": {
+    "A": "d38bd567cdb1b530b99af2b0970b99dc6c4d9f3897ab339ca226fb05fe8b2471",
+    "B": "3f99220ad6f2985acb0771445a7a7f9d9da88b9cc343ebe60d3ca8587f6e9679"
+  },
+  "output_sha256": {
+    "A": "1dc61a75b1069ec3b5721c4f899a68ed3ea18d15c42861258a1e14a55652eba2",
+    "B": "0d966700e37052aefe5005d24a2272f7c8e64e2572ae87939de38b3d2e5343b5"
+  },
+  "all_existing_classes_retained": true,
+  "initial_event": "OnWorldStart",
+  "late_event": "GoreNpcRestockTrialV1",
+  "initial_stock": {
+    "cheese": 3,
+    "arrows": 10,
+    "ore": 100
+  },
+  "late_batch": {
+    "cheese": 2,
+    "arrows": 5,
+    "ore": 20
+  },
+  "runtime": "pending user test"
+}

@@ -421,7 +421,12 @@ and spawn blockers stay visible after compiler acceptance.
 ## Quest authoring
 
 Quest authoring is a greenfield Revision-3 workflow. The only persisted
-generator contract is version 4.
+generator contract is version 6. It emits native `UFUNCTION(BlueprintOverride)`
+event names and const `Should*` predicates; ordinary callable methods named
+`*_Implementation` do not establish those native event bindings.
+Older artifacts, including versions 4 and 5, fail the exact generator-contract
+checks; this change does not migrate existing projects or rewrite their
+generated sources in place.
 
 ### Current model
 
@@ -429,7 +434,7 @@ A Quest consists of one `quest_draft` entity and one generated
 `script_module` entity. Both entities use:
 
 - generator ID `gore-authoring.draft-quest-skeleton`
-- generator version `4`
+- generator version `6`
 - an exact owner/reference pair
 - revisions that advance together for Quest edits
 
@@ -457,7 +462,7 @@ session as requiring reopen. Correctable semantic conflicts remain retryable.
 
 ### Runtime boundary
 
-Mod Studio can author, persist, inspect, and prepare generator-version-4 Quest
+Mod Studio can author, persist, inspect, and prepare generator-version-6 Quest
 content. Runtime qualification and game installation remain explicit status
 claims; the editor never presents an offline draft as proven playable. The
 managed compiler and runtime validation work must succeed before publication to
@@ -465,7 +470,7 @@ the game can be claimed.
 
 ### Invariants for new work
 
-- Add functionality to the single Revision-3/version-4 path.
+- Add functionality to the single Revision-3/version-6 path.
 - Keep the transition plan required in every persisted Quest.
 - Preserve stable objective slots across outline, behavior, and transcript
   edits.

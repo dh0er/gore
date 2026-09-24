@@ -1,0 +1,77 @@
+{
+  "schema": "gore.npc-batch.economy-deployment.v1",
+  "recorded_at": "2026-09-12T15:26:14.499805+00:00",
+  "active": "NpcEconomyRolesTest",
+  "version": "0.1.0",
+  "id": "npceconomyrolestest-9e89ec20",
+  "state": "in_sync",
+  "source_bundle": "work/npc-batch-tests/packages/NpcEconomyRolesTest",
+  "tree_sha256": "45735db5d7a129863aff53c89c00b694e9634ae48fb9b4928bb37a54915985da",
+  "inspection": "Qualified CLI reinspection on2026-09-12 matched the original bundle tree hash; existing build/source checks reused.",
+  "build_report": "../build-checks.json",
+  "source_rebuilt": false,
+  "cli": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe",
+  "cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+  "disabled": [
+    "npcnaturalvoicetest-cfebf456"
+  ],
+  "preflight": "Dedicated preflight confirms game closed, one selected entry, no recovery blocker. No recognized conflicts; pending loadout change expected.",
+  "apply_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "reset_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "original_backup_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "apply_log_sha256": "8505376ef7c0621f93630160f009f596d8925e7eb34f98e0a0420f765a24275d",
+  "voice_restart_result": "../voice/runtime-result-0.1.2.json",
+  "save_cleanup_report": "../profile-cleanup-after-voice.json",
+  "runtime_tested": false,
+  "starts": [
+    "G1R-067",
+    "G1R-068",
+    "G1R-069"
+  ],
+  "status": {
+    "loadout": [
+      {
+        "enabled": true,
+        "id": "npceconomyrolestest-9e89ec20"
+      }
+    ],
+    "manager_owned": {
+      "additive": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      },
+      "backups": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip.gore-bak"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "live": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "recovery": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\gore-mod.deployed.json"
+        ],
+        "total": 1,
+        "truncated": false
+      },
+      "ue4ss": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      }
+    },
+    "state": "in_sync"
+  }
+}

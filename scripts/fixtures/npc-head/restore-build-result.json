@@ -1,0 +1,1771 @@
+{
+  "schema": "gore.npc-head.build-result.v1",
+  "package": "NpcHeadRestoreFix",
+  "version": "0.1.9",
+  "game_build_id": 24878692,
+  "backend": "standalone",
+  "change": "Exclude C visual actor from BFG tick optimization before creating the poseable head; retain the verified pose path and existing restore code.",
+  "artifacts": {
+    "NpcHeadRestoreFix.full.Cache": {
+      "bytes": 124615075,
+      "sha256": "7e7dc60ffad98e89583cd5916dd17684ae352ddfb309b70546ec730f98d35f5f"
+    },
+    "NpcHeadRestoreFix.mini.Cache": {
+      "bytes": 166405,
+      "sha256": "1db591a8cda969881b9ab1ef34313756ea876b9253132444568f96f3be93d143"
+    },
+    "GoreHeadRestoreB.mini.Cache": {
+      "bytes": 71324,
+      "sha256": "a45375f2b49c3d6e98a7892408b88c8a4a7db8219bc01c01038e1e5b4b6aac5e"
+    },
+    "generation-receipt.json": {
+      "bytes": 1434,
+      "sha256": "8c89ce897a9f7aa5be38045511655c4bf2f106002dc5cb4901052b6ebe2e4526"
+    },
+    "joint-composition.json": {
+      "bytes": 3190,
+      "sha256": "4b5fb8e9ade1c6c21e18f4c3b8668849842678b74ec20a6c1bffd2e9c4468699"
+    },
+    "spec.json": {
+      "bytes": 4091,
+      "sha256": "ccc9ca879bad28b69249ee8b1c4ad64d6eb41a10a3763035a54eb3144aca640b"
+    }
+  },
+  "generation_receipt_scope": "Standalone single B-module compilation; joint_composition qualifies the final four-module bundle.",
+  "joint_composition": {
+    "base": {
+      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache.gore-bak",
+      "sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511"
+    },
+    "checks": {
+      "all_compositions_guarded": true,
+      "all_unselected_pristine_modules_byte_identical": true,
+      "create_new_outside_game": true,
+      "four_module_names_exact": true,
+      "joint_plan_binds_exact_inputs": true,
+      "joint_plan_exact_pristine": true,
+      "other_three_authored_module_emissions": [
+        {
+          "emitted_source_sha256": "69045c008c62eff7d26977e29846fa7f3e7d17b813f1e194a2d918de0eeb3622",
+          "exactly_unchanged": true,
+          "module": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A"
+        },
+        {
+          "emitted_source_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+          "exactly_unchanged": true,
+          "module": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego"
+        },
+        {
+          "emitted_source_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f",
+          "exactly_unchanged": true,
+          "module": "LevelScripts.XardasTower_AI"
+        }
+      ],
+      "unselected_pristine_module_count": 7315
+    },
+    "full": {
+      "byte_len": 124615075,
+      "module_count": 7319,
+      "path": "\\\\?\\C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-restore-fix\\artifacts\\NpcHeadRestoreFix.full.Cache",
+      "sha256": "7e7dc60ffad98e89583cd5916dd17684ae352ddfb309b70546ec730f98d35f5f"
+    },
+    "mini": {
+      "byte_len": 166405,
+      "module_count": 4,
+      "path": "\\\\?\\C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-restore-fix\\artifacts\\NpcHeadRestoreFix.mini.Cache",
+      "sha256": "1db591a8cda969881b9ab1ef34313756ea876b9253132444568f96f3be93d143"
+    },
+    "new_b_mini": {
+      "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-restore-fix\\artifacts\\GoreHeadRestoreB.mini.Cache",
+      "sha256": "a45375f2b49c3d6e98a7892408b88c8a4a7db8219bc01c01038e1e5b4b6aac5e"
+    },
+    "operation": "joint pristine loadout plan(prior4,newB), compose prior4, compose_edit B, extract4, remap, final pristine compose_upsert",
+    "prior_full": {
+      "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-neck-fix\\artifacts\\NpcHeadNeckFix.full.Cache",
+      "sha256": "4fb71a870c222a76838733c4538a596056697ad195ccf9895a52f94b70014816"
+    },
+    "prior_mini": {
+      "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-neck-fix\\artifacts\\NpcHeadNeckFix.mini.Cache",
+      "sha256": "26dc5239673a2ec98cf81e621b36817f4f50b5f832501865c33d1e2415b104f9"
+    },
+    "prior_selection_receipt_sha256": "8076f6e4284268cc226acbca21dc76b56387e038d6c130f40cfefe48041e1c04",
+    "replaced_module": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+    "schema": "gore.joint-composition-provenance-v1",
+    "selected_module_names": [
+      "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+      "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+      "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+      "LevelScripts.XardasTower_AI"
+    ]
+  },
+  "compiled_native_qualification": {
+    "format": "gore-poseable-head-compiled-native-tables-check-v1",
+    "qualified": true,
+    "cache": {
+      "path": "work\\npc-head-restore-fix\\artifacts\\GoreHeadRestoreB.mini.Cache",
+      "sha256": "a45375f2b49c3d6e98a7892408b88c8a4a7db8219bc01c01038e1e5b4b6aac5e",
+      "tail_offset": 50401,
+      "t4_end": 67360
+    },
+    "base_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+    "cli_sha256": "9428ceacd052ba3f6ed98162cfd505536e57979e3ffcfe96a555fb3d2bddf005",
+    "checker_sha256": "9792836e1bdf24830213324921730261711d038ee9bd0659b3a32e163f4b7950",
+    "tail_reader_sha256": "96d35c4b297f45a8051d71d8b13d3350f686add84a1a171648c11edb76d556ec",
+    "expected_audit": {
+      "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-probe\\native-poseable-head-audit.json",
+      "sha256": "a22ce0a40f3a6a786b321bb605253868165fa0e2232db3e740191e20f31c68d4"
+    },
+    "types": [
+      {
+        "name": "UPoseableMeshComponent",
+        "full_identity": "0:0:22:UPoseableMeshComponent1:00:",
+        "t1_key": "0x6df5b6a25f6a9748",
+        "actual_t2_ids_linked_to_t1_key": [
+          99669737
+        ],
+        "actual_object_kind": 67108864,
+        "registrar_engine_type_id": 1140854613,
+        "id_note": "T2 values are remapped cache OldReference IDs; exact plain T1 identity and all linked object-kind bits are checked.",
+        "qualified": true
+      },
+      {
+        "name": "USkinnedAsset",
+        "full_identity": "0:0:13:USkinnedAsset1:00:",
+        "t1_key": "0x6ad58738669dc540",
+        "actual_t2_ids_linked_to_t1_key": [
+          82882090
+        ],
+        "actual_object_kind": 67108864,
+        "registrar_engine_type_id": 1140853602,
+        "id_note": "T2 values are remapped cache OldReference IDs; exact plain T1 identity and all linked object-kind bits are checked.",
+        "qualified": true
+      },
+      {
+        "name": "EBoneSpaces",
+        "full_identity": "0:0:11:EBoneSpaces1:00:",
+        "t1_key": "0x680757869ac7b260",
+        "actual_t2_ids_linked_to_t1_key": [
+          26423935
+        ],
+        "actual_object_kind": 0,
+        "registrar_engine_type_id": 618,
+        "id_note": "T2 values are remapped cache OldReference IDs; exact plain T1 identity and all linked object-kind bits are checked.",
+        "qualified": true,
+        "registrar_enum_values": [
+          {
+            "name": "WorldSpace",
+            "value": 0,
+            "registration_ordinal": 4573,
+            "post_bind_value_index": 0
+          },
+          {
+            "name": "ComponentSpace",
+            "value": 1,
+            "registration_ordinal": 4574,
+            "post_bind_value_index": 1
+          },
+          {
+            "name": "EBoneSpaces_MAX",
+            "value": 2,
+            "registration_ordinal": 4575,
+            "post_bind_value_index": 2
+          }
+        ],
+        "enum_note": "Enum T1/T2 identity is checked in this cache. Value declarations come from the pinned registry, not T1; bytecode enum literal operands are outside this check."
+      }
+    ],
+    "functions": [
+      {
+        "name": "GetOrCreate",
+        "namespace": "UPoseableMeshComponent",
+        "full_identity": "6:global0:22:UPoseableMeshComponent0:11:GetOrCreate1:087:6:object1:51:01:01:11:017:0:0:6:AActor1:00:,6:object1:51:11:11:01:016:0:0:5:FName1:00:,60:6:object1:51:01:01:11:034:0:0:22:UPoseableMeshComponent1:00:",
+        "is_method": false,
+        "is_const": false,
+        "is_imported": false,
+        "t3_key": "0x696040c9fa729960",
+        "t3_offset": 63274,
+        "actual_parameter_and_return_datatypes": [
+          {
+            "full_identity": "0:0:6:AActor1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:017:0:0:6:AActor1:00:"
+          },
+          {
+            "full_identity": "0:0:5:FName1:00:",
+            "token": 5,
+            "flags": [
+              1,
+              1,
+              0,
+              1,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:11:11:01:016:0:0:5:FName1:00:"
+          },
+          {
+            "full_identity": "0:0:22:UPoseableMeshComponent1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:034:0:0:22:UPoseableMeshComponent1:00:"
+          }
+        ],
+        "actual_t4_ids_linked_to_t3_key": [
+          886612079
+        ],
+        "registrar_engine_function_id": 82041,
+        "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+        "qualified": true
+      },
+      {
+        "name": "GetSkinnedAsset",
+        "namespace": "",
+        "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:15:GetSkinnedAsset1:10:51:6:object1:51:01:01:11:025:0:0:13:USkinnedAsset1:00:",
+        "is_method": true,
+        "is_const": true,
+        "is_imported": false,
+        "t3_key": "0x684192ecc937fec8",
+        "t3_offset": 63461,
+        "actual_parameter_and_return_datatypes": [
+          {
+            "full_identity": "0:0:13:USkinnedAsset1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:025:0:0:13:USkinnedAsset1:00:"
+          }
+        ],
+        "actual_t4_ids_linked_to_t3_key": [
+          1211529862
+        ],
+        "registrar_engine_function_id": 56323,
+        "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+        "qualified": true
+      },
+      {
+        "name": "SetSkinnedAssetAndUpdate",
+        "namespace": "",
+        "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:24:SetSkinnedAssetAndUpdate1:080:6:object1:51:01:01:11:025:0:0:13:USkinnedAsset1:00:,9:primitive2:651:01:01:01:0,27:9:primitive2:821:01:01:01:0",
+        "is_method": true,
+        "is_const": false,
+        "is_imported": false,
+        "t3_key": "0x69240777b83daf78",
+        "t3_offset": 63557,
+        "actual_parameter_and_return_datatypes": [
+          {
+            "full_identity": "0:0:13:USkinnedAsset1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:025:0:0:13:USkinnedAsset1:00:"
+          },
+          {
+            "full_identity": null,
+            "token": 65,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:651:01:01:01:0"
+          },
+          {
+            "full_identity": null,
+            "token": 82,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:821:01:01:01:0"
+          }
+        ],
+        "actual_t4_ids_linked_to_t3_key": [
+          1982820237
+        ],
+        "registrar_engine_function_id": 56343,
+        "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+        "qualified": true
+      },
+      {
+        "name": "CopyPoseFromSkeletalComponent",
+        "namespace": "",
+        "full_identity": "6:method0:0:34:0:0:22:UPoseableMeshComponent1:00:29:CopyPoseFromSkeletalComponent1:061:6:object1:51:01:01:11:034:0:0:22:USkeletalMeshComponent1:00:,27:9:primitive2:821:01:01:01:0",
+        "is_method": true,
+        "is_const": false,
+        "is_imported": false,
+        "t3_key": "0x655f9d23d379b508",
+        "t3_offset": 61563,
+        "actual_parameter_and_return_datatypes": [
+          {
+            "full_identity": "0:0:22:USkeletalMeshComponent1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:034:0:0:22:USkeletalMeshComponent1:00:"
+          },
+          {
+            "full_identity": null,
+            "token": 82,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:821:01:01:01:0"
+          }
+        ],
+        "actual_t4_ids_linked_to_t3_key": [
+          1030587520
+        ],
+        "registrar_engine_function_id": 60215,
+        "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+        "qualified": true
+      },
+      {
+        "name": "ResetBoneTransformByName",
+        "namespace": "",
+        "full_identity": "6:method0:0:34:0:0:22:UPoseableMeshComponent1:00:24:ResetBoneTransformByName1:043:6:object1:51:01:01:01:016:0:0:5:FName1:00:,27:9:primitive2:821:01:01:01:0",
+        "is_method": true,
+        "is_const": false,
+        "is_imported": false,
+        "t3_key": "0x659650f1703a17d8",
+        "t3_offset": 61837,
+        "actual_parameter_and_return_datatypes": [
+          {
+            "full_identity": "0:0:5:FName1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+          },
+          {
+            "full_identity": null,
+            "token": 82,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:821:01:01:01:0"
+          }
+        ],
+        "actual_t4_ids_linked_to_t3_key": [
+          1370649347
+        ],
+        "registrar_engine_function_id": 60220,
+        "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+        "qualified": true
+      },
+      {
+        "name": "GetBoneTransformByName",
+        "namespace": "",
+        "full_identity": "6:method0:0:34:0:0:22:UPoseableMeshComponent1:00:22:GetBoneTransformByName1:093:6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:01:023:0:0:11:EBoneSpaces1:00:,48:6:object1:51:01:01:01:022:0:0:10:FTransform1:00:",
+        "is_method": true,
+        "is_const": false,
+        "is_imported": false,
+        "t3_key": "0x65da999fae3b98b0",
+        "t3_offset": 61388,
+        "actual_parameter_and_return_datatypes": [
+          {
+            "full_identity": "0:0:5:FName1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+          },
+          {
+            "full_identity": "0:0:11:EBoneSpaces1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:023:0:0:11:EBoneSpaces1:00:"
+          },
+          {
+            "full_identity": "0:0:10:FTransform1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:022:0:0:10:FTransform1:00:"
+          }
+        ],
+        "actual_t4_ids_linked_to_t3_key": [
+          757670160
+        ],
+        "registrar_engine_function_id": 60219,
+        "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+        "qualified": true
+      },
+      {
+        "name": "AddTickPrerequisiteComponent",
+        "namespace": "",
+        "full_identity": "6:method0:0:27:0:0:15:UActorComponent1:00:28:AddTickPrerequisiteComponent1:054:6:object1:51:01:01:11:027:0:0:15:UActorComponent1:00:,27:9:primitive2:821:01:01:01:0",
+        "is_method": true,
+        "is_const": false,
+        "is_imported": false,
+        "t3_key": "0x61dc6ed4ddf3f990",
+        "t3_offset": 62651,
+        "actual_parameter_and_return_datatypes": [
+          {
+            "full_identity": "0:0:15:UActorComponent1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:027:0:0:15:UActorComponent1:00:"
+          },
+          {
+            "full_identity": null,
+            "token": 82,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:821:01:01:01:0"
+          }
+        ],
+        "actual_t4_ids_linked_to_t3_key": [
+          1495254382
+        ],
+        "registrar_engine_function_id": 54618,
+        "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+        "qualified": true
+      },
+      {
+        "name": "RemoveTickPrerequisiteComponent",
+        "namespace": "",
+        "full_identity": "6:method0:0:27:0:0:15:UActorComponent1:00:31:RemoveTickPrerequisiteComponent1:054:6:object1:51:01:01:11:027:0:0:15:UActorComponent1:00:,27:9:primitive2:821:01:01:01:0",
+        "is_method": true,
+        "is_const": false,
+        "is_imported": false,
+        "t3_key": "0x6e86fa1830e02770",
+        "t3_offset": 62503,
+        "actual_parameter_and_return_datatypes": [
+          {
+            "full_identity": "0:0:15:UActorComponent1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:11:027:0:0:15:UActorComponent1:00:"
+          },
+          {
+            "full_identity": null,
+            "token": 82,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:821:01:01:01:0"
+          }
+        ],
+        "actual_t4_ids_linked_to_t3_key": [
+          714388111
+        ],
+        "registrar_engine_function_id": 54632,
+        "id_note": "T4 values are remapped cache OldReference IDs. Exact function identity, owner, namespace, flags and every datatype token/flag are checked.",
+        "qualified": true
+      }
+    ],
+    "scope": "Exactly three plain T1/T2 identities and eight T3/T4 signatures/links. No runtime, visual, tick metadata or bytecode argument-value claim."
+  },
+  "source": {
+    "GORE_TEST_B.as": {
+      "bytes": 22951,
+      "sha256": "2a4d8b2a76fd2b7868518a9e3553ff37c99e6799bf6c9eb5691b8c843ca7658a"
+    },
+    "head-component.as": {
+      "bytes": 12462,
+      "sha256": "539c9da3d6f5ade358d2f5d492ba39cab801efb6783614e4914972dafae3b6be"
+    }
+  },
+  "source_preservation": {
+    "source_prefix_unchanged": true,
+    "voice_localization_inputs_unchanged": true,
+    "only_source_change": "Exclude C visual actor from BFG optimization before poseable component creation",
+    "pose_restore_and_field_layout_unchanged": true,
+    "b_source_sha256": "2a4d8b2a76fd2b7868518a9e3553ff37c99e6799bf6c9eb5691b8c843ca7658a",
+    "helper_sha256": "539c9da3d6f5ade358d2f5d492ba39cab801efb6783614e4914972dafae3b6be"
+  },
+  "crash_analysis": {
+    "format": "gore-npc-head-restore-crash-readonly-analysis-v1",
+    "crash_directory": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\Crashes\\UECC-Windows-BE05737747E845E59E068FB3A97A290B_0000",
+    "source_sha256": {
+      "game_executable": "824fbc94f2ac7f45927a0754605666c37af862d66156a15f8bf6813759d9e8e0",
+      "minidump": "ede32374c5c81b6073540b8028e4436bd15e3936b5050ed66acff227b7e0fa1b",
+      "crash_xml": "a06c6015e9c28f63cd0882e5e9b136a56dfc7c0d85b0580e784a7e13795aecc6",
+      "registration_trace": "17f374a632eadb354207aad9de7512367cad72e1c4c7a3253a3f68d9e075999c",
+      "local_generated_bfg_header": "3172f351501b67435426dc3026065a5cb6393a2691b807f4551a2513973dca5b"
+    },
+    "exception": {
+      "message": "Unhandled Exception: EXCEPTION_ACCESS_VIOLATION reading address 0x0000000000000d50",
+      "build": "Build70_CL172709",
+      "engine": "5.4.3-172709",
+      "thread": "GameThread",
+      "process_uptime_seconds": 116,
+      "crash_rva": "0x363f4ff",
+      "rcx": "0x0",
+      "r14": "0x0",
+      "rsi_nonzero": true,
+      "instruction": "cmp qword ptr [rcx+0xD50],0",
+      "evidence": "Offline CDB .ecxr/.exr -1; no symbols downloaded."
+    },
+    "xml_line_evidence": {
+      "error": 11,
+      "engine_version": 30,
+      "build_version": 35,
+      "relative_call_stack": 89,
+      "crashed_thread": 94,
+      "thread_name": 97
+    },
+    "call_stack_rvas": [
+      "0x363f4ff",
+      "0x52ba6ef",
+      "0x52bde4d",
+      "0x52b4200",
+      "0x52b614f",
+      "0x394f9b2",
+      "0x396993f",
+      "0x379c50c",
+      "0x3fa9a14",
+      "0x3fb0fec",
+      "0x3fb106a",
+      "0x3fb1e90",
+      "0x3fba164",
+      "0x73f79e2"
+    ],
+    "confirmed_facts": [
+      "Immediate caller0x52ba620 processes object-pointer array at input+0x48/count+0x50.",
+      "At0x52ba7de caller gets the exact SkeletalMeshComponent UClass; ancestry check0x52ba7e3-0x52ba800 jumps to0x52ba6e0 on failure.",
+      "Failure sets R14=0, then calls0x363f4f0 with RCX=R14 without checking null. Original-null-entry branch additionally zeros RSI at0x52ba6dd; crash RSI is nonzero. Thus the runtime path is a failed SkeletalMeshComponent cast.",
+      "Fault helper reads this+0xD50, then copies transform-sized96-byte elements from array this+0x8F8/count+0x900. Exact C++ helper symbol is unavailable.",
+      "RVA0x52bdcf0 passes a temporary list produced by0x52be070 to the consumer. Producer reads registered sparse manager entries at+0x1A8 with occupancy bitset+0x1E0. No direct scene-attachment child traversal or Actor.OwnedComponents walk was observed in this path.",
+      "Producer obtains candidate via virtual resolver0x52be30e, rejects null, checks USkinnedMeshComponent, and appends selected candidate to output+0x48 at0x52be95f-0x52be9a1. It performs only optional SkeletalMeshComponent-specific tests before broad skinned acceptance.",
+      "Current executable class registration0x52af050 names BFGTickOptimizerSystem /Script/BFGTickOptimizer, size0x390;0x52af410 names BFGInterpolationSystem, size0x290. Same region has literal All skinned mesh components.",
+      "Outer caller accesses optimizer+0xA8 interpolation pointer and+0xB0/+0xC0 LOD-adjust records. LOD offsets independently match pinned registration properties; generated header corroborates+0xA8."
+    ],
+    "class_literals": [
+      {
+        "rva": "0x7dc63e2",
+        "value": "SkeletalMeshComponent"
+      },
+      {
+        "rva": "0x84b184a",
+        "value": "BFGTickOptimizerSystem"
+      },
+      {
+        "rva": "0x84afb9a",
+        "value": "BFGInterpolationSystem"
+      },
+      {
+        "rva": "0x84afa08",
+        "value": "/Script/BFGTickOptimizer"
+      },
+      {
+        "rva": "0x84b2848",
+        "value": "All skinned mesh components"
+      }
+    ],
+    "pinned_qualifying_api": {
+      "kind": "global_function",
+      "ordinal": 103639,
+      "registration_id": 103639,
+      "context": {
+        "namespace": "UBFGTickOptimizerSystem",
+        "config_group": null,
+        "access_mask": 4294967295
+      },
+      "function_id": 55738,
+      "declaration": "void SetTickOptimizationRuntime_Enabled(AActor Actor,bool OptimizationEnabled)",
+      "call_convention": "cdecl",
+      "callable_stub_id": 292,
+      "auxiliary_object_stub_id": null
+    },
+    "pinned_lod_property_offsets": [
+      {
+        "kind": "object_property",
+        "ordinal": 119296,
+        "registration_id": 119296,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "property_id": 23639,
+        "owner_type_id": 2599,
+        "declaration": "FBFGTickOptimizerLODAdjust m_LodAdjust_Interpolation_Min",
+        "byte_offset": 176,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255,
+        "is_protected": false
+      },
+      {
+        "kind": "object_property",
+        "ordinal": 119297,
+        "registration_id": 119297,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "property_id": 23640,
+        "owner_type_id": 2599,
+        "declaration": "FBFGTickOptimizerLODAdjust m_LodAdjust_Interpolation_Max",
+        "byte_offset": 192,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255,
+        "is_protected": false
+      }
+    ],
+    "shipped_usage": {
+      "path": "work/npc-routine-second/tree/Gameplay/Magic/Components/InExtremo/InExtremoPropComponent.as",
+      "line": 78,
+      "pattern": "UBFGTickOptimizerSystem::SetTickOptimizationRuntime_Enabled(this.GetOwner(), false) precedes visual prop attachment; also used for prop actors."
+    },
+    "conclusions": [
+      {
+        "confidence": "high",
+        "finding": "Crash is in BFG tick-optimization/interpolation flow accepting a skinned object that fails its later SkeletalMeshComponent cast."
+      },
+      {
+        "confidence": "strong hypothesis, original object unavailable",
+        "finding": "UPoseableMeshComponent is a sibling of USkeletalMeshComponent and the introduced skinned object, so PoseHead is the leading candidate. Minidump omits original object slot memory, preventing direct instance identification."
+      },
+      {
+        "confidence": "grounded next test, not runtime-proven",
+        "finding": "Disable BFG tick optimization only for C Character before PoseHead creation/prerequisites, using existing shipped API. This targets demonstrated manager ownership; merely moving attachment lacks evidence of removal."
+      }
+    ],
+    "limits": [
+      "Exact C++ function names unavailable; PHYSFS_* debugger labels are misleading nearest exports and are not used as symbols.",
+      "No claim that disabling component tick or hiding/unhiding removes manager entries; destruction cleanup and setter internal unregister behavior were not traced.",
+      "No proof yet that proposed actor optimizer exclusion prevents the crash. Preserve copy/reset and restore paths for an isolated runtime test.",
+      "No game launched, game files changed, crash uploaded, PDB downloaded, or whole-executable analysis performed."
+    ],
+    "disassembly_evidence": {
+      "fault_helper": [
+        {
+          "rva": "0x363f4f0",
+          "bytes": "48895c2408",
+          "instruction": "mov qword ptr [rsp + 8], rbx"
+        },
+        {
+          "rva": "0x363f4f5",
+          "bytes": "4889742410",
+          "instruction": "mov qword ptr [rsp + 0x10], rsi"
+        },
+        {
+          "rva": "0x363f4fa",
+          "bytes": "57",
+          "instruction": "push rdi"
+        },
+        {
+          "rva": "0x363f4fb",
+          "bytes": "4883ec20",
+          "instruction": "sub rsp, 0x20"
+        },
+        {
+          "rva": "0x363f4ff",
+          "bytes": "4883b9500d000000",
+          "instruction": "cmp qword ptr [rcx + 0xd50], 0"
+        },
+        {
+          "rva": "0x363f507",
+          "bytes": "488bda",
+          "instruction": "mov rbx, rdx"
+        },
+        {
+          "rva": "0x363f50a",
+          "bytes": "488bf9",
+          "instruction": "mov rdi, rcx"
+        },
+        {
+          "rva": "0x363f50d",
+          "bytes": "7428",
+          "instruction": "je 0x363f537"
+        },
+        {
+          "rva": "0x363f50f",
+          "bytes": "e82cfc9cfd",
+          "instruction": "call 0x100f140"
+        },
+        {
+          "rva": "0x363f514",
+          "bytes": "41b801000000",
+          "instruction": "mov r8d, 1"
+        },
+        {
+          "rva": "0x363f51a",
+          "bytes": "488d97500d0000",
+          "instruction": "lea rdx, [rdi + 0xd50]"
+        },
+        {
+          "rva": "0x363f521",
+          "bytes": "488bc8",
+          "instruction": "mov rcx, rax"
+        },
+        {
+          "rva": "0x363f524",
+          "bytes": "e8276905ff",
+          "instruction": "call 0x2695e50"
+        },
+        {
+          "rva": "0x363f529",
+          "bytes": "488b07",
+          "instruction": "mov rax, qword ptr [rdi]"
+        },
+        {
+          "rva": "0x363f52c",
+          "bytes": "b201",
+          "instruction": "mov dl, 1"
+        },
+        {
+          "rva": "0x363f52e",
+          "bytes": "488bcf",
+          "instruction": "mov rcx, rdi"
+        },
+        {
+          "rva": "0x363f531",
+          "bytes": "ff90f80b0000",
+          "instruction": "call qword ptr [rax + 0xbf8]"
+        },
+        {
+          "rva": "0x363f537",
+          "bytes": "33c0",
+          "instruction": "xor eax, eax"
+        },
+        {
+          "rva": "0x363f539",
+          "bytes": "488903",
+          "instruction": "mov qword ptr [rbx], rax"
+        },
+        {
+          "rva": "0x363f53c",
+          "bytes": "4863b700090000",
+          "instruction": "movsxd rsi, dword ptr [rdi + 0x900]"
+        },
+        {
+          "rva": "0x363f543",
+          "bytes": "488bbff8080000",
+          "instruction": "mov rdi, qword ptr [rdi + 0x8f8]"
+        }
+      ],
+      "null_cast_call": [
+        {
+          "rva": "0x52ba6d0",
+          "bytes": "4d8b7500",
+          "instruction": "mov r14, qword ptr [r13]"
+        },
+        {
+          "rva": "0x52ba6d4",
+          "bytes": "4d85f6",
+          "instruction": "test r14, r14"
+        },
+        {
+          "rva": "0x52ba6d7",
+          "bytes": "0f85c4000000",
+          "instruction": "jne 0x52ba7a1"
+        },
+        {
+          "rva": "0x52ba6dd",
+          "bytes": "498bf4",
+          "instruction": "mov rsi, r12"
+        },
+        {
+          "rva": "0x52ba6e0",
+          "bytes": "4d8bf4",
+          "instruction": "mov r14, r12"
+        },
+        {
+          "rva": "0x52ba6e3",
+          "bytes": "488d55b8",
+          "instruction": "lea rdx, [rbp - 0x48]"
+        },
+        {
+          "rva": "0x52ba6e7",
+          "bytes": "498bce",
+          "instruction": "mov rcx, r14"
+        },
+        {
+          "rva": "0x52ba6ea",
+          "bytes": "e8014e38fe",
+          "instruction": "call 0x363f4f0"
+        }
+      ],
+      "class_check": [
+        {
+          "rva": "0x52ba7de",
+          "bytes": "e8bdb438fe",
+          "instruction": "call 0x3645ca0"
+        },
+        {
+          "rva": "0x52ba7e3",
+          "bytes": "498b4e10",
+          "instruction": "mov rcx, qword ptr [r14 + 0x10]"
+        },
+        {
+          "rva": "0x52ba7e7",
+          "bytes": "4883c030",
+          "instruction": "add rax, 0x30"
+        },
+        {
+          "rva": "0x52ba7eb",
+          "bytes": "48635008",
+          "instruction": "movsxd rdx, dword ptr [rax + 8]"
+        },
+        {
+          "rva": "0x52ba7ef",
+          "bytes": "3b5138",
+          "instruction": "cmp edx, dword ptr [rcx + 0x38]"
+        },
+        {
+          "rva": "0x52ba7f2",
+          "bytes": "0f8fe8feffff",
+          "instruction": "jg 0x52ba6e0"
+        },
+        {
+          "rva": "0x52ba7f8",
+          "bytes": "488b4930",
+          "instruction": "mov rcx, qword ptr [rcx + 0x30]"
+        },
+        {
+          "rva": "0x52ba7fc",
+          "bytes": "483904d1",
+          "instruction": "cmp qword ptr [rcx + rdx*8], rax"
+        },
+        {
+          "rva": "0x52ba800",
+          "bytes": "0f85dafeffff",
+          "instruction": "jne 0x52ba6e0"
+        }
+      ],
+      "list_producer_candidate": [
+        {
+          "rva": "0x52be300",
+          "bytes": "4863c8",
+          "instruction": "movsxd rcx, eax"
+        },
+        {
+          "rva": "0x52be303",
+          "bytes": "498b4228",
+          "instruction": "mov rax, qword ptr [r10 + 0x28]"
+        },
+        {
+          "rva": "0x52be307",
+          "bytes": "488b0cc8",
+          "instruction": "mov rcx, qword ptr [rax + rcx*8]"
+        },
+        {
+          "rva": "0x52be30b",
+          "bytes": "488b01",
+          "instruction": "mov rax, qword ptr [rcx]"
+        },
+        {
+          "rva": "0x52be30e",
+          "bytes": "ff10",
+          "instruction": "call qword ptr [rax]"
+        },
+        {
+          "rva": "0x52be310",
+          "bytes": "488bd8",
+          "instruction": "mov rbx, rax"
+        },
+        {
+          "rva": "0x52be313",
+          "bytes": "4885c0",
+          "instruction": "test rax, rax"
+        },
+        {
+          "rva": "0x52be316",
+          "bytes": "0f8489060000",
+          "instruction": "je 0x52be9a5"
+        },
+        {
+          "rva": "0x52be31c",
+          "bytes": "e85f2206fe",
+          "instruction": "call 0x3320580"
+        },
+        {
+          "rva": "0x52be321",
+          "bytes": "488b4b10",
+          "instruction": "mov rcx, qword ptr [rbx + 0x10]"
+        },
+        {
+          "rva": "0x52be325",
+          "bytes": "4883c030",
+          "instruction": "add rax, 0x30"
+        },
+        {
+          "rva": "0x52be329",
+          "bytes": "48635008",
+          "instruction": "movsxd rdx, dword ptr [rax + 8]"
+        },
+        {
+          "rva": "0x52be32d",
+          "bytes": "3b5138",
+          "instruction": "cmp edx, dword ptr [rcx + 0x38]"
+        },
+        {
+          "rva": "0x52be330",
+          "bytes": "0f8f6f060000",
+          "instruction": "jg 0x52be9a5"
+        },
+        {
+          "rva": "0x52be336",
+          "bytes": "488b4930",
+          "instruction": "mov rcx, qword ptr [rcx + 0x30]"
+        },
+        {
+          "rva": "0x52be33a",
+          "bytes": "483904d1",
+          "instruction": "cmp qword ptr [rcx + rdx*8], rax"
+        },
+        {
+          "rva": "0x52be33e",
+          "bytes": "0f8561060000",
+          "instruction": "jne 0x52be9a5"
+        },
+        {
+          "rva": "0x52be344",
+          "bytes": "488bcb",
+          "instruction": "mov rcx, rbx"
+        },
+        {
+          "rva": "0x52be347",
+          "bytes": "e8040237fe",
+          "instruction": "call 0x362e550"
+        },
+        {
+          "rva": "0x52be34c",
+          "bytes": "4885c0",
+          "instruction": "test rax, rax"
+        },
+        {
+          "rva": "0x52be34f",
+          "bytes": "0f8450060000",
+          "instruction": "je 0x52be9a5"
+        },
+        {
+          "rva": "0x52be355",
+          "bytes": "f6839807000008",
+          "instruction": "test byte ptr [rbx + 0x798], 8"
+        },
+        {
+          "rva": "0x52be35c",
+          "bytes": "0f8543060000",
+          "instruction": "jne 0x52be9a5"
+        },
+        {
+          "rva": "0x52be362",
+          "bytes": "e8397938fe",
+          "instruction": "call 0x3645ca0"
+        },
+        {
+          "rva": "0x52be367",
+          "bytes": "488b5310",
+          "instruction": "mov rdx, qword ptr [rbx + 0x10]"
+        },
+        {
+          "rva": "0x52be36b",
+          "bytes": "4c8d4030",
+          "instruction": "lea r8, [rax + 0x30]"
+        },
+        {
+          "rva": "0x52be36f",
+          "bytes": "48634038",
+          "instruction": "movsxd rax, dword ptr [rax + 0x38]"
+        },
+        {
+          "rva": "0x52be373",
+          "bytes": "3b4238",
+          "instruction": "cmp eax, dword ptr [rdx + 0x38]"
+        },
+        {
+          "rva": "0x52be376",
+          "bytes": "7f2f",
+          "instruction": "jg 0x52be3a7"
+        },
+        {
+          "rva": "0x52be378",
+          "bytes": "488bc8",
+          "instruction": "mov rcx, rax"
+        },
+        {
+          "rva": "0x52be37b",
+          "bytes": "488b4230",
+          "instruction": "mov rax, qword ptr [rdx + 0x30]"
+        },
+        {
+          "rva": "0x52be37f",
+          "bytes": "4c3904c8",
+          "instruction": "cmp qword ptr [rax + rcx*8], r8"
+        },
+        {
+          "rva": "0x52be383",
+          "bytes": "7522",
+          "instruction": "jne 0x52be3a7"
+        },
+        {
+          "rva": "0x52be385",
+          "bytes": "488bcb",
+          "instruction": "mov rcx, rbx"
+        },
+        {
+          "rva": "0x52be388",
+          "bytes": "e8330238fe",
+          "instruction": "call 0x363e5c0"
+        },
+        {
+          "rva": "0x52be38d",
+          "bytes": "4885c0",
+          "instruction": "test rax, rax"
+        },
+        {
+          "rva": "0x52be390",
+          "bytes": "0f840f060000",
+          "instruction": "je 0x52be9a5"
+        },
+        {
+          "rva": "0x52be396",
+          "bytes": "488bcb",
+          "instruction": "mov rcx, rbx"
+        },
+        {
+          "rva": "0x52be399",
+          "bytes": "e8320238fe",
+          "instruction": "call 0x363e5d0"
+        },
+        {
+          "rva": "0x52be39e",
+          "bytes": "83f801",
+          "instruction": "cmp eax, 1"
+        },
+        {
+          "rva": "0x52be3a1",
+          "bytes": "0f84fe050000",
+          "instruction": "je 0x52be9a5"
+        }
+      ],
+      "list_append": [
+        {
+          "rva": "0x52be95f",
+          "bytes": "4c637650",
+          "instruction": "movsxd r14, dword ptr [rsi + 0x50]"
+        },
+        {
+          "rva": "0x52be963",
+          "bytes": "418d4601",
+          "instruction": "lea eax, [r14 + 1]"
+        },
+        {
+          "rva": "0x52be967",
+          "bytes": "894650",
+          "instruction": "mov dword ptr [rsi + 0x50], eax"
+        },
+        {
+          "rva": "0x52be96a",
+          "bytes": "3b4654",
+          "instruction": "cmp eax, dword ptr [rsi + 0x54]"
+        },
+        {
+          "rva": "0x52be96d",
+          "bytes": "760c",
+          "instruction": "jbe 0x52be97b"
+        },
+        {
+          "rva": "0x52be96f",
+          "bytes": "418bd6",
+          "instruction": "mov edx, r14d"
+        },
+        {
+          "rva": "0x52be972",
+          "bytes": "488d4e48",
+          "instruction": "lea rcx, [rsi + 0x48]"
+        },
+        {
+          "rva": "0x52be976",
+          "bytes": "e835e0d5fb",
+          "instruction": "call 0x101c9b0"
+        },
+        {
+          "rva": "0x52be97b",
+          "bytes": "488b4648",
+          "instruction": "mov rax, qword ptr [rsi + 0x48]"
+        },
+        {
+          "rva": "0x52be97f",
+          "bytes": "eb20",
+          "instruction": "jmp 0x52be9a1"
+        },
+        {
+          "rva": "0x52be981",
+          "bytes": "4c637610",
+          "instruction": "movsxd r14, dword ptr [rsi + 0x10]"
+        },
+        {
+          "rva": "0x52be985",
+          "bytes": "418d4601",
+          "instruction": "lea eax, [r14 + 1]"
+        },
+        {
+          "rva": "0x52be989",
+          "bytes": "894610",
+          "instruction": "mov dword ptr [rsi + 0x10], eax"
+        },
+        {
+          "rva": "0x52be98c",
+          "bytes": "3b4614",
+          "instruction": "cmp eax, dword ptr [rsi + 0x14]"
+        },
+        {
+          "rva": "0x52be98f",
+          "bytes": "760c",
+          "instruction": "jbe 0x52be99d"
+        },
+        {
+          "rva": "0x52be991",
+          "bytes": "418bd6",
+          "instruction": "mov edx, r14d"
+        },
+        {
+          "rva": "0x52be994",
+          "bytes": "488d4e08",
+          "instruction": "lea rcx, [rsi + 8]"
+        },
+        {
+          "rva": "0x52be998",
+          "bytes": "e813e0d5fb",
+          "instruction": "call 0x101c9b0"
+        },
+        {
+          "rva": "0x52be99d",
+          "bytes": "488b4608",
+          "instruction": "mov rax, qword ptr [rsi + 8]"
+        },
+        {
+          "rva": "0x52be9a1",
+          "bytes": "4a891cf0",
+          "instruction": "mov qword ptr [rax + r14*8], rbx"
+        }
+      ],
+      "optimizer_registration": [
+        {
+          "rva": "0x52af050",
+          "bytes": "4c8bdc",
+          "instruction": "mov r11, rsp"
+        },
+        {
+          "rva": "0x52af053",
+          "bytes": "4883ec78",
+          "instruction": "sub rsp, 0x78"
+        },
+        {
+          "rva": "0x52af057",
+          "bytes": "488b05fae3ad04",
+          "instruction": "mov rax, qword ptr [rip + 0x4ade3fa]"
+        },
+        {
+          "rva": "0x52af05e",
+          "bytes": "4885c0",
+          "instruction": "test rax, rax"
+        },
+        {
+          "rva": "0x52af061",
+          "bytes": "0f8592000000",
+          "instruction": "jne 0x52af0f9"
+        },
+        {
+          "rva": "0x52af067",
+          "bytes": "488d050236d5fb",
+          "instruction": "lea rax, [rip - 0x42ac9fe]"
+        },
+        {
+          "rva": "0x52af06e",
+          "bytes": "49894308",
+          "instruction": "mov qword ptr [r11 + 8], rax"
+        },
+        {
+          "rva": "0x52af072",
+          "bytes": "4c8d0d87d70000",
+          "instruction": "lea r9, [rip + 0xd787]"
+        },
+        {
+          "rva": "0x52af079",
+          "bytes": "488d0530dbf6fb",
+          "instruction": "lea rax, [rip - 0x40924d0]"
+        },
+        {
+          "rva": "0x52af080",
+          "bytes": "498943f0",
+          "instruction": "mov qword ptr [r11 - 0x10], rax"
+        },
+        {
+          "rva": "0x52af084",
+          "bytes": "4c8d05cde3ad04",
+          "instruction": "lea r8, [rip + 0x4ade3cd]"
+        },
+        {
+          "rva": "0x52af08b",
+          "bytes": "488d05fec6b1fd",
+          "instruction": "lea rax, [rip - 0x24e3902]"
+        },
+        {
+          "rva": "0x52af092",
+          "bytes": "498943e8",
+          "instruction": "mov qword ptr [r11 - 0x18], rax"
+        },
+        {
+          "rva": "0x52af096",
+          "bytes": "488d15ad272003",
+          "instruction": "lea rdx, [rip + 0x32027ad]"
+        },
+        {
+          "rva": "0x52af09d",
+          "bytes": "498d4308",
+          "instruction": "lea rax, [r11 + 8]"
+        },
+        {
+          "rva": "0x52af0a1",
+          "bytes": "498943e0",
+          "instruction": "mov qword ptr [r11 - 0x20], rax"
+        },
+        {
+          "rva": "0x52af0a5",
+          "bytes": "488d0d5c092003",
+          "instruction": "lea rcx, [rip + 0x320095c]"
+        },
+        {
+          "rva": "0x52af0ac",
+          "bytes": "488d050d36d5fb",
+          "instruction": "lea rax, [rip - 0x42ac9f3]"
+        },
+        {
+          "rva": "0x52af0b3",
+          "bytes": "498943d8",
+          "instruction": "mov qword ptr [r11 - 0x28], rax"
+        },
+        {
+          "rva": "0x52af0b7",
+          "bytes": "488d0502280000",
+          "instruction": "lea rax, [rip + 0x2802]"
+        },
+        {
+          "rva": "0x52af0be",
+          "bytes": "498943d0",
+          "instruction": "mov qword ptr [r11 - 0x30], rax"
+        },
+        {
+          "rva": "0x52af0c2",
+          "bytes": "488d05b7e72b02",
+          "instruction": "lea rax, [rip + 0x22be7b7]"
+        },
+        {
+          "rva": "0x52af0c9",
+          "bytes": "498943c8",
+          "instruction": "mov qword ptr [r11 - 0x38], rax"
+        },
+        {
+          "rva": "0x52af0cd",
+          "bytes": "49c743c000000000",
+          "instruction": "mov qword ptr [r11 - 0x40], 0"
+        },
+        {
+          "rva": "0x52af0d5",
+          "bytes": "c744243006000010",
+          "instruction": "mov dword ptr [rsp + 0x30], 0x10000006"
+        },
+        {
+          "rva": "0x52af0dd",
+          "bytes": "c744242808000000",
+          "instruction": "mov dword ptr [rsp + 0x28], 8"
+        },
+        {
+          "rva": "0x52af0e5",
+          "bytes": "c744242090030000",
+          "instruction": "mov dword ptr [rsp + 0x20], 0x390"
+        },
+        {
+          "rva": "0x52af0ed",
+          "bytes": "e85e42fefb",
+          "instruction": "call 0x1293350"
+        },
+        {
+          "rva": "0x52af0f2",
+          "bytes": "488b055fe3ad04",
+          "instruction": "mov rax, qword ptr [rip + 0x4ade35f]"
+        },
+        {
+          "rva": "0x52af0f9",
+          "bytes": "4883c478",
+          "instruction": "add rsp, 0x78"
+        },
+        {
+          "rva": "0x52af0fd",
+          "bytes": "c3",
+          "instruction": "ret "
+        }
+      ],
+      "interpolation_registration": [
+        {
+          "rva": "0x52af410",
+          "bytes": "4c8bdc",
+          "instruction": "mov r11, rsp"
+        },
+        {
+          "rva": "0x52af413",
+          "bytes": "4883ec78",
+          "instruction": "sub rsp, 0x78"
+        },
+        {
+          "rva": "0x52af417",
+          "bytes": "488b0542dfad04",
+          "instruction": "mov rax, qword ptr [rip + 0x4addf42]"
+        },
+        {
+          "rva": "0x52af41e",
+          "bytes": "4885c0",
+          "instruction": "test rax, rax"
+        },
+        {
+          "rva": "0x52af421",
+          "bytes": "0f8592000000",
+          "instruction": "jne 0x52af4b9"
+        },
+        {
+          "rva": "0x52af427",
+          "bytes": "488d054232d5fb",
+          "instruction": "lea rax, [rip - 0x42acdbe]"
+        },
+        {
+          "rva": "0x52af42e",
+          "bytes": "49894308",
+          "instruction": "mov qword ptr [r11 + 8], rax"
+        },
+        {
+          "rva": "0x52af432",
+          "bytes": "4c8d0d3732d5fb",
+          "instruction": "lea r9, [rip - 0x42acdc9]"
+        },
+        {
+          "rva": "0x52af439",
+          "bytes": "488d0570d7f6fb",
+          "instruction": "lea rax, [rip - 0x4092890]"
+        },
+        {
+          "rva": "0x52af440",
+          "bytes": "498943f0",
+          "instruction": "mov qword ptr [r11 - 0x10], rax"
+        },
+        {
+          "rva": "0x52af444",
+          "bytes": "4c8d0515dfad04",
+          "instruction": "lea r8, [rip + 0x4addf15]"
+        },
+        {
+          "rva": "0x52af44b",
+          "bytes": "488d057ee698fd",
+          "instruction": "lea rax, [rip - 0x2671982]"
+        },
+        {
+          "rva": "0x52af452",
+          "bytes": "498943e8",
+          "instruction": "mov qword ptr [r11 - 0x18], rax"
+        },
+        {
+          "rva": "0x52af456",
+          "bytes": "488d153d072003",
+          "instruction": "lea rdx, [rip + 0x320073d]"
+        },
+        {
+          "rva": "0x52af45d",
+          "bytes": "498d4308",
+          "instruction": "lea rax, [r11 + 8]"
+        },
+        {
+          "rva": "0x52af461",
+          "bytes": "498943e0",
+          "instruction": "mov qword ptr [r11 - 0x20], rax"
+        },
+        {
+          "rva": "0x52af465",
+          "bytes": "488d0d9c052003",
+          "instruction": "lea rcx, [rip + 0x320059c]"
+        },
+        {
+          "rva": "0x52af46c",
+          "bytes": "488d054d32d5fb",
+          "instruction": "lea rax, [rip - 0x42acdb3]"
+        },
+        {
+          "rva": "0x52af473",
+          "bytes": "498943d8",
+          "instruction": "mov qword ptr [r11 - 0x28], rax"
+        },
+        {
+          "rva": "0x52af477",
+          "bytes": "488d0542230000",
+          "instruction": "lea rax, [rip + 0x2342]"
+        },
+        {
+          "rva": "0x52af47e",
+          "bytes": "498943d0",
+          "instruction": "mov qword ptr [r11 - 0x30], rax"
+        },
+        {
+          "rva": "0x52af482",
+          "bytes": "488d05f7e32b02",
+          "instruction": "lea rax, [rip + 0x22be3f7]"
+        },
+        {
+          "rva": "0x52af489",
+          "bytes": "498943c8",
+          "instruction": "mov qword ptr [r11 - 0x38], rax"
+        },
+        {
+          "rva": "0x52af48d",
+          "bytes": "49c743c000000000",
+          "instruction": "mov qword ptr [r11 - 0x40], 0"
+        },
+        {
+          "rva": "0x52af495",
+          "bytes": "c744243002000010",
+          "instruction": "mov dword ptr [rsp + 0x30], 0x10000002"
+        },
+        {
+          "rva": "0x52af49d",
+          "bytes": "c744242808000000",
+          "instruction": "mov dword ptr [rsp + 0x28], 8"
+        },
+        {
+          "rva": "0x52af4a5",
+          "bytes": "c744242090020000",
+          "instruction": "mov dword ptr [rsp + 0x20], 0x290"
+        },
+        {
+          "rva": "0x52af4ad",
+          "bytes": "e89e3efefb",
+          "instruction": "call 0x1293350"
+        },
+        {
+          "rva": "0x52af4b2",
+          "bytes": "488b05a7dead04",
+          "instruction": "mov rax, qword ptr [rip + 0x4addea7]"
+        },
+        {
+          "rva": "0x52af4b9",
+          "bytes": "4883c478",
+          "instruction": "add rsp, 0x78"
+        },
+        {
+          "rva": "0x52af4bd",
+          "bytes": "c3",
+          "instruction": "ret "
+        }
+      ],
+      "optimizer_to_interpolation_call": [
+        {
+          "rva": "0x52bde29",
+          "bytes": "488b9ba8000000",
+          "instruction": "mov rbx, qword ptr [rbx + 0xa8]"
+        },
+        {
+          "rva": "0x52bde30",
+          "bytes": "4885db",
+          "instruction": "test rbx, rbx"
+        },
+        {
+          "rva": "0x52bde33",
+          "bytes": "7418",
+          "instruction": "je 0x52bde4d"
+        },
+        {
+          "rva": "0x52bde35",
+          "bytes": "488d553f",
+          "instruction": "lea rdx, [rbp + 0x3f]"
+        },
+        {
+          "rva": "0x52bde39",
+          "bytes": "488bcb",
+          "instruction": "mov rcx, rbx"
+        },
+        {
+          "rva": "0x52bde3c",
+          "bytes": "e88fb2ffff",
+          "instruction": "call 0x52b90d0"
+        },
+        {
+          "rva": "0x52bde41",
+          "bytes": "488d55e7",
+          "instruction": "lea rdx, [rbp - 0x19]"
+        },
+        {
+          "rva": "0x52bde45",
+          "bytes": "488bcb",
+          "instruction": "mov rcx, rbx"
+        },
+        {
+          "rva": "0x52bde48",
+          "bytes": "e8d3c7ffff",
+          "instruction": "call 0x52ba620"
+        }
+      ]
+    }
+  },
+  "tick_metadata": {
+    "full": {
+      "cache": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-restore-fix\\artifacts\\NpcHeadRestoreFix.full.Cache",
+      "sha256": "7e7dc60ffad98e89583cd5916dd17684ae352ddfb309b70546ec730f98d35f5f",
+      "event": {
+        "record_offset": 88164188,
+        "function_name": "Tick_Implementation",
+        "namespace": "",
+        "function_id": 1823270576,
+        "is_ufunction": 1,
+        "metadata_offset": 88165769,
+        "unreal_function_name": "Tick",
+        "flags_offset": 88165786,
+        "flags": {
+          "BlueprintCallable": 0,
+          "BlueprintOverride": 1,
+          "BlueprintEvent": 1,
+          "BlueprintPure": 0,
+          "NetFunction": 0,
+          "NetMulticast": 0,
+          "NetClient": 0,
+          "NetServer": 0,
+          "NetValidate": 0,
+          "Unreliable": 0,
+          "BlueprintAuthorityOnly": 0,
+          "Exec": 0,
+          "CanOverrideEvent": 1,
+          "DevFunction": 0,
+          "IsStatic": 0,
+          "IsConstMethod": 0,
+          "ThreadSafe": 0,
+          "IsNoOp": 0
+        }
+      },
+      "shipped_tick_unreal_name": "Tick",
+      "correct": true
+    },
+    "mini": {
+      "cache": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-restore-fix\\artifacts\\NpcHeadRestoreFix.mini.Cache",
+      "sha256": "1db591a8cda969881b9ab1ef34313756ea876b9253132444568f96f3be93d143",
+      "event": {
+        "record_offset": 47695,
+        "function_name": "Tick_Implementation",
+        "namespace": "",
+        "function_id": 1823270576,
+        "is_ufunction": 1,
+        "metadata_offset": 49276,
+        "unreal_function_name": "Tick",
+        "flags_offset": 49293,
+        "flags": {
+          "BlueprintCallable": 0,
+          "BlueprintOverride": 1,
+          "BlueprintEvent": 1,
+          "BlueprintPure": 0,
+          "NetFunction": 0,
+          "NetMulticast": 0,
+          "NetClient": 0,
+          "NetServer": 0,
+          "NetValidate": 0,
+          "Unreliable": 0,
+          "BlueprintAuthorityOnly": 0,
+          "Exec": 0,
+          "CanOverrideEvent": 1,
+          "DevFunction": 0,
+          "IsStatic": 0,
+          "IsConstMethod": 0,
+          "ThreadSafe": 0,
+          "IsNoOp": 0
+        }
+      },
+      "shipped_tick_unreal_name": "Tick",
+      "correct": true
+    },
+    "installed": {
+      "cache": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache",
+      "sha256": "7e7dc60ffad98e89583cd5916dd17684ae352ddfb309b70546ec730f98d35f5f",
+      "event": {
+        "record_offset": 88164188,
+        "function_name": "Tick_Implementation",
+        "namespace": "",
+        "function_id": 1823270576,
+        "is_ufunction": 1,
+        "metadata_offset": 88165769,
+        "unreal_function_name": "Tick",
+        "flags_offset": 88165786,
+        "flags": {
+          "BlueprintCallable": 0,
+          "BlueprintOverride": 1,
+          "BlueprintEvent": 1,
+          "BlueprintPure": 0,
+          "NetFunction": 0,
+          "NetMulticast": 0,
+          "NetClient": 0,
+          "NetServer": 0,
+          "NetValidate": 0,
+          "Unreliable": 0,
+          "BlueprintAuthorityOnly": 0,
+          "Exec": 0,
+          "CanOverrideEvent": 1,
+          "DevFunction": 0,
+          "IsStatic": 0,
+          "IsConstMethod": 0,
+          "ThreadSafe": 0,
+          "IsNoOp": 0
+        }
+      },
+      "shipped_tick_unreal_name": "Tick",
+      "correct": true
+    }
+  },
+  "deployment": {
+    "manager_status": "in_sync",
+    "loadout": [
+      {
+        "enabled": true,
+        "id": "npcheadrestorefix-4d4ff343"
+      }
+    ],
+    "files": {
+      "shipping": {
+        "bytes": 124615075,
+        "sha256": "7e7dc60ffad98e89583cd5916dd17684ae352ddfb309b70546ec730f98d35f5f",
+        "backup_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511"
+      },
+      "localization": {
+        "bytes": 37095936,
+        "sha256": "f3c6948bac217b69c457afeed4346bd99540ed47935d52d47db70efc268057d1",
+        "backup_sha256": "e9bc9a0e87b722f62fb352adfeec26dacdaa42630d16aef2cb2abc6975c8dd03"
+      },
+      "voice": {
+        "bytes": 915865276,
+        "sha256": "da44012393ca5dfaeb37ae37625c054a1e9b07d86aacf6e68344e3ff066339c9",
+        "backup_sha256": "ff7aa5b219c2e0ec9840570e42597d3ea3053a7ad592cf7cfa5b61dd895ecd29"
+      }
+    },
+    "compiled_installed_A_B_exact": true,
+    "compiled_installed_full_cache_exact": true,
+    "native_event_metadata_exact": true,
+    "original_voice_crc_size_preserved": 33323,
+    "voice_payloads_exact": 5,
+    "localization_matches_passed_voice_campaign": true,
+    "loc_rows": 43904,
+    "baseline_saves_unchanged": [
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46
+    ],
+    "game_launched_by_agent": false,
+    "runtime_proven": false,
+    "C_optimizer_exclusion_before_pose_creation": true
+  },
+  "runtime": "passed: head/neck appearance, restore15 without crash, repeated14, full restart and restore after load; user confirmed. See restore-runtime-result.json.",
+  "diagnostic_limits": "Previous-frame head/neck positions diagnose transfer, not rotation/scale equivalence or matching boundary geometry. No lip sync.",
+  "prior_runtime_result": "neck-runtime-result.json: 0.1.8 neck join passed; option15 crashed in BFG interpolation after an unchecked skeletal-component cast"
+}

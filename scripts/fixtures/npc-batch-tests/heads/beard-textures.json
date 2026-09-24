@@ -1,0 +1,1393 @@
+{
+  "schema": "gore.npc-beard.textures.v1",
+  "bundle": "NpcHeadPaletteTest",
+  "version": "0.1.2",
+  "runtime_verified": false,
+  "generation_note": "1254-square PNGs retain normalized UV mapping; visual quality/alignment is part of the user game test. Short beard is albedo detail, not new mesh geometry.",
+  "images": [
+    {
+      "image": "work/npc-batch-tests/beard-switch/images/T_NH_Head_Clean_D.png",
+      "sha256": "c1357d23d584892ee0e24064eac4ee259dd2fc683d759830fc95b6c96b06dfb3",
+      "bytes": 1595459,
+      "size": [
+        1254,
+        1254
+      ],
+      "mode": "RGB",
+      "source_png": "work/npc-batch-tests/heads-beard-v2/materials/T_NH_Head_D.png",
+      "source_sha256": "7f1864cb404316df0adccb05964475acc25f6a8e927aafae52fa4a0cb89c177c",
+      "source_size": [
+        2048,
+        2048
+      ],
+      "tool": "image_gen.imagegen",
+      "requested_size": [
+        2048,
+        2048
+      ],
+      "returned_size": [
+        1254,
+        1254
+      ],
+      "postprocessing": "File copy only; no programmatic image editing. Original imagegen output retained.",
+      "generated_output": "C:\\Users\\Daniel\\.codex\\generated_images\\01a07599-d23b-7093-8dc2-e0ebcb08e1d9\\exec-dec5cd84-d9ef-4943-86dd-7d68a053984d.png",
+      "prompt": "Edit this EXACT 2048x2048 game face UV albedo texture. This is a technical texture edit, not a portrait. Remove ONLY all painted moustache, beard hairs and beard stubble below the nose, across the cheeks/jaw/chin and upper neck; fill those areas with natural clean-shaven skin matching adjacent original complexion, pores, wrinkles, mottling and original diffuse lighting. Preserve the ENTIRE exact UV layout and canvas: eyebrows, eyelids, eyes, nose, lips, ears, forehead, scalp, neck outline, corners and seams must remain in their original pixel positions and sizes with their original color and details. Keep the eyebrows fully intact. Do not move, resize, beautify or reinterpret facial features. Do not crop, rotate, add borders, text or a background. Output a single full square 2048x2048 albedo atlas with exactly the same mapping; clean-shaven lower face is the sole intended change. Preserve original adult male character identity and skin tone. No shadow of facial hairs, no moustache and no beard anywhere.",
+      "game_path": "G1R/Content/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D.png"
+    },
+    {
+      "image": "work/npc-batch-tests/beard-switch/images/T_OC_IE_Flex_Beard_D.png",
+      "sha256": "52c20ba31e3694f88df1132161b75f52d3c555c9532753193d622b520bd7b290",
+      "bytes": 1481019,
+      "size": [
+        1254,
+        1254
+      ],
+      "mode": "RGB",
+      "source_png": "work/npc-batch-tests/beard-switch/materials/T_OC_IE_Flex_Head_D.png",
+      "source_sha256": "71065ffbbaacb73eaac64d4d420e7833229c99de7c69d2fde9770577a66b07fe",
+      "source_size": [
+        2048,
+        2048
+      ],
+      "tool": "image_gen.imagegen",
+      "requested_size": [
+        2048,
+        2048
+      ],
+      "returned_size": [
+        1254,
+        1254
+      ],
+      "postprocessing": "File copy only; no programmatic image editing. Original imagegen output retained.",
+      "generated_output": "C:\\Users\\Daniel\\.codex\\generated_images\\01a07599-d23b-7093-8dc2-e0ebcb08e1d9\\exec-cfa67513-ff72-45f2-90d1-df22cffc6de6.png",
+      "prompt": "Edit this exact game face UV albedo atlas by adding a clearly visible short dark-brown beard and moustache over the lower cheeks, jaw, chin and upper lip only. Technical UV texture edit: retain full original square canvas and identical UV layout, skin complexion, diffuse colors and all pixel positions of eyes, nose, ears, lips, forehead, neck seams and face silhouette. Beard should be short cropped natural hairs, not long geometry; do not cover lips or nose. Preserve existing pores and marks everywhere else. No portrait, no crop, no rotation, no borders, no lettering. Return the full square atlas in 2048x2048, matching source coordinates precisely, with only the new beard as the intended change.",
+      "game_path": "G1R/Content/GoreMods/NpcBeardSwitch/T_OC_IE_Flex_Beard_D.png"
+    }
+  ],
+  "material_evidence": {
+    "scope": "Read-only stock package property decoding and texture extraction; no deployment, shader graph editing, or runtime appearance claim.",
+    "decoder": {
+      "script": "work/npc-batch-tests/beard-switch/materials/read-material-parameters.py",
+      "script_sha256": "da7685239fe772f895997afc38cc1b257a2ebfdb64b19c45c27b558ed9c8f37b",
+      "usmap": "work/npc-batch-tests/heads-beard-v2/materials/MI_NH_Head_G21/gore-generation.usmap",
+      "usmap_sha256": "73558c36895cd1b0f0fd1b3cb44305b240f8dbb93730ad03c88d7b8478b7ffca",
+      "schema_json_sha256": "c8783f5caf285418b42abd585fd65ce92c1e7279ceeaa642bf4565e8fd715b06",
+      "schema_reader": "Existing jmap/usmap.exe to-json, revision 909bce9; no package writer used.",
+      "wire_sources": [
+        "crates/gore-asset/src/legacy_preflight.rs",
+        "crates/gore-asset/src/unversioned.rs",
+        "crates/gore-asset/src/schema.rs",
+        "crates/gore-asset/src/span.rs",
+        "vendor/retoc/src/legacy_asset.rs"
+      ],
+      "bounds": "UE5.4 filtered legacy packages only; schema/name/import indexes checked; unsupported nonzero property shapes fail. Native shader suffix is not interpreted."
+    },
+    "flex_head_source": {
+      "asset": "/Game/Assets/Characters/Humans/TierC/Flex/SK_OC_IE_Flex_Head",
+      "uasset": "work/npc-routine-second/head-inspect/flex-head/SK_OC_IE_Flex_Head.uasset",
+      "uasset_sha256": "a49f628733b8ba51819a19e183ff9a16cb4fd297f005debfa93bafa7fb748e74",
+      "head_material_import": "/Game/Assets/Characters/Humans/TierC/Flex/Materials/MI_OC_IE_Flex_Head_G21",
+      "head_material_extraction": "work/npc-batch-tests/beard-switch/materials/MI_OC_IE_Flex_Head_G21",
+      "albedo_png": "work/npc-batch-tests/beard-switch/materials/T_OC_IE_Flex_Head_D.png",
+      "normal_png": "work/npc-batch-tests/beard-switch/materials/T_OC_IE_Flex_Head_N.png"
+    },
+    "materials": [
+      {
+        "material": "MI_NH_Head_G21",
+        "parent": "/Game/Materials/Master/SkinG21/M_Base_Skin_G21.M_Base_Skin_G21",
+        "evidence": "work/npc-batch-tests/heads-beard-v2/materials/MI_NH_Head_G21/parameters-readonly.json",
+        "uasset_sha256": "9bab2f3ede5c2c8760efde10def9ebe7435f1a4aa6266d928af4bf49f3d53ff6",
+        "uexp_sha256": "b80a24d1abb9c1234d0ff7261dffeeea05bcddeedf64d22af715540249dfdd69",
+        "property_block_end_uexp": 2181,
+        "texture_parameters": [
+          {
+            "name": "1 - Albedo (Alpha Cutout)",
+            "value": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Head_D.T_NH_Head_D",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1526,
+            "value_offset_uexp": 1539,
+            "value_end_uexp": 1543
+          },
+          {
+            "name": "2 - Base  Normal",
+            "value": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Head_N.T_NH_Head_N",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1563,
+            "value_offset_uexp": 1576,
+            "value_end_uexp": 1580
+          },
+          {
+            "name": "3 - WM1 Normal",
+            "value": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_head_WM1_N.T_NH_head_WM1_N",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1600,
+            "value_offset_uexp": 1613,
+            "value_end_uexp": 1617
+          },
+          {
+            "name": "4 - WM2 Normal",
+            "value": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_head_WM2_N.T_NH_head_WM2_N",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1637,
+            "value_offset_uexp": 1650,
+            "value_end_uexp": 1654
+          },
+          {
+            "name": "5 - WM1 Albedo",
+            "value": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_head_WM1_D.T_NH_head_WM1_D",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1674,
+            "value_offset_uexp": 1687,
+            "value_end_uexp": 1691
+          },
+          {
+            "name": "6 - WM2 Albedo",
+            "value": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_head_WM2_D.T_NH_head_WM2_D",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1711,
+            "value_offset_uexp": 1724,
+            "value_end_uexp": 1728
+          },
+          {
+            "name": "2 - Packed Mask (MRAOT)",
+            "value": "/Game/Assets/Characters/Humans/TierA/Milten/Textures/Textures_GC/T_GCom_Milten_Head_MRAOT.T_GCom_Milten_Head_MRAOT",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1748,
+            "value_offset_uexp": 1761,
+            "value_end_uexp": 1765
+          },
+          {
+            "name": "4 - Subsurface Scattering Mask",
+            "value": "/Game/Assets/Characters/Humans/Base/G21_BodyTexturesAdaptation/T_G21_HM_Std_Young_Head_SS.T_G21_HM_Std_Young_Head_SS",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1785,
+            "value_offset_uexp": 1798,
+            "value_end_uexp": 1802
+          },
+          {
+            "name": "6 - Detail Normal",
+            "value": "/Game/Materials/Master/SkinG21/T_SkinMicroNormal.T_SkinMicroNormal",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1822,
+            "value_offset_uexp": 1835,
+            "value_end_uexp": 1839
+          },
+          {
+            "name": "7 - Detail Normal Mask",
+            "value": "/Game/Materials/Master/Textures/Default/Masks/T_White_Mask.T_White_Mask",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1859,
+            "value_offset_uexp": 1872,
+            "value_end_uexp": 1876
+          },
+          {
+            "name": "Sweat MRAOT",
+            "value": "/Game/Assets/Characters/Humans/Shared_Mat/Skin/Tier_Shared_Textures/T_G21_HM_Std_Young_Sweaty_Head_MRAOT.T_G21_HM_Std_Young_Sweaty_Head_MRAOT",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1896,
+            "value_offset_uexp": 1909,
+            "value_end_uexp": 1913
+          }
+        ],
+        "scalar_parameters": [
+          {
+            "name": "AO Albedo Intensity",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 31,
+            "value_offset_uexp": 44,
+            "value_end_uexp": 44
+          },
+          {
+            "name": "Desaturation",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 65,
+            "value_offset_uexp": 78,
+            "value_end_uexp": 78
+          },
+          {
+            "name": "Roughness Max",
+            "value": 0.949999988079071,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 98,
+            "value_offset_uexp": 111,
+            "value_end_uexp": 115
+          },
+          {
+            "name": "Roughness Min",
+            "value": -0.03999999910593033,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 135,
+            "value_offset_uexp": 148,
+            "value_end_uexp": 152
+          },
+          {
+            "name": "Detail Normal Intensity",
+            "value": 1.0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 172,
+            "value_offset_uexp": 185,
+            "value_end_uexp": 189
+          },
+          {
+            "name": "Detail Normal Scale",
+            "value": 12.0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 209,
+            "value_offset_uexp": 222,
+            "value_end_uexp": 226
+          },
+          {
+            "name": "SSS Global Intensity",
+            "value": 0.699999988079071,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 246,
+            "value_offset_uexp": 259,
+            "value_end_uexp": 263
+          },
+          {
+            "name": "Translucency Max",
+            "value": 1.0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 283,
+            "value_offset_uexp": 296,
+            "value_end_uexp": 300
+          },
+          {
+            "name": "Translucency Min",
+            "value": 0.20000000298023224,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 320,
+            "value_offset_uexp": 333,
+            "value_end_uexp": 337
+          },
+          {
+            "name": "Water Height",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 358,
+            "value_offset_uexp": 371,
+            "value_end_uexp": 371
+          },
+          {
+            "name": "Wetness",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 392,
+            "value_offset_uexp": 405,
+            "value_end_uexp": 405
+          },
+          {
+            "name": "wm1_blink_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 426,
+            "value_offset_uexp": 439,
+            "value_end_uexp": 439
+          },
+          {
+            "name": "wm1_blink_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 460,
+            "value_offset_uexp": 473,
+            "value_end_uexp": 473
+          },
+          {
+            "name": "wm1_brows_raise_InL",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 494,
+            "value_offset_uexp": 507,
+            "value_end_uexp": 507
+          },
+          {
+            "name": "wm1_brows_raise_InR",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 528,
+            "value_offset_uexp": 541,
+            "value_end_uexp": 541
+          },
+          {
+            "name": "wm1_brows_raise_OutL",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 562,
+            "value_offset_uexp": 575,
+            "value_end_uexp": 575
+          },
+          {
+            "name": "wm1_brows_raise_OutR",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 596,
+            "value_offset_uexp": 609,
+            "value_end_uexp": 609
+          },
+          {
+            "name": "wm1_cheek_raise_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 630,
+            "value_offset_uexp": 643,
+            "value_end_uexp": 643
+          },
+          {
+            "name": "wm1_cheek_raise_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 664,
+            "value_offset_uexp": 677,
+            "value_end_uexp": 677
+          },
+          {
+            "name": "wm1_chin_raise_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 698,
+            "value_offset_uexp": 711,
+            "value_end_uexp": 711
+          },
+          {
+            "name": "wm1_chin_raise_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 732,
+            "value_offset_uexp": 745,
+            "value_end_uexp": 745
+          },
+          {
+            "name": "wm1_purse_DwnL",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 766,
+            "value_offset_uexp": 779,
+            "value_end_uexp": 779
+          },
+          {
+            "name": "wm1_purse_DwnR",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 800,
+            "value_offset_uexp": 813,
+            "value_end_uexp": 813
+          },
+          {
+            "name": "wm1_purse_UpL",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 834,
+            "value_offset_uexp": 847,
+            "value_end_uexp": 847
+          },
+          {
+            "name": "wm1_purse_UpR",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 868,
+            "value_offset_uexp": 881,
+            "value_end_uexp": 881
+          },
+          {
+            "name": "wm1_smile_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 902,
+            "value_offset_uexp": 915,
+            "value_end_uexp": 915
+          },
+          {
+            "name": "wm1_smile_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 936,
+            "value_offset_uexp": 949,
+            "value_end_uexp": 949
+          },
+          {
+            "name": "wm2_brows_down_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 970,
+            "value_offset_uexp": 983,
+            "value_end_uexp": 983
+          },
+          {
+            "name": "wm2_brows_down_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1004,
+            "value_offset_uexp": 1017,
+            "value_end_uexp": 1017
+          },
+          {
+            "name": "wm2_brows_lateral_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1038,
+            "value_offset_uexp": 1051,
+            "value_end_uexp": 1051
+          },
+          {
+            "name": "wm2_brows_lateral_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1072,
+            "value_offset_uexp": 1085,
+            "value_end_uexp": 1085
+          },
+          {
+            "name": "wm2_eyes_squint_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1106,
+            "value_offset_uexp": 1119,
+            "value_end_uexp": 1119
+          },
+          {
+            "name": "wm2_eyes_squint_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1140,
+            "value_offset_uexp": 1153,
+            "value_end_uexp": 1153
+          },
+          {
+            "name": "wm2_mouth_stretch_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1174,
+            "value_offset_uexp": 1187,
+            "value_end_uexp": 1187
+          },
+          {
+            "name": "wm2_mouth_stretch_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1208,
+            "value_offset_uexp": 1221,
+            "value_end_uexp": 1221
+          },
+          {
+            "name": "wm2_neck_stretch_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1242,
+            "value_offset_uexp": 1255,
+            "value_end_uexp": 1255
+          },
+          {
+            "name": "wm2_neck_stretch_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1276,
+            "value_offset_uexp": 1289,
+            "value_end_uexp": 1289
+          },
+          {
+            "name": "wm2_nose_wrinkle_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1310,
+            "value_offset_uexp": 1323,
+            "value_end_uexp": 1323
+          },
+          {
+            "name": "wm2_nose_wrinkle_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1344,
+            "value_offset_uexp": 1357,
+            "value_end_uexp": 1357
+          },
+          {
+            "name": "Wetness Roughness",
+            "value": 0.15000000596046448,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1377,
+            "value_offset_uexp": 1390,
+            "value_end_uexp": 1394
+          },
+          {
+            "name": "Wetness Specular",
+            "value": 0.15000000596046448,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1414,
+            "value_offset_uexp": 1427,
+            "value_end_uexp": 1431
+          },
+          {
+            "name": "RefractionDepthBias",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1452,
+            "value_offset_uexp": 1465,
+            "value_end_uexp": 1465
+          }
+        ],
+        "static_switch_overrides": [
+          {
+            "name": "Add AO to Albedo?",
+            "value": false,
+            "override": true
+          },
+          {
+            "name": "Change Default Roughness?",
+            "value": true,
+            "override": true
+          },
+          {
+            "name": "Detail Normal?",
+            "value": true,
+            "override": true
+          },
+          {
+            "name": "Add Tatto",
+            "value": true,
+            "override": true
+          }
+        ]
+      },
+      {
+        "material": "MI_NH_Beard",
+        "parent": "/Game/Materials/M_Hair_G1R.M_Hair_G1R",
+        "evidence": "work/npc-batch-tests/heads-beard-v2/materials/MI_NH_Beard/parameters-readonly.json",
+        "uasset_sha256": "caeeab91d6a9416eda7427dfa412af0cb0be11d891d78816d70eccaca456c528",
+        "uexp_sha256": "fd418024c3826fd1a0226aca4b9d95e571f47e41c86f666d93af849ffac9c6d5",
+        "property_block_end_uexp": 987,
+        "texture_parameters": [
+          {
+            "name": "Diffuse",
+            "value": null,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 729,
+            "value_offset_uexp": 742,
+            "value_end_uexp": 742
+          },
+          {
+            "name": "RAD (Root, Alpha, Depth)",
+            "value": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Beard_RAD.T_NH_Beard_RAD",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 762,
+            "value_offset_uexp": 775,
+            "value_end_uexp": 779
+          },
+          {
+            "name": "SIAO (Specular, ID, Ambient Occlusion)",
+            "value": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Beard_SIAO.T_NH_Beard_SIAO",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 799,
+            "value_offset_uexp": 812,
+            "value_end_uexp": 816
+          }
+        ],
+        "scalar_parameters": [
+          {
+            "name": "Brightness",
+            "value": 0.40799999237060547,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 31,
+            "value_offset_uexp": 44,
+            "value_end_uexp": 48
+          },
+          {
+            "name": "Value Variation",
+            "value": 2.0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 68,
+            "value_offset_uexp": 81,
+            "value_end_uexp": 85
+          },
+          {
+            "name": "Hue Variation",
+            "value": 0.10000000149011612,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 105,
+            "value_offset_uexp": 118,
+            "value_end_uexp": 122
+          },
+          {
+            "name": "Depth Contrast",
+            "value": 1.0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 142,
+            "value_offset_uexp": 155,
+            "value_end_uexp": 159
+          },
+          {
+            "name": "Metallic",
+            "value": 0.20000000298023224,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 179,
+            "value_offset_uexp": 192,
+            "value_end_uexp": 196
+          },
+          {
+            "name": "Specular Intensity",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 217,
+            "value_offset_uexp": 230,
+            "value_end_uexp": 230
+          },
+          {
+            "name": "Specular Contrast",
+            "value": 1.0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 250,
+            "value_offset_uexp": 263,
+            "value_end_uexp": 267
+          },
+          {
+            "name": "Roughness",
+            "value": 0.3799999952316284,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 287,
+            "value_offset_uexp": 300,
+            "value_end_uexp": 304
+          },
+          {
+            "name": "Edge Mask Contrast",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 325,
+            "value_offset_uexp": 338,
+            "value_end_uexp": 338
+          },
+          {
+            "name": "Edge Mask Min",
+            "value": 1.0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 358,
+            "value_offset_uexp": 371,
+            "value_end_uexp": 375
+          },
+          {
+            "name": "Pixel Depth Offset Tip",
+            "value": 1.0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 395,
+            "value_offset_uexp": 408,
+            "value_end_uexp": 412
+          },
+          {
+            "name": "Pixel Depth Offset Root",
+            "value": 1.7488329410552979,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 432,
+            "value_offset_uexp": 445,
+            "value_end_uexp": 449
+          },
+          {
+            "name": "MipBias",
+            "value": -1.0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 469,
+            "value_offset_uexp": 482,
+            "value_end_uexp": 486
+          },
+          {
+            "name": "RefractionDepthBias",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 507,
+            "value_offset_uexp": 520,
+            "value_end_uexp": 520
+          }
+        ],
+        "static_switch_overrides": [
+          {
+            "name": "Add Variation",
+            "value": true,
+            "override": true
+          },
+          {
+            "name": "Subtract Tip From Depth",
+            "value": true,
+            "override": true
+          },
+          {
+            "name": "Interpolate Root Depth",
+            "value": true,
+            "override": true
+          }
+        ]
+      },
+      {
+        "material": "MI_OC_IE_Flex_Head_G21",
+        "parent": "/Game/Materials/Master/SkinG21/M_Base_Skin_G21.M_Base_Skin_G21",
+        "evidence": "work/npc-batch-tests/beard-switch/materials/MI_OC_IE_Flex_Head_G21/parameters-readonly.json",
+        "uasset_sha256": "9e8b32178afd1be10ffa383dcf96dbc41fb33c4ea452c9ed5f405909d802fa8a",
+        "uexp_sha256": "09da6e18d6b75a381e0de9f403b31225b92048e4b9f597fd0609482139b5639f",
+        "property_block_end_uexp": 1933,
+        "texture_parameters": [
+          {
+            "name": "1 - Albedo (Alpha Cutout)",
+            "value": "/Game/Assets/Characters/Humans/TierC/Flex/Textures/T_OC_IE_Flex_Head_D.T_OC_IE_Flex_Head_D",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1354,
+            "value_offset_uexp": 1367,
+            "value_end_uexp": 1371
+          },
+          {
+            "name": "2 - Base  Normal",
+            "value": "/Game/Assets/Characters/Humans/TierC/Flex/Textures/T_OC_IE_Flex_Head_N.T_OC_IE_Flex_Head_N",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1391,
+            "value_offset_uexp": 1404,
+            "value_end_uexp": 1408
+          },
+          {
+            "name": "Tatto Map",
+            "value": "/Game/WeatherPlugins/FluidNinjaLive/Core/Assets/T_Black.T_Black",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1428,
+            "value_offset_uexp": 1441,
+            "value_end_uexp": 1445
+          },
+          {
+            "name": "2 - Packed Mask (MRAOT)",
+            "value": "/Game/Assets/Characters/Humans/Base/G21_BodyTexturesAdaptation/T_G21_HM_Std_Young_Head_MRAOT.T_G21_HM_Std_Young_Head_MRAOT",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1465,
+            "value_offset_uexp": 1478,
+            "value_end_uexp": 1482
+          },
+          {
+            "name": "4 - Subsurface Scattering Mask",
+            "value": "/Game/Assets/Characters/Humans/Base/G21_BodyTexturesAdaptation/T_G21_HM_Std_Young_Head_SS.T_G21_HM_Std_Young_Head_SS",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1502,
+            "value_offset_uexp": 1515,
+            "value_end_uexp": 1519
+          },
+          {
+            "name": "6 - Detail Normal",
+            "value": "/Game/Materials/Master/SkinG21/T_SkinMicroNormal.T_SkinMicroNormal",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1539,
+            "value_offset_uexp": 1552,
+            "value_end_uexp": 1556
+          },
+          {
+            "name": "7 - Detail Normal Mask",
+            "value": "/Game/Materials/Master/Textures/Default/Masks/T_White_Mask.T_White_Mask",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1576,
+            "value_offset_uexp": 1589,
+            "value_end_uexp": 1593
+          },
+          {
+            "name": "Sweat MRAOT",
+            "value": "/Game/Assets/Characters/Humans/Shared_Mat/Skin/Tier_Shared_Textures/T_G21_HM_Std_Young_Sweaty_Head_MRAOT.T_G21_HM_Std_Young_Sweaty_Head_MRAOT",
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1613,
+            "value_offset_uexp": 1626,
+            "value_end_uexp": 1630
+          }
+        ],
+        "scalar_parameters": [
+          {
+            "name": "Desaturation",
+            "value": 0.14000000059604645,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 31,
+            "value_offset_uexp": 44,
+            "value_end_uexp": 48
+          },
+          {
+            "name": "Roughness Max",
+            "value": 0.699999988079071,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 68,
+            "value_offset_uexp": 81,
+            "value_end_uexp": 85
+          },
+          {
+            "name": "Roughness Min",
+            "value": 0.20000000298023224,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 105,
+            "value_offset_uexp": 118,
+            "value_end_uexp": 122
+          },
+          {
+            "name": "Detail Normal Intensity",
+            "value": 1.0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 142,
+            "value_offset_uexp": 155,
+            "value_end_uexp": 159
+          },
+          {
+            "name": "Detail Normal Scale",
+            "value": 9.0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 179,
+            "value_offset_uexp": 192,
+            "value_end_uexp": 196
+          },
+          {
+            "name": "SSS Global Intensity",
+            "value": 1.0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 216,
+            "value_offset_uexp": 229,
+            "value_end_uexp": 233
+          },
+          {
+            "name": "Translucency Max",
+            "value": 0.8999999761581421,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 253,
+            "value_offset_uexp": 266,
+            "value_end_uexp": 270
+          },
+          {
+            "name": "Translucency Min",
+            "value": 0.4000000059604645,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 290,
+            "value_offset_uexp": 303,
+            "value_end_uexp": 307
+          },
+          {
+            "name": "wm1_blink_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 328,
+            "value_offset_uexp": 341,
+            "value_end_uexp": 341
+          },
+          {
+            "name": "wm1_blink_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 362,
+            "value_offset_uexp": 375,
+            "value_end_uexp": 375
+          },
+          {
+            "name": "wm1_brows_raise_InL",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 396,
+            "value_offset_uexp": 409,
+            "value_end_uexp": 409
+          },
+          {
+            "name": "wm1_brows_raise_InR",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 430,
+            "value_offset_uexp": 443,
+            "value_end_uexp": 443
+          },
+          {
+            "name": "wm1_brows_raise_OutL",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 464,
+            "value_offset_uexp": 477,
+            "value_end_uexp": 477
+          },
+          {
+            "name": "wm1_brows_raise_OutR",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 498,
+            "value_offset_uexp": 511,
+            "value_end_uexp": 511
+          },
+          {
+            "name": "wm1_cheek_raise_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 532,
+            "value_offset_uexp": 545,
+            "value_end_uexp": 545
+          },
+          {
+            "name": "wm1_cheek_raise_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 566,
+            "value_offset_uexp": 579,
+            "value_end_uexp": 579
+          },
+          {
+            "name": "wm1_chin_raise_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 600,
+            "value_offset_uexp": 613,
+            "value_end_uexp": 613
+          },
+          {
+            "name": "wm1_chin_raise_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 634,
+            "value_offset_uexp": 647,
+            "value_end_uexp": 647
+          },
+          {
+            "name": "wm1_purse_DwnL",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 668,
+            "value_offset_uexp": 681,
+            "value_end_uexp": 681
+          },
+          {
+            "name": "wm1_purse_DwnR",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 702,
+            "value_offset_uexp": 715,
+            "value_end_uexp": 715
+          },
+          {
+            "name": "wm1_purse_UpL",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 736,
+            "value_offset_uexp": 749,
+            "value_end_uexp": 749
+          },
+          {
+            "name": "wm1_purse_UpR",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 770,
+            "value_offset_uexp": 783,
+            "value_end_uexp": 783
+          },
+          {
+            "name": "wm1_smile_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 804,
+            "value_offset_uexp": 817,
+            "value_end_uexp": 817
+          },
+          {
+            "name": "wm1_smile_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 838,
+            "value_offset_uexp": 851,
+            "value_end_uexp": 851
+          },
+          {
+            "name": "wm2_brows_down_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 872,
+            "value_offset_uexp": 885,
+            "value_end_uexp": 885
+          },
+          {
+            "name": "wm2_brows_down_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 906,
+            "value_offset_uexp": 919,
+            "value_end_uexp": 919
+          },
+          {
+            "name": "wm2_brows_lateral_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 940,
+            "value_offset_uexp": 953,
+            "value_end_uexp": 953
+          },
+          {
+            "name": "wm2_brows_lateral_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 974,
+            "value_offset_uexp": 987,
+            "value_end_uexp": 987
+          },
+          {
+            "name": "wm2_eyes_squint_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1008,
+            "value_offset_uexp": 1021,
+            "value_end_uexp": 1021
+          },
+          {
+            "name": "wm2_eyes_squint_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1042,
+            "value_offset_uexp": 1055,
+            "value_end_uexp": 1055
+          },
+          {
+            "name": "wm2_mouth_stretch_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1076,
+            "value_offset_uexp": 1089,
+            "value_end_uexp": 1089
+          },
+          {
+            "name": "wm2_mouth_stretch_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1110,
+            "value_offset_uexp": 1123,
+            "value_end_uexp": 1123
+          },
+          {
+            "name": "wm2_neck_stretch_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1144,
+            "value_offset_uexp": 1157,
+            "value_end_uexp": 1157
+          },
+          {
+            "name": "wm2_neck_stretch_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1178,
+            "value_offset_uexp": 1191,
+            "value_end_uexp": 1191
+          },
+          {
+            "name": "wm2_nose_wrinkle_L",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1212,
+            "value_offset_uexp": 1225,
+            "value_end_uexp": 1225
+          },
+          {
+            "name": "wm2_nose_wrinkle_R",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1246,
+            "value_offset_uexp": 1259,
+            "value_end_uexp": 1259
+          },
+          {
+            "name": "RefractionDepthBias",
+            "value": 0,
+            "association": 2,
+            "index": -1,
+            "name_offset_uexp": 1280,
+            "value_offset_uexp": 1293,
+            "value_end_uexp": 1293
+          }
+        ],
+        "static_switch_overrides": [
+          {
+            "name": "Change Default Roughness?",
+            "value": true,
+            "override": true
+          },
+          {
+            "name": "Detail Normal?",
+            "value": true,
+            "override": true
+          },
+          {
+            "name": "Animated Albedo",
+            "value": false,
+            "override": true
+          },
+          {
+            "name": "Animated Normals",
+            "value": false,
+            "override": true
+          },
+          {
+            "name": "Add Tatto",
+            "value": true,
+            "override": true
+          }
+        ]
+      }
+    ],
+    "visual_findings": [
+      {
+        "textures": [
+          "T_NH_Head_D",
+          "T_NH_head_WM1_D",
+          "T_NH_head_WM2_D"
+        ],
+        "finding": "All three stock albedo images visibly contain the painted lower-face beard and moustache."
+      },
+      {
+        "textures": [
+          "T_NH_Head_N",
+          "T_NH_head_WM1_N",
+          "T_NH_head_WM2_N"
+        ],
+        "finding": "Original-resolution visual inspection shows facial pores and expression folds, with no clearly visible coarse beard strands or sharp beard outline. This is visual evidence, not proof of zero microscopic beard contribution."
+      },
+      {
+        "textures": [
+          "T_GCom_Milten_Head_MRAOT",
+          "T_G21_HM_Std_Young_Sweaty_Head_MRAOT",
+          "T_G21_HM_Std_Young_Head_SS"
+        ],
+        "finding": "Hero instance uses shared skin mask textures. Exported images show skin/sweat/subsurface patterns without a visible beard-shaped region. Exact packed-channel shader routing was not decoded."
+      },
+      {
+        "textures": [
+          "T_OC_IE_Flex_Head_D"
+        ],
+        "finding": "Stock Flex head albedo is visibly clean-shaven."
+      }
+    ],
+    "implementation_conclusions": [
+      "Use exact global texture parameter name 1 - Albedo (Alpha Cutout) on each NPC head MID.",
+      "Hero clean mode should also override 5 - WM1 Albedo and 6 - WM2 Albedo to prevent the stock painted beard returning through animated albedo.",
+      "Using the same clean image for all three Hero albedo slots removes animated albedo color variation; preserving the original three normal maps retains their wrinkle normal detail.",
+      "The exact base-normal name has TWO spaces: 2 - Base  Normal. Its replacement is not supported as necessary by the inspected images.",
+      "Hero has no explicit Animated Albedo or Animated Normals override in its MI. Parent defaults and final shader activation were not established by this property-only decoder.",
+      "Flex explicitly overrides Animated Albedo=false and Animated Normals=false and has no instance WM texture overrides.",
+      "Separate MI_NH_Beard hair cards use RAD (Root, Alpha, Depth) and SIAO (Specular, ID, Ambient Occlusion); hiding those cards is independent of removing the head albedo beard."
+    ],
+    "extracted_textures": [
+      {
+        "path": "work/npc-batch-tests/beard-switch/materials/T_G21_HM_Std_Young_Head_SS.png",
+        "sha256": "648db7967830efdcb4cd3e0a00255a66037cd4cc88f3d51fcffa2028b482283a",
+        "metadata": {
+          "asset": "/Game/Assets/Characters/Humans/Base/G21_BodyTexturesAdaptation/T_G21_HM_Std_Young_Head_SS",
+          "width": 1024,
+          "height": 1024,
+          "format": "PF_DXT1"
+        }
+      },
+      {
+        "path": "work/npc-batch-tests/beard-switch/materials/T_G21_HM_Std_Young_Sweaty_Head_MRAOT.png",
+        "sha256": "91370c96cdf8dfb23424e24ff92ecd9f5873ecb92000e9d25ec5e9b44df066a7",
+        "metadata": {
+          "asset": "/Game/Assets/Characters/Humans/Shared_Mat/Skin/Tier_Shared_Textures/T_G21_HM_Std_Young_Sweaty_Head_MRAOT",
+          "width": 4096,
+          "height": 4096,
+          "format": "PF_DXT1"
+        }
+      },
+      {
+        "path": "work/npc-batch-tests/beard-switch/materials/T_GCom_Milten_Head_MRAOT.png",
+        "sha256": "b368618c415895932699e7740daa483002ee94c162557a20f44f53adb1ccec69",
+        "metadata": {
+          "asset": "/Game/Assets/Characters/Humans/TierA/Milten/Textures/Textures_GC/T_GCom_Milten_Head_MRAOT",
+          "width": 1024,
+          "height": 1024,
+          "format": "PF_DXT1"
+        }
+      },
+      {
+        "path": "work/npc-batch-tests/beard-switch/materials/T_NH_Head_N.png",
+        "sha256": "6caff7f18a9511d8e47ef08109daf94e4346ff354da5a20960fcc8b9471c4a23",
+        "metadata": {
+          "asset": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Head_N",
+          "width": 1024,
+          "height": 1024,
+          "format": "PF_BC5"
+        }
+      },
+      {
+        "path": "work/npc-batch-tests/beard-switch/materials/T_NH_head_WM1_D.png",
+        "sha256": "949546c8f2880253a1f42faf71a2f86a0dfa76ff3175a8c9bd9150fbc222a21a",
+        "metadata": {
+          "asset": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_head_WM1_D",
+          "width": 1024,
+          "height": 1024,
+          "format": "PF_DXT1"
+        }
+      },
+      {
+        "path": "work/npc-batch-tests/beard-switch/materials/T_NH_head_WM1_N.png",
+        "sha256": "b59667a10fd768317b6764333bcf404f1af4ce9cae25f0c6cc550f77ec64311e",
+        "metadata": {
+          "asset": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_head_WM1_N",
+          "width": 1024,
+          "height": 1024,
+          "format": "PF_BC5"
+        }
+      },
+      {
+        "path": "work/npc-batch-tests/beard-switch/materials/T_NH_head_WM2_D.png",
+        "sha256": "149173adc2d184bc558f5764012d20c3a3f5954e3ad915dfd7c82e9be0040380",
+        "metadata": {
+          "asset": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_head_WM2_D",
+          "width": 1024,
+          "height": 1024,
+          "format": "PF_DXT1"
+        }
+      },
+      {
+        "path": "work/npc-batch-tests/beard-switch/materials/T_NH_head_WM2_N.png",
+        "sha256": "b4c303f3a4d3239647b2921cc6b8ede0526f9527a1d174931a1a7c930288ab34",
+        "metadata": {
+          "asset": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_head_WM2_N",
+          "width": 1024,
+          "height": 1024,
+          "format": "PF_BC5"
+        }
+      },
+      {
+        "path": "work/npc-batch-tests/beard-switch/materials/T_OC_IE_Flex_Head_D.png",
+        "sha256": "71065ffbbaacb73eaac64d4d420e7833229c99de7c69d2fde9770577a66b07fe",
+        "metadata": {
+          "asset": "/Game/Assets/Characters/Humans/TierC/Flex/Textures/T_OC_IE_Flex_Head_D",
+          "width": 2048,
+          "height": 2048,
+          "format": "PF_DXT1"
+        }
+      },
+      {
+        "path": "work/npc-batch-tests/beard-switch/materials/T_OC_IE_Flex_Head_N.png",
+        "sha256": "2e9b2fb2eef5086f79a0bd60663ec697fc9388a7ab02c7ad3f9ffe81a87caac0",
+        "metadata": {
+          "asset": "/Game/Assets/Characters/Humans/TierC/Flex/Textures/T_OC_IE_Flex_Head_N",
+          "width": 2048,
+          "height": 2048,
+          "format": "PF_BC5"
+        }
+      }
+    ]
+  },
+  "flex_lod_material": {
+    "name": "MI_Lods_OC_IE_Flex_Head_G21",
+    "parent": "M_Base_Skin_G21",
+    "albedo_parameter": "1 - Albedo (Alpha Cutout)",
+    "source_evidence": "work/npc-batch-tests/beard-switch/materials/MI_Lods_OC_IE_Flex_Head_G21/parameters-readonly.json",
+    "source_sha256": "546c6b76e51ba3811c9d50f0165d60ace295924009ff081c12bb0aa881d406b2",
+    "parent_uexp_range": [
+      18,
+      22
+    ],
+    "albedo_uexp_range": [
+      1367,
+      1371
+    ],
+    "reason": "Direct master parent requires matching this LOD material explicitly, not only the main Flex face."
+  }
+}

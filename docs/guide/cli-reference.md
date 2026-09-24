@@ -160,6 +160,7 @@ and failing would bury the line explaining what was not searched.
 | `text` | `<NPC>` · `--lang` · `--out <FILE>` | That conversation's lines as a `gore loc import` edits document, each under the column the game actually reads. |
 | `new-topic` | `<NPC>` · `--caption`/`--caption-key` · `--class` · `--subdialog-of <TOPIC>` · `--subdialog-position <N>` · `--priority-rank <N>` · `--mod-name` · `--out <DIR>` | Write a complete same-module edit workspace with the new class inserted into the conversation namespace. Without `--subdialog-of`, make a native direct root and automatically choose a normal rank before the recognized final End/Back row (or the current last root-rank group). With it, shift the named shipped parent's fixed 20-slot `Subdialog` entries and insert the child at optional 1-based position `N`; by default a trailing `TEXT_BACK`/Zurück entry stays last, otherwise the child appends. Sub-topics default to rank 0, so equal-rank slot order is preserved. An explicit rank wins exactly; `-1` intentionally requests the game's forced-topic behavior and is never chosen automatically. This is not an isolated `--op add` recipe and does not generate a UE4SS adapter. |
 | `new-conversation` | `<NPC>` · `--caption`/`--caption-key` · `--class` · `--priority-rank <N>` · `--mod-name` · `--out <DIR>` | Start a complete conversation for an exact NPC with no root topics. The command requires that NPC's one already-loaded per-NPC conversation-settings module, preserves its settings class, and appends the private root plus first choice in the same module. The first choice defaults to rank 2; an explicit rank wins, and `-1` should be passed only for an intentionally forced topic. A partial/ambiguous NPC, existing rooted conversation, or missing/malformed settings anchor fails closed; there is no unreferenced Add-module fallback. Further new topics and new-to-new `Subdialog` levels stay in this source module. |
+| `clone` | `<SOURCE>` · `--id <ID>` · `--guild <BASE>` · `--at <POINT>` · `--waypoint <SPOT>` · `--trader` · `--cache` · `--game` · `--out <DIR>` | Like `new`, but the template resolved values are written into the file instead of inherited silently — 51 lines for Diego. Use it when the point is to change the numbers; use `new` when the point is a character that follows its template. |
 | `checkout` | `<NPC>` · `--out <DIR>` | The conversation module's compiler-ready AngelScript, including reconstructed class defaults, plus an untouched copy and a manifest bound to this game build. `<DIR>` must be absent or empty; existing work is never overwritten. |
 | `check` | `<DIR>` | Check method/default edits, complete default supersession, fixed shipped ABI and intentional new symbols. Partial or loss-prone defaults and consecutive actionless new-to-new `Subdialog` transitions fail closed. Offline; no compile. |
 | `stage` | `<DIR>` · `--mod-name` · `--cache` · `--game` | Write the build spec and strict standalone `compile-module` command. The mod name must be one portable path component. Stage uses `--op edit`, adds `--allow-new-symbols` when required, includes the resolved `--game`, and refuses a cache hash that does not match that installation. |
@@ -221,6 +222,62 @@ and the separate compile/package/deploy/runtime proof boundaries are in
 launched, and the tree describes
 what the cache declares rather than what a given save would show. Full detail in
 [Reading and editing dialog trees](dialog-trees.md).
+
+## `npc`
+
+`gore npc <list|show|sites|new|clone|checkout|delete|check|stage|text|routine> [OPTIONS]`
+
+| Subcommand | Flags | Meaning |
+|---|---|---|
+| `list` | `[FILTER]` · `--category <NAME>` · `--max <N>` · `--json` | The characters the game ships. `FILTER` keeps the rows whose id or class contains it; `--category` takes one of `human`, `creature`, `other`. Answered from the catalog compiled into `gore.exe`, so it needs no game install. |
+| `show` | `<NPC>` · `--cache` · `--game` · `--json` | One character in full: the spawn definition, AI agent config, character definition, the guild base it derives from, its unique name, and every world point that spawns it with what is known about recompiling that level script. `<NPC>` is the exact id, not a filter. |
+| `sites` | `--level <TEXT>` · `--npc <ID>` · `--max <N>` · `--cache` · `--game` · `--json` | The world points the level scripts spawn characters from: world point, spawn definition, level-script module. `--level` matches the module name by substring; `--npc` keeps only the sites that spawn one character. |
+| `new` | `<ID>` · `--from <NPC>` · `--guild <BASE>` · `--at <POINT>` · `--waypoint <SPOT>` · `--trader` · `--modular-visuals` · `--cache` · `--game` · `--out <DIR>` | Write an authoring workspace: the new character's six classes in one module of their own, the level script with one added spawn line, an untouched copy of that script, and the manifest. `--from` names the shipped **character** whose looks, stats and voice are inherited — not a guild; `--guild` then replaces only the faction. `--at` is a world point from `sites`. `--modular-visuals` builds the appearance from parts at runtime instead of borrowing the template's prebaked model; no shipped character does that and the generated source says so. `<DIR>` must not exist. |
+| `delete` | `<NPC>` · `--cache` · `--game` · `--out <DIR>` | The same workspace shape for taking a shipped character's spawn line out again. This stops future placement only: a save that already spawned the character still carries that body. A character placed from more than one level script is refused rather than half removed. |
+| `checkout` | `<NPC>` · `--cache` · `--game` · `--out <DIR>` | Take a shipped character's own module out for editing: the one declaring its `CharacterDefinition`, so its level, health, resistances, inventory, guild parent, skills, personality and combat AI. Values may change freely; class names and their parent classes may not, because those are the character's identity in the cache and a rename remaps to nothing. Appearance and the spawn definition are not included — they live in modules hundreds of characters share. `<DIR>` must not exist. |
+| `check` | `<DIR>` · `--cache` · `--game` | Diff the edited level script against its pristine copy and block on every change that is not a spawn line of the character being authored, naming the line. Also blocks on a cache that no longer matches the workspace, an id the game already ships, a script that did not change, and an unknown routine waypoint. Offline; no compile. |
+| `stage` | `<DIR>` · `--tree <DIR>` · `--mod-name <NAME>` · `--cache` · `--game` | Write `spec.json` into the workspace and print the compile and build commands. A new character needs `--tree`: its new module and the shipped level script must compile together, which is the complete-tree `gore as compile --mini` route, and that tree costs about 19 minutes once per game version before it is stamped and reused. A suppression touches one module and gets the far quicker `gore as compile-module`. `stage` runs neither. |
+| `text` | `<ID>` · `--name <NAME>` · `--english <NAME>` · `--out <FILE>` | The character's display name as a `gore loc import --edits` document, keyed by the id in lowercase. Both German columns are written, because `german_new` beats `german` wherever it exists; `--english` fills the three English ones. Reads nothing at all. `<FILE>` must not exist. |
+| `routine set` | `<DIR>` · `--time HH:MM` · `--activity <NAME>` · `--spot <NAME>` · `--game` | Insert or replace one daily phase in an existing new/clone workspace; validate the spot and wire the spawn. Activities: stand/read/drink/sit/sleep/guard/alchemy. |
+| `routine show` | `<DIR>` · `--json` | Show phases, daily wraparound and the explicit script helper for replacing an already-spawned NPC's saved routine. |
+| `routine remove` | `<DIR>` · `--time HH:MM` · `--game` | Remove a phase, extending its predecessor. Refuses the last phase and unknown times. |
+| `routine spots` | `--activity <NAME>` · `--area` · `--prefix` · `--max` · `--game` · `--json` | List known navigation targets or compatible objects using installed action/restriction metadata. Object activities require the game files; direct stand/read/drink work offline. |
+
+A character is not a data record in this game but a chain of AngelScript
+classes: a spawn definition names an AI agent config, which names a character
+definition, whose **super class** is the guild. `show` is where that chain gets
+walked, out of the emitted source rather than bytecode. Placement is separate
+again — a `SpawnAIAgent` call in one of the level scripts — and that is what
+`sites` reads, in both the ordinary `TSubclassOf<>(…::StaticClass())` form and
+the 14 bare class references the shipped scripts also use.
+
+Every subcommand except `list`, `text` and `routine` takes `--cache <PATH>` to read an
+exact script cache and `--game <ROOT>` to pick the install; without either, the
+configured game path is used, then Steam auto-detect. `list` answers from the
+bundled catalog and `text` from its own arguments, so neither reads an install.
+`--max` caps the printed rows while the closing line still reports how many
+matched.
+
+`show` emits only the modules it needs — the 29 in the `LevelScripts.`
+namespace plus the few that declare the classes in the chain. Emitting the
+whole tree is never right here: `Map.MainMap.WorldPointManagerConfig_MainMap`
+alone needs over five minutes to recover its class defaults, against about two
+seconds for an ordinary module.
+
+Each site `show` prints carries a `translation:` line about its level script,
+in one of exactly three states: `measured, no known difference`,
+`N divergent function(s), M behaviour risk(s)`, or
+`NOT MEASURED for this game version`. The last one means nobody measured that
+game build; it is an absence of evidence, not reassurance.
+
+**Read-only apart from the files it is asked to write.** The authoring
+commands write a workspace, a spec and an edits document where they are pointed;
+`routine set/remove` update that workspace in place. Nothing is compiled,
+packaged, deployed or launched here. The NPC campaign records specific runtime
+passes; commands alone do not prove a new character, route or save-load case.
+Managed routines are also checked by `check` and `stage`; unknown spots or
+incompatible object actions block them. Full detail and existing-save activation
+in [Characters](npc-authoring.md#editing-a-daily-schedule).
 
 ## `gen`
 

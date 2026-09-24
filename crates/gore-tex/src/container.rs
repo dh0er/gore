@@ -1662,6 +1662,56 @@ pub fn unpack_asset(
     Ok(unpack_asset_verified(utoc, usmap, asset_path, out_dir)?.uasset)
 }
 
+/// A clone destination is occupied whenever any installed package chunk has
+/// its IoStore package ID, even if the header spells the path differently.
+pub fn installed_package_id_occupied(utoc: &Path, asset_path: &str) -> Result<bool> {
+    let store_path = utoc.parent().unwrap_or(utoc);
+    let store = iostore::open(store_path, Arc::new(Config::default()))?;
+    let package_id = package_id_from_asset_path(asset_path);
+    let occupied = store.chunks_all().any(|chunk| {
+        let id = chunk.id();
+        id.get_package_id() == package_id
+            && matches!(
+                id.get_chunk_type(),
+                EIoChunkType::ExportBundleData
+                    | EIoChunkType::BulkData
+                    | EIoChunkType::OptionalBulkData
+                    | EIoChunkType::MemoryMappedBulkData
+            )
+    });
+    Ok(occupied)
+}
+
+/// A clone must not introduce a second cooked package with the same IoStore ID
+/// into its own output tree. File existence checks alone miss case variants on
+/// case-sensitive filesystems, while Unreal hashes virtual package names without case.
+pub fn mod_tree_package_id_occupied(mod_dir: &Path, asset_path: &str) -> Result<bool> {
+    match std::fs::symlink_metadata(mod_dir) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+        Ok(_) => validate_plain_directory_root(mod_dir, "cooked input")?,
+    }
+    let target_id = package_id_from_asset_path(asset_path);
+    let mut assets = Vec::new();
+    collect_uassets(mod_dir, mod_dir, 0, &mut assets)?;
+    for relative in assets {
+        let cooked = relative.to_string_lossy().replace('\\', "/");
+        let lowercase = cooked.to_ascii_lowercase();
+        let (mount, prefix) = if lowercase.starts_with("g1r/content/") {
+            ("/Game/", "g1r/content/")
+        } else if lowercase.starts_with("engine/content/") {
+            ("/Engine/", "engine/content/")
+        } else {
+            continue;
+        };
+        let stem = &cooked[prefix.len()..cooked.len() - ".uasset".len()];
+        if package_id_from_asset_path(&format!("{mount}{stem}")) == target_id {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Snapshot-backed form of [`unpack_asset`]. In addition to the legacy output,
 /// returns every exact IoStore chunk consumed by conversion, including the
 /// winning sibling container and verified TOC BLAKE3 identity. Repeated reads
@@ -4478,6 +4528,56 @@ mod tests {
             ),
             id
         );
+    }
+
+    #[test]
+    fn clone_destination_probe_detects_case_colliding_package_id() {
+        use retoc::iostore_writer::IoStoreWriter;
+        use retoc::version::EngineVersion;
+
+        let base = unique_tmp("clone-case-collision");
+        std::fs::create_dir_all(&base).unwrap();
+        let utoc = base.join("pakchunk0-Windows.utoc");
+        let original = "/Game/Texture/T_Existing";
+        let version = EngineVersion::UE5_4;
+        let mut writer = IoStoreWriter::new(
+            &utoc,
+            version.toc_version(),
+            Some(version.container_header_version()),
+            UEPathBuf::from("../../../"),
+        )
+        .unwrap();
+        writer
+            .write_package_chunk(
+                FIoChunkId::from_package_id(
+                    package_id_from_asset_path(original),
+                    0,
+                    EIoChunkType::ExportBundleData,
+                ),
+                Some(UEPath::new("../../../G1R/Content/Texture/T_Existing.uasset")),
+                b"package bytes need no decoding for the occupancy check",
+                &StoreEntry::default(),
+            )
+            .unwrap();
+        writer.finalize().unwrap();
+
+        assert!(installed_package_id_occupied(&utoc, original).unwrap());
+        assert!(installed_package_id_occupied(&utoc, "/game/texture/t_existing").unwrap());
+        assert!(!installed_package_id_occupied(&utoc, "/Game/Texture/T_Free").unwrap());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn clone_destination_probe_detects_case_collision_in_mod_tree() {
+        let base = unique_tmp("clone-mod-tree-case-collision");
+        let cooked = base.join("G1R/Content/Texture");
+        std::fs::create_dir_all(&cooked).unwrap();
+        std::fs::write(cooked.join("T_Existing.uasset"), b"package").unwrap();
+        std::fs::write(cooked.join("T_Existing.uexp"), b"exports").unwrap();
+
+        assert!(mod_tree_package_id_occupied(&base, "/game/texture/t_existing").unwrap());
+        assert!(!mod_tree_package_id_occupied(&base, "/Game/Texture/T_Free").unwrap());
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]

@@ -35,7 +35,7 @@ pub fn definition() -> Value {
              Use it when a tool description is not specific enough about an argument, or to check \
              what a command accepts before constructing a call. Pass an empty `command` for the \
              top-level list of commands, a group name such as \"as\" for its subcommands, or a \
-             full path such as \"as patch-default\" for one command.\n\n\
+             full path such as \"as patch-default\" or \"npc routine set\" for one command.\n\n\
              For what a command is *for*, and the order to run things in, use gore_guide instead.",
         "inputSchema": {
             "type": "object",
@@ -43,7 +43,7 @@ pub fn definition() -> Value {
                 "command": {
                     "type": "string",
                     "description": "Command path, space separated: \"\" for the top level, \"as\" \
-                                    for a group, \"as patch-default\" for one command.",
+                                    for a group, \"npc routine set\" for a nested leaf command.",
                 },
             },
             "required": ["command"],
@@ -202,9 +202,9 @@ fn validate(path: &[&str]) -> Result<(), String> {
                 Err(format!("`gore {first}` is not a command. {}", available()))
             }
         }
-        [first, second] => {
+        [first, second, rest @ ..] => {
             if let Some(subcommands) = meta_command(first) {
-                return if subcommands.contains(second) {
+                return if rest.is_empty() && subcommands.contains(second) {
                     Ok(())
                 } else {
                     Err(format!(
@@ -241,28 +241,49 @@ fn validate(path: &[&str]) -> Result<(), String> {
             // `voice index` — and refusing to explain a name the CLI just showed it sends it
             // hunting for a typo in something it read correctly. A tool *call* still resolves
             // through the canonical name alone, which keeps the subcommand enum a closed set.
-            if groups
+            let requested: Vec<&str> = std::iter::once(*second)
+                .chain(rest.iter().copied())
+                .collect();
+            let candidates: Vec<Vec<&str>> = groups
                 .iter()
-                .any(|group| group.command_or_alias(second).is_some())
+                .flat_map(|group| group.commands)
+                .flat_map(|command| {
+                    std::iter::once(command.sub).chain(command.aliases.iter().copied())
+                })
+                .map(|sub| sub.split_whitespace().collect())
+                .collect();
+            // A registered leaf also proves its intermediate help path, e.g. `npc routine`.
+            if candidates
+                .iter()
+                .any(|candidate| candidate.starts_with(&requested))
             {
                 Ok(())
             } else {
-                let mut subcommands: Vec<_> = groups
+                let parent = &requested[..requested.len() - 1];
+                let mut subcommands: Vec<_> = candidates
                     .iter()
-                    .flat_map(|group| group.subcommands())
+                    .filter(|candidate| candidate.starts_with(parent))
+                    .filter_map(|candidate| candidate.get(parent.len()).copied())
                     .collect();
                 subcommands.sort_unstable();
                 subcommands.dedup();
+                if subcommands.is_empty() {
+                    return Err(format!(
+                        "`gore {}` is not a command path. Ask for `{first}` to list its subcommands.",
+                        path.join(" ")
+                    ));
+                }
+                let parent_path = std::iter::once(*first)
+                    .chain(parent.iter().copied())
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 Err(format!(
-                    "`gore {first}` has no subcommand `{second}`. It accepts: {}.",
+                    "`gore {parent_path}` has no subcommand `{}`. It accepts: {}.",
+                    requested.last().unwrap(),
                     subcommands.join(", ")
                 ))
             }
         }
-        _ => Err(format!(
-            "`{}` is deeper than any gore command. Paths are at most two words.",
-            path.join(" ")
-        )),
     }
 }
 
@@ -541,8 +562,41 @@ mod tests {
     fn a_path_deeper_than_the_cli_is_rejected() {
         let spawn = FakeSpawn::new(Outcome::success(""));
         let result = call_with(json!({ "command": "as compile module extra" }), &spawn);
-        assert!(text_of(&result, 0).contains("at most two words"));
+        assert!(text_of(&result, 0).contains("is not a command path"));
         assert!(spawn.calls().is_empty());
+    }
+
+    #[test]
+    fn nested_routine_help_reaches_each_leaf_and_its_parent() {
+        let spawn = FakeSpawn::new(Outcome::success("routine help"));
+        for command in [
+            "npc routine",
+            "npc routine set",
+            "npc routine show",
+            "npc routine remove",
+            "npc routine spots",
+        ] {
+            let result = call_with(json!({ "command": command }), &spawn);
+            assert_eq!(result["isError"], json!(false), "{command}");
+            let mut expected: Vec<String> = command.split_whitespace().map(str::to_owned).collect();
+            expected.push("--help".into());
+            let calls = spawn.calls();
+            let argv: Vec<String> = calls
+                .last()
+                .unwrap()
+                .argv
+                .iter()
+                .map(|token| token.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(argv, expected);
+        }
+        let calls = spawn.calls().len();
+        let result = call_with(json!({ "command": "npc routine missing" }), &spawn);
+        assert_eq!(result["isError"], json!(true));
+        let message = text_of(&result, 0);
+        assert!(message.contains("has no subcommand `missing`"), "{message}");
+        assert!(message.contains("set"), "{message}");
+        assert_eq!(spawn.calls().len(), calls);
     }
 
     #[test]
@@ -567,10 +621,7 @@ mod tests {
         // about what exists.
         for group in spec::GROUPS {
             for command in group.commands {
-                let path: Vec<&str> = match group.shape {
-                    GroupShape::Nested => vec![group.cli, command.sub],
-                    GroupShape::Flat => vec![command.sub],
-                };
+                let path = group.command_path(command.sub);
                 assert!(validate(&path).is_ok(), "{path:?} was rejected");
             }
         }

@@ -1,0 +1,761 @@
+{
+  "schema": "gore.npc-batch.quest-hotfix.v1",
+  "date": "2026-09-21T20:07:49.406292+00:00",
+  "bundle": "NpcQuestCallbacksTest",
+  "version": "0.1.2",
+  "manager_id": "npcquestcallbackstest-967ab254",
+  "manager_status": "in_sync",
+  "rebase": {
+    "original_head": "cffbb433d19b3871b8e40497bfba06d8301ee14b",
+    "main": "24e072595bc97bc9a2635735b2b28e245e3caaa8",
+    "rebased_head": "3c91575bdb521220b2d6100b0c844d3aa6640d82",
+    "backup_branch": "codex/npc-session-before-main-20260921",
+    "range_diff_sha256": "f4923eacf3c73e3c28453fe7c7e92a715ef6dbd025434364b3f2fb4ec22307d9",
+    "integration": "Preserve main emitter semantics, narrow the NPC LoadObject fallback to its exact global two-parameter cache signature, and adapt seven test fixtures to variable_space."
+  },
+  "game": {
+    "id": "g1r-steam-25168047",
+    "files": {
+      "G1R-Win64-Shipping.exe": "dafd816b62230087cdb65ad504f4d8d003cd6013dba1b2b5b4f51457d78f729a",
+      "PrecompiledScript_Shipping.Cache": "b913264a50327da30b48c3b35f431e90197f3eafdebe431501a90ffd2d793d54",
+      "Binds.Cache": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2",
+      "G1R-5.4.3-173255-272ce2f8.usmap": "08a98e01fb44a7632fdbe69b587ff40f0f14ad3a27f2bcca53a0e0ecf60b5e38"
+    },
+    "cache_guid_hex": "cc072d82367ad34bbf51117546a8c7ce"
+  },
+  "native_api_qualification": {
+    "path": "native-api-25168047-qualification.json",
+    "sha256": "430c30642c5f8593532a0d7fb685c0024ed380bbf5865e66d199c9a3ad966a1e"
+  },
+  "build": {
+    "authored_modules": [
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+        "operation": "Add",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+        "source_byte_len": 47192,
+        "source_sha256": "997d9b8ea5c1a5bb73e177cb5d53ebd9d12c7790653188302d7f89f24ff31661"
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+        "operation": "Add",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+        "source_byte_len": 27192,
+        "source_sha256": "af5a3dbfd775e36643033c2b0d91f182c46836b7808bda67a3cd83115e04fcc0"
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+        "operation": "Edit",
+        "relative_path": "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+        "source_byte_len": 5203,
+        "source_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+      },
+      {
+        "module_name": "LevelScripts.XardasTower_AI",
+        "operation": "Edit",
+        "relative_path": "LevelScripts/XardasTower_AI.as",
+        "source_byte_len": 1814,
+        "source_sha256": "ee74734e29cafb76445abe5000bc662d2c9e79d3cd6b88a989a17f81d42056eb"
+      }
+    ],
+    "elapsed_seconds": 206.5529002,
+    "full_modules": 7319,
+    "full_sha256": "c8aec07daf4aecefcec3e2809a482520b367cbaf1186ee4f21f599d4e73eb267",
+    "game_backend_attempted": false,
+    "mini_compose_upsert": true,
+    "mini_modules": 4,
+    "mini_sha256": "302d941c40ba961fecb9876438521bf6930098a37ce34b76b495580ef2511ccb",
+    "passed": true,
+    "product_generation_receipt": true,
+    "route": "productive Core FullGraph; frozen-manifest plan",
+    "source_modules_verified": 7319,
+    "target_closing_audit": true,
+    "unselected_pristine_modules_byte_identical": 7315
+  },
+  "build_path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\hotfix-25168047\\build",
+  "source_preparation": {
+    "qualified_input": "C:\\gt\\hotfix_25168047",
+    "base_sha256": "b913264a50327da30b48c3b35f431e90197f3eafdebe431501a90ffd2d793d54",
+    "qualified_oracle_sha256": "d6a7a801c6e879c96a10f459fd75d80ec2454d96a77a20bc41c142948d445f78",
+    "authored_sources": {
+      "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as": "997d9b8ea5c1a5bb73e177cb5d53ebd9d12c7790653188302d7f89f24ff31661",
+      "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as": "af5a3dbfd775e36643033c2b0d91f182c46836b7808bda67a3cd83115e04fcc0",
+      "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+      "LevelScripts/XardasTower_AI.as": "ee74734e29cafb76445abe5000bc662d2c9e79d3cd6b88a989a17f81d42056eb"
+    },
+    "unchanged_source_modules": 7315,
+    "note": "Reuse qualified hotfix tree with exact frozen inventory. Both authored vanilla anchors equal fresh emissions from the rebased CLI. Existing Core FullGraph API compiles the full graph and preserves all7315 unselected pristine module spans exactly.",
+    "current_emitter_anchor_check": {
+      "CharacterDefinition_OC_STT_Diego": "eea7a3c6f50f78b62765cf6f8e59cc52ee554680da7fc6f7e2a0e97be7f00a9f",
+      "LevelScripts.XardasTower_AI": "9ea743947fef937442ba6ea0348f9743d57db2c2afe2a257abbf0d012670dce5"
+    }
+  },
+  "source_and_quest_content_unchanged_from_0_1_1": true,
+  "quest_content_sha256": "52182e466c749fa54467de8aaad79a41bba956c9ee330212847904bfa1c3ffe7",
+  "generation_receipt_sha256": "b0700adff22a2216f9b312019f661303cfd68f741cac8a50ff91841110780932",
+  "builder": {
+    "route": "Existing productive FullGraph Core API linked to freshly rebased Release libraries",
+    "source_sha256": "d25037bdccb905aeeb476d8a5747f3c681c3fc785048bc5c7713013e2376e06a",
+    "helper_sha256": "1843230ed5d44b980fe6ae837b78d1333c6d76627dc685ce0bc513059e5266e6",
+    "libraries": {
+      "gore_as": {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\deps\\libgore_as-0a303f6a95c2be37.rlib",
+        "sha256": "1125342791bd762b7fc2b737d1deaf10427dc5f451a1c678f614a7a9275ebc81"
+      },
+      "gore_mod": {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\deps\\libgore_mod-826075152e8cbff4.rlib",
+        "sha256": "9264dd067d82db6a28b45ab2acbecfcd0a47ecbeb198e95fd0cb15ecd2773572"
+      },
+      "serde_json": {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\deps\\libserde_json-408aeb98b879f5ad.rlib",
+        "sha256": "281dcd87ff01260cfd188390cbd66c60e7d6622204c2988d41f2f4a712973f5e"
+      },
+      "sha2": {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\deps\\libsha2-dfce5100f21747bc.rlib",
+        "sha256": "3e0a81aa63420846fe2d88084fed5dc156369f25aecdcbc28cef338a504b043e"
+      },
+      "anyhow": {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\deps\\libanyhow-f743ab8a597f82a4.rlib",
+        "sha256": "1b144d8cfa08882d349d6411ad99c36b090787d278589d0db9c2479fc5dc727d"
+      }
+    },
+    "cli_sha256": "bf48dc461d0f919180dd7cf3e852f911026382f1d3f4dbd9deb53fd3780038de",
+    "native_snapshot_sha256": "0495bbc238aea629d3c1c611823167e659d4b17df43b017676431804e41fb962",
+    "arguments": [
+      "rustc",
+      "--edition=2021",
+      "-C",
+      "opt-level=2",
+      "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\hotfix-25168047\\core-build.rs",
+      "--crate-name",
+      "npc_quest_hotfix_build",
+      "-L",
+      "dependency=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\deps",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\anyhow-2d956c2822e50910\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\av-scenechange-13d686b603a4d750\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\blake3-9621502345b08141\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\crc32fast-fccab5effe169050\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\crossbeam-utils-dae04042cf9b7634\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\fs-err-e1b464fcc2a7d072\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\generic-array-0bbcd9e49b249b09\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\generic-array-8463e961af93c93b\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\getrandom-04ac2a08bbd896ee\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\getrandom-96b0fe92c096997a\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\gore-as-46d018cbb858b569\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\intel_tex_2-8fd861e9da9d2eba\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\libc-6881a03f2016c071\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\libc-7c131384b479e5b0\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\libz-sys-623fd3fad405d526\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\num-traits-54b9332787296a8b\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\parking_lot_core-c6523d22b79468aa\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\paste-bebb1cad615c3707\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\portable-atomic-f12a6143d6563561\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\proc-macro2-3c9c828fa53dad33\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\pulldown-cmark-e686b0f7a28e0f72\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\quote-a8f066bb44f73fad\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\rav1e-45e0f98f75cbfa14\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\rayon-core-4056a05830d95468\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\serde-45ce9a9451367cdc\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\serde_core-f0966b605f5edad9\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\serde_json-9743bda4f54f4a89\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\thiserror-042c7d9b09cda571\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\thiserror-1da6cec3b66150db\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\windows_x86_64_msvc-f40db738eb497731\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\zerocopy-ac8ab2cfc195421d\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\zip-c39d9693075e5bee\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\zmij-8279b81a828b74d2\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\zstd-safe-1acd9afd6c9180cc\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\build\\zstd-sys-56c581b0170bc666\\out",
+      "-L",
+      "native=C:\\Users\\Daniel\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\windows_x86_64_msvc-0.48.5\\lib",
+      "-L",
+      "native=C:\\Users\\Daniel\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\windows_x86_64_msvc-0.52.6\\lib",
+      "-L",
+      "native=C:\\Users\\Daniel\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\windows_x86_64_msvc-0.53.1\\lib",
+      "--extern",
+      "gore_as=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\deps\\libgore_as-0a303f6a95c2be37.rlib",
+      "--extern",
+      "gore_mod=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\deps\\libgore_mod-826075152e8cbff4.rlib",
+      "--extern",
+      "serde_json=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\deps\\libserde_json-408aeb98b879f5ad.rlib",
+      "--extern",
+      "sha2=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\deps\\libsha2-dfce5100f21747bc.rlib",
+      "--extern",
+      "anyhow=C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\target\\release\\deps\\libanyhow-f743ab8a597f82a4.rlib",
+      "-o",
+      "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\hotfix-25168047\\core-build.exe"
+    ]
+  },
+  "tests": [
+    {
+      "log": "refs-tests-v2.log",
+      "passed": 17,
+      "ignored": 0,
+      "sha256": "db37108aa314b74475cdaaf7f034a9dd750acc90ea2039fb12fe3c1083c5d631"
+    },
+    {
+      "log": "native-api-tests.log",
+      "passed": 8,
+      "ignored": 1,
+      "sha256": "d01f544f033deb2e88c3f53fe1890d9572d525f15399a5b193eff2c0592c236e"
+    },
+    {
+      "log": "npc-cli-tests.log",
+      "passed": 8,
+      "ignored": 0,
+      "sha256": "8e2aa7d7aa1ed47731407233193c2885db5dca8fcceb11be7b8b1f1d991c50c8"
+    }
+  ],
+  "event_binding_check": {
+    "scope": "15 exact new quest fixture classes; 29 native event bindings; 7 const quest predicates",
+    "full_and_mini_passed": true,
+    "installed_passed": true,
+    "full_and_mini_report_sha256": "7f781f1d028b9c749fc909f7349cd87734b71b73c8569e447b29892f52b4d7e3",
+    "installed_report_sha256": "cd04dfd367e7424e9604f109719571b4fc28c799cda1eb862c7277632da58931",
+    "installed_cache_sha256": "61a2b8b97a51d1643b2342cf8a661590da5622bcbf4b4c8d4ecc5267fd691f42"
+  },
+  "inspection": {
+    "report_format": 1,
+    "source_kind": "directory",
+    "bundle_format": 1,
+    "mod": {
+      "name": "NpcQuestCallbacksTest",
+      "version": "0.1.2",
+      "author": ""
+    },
+    "component_count": 3,
+    "components": [
+      {
+        "type": "loc_patch",
+        "path": "loc/edits.json",
+        "target_count": 42,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "voice_archive_patch",
+        "path": "voice",
+        "target_count": 5,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "angel_script_patch",
+        "path": "scripts",
+        "target_count": 4,
+        "footprint_coverage": "exact"
+      }
+    ],
+    "file_count": 10,
+    "directory_count": 4,
+    "total_file_bytes": 462100,
+    "manifest_sha256": "7d5e2f27bfa2d857010d019911506c798970f42e59cd64d11ec9ebad995ec92f",
+    "tree_sha256": "351d082694637be3992d9c1255abdf52a836d120393f1da36977bd55adef47f9",
+    "evidence": {
+      "verified": [
+        "bounded non-link materialization of the selected directory or ZIP",
+        "root manifest format plus every declared component manifest and referenced payload",
+        "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+        "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+      ],
+      "not_verified": [
+        "compatibility with any particular game installation or game build",
+        "whether named game-side assets, samples, localization ids, or script edit targets exist",
+        "cross-mod conflicts, load order, or deployment readiness",
+        "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+      ]
+    }
+  },
+  "legacy_connector_limit": "The pinned versioned MCP CLI0.3.0 rejects a valid four-module mini manifest. Fresh rebuilt CLI inspection and Manager Apply accept it; no approval refusal occurred.",
+  "preflight": "Only new quest bundle enabled; no recognized conflicts; game closed; no recovery artifact. Expected Steam-updated script drift resolved by regular Apply.",
+  "apply_log_sha256": "15a4ae850ccc70b512be379cd3c7ca23da69c25d73aa6686d9751cda28d19ad4",
+  "status_report_sha256": "4e55a1d8937e0bfa01d99bd2cab8772fb2f2be818c50186f5bbc06033a233a8f",
+  "new_original_backup_sha256": "b913264a50327da30b48c3b35f431e90197f3eafdebe431501a90ffd2d793d54",
+  "original_refresh": "Manager selected the Steam-updated live pristine and refreshed its original backup; old pre-hotfix backup was not restored.",
+  "cli_install": {
+    "schema": "gore.local-cli-install.v1",
+    "completed_utc": "2026-09-21T20:07:02.967669+00:00",
+    "passed": true,
+    "source": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\hotfix-25168047\\runtime",
+    "target": "C:\\tools\\gore-cli",
+    "backup": "C:\\tools\\gore-cli-backups\\20260921T200315Z",
+    "binary": {
+      "byte_len": 46355456,
+      "sha256": "bf48dc461d0f919180dd7cf3e852f911026382f1d3f4dbd9deb53fd3780038de"
+    },
+    "version": "gore 0.3.0",
+    "source_binary_matches": true,
+    "managed_files": {
+      "compiler/catalog.json": {
+        "byte_len": 2314,
+        "sha256": "de2a2820193eb81f3032e3731d469a02dbd9ea05942f0ef48ebab58966a46e64"
+      },
+      "compiler/compiler-bundle-manifest.json": {
+        "byte_len": 3014,
+        "sha256": "214f8dd1f10a8dda9598161419f306278825ce8e09ccf967b2a539bb43195995"
+      },
+      "compiler/gore-as-standalone-compiler.exe": {
+        "byte_len": 2233608,
+        "sha256": "abceb0a495074852441da1b3370122a5bf6d24d4e8096c23596caff2a8ed6ee2"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/class-generator-config.json": {
+        "byte_len": 216,
+        "sha256": "e5a5dfbf64f25c6e39b5f257dcbae16d601c1f580a4c323e89e456f6c9948b1f"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/codegen-probe-corpus.json": {
+        "byte_len": 23151,
+        "sha256": "ac76b0ec41fc370d17ab6e0f568313f6215089b8e9715bbe525ff435feb1f3e8"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/compiler-options.json": {
+        "byte_len": 434,
+        "sha256": "c9635279beed9268e306dc288f18934c8c14aef60a7bf235efe405c4cd633c53"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/compiler-profile.json": {
+        "byte_len": 5024,
+        "sha256": "0a708b4cdb8ded7b7b495a66681363903065152827892043f6f08b9ee0a0319f"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/diagnostic-parity.json": {
+        "byte_len": 10555,
+        "sha256": "f13496c550113bee19be0858cfc0fdb128e7e645fbd54c209b023f02ece293b3"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/embedded-qualification-artifacts.json": {
+        "byte_len": 28473,
+        "sha256": "e623c7782e680b4be27948b955cc6835df38b89695ad035925f2435c3d034bb3"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/engine-properties.json": {
+        "byte_len": 2071,
+        "sha256": "44871bd8087d9460659cc18e895a978267dc18131784abc87542835b3107d610"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/expected-probe-results.json": {
+        "byte_len": 10070,
+        "sha256": "1b5845c4fc5f60bf69d1ba501780bdfda3a9fbf07802a6621b2cd3470795e51c"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/normalized-oracle-corpus.bin": {
+        "byte_len": 3245,
+        "sha256": "64799820800207c0f5cff9f4848d8ff0d9a23403e3cf8b409a3930d15e86f0d3"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/opcode-table.bin": {
+        "byte_len": 90422,
+        "sha256": "2a66371151ca25e766211d41fd6608ba1c632228f86f8b0e4c719e04784ccdcd"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/operand-schema.bin": {
+        "byte_len": 71295,
+        "sha256": "fd475382af57216986d37abcc1311f1e9aa1b6b598fea1cbfd77881d52167fa0"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/post-bind-snapshot.json": {
+        "byte_len": 69546919,
+        "sha256": "a3f87d6be8bf561445067e4fa9c35fc4e12909a7d47fb29c3dde1386521f8485"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/preprocessor-config.json": {
+        "byte_len": 2484361,
+        "sha256": "3a5737a07d51771a13cf7faa215dda9046f5914988f1cdbe16937ab7abc8ff73"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/qualification-promotion-receipt.json": {
+        "byte_len": 18459,
+        "sha256": "6b472fd8b4ae324118315895afa331d3e6685cfcaf51700299cf278cd204097d"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/reference-table-order.bin": {
+        "byte_len": 24686,
+        "sha256": "b77334595cea151a26a01d204c3a8c7b55dbfa3afcbaa238abd298d4d2a9a9cf"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/reflected-type-graph.bin": {
+        "byte_len": 5908587,
+        "sha256": "854f58a695d0170144957f085c1e8c0f9ef40b271e35e90f79ffbccff8d999c5"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/registration-trace.json": {
+        "byte_len": 78985862,
+        "sha256": "6d0c4025dfca0fe7333d2da0bd4da52c1da57f59a83b14c05cb2ec729d443f3f"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/semantic-parity.json": {
+        "byte_len": 7288,
+        "sha256": "76e6c10f6b0fbf20d476b56737f56f40ccc0effbc9b40d92036672088546cd9e"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/serializer-schema.bin": {
+        "byte_len": 55238,
+        "sha256": "75912681ef2e53d165aa23d2dc1ca63567d3e8b85170b47cf17ed80457103e17"
+      },
+      "compiler/profiles/build-24539464-cf0b83bd-e023-061b-2100-0f0fccf871d2/standalone-qualification-artifacts.json": {
+        "byte_len": 28666,
+        "sha256": "48b8ffafa373542ab87b9701e0a4677caf29fef960169ffc35494a68a93d116d"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/class-generator-config.json": {
+        "byte_len": 216,
+        "sha256": "e5a5dfbf64f25c6e39b5f257dcbae16d601c1f580a4c323e89e456f6c9948b1f"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/codegen-probe-corpus.json": {
+        "byte_len": 23151,
+        "sha256": "ac76b0ec41fc370d17ab6e0f568313f6215089b8e9715bbe525ff435feb1f3e8"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/compiler-options.json": {
+        "byte_len": 434,
+        "sha256": "c9635279beed9268e306dc288f18934c8c14aef60a7bf235efe405c4cd633c53"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/compiler-profile.json": {
+        "byte_len": 5023,
+        "sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/diagnostic-parity.json": {
+        "byte_len": 10555,
+        "sha256": "f13496c550113bee19be0858cfc0fdb128e7e645fbd54c209b023f02ece293b3"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/embedded-qualification-artifacts.json": {
+        "byte_len": 28472,
+        "sha256": "9b59170deff9e6c8b1a86f6a757f135582b9070571886b4ff1a1a34f83e5b63a"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/engine-properties.json": {
+        "byte_len": 2071,
+        "sha256": "44871bd8087d9460659cc18e895a978267dc18131784abc87542835b3107d610"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/expected-probe-results.json": {
+        "byte_len": 10070,
+        "sha256": "1b5845c4fc5f60bf69d1ba501780bdfda3a9fbf07802a6621b2cd3470795e51c"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/normalized-oracle-corpus.bin": {
+        "byte_len": 3329,
+        "sha256": "9f9d2d0c3f08c31734be5d1baa7501b9fba0953df440f22caba9ff740193a70a"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/opcode-table.bin": {
+        "byte_len": 90422,
+        "sha256": "2a66371151ca25e766211d41fd6608ba1c632228f86f8b0e4c719e04784ccdcd"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/operand-schema.bin": {
+        "byte_len": 71295,
+        "sha256": "fd475382af57216986d37abcc1311f1e9aa1b6b598fea1cbfd77881d52167fa0"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/post-bind-snapshot.json": {
+        "byte_len": 69550443,
+        "sha256": "e355aeead72953582c31a2c1b933d08f87c4daa20f4cd55ae71db1f51713d4c5"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/preprocessor-config.json": {
+        "byte_len": 2484373,
+        "sha256": "9a70027482611d129b3b35a7c038cbbb045c00df8ad5ba04d330790e81f7ec2a"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/qualification-promotion-receipt.json": {
+        "byte_len": 18456,
+        "sha256": "ed1783abeecf5b5e194e4fedbe74c119e933e8fa0d901e5d1e4b89d98182305d"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/reference-table-order.bin": {
+        "byte_len": 24686,
+        "sha256": "b77334595cea151a26a01d204c3a8c7b55dbfa3afcbaa238abd298d4d2a9a9cf"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/reflected-type-graph.bin": {
+        "byte_len": 5908985,
+        "sha256": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/registration-trace.json": {
+        "byte_len": 78990768,
+        "sha256": "17f374a632eadb354207aad9de7512367cad72e1c4c7a3253a3f68d9e075999c"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/semantic-parity.json": {
+        "byte_len": 7288,
+        "sha256": "76e6c10f6b0fbf20d476b56737f56f40ccc0effbc9b40d92036672088546cd9e"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/serializer-schema.bin": {
+        "byte_len": 55238,
+        "sha256": "75912681ef2e53d165aa23d2dc1ca63567d3e8b85170b47cf17ed80457103e17"
+      },
+      "compiler/profiles/build-24878692-c2ca4ada-4878-d963-e567-717dc2c483a2/standalone-qualification-artifacts.json": {
+        "byte_len": 28665,
+        "sha256": "00f8b6519c2c7084f12749408a3422b4bd9c41d432950eaaecacea80d4aa342f"
+      },
+      "compiler/PROVENANCE.toml": {
+        "byte_len": 3112,
+        "sha256": "dac606c6cb091bc6cd410373fbb22b2759a033716523cfdebb2dddd82a02a982"
+      },
+      "compiler/SOURCE_INVENTORY.tsv": {
+        "byte_len": 34314,
+        "sha256": "bb69c4e071b76f1086ce51954aa97d4bc3d483ce55c8e371a7e9087b2901736b"
+      },
+      "compiler/UNREANGEL-LICENSE.md": {
+        "byte_len": 3546,
+        "sha256": "b1f27c42452660ab9ae73b7e71e2583c5bf1eeff4481859ee30a4ed84030dca1"
+      },
+      "docs/angelscript-defaults.md": {
+        "byte_len": 9741,
+        "sha256": "897a49e673894d2b7effbfa4e1d66b943bb8e3884a2deb07baf4777cf81d0516"
+      },
+      "docs/audio.md": {
+        "byte_len": 17690,
+        "sha256": "4fcc0b54d75f7194cf655350ada08a390428c6316ec2f93cdb140c289b59e2a8"
+      },
+      "docs/bundles.md": {
+        "byte_len": 21735,
+        "sha256": "7bb789ac25da8defaf958df8b1febc5c02bc9b0c0a2eb0d05b8043a522366306"
+      },
+      "docs/catalogs-and-models.md": {
+        "byte_len": 9018,
+        "sha256": "23d7b03703b80fa2cfe86195807c86cc3c0a80c86f26bf87d481e9e71a82fa2a"
+      },
+      "docs/cli-reference.md": {
+        "byte_len": 37492,
+        "sha256": "8cffd5faea85adc78826849aba890d1635e0ad33f4a64017bed5b60f0a99f2b8"
+      },
+      "docs/dataassets.md": {
+        "byte_len": 12567,
+        "sha256": "f66fb4a225ac55228209b72bd6f7f4ffbcb841fa031b15a16c30f3cd84414955"
+      },
+      "docs/dialog-authoring.md": {
+        "byte_len": 33900,
+        "sha256": "4d89811d6583f5c5b8bd859f3f513b8f1b74a588391025ec0e1f47b44b85b457"
+      },
+      "docs/dialog-trees.md": {
+        "byte_len": 25658,
+        "sha256": "4e046915701a4429aafdcad7f69a94abcc65ee6188864898d6dc93f243d4b8fb"
+      },
+      "docs/find.md": {
+        "byte_len": 7278,
+        "sha256": "10e5e0de036e0002c3258c99ef57c05f1ac5387decbcf9da2ebde1c69f462e8e"
+      },
+      "docs/getting-started.md": {
+        "byte_len": 13268,
+        "sha256": "9471e53cd771bbbf88a936424f28f858beb4565732f310eda90bb33e7dadd50d"
+      },
+      "docs/guide.html": {
+        "byte_len": 514761,
+        "sha256": "fcb5b8b35e6ca2787765a93a6a3b8489f061d54937bba528b29f25275d6c21e9"
+      },
+      "docs/items.md": {
+        "byte_len": 8794,
+        "sha256": "f9a7d2a7adabf8266de8e6ce076ebcd439b16d23ab7c5865166ae8ba7dc2e9c3"
+      },
+      "docs/mcp.md": {
+        "byte_len": 28016,
+        "sha256": "55cc66228877a07ca8825f9e15edd4e2ea4d292bcf7750b221ec696bc4391601"
+      },
+      "docs/mod-manager.md": {
+        "byte_len": 23299,
+        "sha256": "29fa25c74f75d529f5586a6b0e48c7c1ad08afab0c507ca53fab00a6b58d2e6c"
+      },
+      "docs/mod-studio.md": {
+        "byte_len": 19094,
+        "sha256": "f686b278d626b27e3dcd312bbed60aec2f1fbbe042eedc6a098cc9339d247172"
+      },
+      "docs/npc-authoring.md": {
+        "byte_len": 49769,
+        "sha256": "da1c58dc89989a6d762e6f904518598d5dfde707fca0817b5daf560abde40bc3"
+      },
+      "docs/npc-open-items.md": {
+        "byte_len": 22125,
+        "sha256": "8c281c9438435898baecebf1fbf1600c2d7799c0f9b623dfe67086b192a22fa1"
+      },
+      "docs/README.md": {
+        "byte_len": 2878,
+        "sha256": "67a484d38e3310ae5e67c30dfe5d06b12165c76815a93cea3e346ba626d74af0"
+      },
+      "docs/scripts.md": {
+        "byte_len": 35827,
+        "sha256": "b8e8ce39694d07b0a82d8bd931c1281c08f2a649babfb816881d1e2ef5a65b6a"
+      },
+      "docs/text-and-dialogs.md": {
+        "byte_len": 12658,
+        "sha256": "784d918328335aaeba50f766eb198d22217937d7fab0604497535446620b89e5"
+      },
+      "docs/textures.md": {
+        "byte_len": 17178,
+        "sha256": "22549de0d8199af8caafbd51aa4f27bb3aeb419d5f98896a271faeecfeceecc2"
+      },
+      "docs/voice.md": {
+        "byte_len": 24258,
+        "sha256": "ac23258804923874355328e00218a2c673339aef43cfb85c07effa8ca76667ae"
+      },
+      "gore.exe": {
+        "byte_len": 46355456,
+        "sha256": "bf48dc461d0f919180dd7cf3e852f911026382f1d3f4dbd9deb53fd3780038de"
+      },
+      "LICENSE": {
+        "byte_len": 1089,
+        "sha256": "ea4a8d44f5f89e072f64fe46ea3e3a9e34072c02d33a8dd8a6a3d4b2b2bbcea6"
+      },
+      "THIRD_PARTY_LICENSES.md": {
+        "byte_len": 432590,
+        "sha256": "130afe1a5d220c08a4aee4c1e47fb6a2787cba7bbc5572a2343b00571241fffb"
+      }
+    },
+    "changed_files": [
+      "compiler/catalog.json",
+      "compiler/compiler-bundle-manifest.json",
+      "compiler/gore-as-standalone-compiler.exe",
+      "docs/angelscript-defaults.md",
+      "docs/bundles.md",
+      "docs/catalogs-and-models.md",
+      "docs/cli-reference.md",
+      "docs/dataassets.md",
+      "docs/dialog-authoring.md",
+      "docs/getting-started.md",
+      "docs/guide.html",
+      "docs/items.md",
+      "docs/mcp.md",
+      "docs/mod-manager.md",
+      "docs/mod-studio.md",
+      "docs/npc-authoring.md",
+      "docs/npc-open-items.md",
+      "docs/README.md",
+      "docs/scripts.md",
+      "docs/text-and-dialogs.md",
+      "docs/textures.md",
+      "docs/voice.md",
+      "gore.exe"
+    ],
+    "backup_file_count": 70,
+    "backups_reverified": true,
+    "other_root_files_unchanged": true,
+    "protected_directories": [
+      "shared",
+      "versions"
+    ],
+    "protected_directories_write_scope_excluded": true,
+    "versioned_mcp_binaries_untouched": true,
+    "processes_stopped": false,
+    "previous_loaded_image": "C:\\tools\\gore-cli-backups\\20260921T200315Z\\gore.exe.loaded-original",
+    "documentation": {
+      "packaging": "build.py stage_docs + gore guide html; reference docs are embedded in gore.exe as defined by product packaging",
+      "repo_ref": "3c91575bdb521220b2d6100b0c844d3aa6640d82",
+      "markdown_pages": 21,
+      "html": {
+        "byte_len": 514761,
+        "sha256": "fcb5b8b35e6ca2787765a93a6a3b8489f061d54937bba528b29f25275d6c21e9"
+      },
+      "source_files": {
+        "angelscript-defaults.md": "f687bbd81bb0af47501c8a5555da19c09727ad7c08fd086ba5e1a9b8097ad3db",
+        "audio.md": "739f55917000c86d161ac31bd07b172af612068009130d3defef906ea3dc0682",
+        "bundles.md": "b733849b4c2d9ea90a2522c2df25a2d5afb18de33d1d959bf81555bc35264267",
+        "catalogs-and-models.md": "5d7fb85841dfb6f5b50501a756b58c10cff7d448ebf00e986d8c641a6e87fa18",
+        "cli-reference.md": "a4e2a465b0fa24b239879d4c6efcbe65bd07f1ba79ff23ab3bccd5dd3e2915ed",
+        "dataassets.md": "6eaca72ee19ded35fb00edf088c0f76199a856ea83faa7f42e632498bcd8e00d",
+        "dialog-authoring.md": "92e792e606ede5e1e1f38a5ec52f4920681cbfca522965a52a077d6edaa9c040",
+        "dialog-trees.md": "bd0f66aa9158d63a032c0448613c87af142d71814978f5fed0217cf0fbc760db",
+        "find.md": "2a49b3ecea2fa14b4576c91be1ded535f0fb0e4da6a04684036cd80917d3b99b",
+        "getting-started.md": "1e530020f592251a073295f44cec293b7ec1fc292aa14cfb975ce21eec0b92a1",
+        "items.md": "d6e829d5d832f3ab11f5e717e95d75aa3df70d869244b124a5ce0eb9e5eefa53",
+        "mcp.md": "1757bfc57614585ee9c64725f998199406a341f9429c07532d1d45ec55361c02",
+        "mod-manager.md": "c2b4fb3b7afc5adb99c45f0a83b8eab2d3527c513a8cfa943653862f3c1611b5",
+        "mod-studio.md": "cbf62fba6ddf05f2f3f2ca08acc9ba5586ceebb9aa8f892342971873556063f8",
+        "npc-authoring.md": "61404f48cca7e1e9d4fd45ee4eef9b772177fb493505d111983d2e2afa08ad86",
+        "npc-open-items.md": "6e6b14153bfde29c6ffee994a9be7caffe219d48162f244fa8dab13f7ef44063",
+        "README.md": "48110d59fc7b44ff58090ee9e9ea8627aef20a95d6674bd33ad10e3d7034be40",
+        "scripts.md": "7671f6c820a7189b48466b01b04cdba29daa2ec23dfc5fdf7e84d49d6a549e12",
+        "text-and-dialogs.md": "b95c24f197e67e856bbf17a949a38d09db6228b1c9140a851c608fd6608b5aa2",
+        "textures.md": "4c0dd6cdb8c7391e3978f161942dc38948ab00e447f8e5796f48e39b35b824f1",
+        "voice.md": "a933029d017c2eceaf59626a1c079d4cbd8344cf996192c0bcaeaa346f8abb75"
+      }
+    },
+    "read_only_commands": [
+      {
+        "arguments": [
+          "--version"
+        ],
+        "exit_code": 0,
+        "stdout_sha256": "016139d1e30ab44b9ae16bae0e578dae9295b69c23f4d743ffd99b80824756d8"
+      },
+      {
+        "arguments": [
+          "--help"
+        ],
+        "exit_code": 0,
+        "stdout_sha256": "f9bac40bde4905aae34aa0ebb39c364dfb083a409a21e108deb8cd201912038d"
+      },
+      {
+        "arguments": [
+          "as",
+          "compile",
+          "--help"
+        ],
+        "exit_code": 0,
+        "stdout_sha256": "a130f3d9cdc4fd1eda06a127b252cb1d6bb2d5d79f02673b442bd2ece4b7e681"
+      },
+      {
+        "arguments": [
+          "guide",
+          "search",
+          "25168047",
+          "--limit",
+          "2"
+        ],
+        "exit_code": 0,
+        "stdout_sha256": "e1c7996f7e8b6077176f5a34d4d84585ca5232fb14abd5f5ae6a5947ec79b15e"
+      }
+    ],
+    "standalone_package": {
+      "ready": true,
+      "catalog_sha256": "de2a2820193eb81f3032e3731d469a02dbd9ea05942f0ef48ebab58966a46e64",
+      "host_catalog_exact": true,
+      "verified_file_count": 46,
+      "signed_sidecar_and_production_capabilities_verified": true,
+      "typed_profiles": [
+        {
+          "profile_sha256": "b75706a256b5306acb537d4760fbdfd8af44797fd533cd662eb617c75dab260c",
+          "manifest_sha256": "0a708b4cdb8ded7b7b495a66681363903065152827892043f6f08b9ee0a0319f",
+          "promotion_receipt_sha256": "6b472fd8b4ae324118315895afa331d3e6685cfcaf51700299cf278cd204097d",
+          "tree_sha256": "8905fdd498e72a730d9b7bd762cb25bb52bcd409c76b10cc0add8ecfd81a703c",
+          "file_count": 20
+        },
+        {
+          "profile_sha256": "264c06884f7d54db2da35cc9c057529be4ccbf208cf577370e4da5199aaf9ab3",
+          "manifest_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
+          "promotion_receipt_sha256": "ed1783abeecf5b5e194e4fedbe74c119e933e8fa0d901e5d1e4b89d98182305d",
+          "tree_sha256": "dd602f205b5ee4c0682857c2a1f8775e60548c9643d70d0cfe12f58ec3b6cb2d",
+          "file_count": 20
+        }
+      ],
+      "verifier": {
+        "path": "C:\\sbx\\goresave\\target\\standalone-profile-verifier-trusted\\build-y4vow03a\\authority\\gore-as-qualified-profile-verifier.exe",
+        "byte_len": 4519424,
+        "sha256": "453bce69d5fe2594af9f2765e62f66c99de72d585613bf03a938221ffc2176c1"
+      }
+    },
+    "limitations": [
+      "Existing processes continue their already loaded executable until their normal restart.",
+      "No game, Manager, Doctor, or new Cargo build was run."
+    ]
+  },
+  "start": {
+    "displayed_profile": 4,
+    "slot": "G1R-071",
+    "title": "NPC 05 Quest - START",
+    "clock": "12:00:00",
+    "sha256": "aee18515288dc09ebc1f4687fc3da21cccdec946596b2744f2028ccdfaf68db5",
+    "bytes": 1018879,
+    "unchanged": true
+  },
+  "save_changes": false,
+  "game_launched_by_agent": false,
+  "runtime_verified": false,
+  "game_tests_performed_by": "user",
+  "checklist": "FIELD-TEST.md",
+  "next_test": "Load Profile4/071 and restart FIELD-TEST.md at step1 (Q1).",
+  "apply_command": "& \"C:\\tools\\gore-cli\\gore.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "reset_command": "& \"C:\\tools\\gore-cli\\gore.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\""
+}

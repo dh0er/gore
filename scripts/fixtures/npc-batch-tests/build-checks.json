@@ -1,0 +1,521 @@
+{
+  "schema": "gore.npc-batch.build-checks.v1",
+  "date": "2026-09-11",
+  "passed": true,
+  "cache_tests": {
+    "passed": 383,
+    "failed": 0,
+    "ignored": 19
+  },
+  "final_cli_sha256": "3e16d37f2c04361e6c80764295a648837a91273c6bef792ac14990c9758c9ada",
+  "native_snapshot_sha256": "e8004138e4b07a04203bfb7d10c33e8ba21ca64b0990f91a670b64d2a63fea3b",
+  "bundles": [
+    {
+      "kind": "heads",
+      "build": "heads-v2",
+      "bundle": "work/npc-batch-tests/packages/NpcHeadPaletteTest",
+      "route": "compile_full_graph_standalone_v1_with_target",
+      "core_route": {
+        "base_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+        "binds_sha256": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2",
+        "changed_paths": [
+          "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+          "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+          "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+          "LevelScripts/XardasTower_AI.as"
+        ],
+        "final_source_manifest_sha256": "f58ee74b46256cbee966684cf918932bef756e1b80e3888437352aa353e28515",
+        "frozen_build": "\\\\?\\C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\builds\\heads-v1",
+        "frozen_manifest_sha256": "f27e829bdf9bff1fbceb59b4035dc071f4c2a3b738ea4837d078072091b80a5f",
+        "helper_sha256": "3f7c1bdd40fa85c459a072e025eed0992707dfdf7fd5b2934d37cc504b1f6e6a",
+        "overlay_sha256": {
+          "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as": "a7f2cd17688a5a32ae625fdb48303b79c06fbd258deab52053cfbeae8ba5aa38",
+          "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as": "637a06baf3cd51b086772c2af2dec5630d6477849c2d893d9a7f05360952e5f2"
+        },
+        "pristine_source_manifest_sha256": "18ba4561d63639f4a78ccba1a8d93c5d7eb99f995a2adcd9ce788c118c281679",
+        "product_package": {
+          "catalog_sha256": "de2a2820193eb81f3032e3731d469a02dbd9ea05942f0ef48ebab58966a46e64",
+          "compatibility_id": "gore-as-standalone-semantic-v2",
+          "manifest_byte_len": 5023,
+          "manifest_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
+          "profile_sha256": "264c06884f7d54db2da35cc9c057529be4ccbf208cf577370e4da5199aaf9ab3",
+          "request_version": 2,
+          "response_version": 1,
+          "sidecar_byte_len": 2233608,
+          "sidecar_sha256": "abceb0a495074852441da1b3370122a5bf6d24d4e8096c23596caff2a8ed6ee2",
+          "target": {
+            "pe_codeview": {
+              "age": 1,
+              "guid": "c2ca4ada-4878-d963-e567-717dc2c483a2"
+            },
+            "target": {
+              "architecture": "x86_64",
+              "build_configuration": "shipping",
+              "depot_id": 1297901,
+              "depot_manifest_gid": 382135126159906494,
+              "platform": "windows",
+              "steam_app_id": 1297900,
+              "steam_build_id": 24878692
+            }
+          }
+        },
+        "route": "compile_full_graph_standalone_v1_with_target",
+        "source_modules": 7319,
+        "source_planner": "frozen source inventory compared with prior verified pristine emission; no repeated original emit"
+      },
+      "module_preservation": {
+        "operation": "product module_ranges exact serialized module span comparison",
+        "mini_modules": 4,
+        "full_modules": 7319,
+        "pristine_modules": 7317,
+        "unselected_pristine_modules_byte_identical": 7315,
+        "exact_selected_module_set": true,
+        "diego_bytes_unchanged_from_0_1_11": false,
+        "tower_bytes_unchanged_from_0_1_11": true,
+        "passed": true
+      },
+      "unchanged_Diego_Tower": true,
+      "full_sha256": "ca09c0d6aa2fedfaaf108bd09505f45a0d928631146d5a55af1aab7c4202a199",
+      "mini_sha256": "e7923a03b6045c0e2a54462f9356431de7920effc1847265d86c2c6bfbdff9b7",
+      "generation_receipt_sha256": "849ea29bce1b2c93580f14c839977e95192db6797e690e6215e53b737fd6d05b",
+      "inspection": {
+        "report_format": 1,
+        "source_kind": "directory",
+        "bundle_format": 1,
+        "mod": {
+          "name": "NpcHeadPaletteTest",
+          "version": "0.1.0",
+          "author": ""
+        },
+        "component_count": 3,
+        "components": [
+          {
+            "type": "loc_patch",
+            "path": "loc/edits.json",
+            "target_count": 42,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "voice_archive_patch",
+            "path": "voice",
+            "target_count": 5,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "angel_script_patch",
+            "path": "scripts",
+            "target_count": 4,
+            "footprint_coverage": "exact"
+          }
+        ],
+        "file_count": 10,
+        "directory_count": 4,
+        "total_file_bytes": 453664,
+        "manifest_sha256": "279427c342d09248c01bef8aae59e6303033f8843a8d716f553d88a8074a4052",
+        "tree_sha256": "1bb59eca8717ddc7f5e4f78af48fff404b8f461c791b22791a15e30a5fe50c7c",
+        "evidence": {
+          "verified": [
+            "bounded non-link materialization of the selected directory or ZIP",
+            "root manifest format plus every declared component manifest and referenced payload",
+            "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+            "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+          ],
+          "not_verified": [
+            "compatibility with any particular game installation or game build",
+            "whether named game-side assets, samples, localization ids, or script edit targets exist",
+            "cross-mod conflicts, load order, or deployment readiness",
+            "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+          ]
+        }
+      },
+      "runtime_tested": false
+    },
+    {
+      "kind": "voice",
+      "build": "voice-v1",
+      "bundle": "work/npc-batch-tests/packages/NpcNaturalVoiceTest",
+      "route": "gore as compile --backend standalone",
+      "core_route": null,
+      "module_preservation": {
+        "operation": "product module_ranges exact serialized module span comparison",
+        "mini_modules": 4,
+        "full_modules": 7319,
+        "pristine_modules": 7317,
+        "unselected_pristine_modules_byte_identical": 7315,
+        "exact_selected_module_set": true,
+        "diego_bytes_unchanged_from_0_1_11": false,
+        "tower_bytes_unchanged_from_0_1_11": true,
+        "passed": true
+      },
+      "unchanged_Diego_Tower": true,
+      "full_sha256": "dd4320b3d2c26a6330b25f7beee5ac44e24eadb067b88a56496bad33ea8d3d90",
+      "mini_sha256": "28e969cd71054cf5002bf36429540a3a9cf858f46de104ee5f30f0b82b12f567",
+      "generation_receipt_sha256": "93b198639cf0b11b9c9e3963fe60326e8f079bc6d2224a01d5fffd4fe7e203de",
+      "inspection": {
+        "report_format": 1,
+        "source_kind": "directory",
+        "bundle_format": 1,
+        "mod": {
+          "name": "NpcNaturalVoiceTest",
+          "version": "0.1.0",
+          "author": ""
+        },
+        "component_count": 3,
+        "components": [
+          {
+            "type": "loc_patch",
+            "path": "loc/edits.json",
+            "target_count": 42,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "voice_archive_patch",
+            "path": "voice",
+            "target_count": 5,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "angel_script_patch",
+            "path": "scripts",
+            "target_count": 4,
+            "footprint_coverage": "exact"
+          }
+        ],
+        "file_count": 10,
+        "directory_count": 4,
+        "total_file_bytes": 440345,
+        "manifest_sha256": "4d697430a9490ad4a502213cf034c956225da18fba0786ec32200fd70da0e174",
+        "tree_sha256": "2a5a51318ed9d62a838c6d18727dda5a080bf36764eeb39903237bb25ced31cb",
+        "evidence": {
+          "verified": [
+            "bounded non-link materialization of the selected directory or ZIP",
+            "root manifest format plus every declared component manifest and referenced payload",
+            "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+            "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+          ],
+          "not_verified": [
+            "compatibility with any particular game installation or game build",
+            "whether named game-side assets, samples, localization ids, or script edit targets exist",
+            "cross-mod conflicts, load order, or deployment readiness",
+            "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+          ]
+        }
+      },
+      "runtime_tested": false
+    },
+    {
+      "kind": "economy",
+      "build": "economy-v1",
+      "bundle": "work/npc-batch-tests/packages/NpcEconomyRolesTest",
+      "route": "gore as compile --backend standalone",
+      "core_route": null,
+      "module_preservation": {
+        "operation": "product module_ranges exact serialized module span comparison",
+        "mini_modules": 4,
+        "full_modules": 7319,
+        "pristine_modules": 7317,
+        "unselected_pristine_modules_byte_identical": 7315,
+        "exact_selected_module_set": true,
+        "diego_bytes_unchanged_from_0_1_11": false,
+        "tower_bytes_unchanged_from_0_1_11": true,
+        "passed": true
+      },
+      "unchanged_Diego_Tower": true,
+      "full_sha256": "cff2b6c3df575c02e3e0488c178048e1da3b845f97e77f1db2f386c8bff0ee67",
+      "mini_sha256": "8f56f9322eb6cc205a54188c6032a3bed9e7544ebce2812eb96d109730c0fadc",
+      "generation_receipt_sha256": "8e97bbb392e8a6d3a69f60ff77104b0e3c026293bb66fe0be8d19fba6ab7265c",
+      "inspection": {
+        "report_format": 1,
+        "source_kind": "directory",
+        "bundle_format": 1,
+        "mod": {
+          "name": "NpcEconomyRolesTest",
+          "version": "0.1.0",
+          "author": ""
+        },
+        "component_count": 3,
+        "components": [
+          {
+            "type": "loc_patch",
+            "path": "loc/edits.json",
+            "target_count": 42,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "voice_archive_patch",
+            "path": "voice",
+            "target_count": 5,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "angel_script_patch",
+            "path": "scripts",
+            "target_count": 4,
+            "footprint_coverage": "exact"
+          }
+        ],
+        "file_count": 10,
+        "directory_count": 4,
+        "total_file_bytes": 439911,
+        "manifest_sha256": "52b8474b549684b8daa736673ce20b03bfcdf41aa05237265e61af9999ffd8c8",
+        "tree_sha256": "45735db5d7a129863aff53c89c00b694e9634ae48fb9b4928bb37a54915985da",
+        "evidence": {
+          "verified": [
+            "bounded non-link materialization of the selected directory or ZIP",
+            "root manifest format plus every declared component manifest and referenced payload",
+            "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+            "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+          ],
+          "not_verified": [
+            "compatibility with any particular game installation or game build",
+            "whether named game-side assets, samples, localization ids, or script edit targets exist",
+            "cross-mod conflicts, load order, or deployment readiness",
+            "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+          ]
+        }
+      },
+      "runtime_tested": false
+    },
+    {
+      "kind": "field",
+      "build": "field-v2",
+      "bundle": "work/npc-batch-tests/packages/NpcFieldRolesTest",
+      "route": "compile_full_graph_standalone_v1_with_target",
+      "core_route": {
+        "base_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+        "binds_sha256": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2",
+        "changed_paths": [
+          "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+          "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+          "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+          "LevelScripts/XardasTower_AI.as"
+        ],
+        "final_source_manifest_sha256": "c71feec19f286bc4aa0a35691cc157f906688880b633c8e4234010e2d8c8250e",
+        "frozen_build": "\\\\?\\C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\builds\\field-v1",
+        "frozen_manifest_sha256": "cebec34bf9e1269fd6d66a3062f6456ebfdcc8caaef3f7b8aaecc3f119b385fe",
+        "helper_sha256": "3f7c1bdd40fa85c459a072e025eed0992707dfdf7fd5b2934d37cc504b1f6e6a",
+        "overlay_sha256": {
+          "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as": "40c59b6053412f40ba0fcdc33e77d6a431e64e070b68a78133be0c606bf83b2c",
+          "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as": "34a5f200d787dacfd3738851bbb716f6345f8788f7c66930960f3965c7fe7b4a"
+        },
+        "pristine_source_manifest_sha256": "18ba4561d63639f4a78ccba1a8d93c5d7eb99f995a2adcd9ce788c118c281679",
+        "product_package": {
+          "catalog_sha256": "de2a2820193eb81f3032e3731d469a02dbd9ea05942f0ef48ebab58966a46e64",
+          "compatibility_id": "gore-as-standalone-semantic-v2",
+          "manifest_byte_len": 5023,
+          "manifest_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
+          "profile_sha256": "264c06884f7d54db2da35cc9c057529be4ccbf208cf577370e4da5199aaf9ab3",
+          "request_version": 2,
+          "response_version": 1,
+          "sidecar_byte_len": 2233608,
+          "sidecar_sha256": "abceb0a495074852441da1b3370122a5bf6d24d4e8096c23596caff2a8ed6ee2",
+          "target": {
+            "pe_codeview": {
+              "age": 1,
+              "guid": "c2ca4ada-4878-d963-e567-717dc2c483a2"
+            },
+            "target": {
+              "architecture": "x86_64",
+              "build_configuration": "shipping",
+              "depot_id": 1297901,
+              "depot_manifest_gid": 382135126159906494,
+              "platform": "windows",
+              "steam_app_id": 1297900,
+              "steam_build_id": 24878692
+            }
+          }
+        },
+        "route": "compile_full_graph_standalone_v1_with_target",
+        "source_modules": 7319,
+        "source_planner": "frozen source inventory compared with prior verified pristine emission; no repeated original emit"
+      },
+      "module_preservation": {
+        "operation": "product module_ranges exact serialized module span comparison",
+        "mini_modules": 4,
+        "full_modules": 7319,
+        "pristine_modules": 7317,
+        "unselected_pristine_modules_byte_identical": 7315,
+        "exact_selected_module_set": true,
+        "diego_bytes_unchanged_from_0_1_11": false,
+        "tower_bytes_unchanged_from_0_1_11": true,
+        "passed": true
+      },
+      "unchanged_Diego_Tower": true,
+      "full_sha256": "1cf1d537e146ce53da5d5e07380f33e1d5beb48734fa9dfa6a3948f7e97c1532",
+      "mini_sha256": "d94b6383781485a29193f2dfc7b3d3ed200429120aad695c7def0734c1bec07a",
+      "generation_receipt_sha256": "50489ae0b7f72c2b7a57bdb9b5d6a79d06f35d09b8b2692b43957f87542e0651",
+      "inspection": {
+        "report_format": 1,
+        "source_kind": "directory",
+        "bundle_format": 1,
+        "mod": {
+          "name": "NpcFieldRolesTest",
+          "version": "0.1.0",
+          "author": ""
+        },
+        "component_count": 3,
+        "components": [
+          {
+            "type": "loc_patch",
+            "path": "loc/edits.json",
+            "target_count": 42,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "voice_archive_patch",
+            "path": "voice",
+            "target_count": 5,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "angel_script_patch",
+            "path": "scripts",
+            "target_count": 4,
+            "footprint_coverage": "exact"
+          }
+        ],
+        "file_count": 10,
+        "directory_count": 4,
+        "total_file_bytes": 472072,
+        "manifest_sha256": "16fd921d9110f0229c75e700a8040e75d1f3fb93443bae71155abd41175b9c78",
+        "tree_sha256": "627f40f47f398d7f4613bc863447c8bedec79346d8889c52b9d83e7b2a83abdf",
+        "evidence": {
+          "verified": [
+            "bounded non-link materialization of the selected directory or ZIP",
+            "root manifest format plus every declared component manifest and referenced payload",
+            "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+            "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+          ],
+          "not_verified": [
+            "compatibility with any particular game installation or game build",
+            "whether named game-side assets, samples, localization ids, or script edit targets exist",
+            "cross-mod conflicts, load order, or deployment readiness",
+            "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+          ]
+        }
+      },
+      "runtime_tested": false
+    },
+    {
+      "kind": "quest",
+      "build": "quest-v6",
+      "bundle": "work/npc-batch-tests/packages/NpcQuestCallbacksTest",
+      "route": "compile_full_graph_standalone_v1_with_target",
+      "core_route": {
+        "base_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+        "binds_sha256": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2",
+        "changed_paths": [
+          "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+          "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+          "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+          "LevelScripts/XardasTower_AI.as"
+        ],
+        "final_source_manifest_sha256": "c278bef6fbde271cca730677b94e2f64871f2fbc6dcc63f0231c5941a7fd6068",
+        "frozen_build": "\\\\?\\C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\builds\\quest-v4",
+        "frozen_manifest_sha256": "de0c48d6cc2d74d593fe5c6015d5429e264a1906061d53a2440e4ef0589ae168",
+        "helper_sha256": "80ee4c2b1c91c868a3b5ff5329d49202ee0d8531c3d224c652e03720f312b37c",
+        "overlay_sha256": {},
+        "pristine_source_manifest_sha256": "18ba4561d63639f4a78ccba1a8d93c5d7eb99f995a2adcd9ce788c118c281679",
+        "product_package": {
+          "catalog_sha256": "de2a2820193eb81f3032e3731d469a02dbd9ea05942f0ef48ebab58966a46e64",
+          "compatibility_id": "gore-as-standalone-semantic-v2",
+          "manifest_byte_len": 5023,
+          "manifest_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
+          "profile_sha256": "264c06884f7d54db2da35cc9c057529be4ccbf208cf577370e4da5199aaf9ab3",
+          "request_version": 2,
+          "response_version": 1,
+          "sidecar_byte_len": 2233608,
+          "sidecar_sha256": "abceb0a495074852441da1b3370122a5bf6d24d4e8096c23596caff2a8ed6ee2",
+          "target": {
+            "pe_codeview": {
+              "age": 1,
+              "guid": "c2ca4ada-4878-d963-e567-717dc2c483a2"
+            },
+            "target": {
+              "architecture": "x86_64",
+              "build_configuration": "shipping",
+              "depot_id": 1297901,
+              "depot_manifest_gid": 382135126159906494,
+              "platform": "windows",
+              "steam_app_id": 1297900,
+              "steam_build_id": 24878692
+            }
+          }
+        },
+        "route": "compile_full_graph_standalone_v1_with_target",
+        "source_modules": 7319,
+        "source_planner": "frozen source inventory compared with prior verified pristine emission; no repeated original emit"
+      },
+      "module_preservation": {
+        "operation": "product module_ranges exact serialized module span comparison",
+        "mini_modules": 4,
+        "full_modules": 7319,
+        "pristine_modules": 7317,
+        "unselected_pristine_modules_byte_identical": 7315,
+        "exact_selected_module_set": true,
+        "diego_bytes_unchanged_from_0_1_11": false,
+        "tower_bytes_unchanged_from_0_1_11": true,
+        "passed": true
+      },
+      "unchanged_Diego_Tower": true,
+      "full_sha256": "16cd55df3765f27ede0547cb3a22c2e258466444aa450319488d6908c99360ab",
+      "mini_sha256": "f4560fc6f6b2cccf685f60b5eb2b58891e231acd516601e73adfcceb057219d4",
+      "generation_receipt_sha256": "ce140221c40b8ec1512ef4449de7f29db994f82a4c8918efa2bb3108a29f545c",
+      "inspection": {
+        "report_format": 1,
+        "source_kind": "directory",
+        "bundle_format": 1,
+        "mod": {
+          "name": "NpcQuestCallbacksTest",
+          "version": "0.1.0",
+          "author": ""
+        },
+        "component_count": 3,
+        "components": [
+          {
+            "type": "loc_patch",
+            "path": "loc/edits.json",
+            "target_count": 42,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "voice_archive_patch",
+            "path": "voice",
+            "target_count": 5,
+            "footprint_coverage": "exact"
+          },
+          {
+            "type": "angel_script_patch",
+            "path": "scripts",
+            "target_count": 4,
+            "footprint_coverage": "exact"
+          }
+        ],
+        "file_count": 10,
+        "directory_count": 4,
+        "total_file_bytes": 461740,
+        "manifest_sha256": "cd4eb892658c7b70a16129f078a5f1d6b4cbdeb0d79f28efd85cfe4c276f7aa8",
+        "tree_sha256": "c9aba85b4aed34a85202919132218d7dcac142770ef4f10c12756e8478bd49b1",
+        "evidence": {
+          "verified": [
+            "bounded non-link materialization of the selected directory or ZIP",
+            "root manifest format plus every declared component manifest and referenced payload",
+            "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+            "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+          ],
+          "not_verified": [
+            "compatibility with any particular game installation or game build",
+            "whether named game-side assets, samples, localization ids, or script edit targets exist",
+            "cross-mod conflicts, load order, or deployment readiness",
+            "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+          ]
+        }
+      },
+      "runtime_tested": false
+    }
+  ],
+  "start_saves_report_sha256": "7caa5538598f5eeeaecec1a55edb75bb017aa9ab2359396480b3245074f5a3d7",
+  "game_tests_performed_by": "user; pending for this batch",
+  "installed_mcp_inspector": "Old installed CLI rejects multi-module mini caches; all bundles inspected with the current local CLI.",
+  "excluded": "line-specific lipsync"
+}

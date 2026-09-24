@@ -15,7 +15,7 @@ const _maxItemStringTotalBytes = 64 * 1024;
 const _npcGeneratorId = 'gore-authoring.logical-npc-clone-draft';
 const _npcGeneratorVersion = 1;
 const _questGeneratorId = 'gore-authoring.draft-quest-skeleton';
-const _questGeneratorVersion = 4;
+const _questGeneratorVersion = 6;
 const _questCollisionMediaType =
     'application/vnd.gore.quest-collision-capability+json;version=2';
 

@@ -370,11 +370,11 @@ pub fn build(
         }
     }
 
-    let mut argv: Vec<OsString> = Vec::new();
-    if group.shape == GroupShape::Nested {
-        argv.push(group.cli.into());
-    }
-    argv.push(command.sub.into());
+    let mut argv: Vec<OsString> = group
+        .command_path(command.sub)
+        .into_iter()
+        .map(OsString::from)
+        .collect();
     argv.extend(flags);
     argv.extend(command.forced_argv.iter().map(OsString::from));
     if command.json == JsonSupport::Stdout {
@@ -879,6 +879,11 @@ fn derived_target(
             }
         }
         Derived::Extension(extension) => DerivedTarget::At(base.with_extension(extension)),
+        Derived::Suffix(suffix) => {
+            let mut path = base.components().collect::<std::path::PathBuf>().into_os_string();
+            path.push(suffix);
+            DerivedTarget::At(path.into())
+        }
         Derived::Child(child) => DerivedTarget::At(base.join(child)),
     }
 }
@@ -2016,10 +2021,32 @@ mod tests {
         }
     }
 
+    /// Create a directory symlink, reporting whether the platform and user allow it.
+    fn symlink_directory(target: &std::path::Path, link: &std::path::Path) -> bool {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(target, link).is_ok()
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+    }
+
     #[test]
     fn a_relative_output_is_resolved_before_the_game_tree_is_judged() {
         // The child resolves a relative path against this process's working directory, so judging
         // it lexically would wave through `--out .` run from inside the installation.
+        const CHILD: &str = "GORE_MCP_RELATIVE_OUTPUT_CWD_CHILD";
+        let call = |out: &str| json!({ "mod_dir": "mod", "name": "zzz_Mine_P", "out": out });
+        if std::env::var_os(CHILD).as_deref() == Some(std::ffi::OsStr::new("1")) {
+            assert!(
+                question("gore_texture", "pack", call("."), &options()).is_some(),
+                "`--out .` inside the installation is the same deployment by a shorter name"
+            );
+            return;
+        }
+
         let dir = tempfile::tempdir().expect("tempdir");
         let inside = dir
             .path()
@@ -2029,22 +2056,25 @@ mod tests {
             .join("~mods");
         std::fs::create_dir_all(&inside).expect("create install-like tree");
 
-        let call = |out: &str| json!({ "mod_dir": "mod", "name": "zzz_Mine_P", "out": out });
         let absolute = inside.to_string_lossy().into_owned();
         assert!(
             question("gore_texture", "pack", call(&absolute), &options()).is_some(),
             "the absolute form was already caught"
         );
 
-        // The same directory named relatively, from a working directory inside it.
-        let previous = std::env::current_dir().expect("cwd");
-        std::env::set_current_dir(&inside).expect("enter the install tree");
-        let relative = question("gore_texture", "pack", call("."), &options());
-        std::env::set_current_dir(previous).expect("restore cwd");
-
+        // A process-wide cwd change would race every parallel test that resolves relative paths.
+        // Run just this assertion in a child whose cwd already is the simulated installation.
+        let child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", "argv::tests::a_relative_output_is_resolved_before_the_game_tree_is_judged"])
+            .env(CHILD, "1")
+            .current_dir(&inside)
+            .output()
+            .expect("run isolated relative-output assertion");
         assert!(
-            relative.is_some(),
-            "`--out .` inside the installation is the same deployment by a shorter name"
+            child.status.success(),
+            "isolated relative-output assertion failed:\n{}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
         );
     }
 
@@ -2513,6 +2543,163 @@ mod tests {
             ),
             vec!["dump", "--out", "model.json", "--", "SDK"]
         );
+    }
+
+    #[test]
+    fn routine_leaf_paths_are_tokens_but_argument_values_stay_intact() {
+        assert_eq!(
+            argv_of(
+                "gore_npc",
+                "routine set",
+                json!({
+                    "dir": "workspace with spaces", "time": "12:00", "activity": "read", "spot": "FP_Test", "game": "game path"
+                })
+            ),
+            vec![
+                "npc",
+                "routine",
+                "set",
+                "--time",
+                "12:00",
+                "--activity",
+                "read",
+                "--spot",
+                "FP_Test",
+                "--game",
+                "game path",
+                "--",
+                "workspace with spaces"
+            ]
+        );
+        assert_eq!(
+            argv_of("gore_npc", "routine show", json!({ "dir": "work" })),
+            vec!["npc", "routine", "show", "--json", "--", "work"]
+        );
+        assert_eq!(
+            argv_of(
+                "gore_npc",
+                "routine remove",
+                json!({ "dir": "work", "time": "12:00" })
+            ),
+            vec!["npc", "routine", "remove", "--time", "12:00", "--", "work"]
+        );
+        assert_eq!(
+            argv_of(
+                "gore_npc",
+                "routine spots",
+                json!({ "activity": "sit", "area": "OldCamp", "prefix": "IO_", "max": 7 })
+            ),
+            vec![
+                "npc",
+                "routine",
+                "spots",
+                "--activity",
+                "sit",
+                "--area",
+                "OldCamp",
+                "--prefix",
+                "IO_",
+                "--max",
+                "7",
+                "--json"
+            ]
+        );
+        assert!(
+            build_with(
+                "gore_npc",
+                "routine spots",
+                json!({ "activity": "invented" }),
+                &permissive()
+            )
+            .is_err()
+        );
+        assert!(build_with("gore_npc", "routine invented", json!({}), &permissive()).is_err());
+    }
+
+    #[test]
+    fn routine_workspace_edits_use_the_existing_write_gate_but_inspection_does_not() {
+        for (sub, args) in [
+            (
+                "routine set",
+                json!({ "dir": "work", "time": "12:00", "activity": "read", "spot": "FP_Test" }),
+            ),
+            ("routine remove", json!({ "dir": "work", "time": "12:00" })),
+        ] {
+            assert!(asks_about_a_write(question(
+                "gore_npc",
+                sub,
+                args.clone(),
+                &options()
+            )));
+            let consent = question("gore_npc", sub, args.clone(), &options()).unwrap();
+            assert!(consent.command_line.contains("npc routine"));
+            assert!(question("gore_npc", sub, args, &permissive()).is_none());
+        }
+        for (sub, args) in [
+            ("routine show", json!({ "dir": "work" })),
+            ("routine spots", json!({ "activity": "sleep" })),
+        ] {
+            assert!(question("gore_npc", sub, args, &options()).is_none());
+        }
+    }
+
+    #[test]
+    fn npc_stage_treats_the_emitted_tree_as_an_installation_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let game = temp.path().join("G1R");
+        let work = temp.path().join("npc-work");
+        std::fs::create_dir(&game).unwrap();
+        let args = json!({
+            "dir": work.to_string_lossy(),
+            "tree": game.join("npc-tree").to_string_lossy(),
+            "game": game.to_string_lossy()
+        });
+        assert!(asks_about_a_write(question(
+            "gore_npc",
+            "stage",
+            args,
+            &options()
+        )));
+    }
+
+    #[test]
+    fn npc_stage_classifies_the_lexical_work_sibling_of_a_linked_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let game = temp.path().join("G1R");
+        let outside = temp.path().join("outside-workspace");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let workspace_link = game.join("npc-work");
+        if !symlink_directory(&outside, &workspace_link) {
+            eprintln!("skipping: this platform/user cannot create directory symlinks");
+            return;
+        }
+        for dir in [
+            workspace_link.to_string_lossy().to_string(),
+            format!("{}/", workspace_link.display()),
+        ] {
+            let args = json!({
+                "dir": dir,
+                "tree": outside.join("tree").to_string_lossy(),
+                "game": game.to_string_lossy()
+            });
+            assert!(asks_about_a_write(question(
+                "gore_npc",
+                "stage",
+                args,
+                &options()
+            )));
+        }
+    }
+
+    #[test]
+    fn suffix_target_normalizes_a_trailing_separator() {
+        let target = derived_target(
+            &Map::new(),
+            std::path::Path::new("npc-work/"),
+            Derived::Suffix(".work"),
+        );
+        assert!(matches!(target, DerivedTarget::At(path) if path == std::path::Path::new("npc-work.work")));
     }
 
     #[test]

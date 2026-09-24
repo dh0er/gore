@@ -1,0 +1,483 @@
+{
+  "schema": "gore.npc-batch.field-health-starts.v1",
+  "date": "2026-09-13",
+  "published": true,
+  "displayed_profile": 4,
+  "internal_profile_id": 2,
+  "titles": {
+    "G1R-070": "NPC 04 Rollen - START",
+    "G1R-072": "NPC 04 Rollen - Kampf bereit"
+  },
+  "archive": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-field-health-20260913T062120Z",
+  "archive_manifest_sha256": "0845b4c9db6ebc349bc4b120de2220875c9b23c7558f1d3e3aacea75d117651a",
+  "independent_pdl_metadata_refresh": {
+    "old_archive": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-field-health-20260913T061317Z",
+    "old_manifest_sha256": "a9396009827d3c6cbe2c6d217b68ea74a2ffeca6e28036a824b59a08bfc3c6d7",
+    "old_pdl": {
+      "bytes": 30725,
+      "sha256": "322077d545f223156de6af5c220773d4afe9b7b37c09ac7ce079c690e6f7ad11"
+    },
+    "fresh_pdl": {
+      "bytes": 30725,
+      "sha256": "442787acecc7edf2f7a4f54afdd7f404461466b06ad752644c645f22534d3e13"
+    },
+    "byte_differences": [
+      26123
+    ],
+    "length_unchanged": true,
+    "profiles_and_registry_unchanged": true,
+    "all_save_preimages_unchanged": true,
+    "existing_metadata_changes_preserved": true
+  },
+  "dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "write_save_options": {
+    "backup": true,
+    "syncPersistentDataList": false
+  },
+  "saves": [
+    {
+      "slot": "G1R-070",
+      "title": "NPC 04 Rollen - START",
+      "original": {
+        "bytes": 1034804,
+        "sha256": "20f4a849358475a9671961cab18fea35cbb303e5d3dda85b34d52d3e22ded7c2"
+      },
+      "preview": {
+        "bytes": 1035017,
+        "sha256": "7d90d3b1adae82110223278fc2993930998967e54d8261422548e21d9c75944f"
+      },
+      "edits": [
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{Hero}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{Health}",
+              "BaseValue"
+            ],
+            "value": 10000.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{Hero}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{Health}",
+              "CurrentValue"
+            ],
+            "value": 10000.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{Hero}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{MaxHealth}",
+              "BaseValue"
+            ],
+            "value": 10000.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{Hero}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{MaxHealth}",
+              "CurrentValue"
+            ],
+            "value": 10000.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{Health}",
+              "BaseValue"
+            ],
+            "value": 50.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{Health}",
+              "CurrentValue"
+            ],
+            "value": 50.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{MaxHealth}",
+              "BaseValue"
+            ],
+            "value": 50.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{MaxHealth}",
+              "CurrentValue"
+            ],
+            "value": 50.0
+          }
+        }
+      ],
+      "health_before": {
+        "Hero": {
+          "Health": {
+            "base": 40.0,
+            "current": 40.0
+          },
+          "MaxHealth": {
+            "base": 40.0,
+            "current": 40.0
+          }
+        },
+        "B": {
+          "Health": {
+            "base": 648.0,
+            "current": 648.0
+          },
+          "MaxHealth": {
+            "base": 648.0,
+            "current": 648.0
+          }
+        }
+      },
+      "health_after": {
+        "Hero": {
+          "Health": {
+            "base": 10000.0,
+            "current": 10000.0
+          },
+          "MaxHealth": {
+            "base": 10000.0,
+            "current": 10000.0
+          }
+        },
+        "B": {
+          "Health": {
+            "base": 50.0,
+            "current": 50.0
+          },
+          "MaxHealth": {
+            "base": 50.0,
+            "current": 50.0
+          }
+        }
+      },
+      "time_total_seconds": 43200.0,
+      "live": {
+        "bytes": 1035017,
+        "sha256": "7d90d3b1adae82110223278fc2993930998967e54d8261422548e21d9c75944f"
+      },
+      "backup_file": "goresave_backups\\G1R-070.sav.bak.1789280498"
+    },
+    {
+      "slot": "G1R-072",
+      "title": "NPC 04 Rollen - Kampf bereit",
+      "original": {
+        "bytes": 1034835,
+        "sha256": "3168d88ef5af260e6e6c58311a71c99b5ffebd8f6e5a680c4c015cda4403fffe"
+      },
+      "preview": {
+        "bytes": 1035052,
+        "sha256": "2af60fcee66ed8d0be7177984a4a11d5d32e423f2ac9e8a899e3398e82d68258"
+      },
+      "edits": [
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{Hero}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{Health}",
+              "BaseValue"
+            ],
+            "value": 10000.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{Hero}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{Health}",
+              "CurrentValue"
+            ],
+            "value": 10000.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{Hero}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{MaxHealth}",
+              "BaseValue"
+            ],
+            "value": 10000.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{Hero}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{MaxHealth}",
+              "CurrentValue"
+            ],
+            "value": 10000.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{Health}",
+              "BaseValue"
+            ],
+            "value": 50.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{Health}",
+              "CurrentValue"
+            ],
+            "value": 50.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{MaxHealth}",
+              "BaseValue"
+            ],
+            "value": 50.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Health}",
+              "Attributes",
+              "{MaxHealth}",
+              "CurrentValue"
+            ],
+            "value": 50.0
+          }
+        }
+      ],
+      "health_before": {
+        "Hero": {
+          "Health": {
+            "base": 3000.0,
+            "current": 3000.0
+          },
+          "MaxHealth": {
+            "base": 3000.0,
+            "current": 3000.0
+          }
+        },
+        "B": {
+          "Health": {
+            "base": 648.0,
+            "current": 648.0
+          },
+          "MaxHealth": {
+            "base": 648.0,
+            "current": 648.0
+          }
+        }
+      },
+      "health_after": {
+        "Hero": {
+          "Health": {
+            "base": 10000.0,
+            "current": 10000.0
+          },
+          "MaxHealth": {
+            "base": 10000.0,
+            "current": 10000.0
+          }
+        },
+        "B": {
+          "Health": {
+            "base": 50.0,
+            "current": 50.0
+          },
+          "MaxHealth": {
+            "base": 50.0,
+            "current": 50.0
+          }
+        }
+      },
+      "time_total_seconds": 43200.0,
+      "live": {
+        "bytes": 1035052,
+        "sha256": "2af60fcee66ed8d0be7177984a4a11d5d32e423f2ac9e8a899e3398e82d68258"
+      },
+      "backup_file": "goresave_backups\\G1R-072.sav.bak.1789280517"
+    }
+  ],
+  "persistent_before_and_after": {
+    "bytes": 30725,
+    "sha256": "442787acecc7edf2f7a4f54afdd7f404461466b06ad752644c645f22534d3e13"
+  },
+  "unchanged_071": {
+    "bytes": 1018879,
+    "sha256": "aee18515288dc09ebc1f4687fc3da21cccdec946596b2744f2028ccdfaf68db5"
+  },
+  "checks": {
+    "game_closed_before_each_live_write": true,
+    "originals_matched_last_cleanup_hashes_and_exact_titles": true,
+    "detached_preview_passed": true,
+    "live_outputs_byte_identical_to_verified_previews": true,
+    "health_and_max_health_both_base_and_current_verified": true,
+    "all_other_Hero_B_attributes_unchanged": true,
+    "Hero_B_inventories_positions_skills_unchanged": true,
+    "actor_identities_and_time_unchanged": true,
+    "public_payloads_byte_identical": true,
+    "persistent_and_other_profiles_byte_identical": true,
+    "target_registry_memberships_still_exactly_once": true,
+    "all_other_live_files_unchanged": true,
+    "both_save_preimage_backups_verified": true,
+    "archived_originals_unchanged": true
+  },
+  "qualification": "Only Health and MaxHealth were changed. Original combat/weapon diagnostic health baselines remain archived; these live starts now use Hero 10000 and B 50 for survival and tracing. Existing Strength, resistances, weapons and AI were not changed."
+}

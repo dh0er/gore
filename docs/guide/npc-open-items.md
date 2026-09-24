@@ -1,0 +1,308 @@
+# NPC modding: open work
+
+Updated 2026-09-22. The user sets this order: **heads, objects, voice triggers,
+NPC roles**. Game tests are performed by the user. Complete each focused change,
+then batch offline checks and provide a short game checklist. An untested behavior
+is not automatically a missing CLI capability.
+
+The [remaining-case test batch](../../scripts/fixtures/npc-batch-tests/README.md)
+prepares separate appearance, natural-voice, economy/teacher, field-role and
+quest packages. It covers the open runtime cases below with isolated starting
+saves, including separate teacher requirement failures and a stronger Hero only
+for the positive defeat/death tests. Its current build/verification status is
+recorded with that batch. Preparation does not check off the runtime items.
+
+## 1. Modular heads and faces — tested path passed
+
+- [x] Combine the shipped Flex head with the tested modular Novice clothing.
+- [x] Qualify the required native mesh API references through compilation and
+  Manager composition. Exact sealed native declarations now pass both admission
+  and final cache validation; unknown signatures still fail.
+- [x] Flex/Hero face selection, independent hair visibility, Flex hair color,
+  restoration and restart passed in the user's palette test on2026-09-11.
+- [x] Switch the tested Hero/Flex faces between clean-shaven and short-bearded
+  appearances on C without changing the other characters.
+  H5/H6 failed visually: the Hero beard is painted into `T_NH_Head_D`; hiding
+  the extra `MI_NH_Beard` geometry cannot remove it. Flex has no separate beard.
+  Version0.1.2 then rendered both replacement faces black; Hero restoration
+  also failed. Its ordinary PNG textures did not match the original virtual
+  textures, and the component MID factory could mutate the saved original.
+  Version0.1.3 uses separately cooked VT assets and fresh MIDs with copied
+  original overrides. The user confirms the complete 0.1.3 retest passes:
+  normal skin, both beard variants, original restoration and full restart.
+  This qualifies these two face variants, not arbitrary beard meshes or every
+  head/material combination. Natural-voice results are recorded below.
+  See the [beard checklist](../../scripts/fixtures/npc-batch-tests/heads/README.md)
+  and [0.1.3 runtime result](../../scripts/fixtures/npc-batch-tests/heads/beard-runtime-0.1.3.json).
+- [x] Verify animation alignment, save/load, full restart and absence of duplicate
+  or overlapping heads.
+
+Current result: complete borrowed NPC looks work. Explicit Guard/Novice clothing
+works on `MO_Player`, but retains the Hero head. A separate shipped Flex head has
+been extracted. The user's `NpcHeadProbe` 0.1.5 test **failed visually**: head
+geometry stretches severely when turning. Option 15 restores the Hero head.
+Slot 43 (`npc kopf - wechsel`) confirms the asset loads and bone names match;
+those checks do not establish pose compatibility. The visibility diagnostic
+also reports only six hidden material/LOD pairs from 31 matched materials.
+`NpcHeadVisibilityFix` 0.1.6 also failed visually. Slot 44 (`npc kopf - materialfix`)
+confirms all 186 expected material/LOD pairs report hidden; option 15 still
+restores the Hero head. Material hiding alone therefore does not solve the
+deformation. The following experiment kept Flex in its own reference pose and
+attached it rigidly to the animated body head bone, without facial animation.
+`NpcHeadRigidFix` 0.1.7 is a partial success: the user confirms normal head shape,
+restoration and repeated option 14, but the neck has an open gap. Slot 45
+(`npc kopf - grundpose`) confirms rigid mode and complete material hiding.
+The 0.1.8 experiment uses a poseable mesh: copy the body pose, then restore only
+strict head descendants to Flex's local reference pose. Tick-order and recorded
+head/neck position comparisons are included; runtime compatibility and boundary
+geometry needed a game test. The user confirms a correct neck join in 0.1.8;
+slot 46 (`npc kopf - halsanimation`) records running pose copies and near-zero
+head/neck position errors. However, option 15 crashes after that save.
+That failure required fixing restoration before testing repeated application.
+The 0.1.9 correction excludes C from BFG tick optimization before creating the
+poseable head. The crash dump shows a failed skeletal-component cast in that
+optimizer's interpolation path. The user now confirms the complete 0.1.9
+checklist passes: correct connection, restoration without a crash, repeated
+application without duplicates, full restart and restoration after loading.
+Slots 47 (`npc kopf - wiederhergestellt`) and 48 (`npc kopf - erneut`) confirm
+saved modes 0 and 1. This qualifies the tested Flex/Novice combination; arbitrary
+independent face, hair, beard and color choices were still open at that stage.
+The later palette result above qualifies the tested hair/color controls only.
+See the [head test](../../scripts/fixtures/npc-head/README.md) and
+[head investigation](../../scripts/fixtures/npc-appearance-routine/RESULTS.md#heads-and-faces).
+
+## 2. Activities using objects — tested pairs passed
+
+- [x] Demonstrate sleeping in a real bed and a representative work activity
+  using an alchemy table.
+- [x] Demonstrate sitting at a compatible real chair or stool.
+- [x] Verify a guard activity at a compatible spot.
+- [x] Verify scheduled arrival, activity exit on a time change and continuation
+  after save/load or restart for the bed/alchemy and sitting/watch pairs.
+
+Current result: scheduled walking, free reading/drinking, evening return and
+restart continuation passed with `NpcActivitiesEventFix` 0.1.4. The initial
+ambient fixture failed because its targets did not provide suitable actions.
+The successful free actions do not qualify furniture or work objects.
+`NpcObjectActivities` 0.1.10 passed the user's full game checklist: Xardas'
+bedroom bed and alchemy table, scheduled walking/entry/exit, restart and continued
+sleep at08:00 the next day. Saves49–52 retain the routine and matching positions
+and clock. Alchemy qualifies object use/animations, not recipes or crafted items.
+See the [object fixture](../../scripts/fixtures/npc-objects/README.md).
+The [NpcSeatGuardActivities0.1.11](../../scripts/fixtures/npc-seat-guard/README.md)
+checklist also passed: stool use inside a hut near the Old Camp north gate,
+walking to stationary GuardWatch at noon, return at18:00, full restart and
+continued sitting the next morning. Saves53–56 retain matching positions and
+routine. GuardWatch is a posture with small gestures, not a patrol test.
+The absence of custom restrictions on an interaction spot does not make its
+surrounding room public; the hut belongs to Digger26_531.
+
+## 3. Natural voice triggers — greeting and everyday speech passed
+
+The 0.1.1 batch setup displayed ready but left Hero and A at the tower's upper
+starting point. Its teleport calls came after `EndConversation`; 0.1.2 moves
+them before the conversation ends, using the tested head-setup order. On
+2026-09-12 the user confirms that B and C both greet and independently mumble,
+and B follows his routine path. B also spoke once while walking; the short path
+does not promise a line on every trip. The user also confirms the full-restart
+check without repeating setup. On2026-09-22 the user additionally confirms
+the audible identities: B sounds like Diego and C like Lares.
+See the [setup correction](../../scripts/fixtures/npc-batch-tests/voice/setup-fix.json).
+The [0.1.2 runtime report](../../scripts/fixtures/npc-batch-tests/voice/runtime-result-0.1.2.json)
+separates the observed behavior from remaining checks.
+
+- [x] Demonstrate natural greetings and everyday lines on B and fresh C,
+  including one everyday line while B walks his routine.
+- [x] Observe a naturally triggered trespassing warning spoken by invented B.
+- [x] Observe B's natural threat warning with voice and cleanup after the first warning (bare fists).
+- [x] Resolve the stuck warning after lowering fists following the second spoken warning; nearby saving and save/load now pass in0.1.12.
+- [x] Preserve escalation after save/load: raising fists again after loading the second-warning save makes B attack immediately.
+- [x] Demonstrate equipped-sword escalation and B's spoken combat-start line.
+- [x] Verify greetings/everyday speech after a full restart without repeating setup.
+- [x] Audible distinction between B's Diego and C's Lares profiles, explicitly
+  confirmed by the user on2026-09-22; no repeated voice test is needed.
+- [ ] Investigate two briefly flashing everyday speech bubbles if reproducible.
+  Speaker, wording and whether audio also stopped were not reported. No cause
+  is established; neither vanilla correctness nor a mod defect is assumed.
+
+Current result: existing/new recordings, subtitles, A/Hero speaker changes,
+explicit generic requests, repeat, skip and restart passed. Deliberately invoking
+a generic request does not prove every natural trigger. See the
+[voice campaign](../../scripts/fixtures/npc-voice/RESULTS.md).
+During0.1.11 the user heard B warn about entering Hut31, including while seated
+the next morning. Save56 records B as a witness protecting Digger26_531, with
+two matching Hero trespassing records. This qualifies that natural reaction;
+it does not qualify every trigger or a second profile. The different warning
+behavior across saves is [documented](../../scripts/fixtures/npc-seat-guard/TRESPASSING.md),
+with its exact cause still unresolved.
+The next check on installed0.1.11 was performed with **bare fists**. B's natural
+voice and cleanup after the first warning passed; cleanup after the second
+warning failed, including blocked saving until the user moved farther away.
+Saves57/58 were made after saving became possible and cannot show the stuck
+live state. The [warning investigation](../../scripts/fixtures/npc-weapon-warning/README.md)
+records this partial pass and audits actual cache/reference preservation.
+Original warning modules were not recompiled; a cleanup gate exists in original
+bytecode, but its role in the observed failure is not yet established. Vanilla
+correctness and blanket decompiler correctness are not assumed.
+The [0.1.12 correction](../../scripts/fixtures/npc-weapon-warning/RECOVERY.md)
+introduced the tested fix: only B receives a derived warning state that retries normal
+end assessment for a latched state with no target, warned characters or sensed
+living enemies. C retains its original AI. The user confirmed all focused tests
+on2026-09-10; saves59/60 both contain activation and recovery markers. Cleanup,
+nearby saving and normal watch after loading pass. Raising fists again after
+loading save60 produces an immediate attack, confirming that escalation remains.
+The exact internal warning counter is not inferred from the saved crime rows.
+The [equipped-weapon/combat-voice test](../../scripts/fixtures/npc-weapon-voice/README.md)
+uses separate slot61, `npc voice - waffentest start`: a copy of54 with one usable
+old sword. On2026-09-10 the user confirmed B attacks and speaks his combat line.
+Save62 is `npc voice - schwertwarnung`. No mod rebuild was needed, and the original
+saves were retained. The latest report did not separately describe cleanup after
+sheathing; the recorded checkpoint is not proof of every cleanup step.
+The user could not find the initially imported save. Core import defects in
+duplicated public metadata and central slot registration were corrected, and61
+was repaired with backups on2026-09-10. The subsequent game test confirms loading;
+the retained source date may sort it beside54 rather than at the top.
+
+## 4. NPC roles — field campaign passed; remaining limits
+
+`NpcFieldRolesTest 0.1.0` was tested on2026-09-13; fleeing and revival failed.
+The0.1.1 retest confirms revival.0.1.2 still did not flee; its saved diagnostics
+never reached the task body's first marker.0.1.3 enabled simulated steps and
+the user confirms the complete flight test passed. Its save records entry1,
+41 movement attempts and5381.774cm cumulative movement, then the wait routine.
+See the [latest report](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.3.json).
+See the [save-backed results](../../scripts/fixtures/npc-batch-tests/roles/field-runtime-0.1.0.json)
+and [targeted field retest](../../scripts/fixtures/npc-batch-tests/roles/FIELD-TEST.md).
+The completed economy/teacher starts067/068/069 isolate missing LP, missing ore and successful
+learning. The user confirms all teacher cases, including exact cost, duplicate
+prevention and full restart. Trading0.1.0 and0.1.1 failed: result024 contains stock
+only in A's NPC container, while the separate global shop maps are empty. See the
+[root-cause report](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.1.json),
+[role checklist](../../scripts/fixtures/npc-batch-tests/roles/README.md) and
+[reload correction](../../scripts/fixtures/npc-batch-tests/roles/economy-reload-0.1.3.json).
+The explicit Wilderness/General config candidate made no visible difference.
+TraderConfig plus a dedicated global event made purchase/sale/cancel work in0.1.2,
+but the first reload duplicated the batch while rebuilding the empty default map.
+See the [runtime report](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.2.json).
+The0.1.3 correction uses native `OnWorldStart` initial stock without a manual event
+call. The [0.1.3 result](../../scripts/fixtures/npc-batch-tests/roles/economy-runtime-0.1.3.json)
+passes both loads with unchanged traded stock and Hero inventory. Completed
+starts/results are archived outside the game. After the field campaign,
+Profile4 retained only071 for the subsequent quest tests; that campaign has
+now also passed and its completed saves are archived externally.
+The earlier NPC-container readback was not shop-stock proof.
+
+- [x] Trader with actual stock and working buying/selling/cancel, tested0.1.2.
+- [x] Initial trader stock and transaction changes survive full restart and repeated loading (0.1.3).
+- [x] Qualify persistent late stock-event grants after native initial stock.
+  The0.1.2 path duplicated a batch on first reload despite a retained ledger.
+  The [focused restock follow-up](../../scripts/fixtures/npc-batch-tests/roles/restock/README.md)
+  passed on25168047: initial3/10/100, later2/5/20, repeated dispatch without
+  another grant, purchase and two restarts. Five saves confirm the result;
+  final A stock is4/15/127 and Hero retains1 cheese/43 ore. The default map
+  grows on load without duplicating current stock. The older failure's native
+  cause remains unproven. All six START/result saves are archived externally.
+- [x] Teacher with separate LP/ore requirements, exact cost, no duplicate charge
+  and persistent learned result after full restart.
+- [x] Companion/following behavior, including stopping, resuming and reload.
+- [x] Training defeat/recovery, hostility until defeat and saved faction roundtrip.
+- [x] Fleeing from Hero:0.1.0 attacked. The explicit authored retreat uses
+  Hero as its target and native navigation, bypassing conditional fight assessment
+  and same-species filtering.0.1.1 stopped attacking but did not move;0.1.2 uses
+  the proven routine entry path, explicit player target and native pathfinding,
+  with a few saved diagnostic values.0.1.2 records no entry or movement attempt;
+  0.1.3 enables simulated steps like the proven routine states; the user and
+  saved movement measurements confirm the tested flight/stop path. This does
+  not qualify stock fear assessment, all streaming cases or every terrain.
+- [ ] Investigate B drawing a bow next to the Hero and sometimes switching to a
+  sword before firing. Archer personality and both usable weapons are confirmed;
+  the runtime cause remains open. See the
+  [analysis](../../scripts/fixtures/npc-weapon-voice/WEAPON-SELECTION.md).
+  Test64 (`npc kampf - B freie flaeche`) was prepared from the user's open-ground
+  save63 on2026-09-11; B starts two metres ahead with his daily routine disabled.
+  Weapons/combat AI are retained. The user reproduced it on2026-09-11: B draws
+  the sword during the warning, then switches to his bow when combat starts.
+  The hut is not required to reproduce it; runtime scoring and attribution remain open.
+  The2026-09-13 trace captures warning sword at97cm but no combat-phase sample;
+  it does not resolve the bow cause.
+- [x] Death/defeat and persistence of death on reload.
+- [x] Explicit same-NPC revival:0.1.0 stayed dead despite82.7 game minutes since
+  execution. Adding the actual Character.Defeated.Kill death memory to its
+  filter fixed the user's0.1.1 runtime test. No separate post-revival save
+  readback was available in that follow-up; do not extend this to arbitrary
+  death types, all streaming conditions or unseen reload cases.
+
+These are focused role tests still to perform, not claims that the corresponding
+engine features or script paths are absent. `npc new --trader` currently creates
+an empty trader configuration; it does not by itself qualify a working shop.
+
+## 5. Quest completion beyond the basic session fixture — tested campaign passed
+
+On2026-09-21 the user confirms all seven steps of NpcQuestCallbacksTest0.1.2
+passed, starting from Profile4 slot071 at noon. See the
+[runtime result](../../scripts/fixtures/npc-batch-tests/quest/runtime-0.1.2.json)
+and [completed German checklist](../../scripts/fixtures/npc-batch-tests/quest/FIELD-TEST.md).
+The package was rebuilt for Steam hotfix 25168047 after rebasing onto the current
+main decompiler. Its quest sources and start save are unchanged; the new game's
+unselected modules are preserved. See the
+[hotfix deployment](../../scripts/fixtures/npc-batch-tests/quest/hotfix-0.1.2.json).
+In0.1.0 A had no dialogue menu. All29 authored events were incorrectly registered
+as ordinary callables;0.1.1 fixes dialog, quest and document event bindings and
+const predicate signatures. The standalone and Revision-3 generators both use
+version 6 and emit the correct native overrides. The corrected fixture's
+runtime progression is now confirmed; the earlier failure remains documented:
+[failure and diagnosis](../../scripts/fixtures/npc-batch-tests/quest/runtime-0.1.0.json).
+
+The [session campaign](../../scripts/fixtures/npc-session/RESULTS.md) passed
+quest acceptance, active/completed journal presence, direct start/success calls,
+stage-dependent dialogue and persistence across save/load and full restart.
+It did not qualify every generated quest transition or a finished quest journal.
+
+- [x] Own questlog document, objective text and authored journal paragraphs,
+  without the unrelated vanilla letter from the earlier session fixture.
+- [x] Two objectives with automatic start/success/failure callbacks and
+  progression from agreement to delivery.
+- [x] Exactly two cheese handed in for exactly25 ore once; the supply option
+  and reward remain single-use after reload/restart and repeated dialogue.
+- [x] Success and cancellation branches, with full restarts at intermediate
+  and terminal stages. Cancellation grants no reward and consumes no items.
+
+This qualifies the tested handwritten two-objective quest on Steam25168047.
+It does not establish every generated quest graph, arbitrary branching or all
+game versions; broader generated behavior retains its separate qualification.
+
+## Dialog and voice boundaries
+
+New conversations, same-module nested dialogue trees, rules, persisted effects,
+speaker changes and new Vorbis recordings have game evidence. The current
+[dialog guide](dialog-authoring.md#practical-limits-only) records constraints:
+at most20 immediate choices per submenu; a required top-level Say between
+successive new submenu transitions; a loaded settings anchor for first
+conversations; and a complete-cache build for new cross-module dependencies.
+These are authoring constraints, not evidence that ordinary dialogue creation
+is missing. Other game builds and untested audio layouts are not qualified.
+Voice publication uses Vorbis; line-specific lip sync is excluded by the user.
+
+## Follow-up improvements
+
+- [x] CLI convenience for multiple schedule phases and activity selection:
+  `npc routine set/show/remove/spots` edits new/clone workspaces, validates times
+  and object action restrictions, and generates an explicit saved-NPC routine
+  replacement helper. Seven activities reuse the tested paths; see
+  [daily schedules](npc-authoring.md#editing-a-daily-schedule). Arbitrary newly
+  selected routes still require an in-game check. Quest-dependent alternate
+  schedules remain handwritten.
+- [ ] Optional longer, more natural activity animations. The current test repeats
+  short reading/drinking actions with a two-second pause; this is expected.
+
+Accurate line-specific lip sync is **excluded by the user**.
+
+## Already verified
+
+New NPC identity/body/spawn; existing complete appearances; modular clothing;
+dialogue/quest progress; persistent knowledge and a Friend relationship; new
+voice recordings and subtitle IDs; scheduled walks and free reading/drinking;
+the tested separate Flex head with modular clothing, restore/reapply and restart;
+the tested save/load and full-restart cases. A shipped Diego health edit also
+passed. See the [NPC guide](npc-authoring.md#what-is-proven-and-what-is-not)
+for scope and linked evidence.

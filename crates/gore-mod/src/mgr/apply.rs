@@ -1497,8 +1497,12 @@ fn apply_loadout_with_limits(
 
         // Pass 3 builds the guard only after the plan's large base context is gone. Reopen, verify,
         // and compose each tempfile in loadout order; consuming it cleans disk incrementally.
-        let mut merge_guard = gore_as::cache::splice::SequentialMiniGuard::new(&base)
-            .map_err(|e| ModError::Other(format!("prepare script composition: {e}")))?;
+        let binds = crate::qualified_native_binds_for_base(&gp.script_cache, &base);
+        let mut merge_guard = gore_as::cache::splice::SequentialMiniGuard::new_with_binds(
+            &base,
+            binds.as_deref().unwrap_or(&[]),
+        )
+        .map_err(|e| ModError::Other(format!("prepare script composition: {e}")))?;
         let mut acc = base;
         let mut canonical_read_bytes = 0u64;
         for ((op, module, _), sealed) in scripts.iter().zip(canonical_minis) {
