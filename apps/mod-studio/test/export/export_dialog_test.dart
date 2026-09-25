@@ -46,7 +46,6 @@ void main() {
       request: ExportRequest(
         modName: 'MyBalanceMod',
         targetDir: tmp.path,
-        delayMs: 0,
       ),
       overrides: container.read(overridesProvider).entries,
     );
@@ -60,7 +59,7 @@ void main() {
 
     final genPayload = genCalls.first.payload;
     expect(genPayload['meta'], containsPair('name', 'MyBalanceMod'));
-    expect(genPayload['meta'], containsPair('delay_ms', 0));
+    expect((genPayload['meta'] as Map).containsKey('delay_ms'), isFalse);
     final sentOverrides = genPayload['override'] as List;
     expect(sentOverrides, hasLength(2));
     final appleEntry = sentOverrides

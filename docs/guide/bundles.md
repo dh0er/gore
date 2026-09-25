@@ -303,34 +303,9 @@ choices, and ended cleanly without a generated UE4SS component. A separate new
 conversation Add module compiled, packaged and deployed but was not discovered,
 which is why the command now refuses a missing settings anchor.
 
-`dialog_topics` remains a separate low-level compatibility surface for old
-workspaces and explicitly hand-authored specs. Such an entry asks the generated
-UE4SS adapter to register an authored AngelScript topic at the target
-conversation's natural UI boundary. It needs explicit identities: the
-participant, the authored `topic_class`, and a vanilla `sentinel_class`:
-
-```json
-{
-  "dialog_topics": [
-    {
-      "id": "legacy-diego-test",
-      "participant_name": "oc_stt_diego",
-      "topic_class": "/Script/Angelscript.ChoiceMyModDiego",
-      "sentinel_class": "/Script/Angelscript.ChoiceDiegoExitGamestart"
-    }
-  ]
-}
-```
-
-For a state-dependent choice, add `"allow_hidden": true`. A clean zero-match
-after `IsVisible_Implementation` is then accepted as conditional, while
-duplicates and mixed identity/class matches still fail closed. The default
-remains strict: the registered topic must reach both UI proof stages.
-
-That `allow_hidden` flag belongs to this low-level adapter schema; it is not a
-`gore dialog new-topic` CLI option. Compilation and script-only packaging do
-not require UE4SS. The adapter's older runtime evidence does not replace the
-native current-path evidence or qualify other builds.
+`dialog_topics` is retired. `gore mod build` refuses a spec that still contains
+it, and `gore dialog check` and `stage` refuse a workspace that still carries
+one. Old workspaces have to be re-authored as a same-module script mini-cache.
 
 Full template, runtime evidence, and safe test order:
 [AngelScript dialog authoring](dialog-authoring.md).

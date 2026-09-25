@@ -2,14 +2,10 @@ class ExportRequest {
   const ExportRequest({
     required this.modName,
     required this.targetDir,
-    this.delayMs = 0,
   });
 
   final String modName;
   final String targetDir;
-
-  /// 0 = apply on first tick; >0 = ExecuteWithDelay in ms.
-  final int delayMs;
 }
 
 class ExportResult {

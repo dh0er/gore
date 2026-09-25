@@ -468,10 +468,8 @@ anchored first-conversation and all-new-tree fixtures. A standalone new
 conversation module is not an equivalent package: it deploys, but the game does
 not discover it.
 
-If a hand-authored low-level bundle deliberately includes legacy
-`dialog_topics`, its transient registration component remains `opaque`. The
-manager then reports an unknown-interaction advisory when another UE4SS mod
-shares the loadout; that advisory does not invent a later-wins result.
+A spec that still contains `dialog_topics` does not build. `gore mod build`
+refuses it, and there is no UE4SS registration component to package.
 
 ## Safe validation order
 
@@ -487,10 +485,7 @@ shares the loadout; that advisory does not invent a later-wins result.
 6. Inspect an existing-topic edit, same-module root, same-module sub-topic or
    anchored first conversation in the native menu directly. For a new
    multi-level tree, put an unconditional top-level `Say` before one of two
-   consecutive nested `Subdialog` transitions. If separately
-   qualifying a hand-authored legacy `dialog_topics` adapter, require its
-   `ARMED -> CHOICE_PASS -> RENDER_PASS` sequence and exact identity/class
-   counts, then still confirm the option visually.
+   consecutive nested `Subdialog` transitions.
 7. For a render-only check, confirm the caption visually and select nothing.
    For a selection check, use a disposable save, select the exact fixture, and
    verify its expected result such as conversation end and restored player

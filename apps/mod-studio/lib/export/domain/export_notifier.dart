@@ -70,8 +70,7 @@ class ExportNotifier extends StateNotifier<ExportState> {
     // `{meta, override:[{class, field, value_int|value_float|value_bool|value_str}]}`.
     final res = await _core.execute('generate_mod', payload: {
       'meta': {
-        'name':     request.modName,
-        'delay_ms': request.delayMs,
+        'name': request.modName,
       },
       'override': [for (final o in overrides) o.toFfiJson()],
     });
