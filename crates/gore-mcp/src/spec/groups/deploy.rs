@@ -623,6 +623,8 @@ const MOD_COMMANDS: &[CommandSpec] = &[
                         pointer: "/meta/name",
                     },
                 ),
+                // Values compiles delete leftover `*.mini.cache` files in this directory.
+                ("out", Derived::Child(".value-minis")),
                 ("work_dir", Derived::Child("tree")),
             ])
             .clobbers_dir(&["work_dir"])

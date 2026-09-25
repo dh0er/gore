@@ -1338,6 +1338,7 @@ mod tests {
                             pointer: "/meta/name",
                         },
                     ),
+                    ("out", Derived::Child(".value-minis")),
                     ("work_dir", Derived::Child("tree")),
                 ],
             ),
