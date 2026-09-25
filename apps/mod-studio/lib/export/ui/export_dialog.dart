@@ -20,7 +20,6 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
   final _nameController  = TextEditingController(text: 'MyBalanceMod');
   final _delayController = TextEditingController(text: '0');
   String? _targetDir;
-  bool _packageAsZip = false;
   String? _nameError;
   String? _delayError;
 
@@ -69,7 +68,6 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
         modName:      _nameController.text.trim(),
         targetDir:    _targetDir!,
         delayMs:      int.tryParse(_delayController.text.trim()) ?? 0,
-        packageAsZip: _packageAsZip,
       ),
       overrides: overrides,
     );
@@ -131,13 +129,6 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
                   child: Text(l10n.chooseFolder),
                 ),
               ],
-            ),
-            const SizedBox(height: 12),
-            CheckboxListTile(
-              title: Text(l10n.packageAsZip),
-              value: _packageAsZip,
-              contentPadding: EdgeInsets.zero,
-              onChanged: (v) => setState(() => _packageAsZip = v ?? false),
             ),
             if (exportState.validationErrors.isNotEmpty) ...[
               const SizedBox(height: 8),

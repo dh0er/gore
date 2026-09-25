@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:archive/archive.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/core_service.dart';
@@ -19,14 +18,14 @@ void main() {
     classId: 'ItMw_1H_Sword_01', field: 'm_Weight', oldValue: 5.0, newValue: 1.5,
   );
 
-  testWidgets('export sends the gore_core schema and writes returned files', (tester) async {
+  testWidgets('export writes a source spec and not a finished mod', (tester) async {
     final fake = FakeGoreCoreFfiService(responses: {
       'generate_mod': {
         'ok': true,
         'files': {
-          'enabled.txt': '',
-          'Scripts/main.lua': '-- generated mod\n',
+          'spec.json': '{"meta":{"name":"MyBalanceMod"},"values":[]}\n',
         },
+        'note': 'item values compile into a script mini-cache via gore mod build',
       },
     });
 
@@ -74,20 +73,18 @@ void main() {
         .firstWhere((o) => o['class'] == 'ItMw_1H_Sword_01');
     expect(swordEntry['value_float'], 1.5);
 
-    // Files were materialized under <targetDir>/<modName>/.
-    final modDir = p.join(tmp.path, 'MyBalanceMod');
-    expect(File(p.join(modDir, 'enabled.txt')).existsSync(), isTrue);
-    expect(
-      File(p.join(modDir, 'Scripts/main.lua')).readAsStringSync(),
-      '-- generated mod\n',
-    );
+    final specPath = p.join(tmp.path, 'MyBalanceMod.spec.json');
+    expect(File(specPath).readAsStringSync(), contains('"values"'));
+    expect(Directory(p.join(tmp.path, 'MyBalanceMod')).existsSync(), isFalse);
+    expect(File(p.join(tmp.path, 'MyBalanceMod.zip')).existsSync(), isFalse);
 
     final result = container.read(exportProvider).result;
     expect(result?.success, isTrue);
-    expect(result?.outputPath, modDir);
+    expect(result?.outputPath, specPath);
+    expect(result?.note, contains('gore mod build'));
   });
 
-  testWidgets('packageAsZip writes a .zip nested under the mod name', (tester) async {
+  testWidgets('a lua-shaped files map is not written as a mod', (tester) async {
     final fake = FakeGoreCoreFfiService(responses: {
       'generate_mod': {
         'ok': true,
@@ -106,22 +103,13 @@ void main() {
     addTearDown(container.dispose);
 
     await container.read(exportProvider.notifier).export(
-      request: ExportRequest(
-        modName: 'ZipMod',
-        targetDir: tmp.path,
-        packageAsZip: true,
-      ),
+      request: ExportRequest(modName: 'ZipMod', targetDir: tmp.path),
       overrides: [apple500],
     );
 
-    final zipPath = p.join(tmp.path, 'ZipMod.zip');
-    expect(File(zipPath).existsSync(), isTrue);
-    expect(container.read(exportProvider).result?.outputPath, zipPath);
-
-    final archive = ZipDecoder().decodeBytes(File(zipPath).readAsBytesSync());
-    final names = archive.files.map((f) => f.name).toSet();
-    expect(names, contains('ZipMod/enabled.txt'));
-    expect(names, contains('ZipMod/Scripts/main.lua'));
+    expect(container.read(exportProvider).result?.success, isFalse);
+    expect(File(p.join(tmp.path, 'ZipMod.zip')).existsSync(), isFalse);
+    expect(Directory(p.join(tmp.path, 'ZipMod')).existsSync(), isFalse);
   });
 
   testWidgets('rejects a path-escaping mod name without writing', (tester) async {
@@ -152,10 +140,7 @@ void main() {
     expect(fake.calls, isEmpty);
   });
 
-  testWidgets('a failed write removes the partial mod tree', (tester) async {
-    // The second file name is invalid on Windows, so the first file writes
-    // (creating the mod dir) and the second throws — the partial tree must be
-    // cleaned up rather than left looking like a real export.
+  testWidgets('a non-spec response writes nothing', (tester) async {
     final fake = FakeGoreCoreFfiService(responses: {
       'generate_mod': {
         'ok': true,
@@ -180,9 +165,10 @@ void main() {
 
     expect(container.read(exportProvider).result?.success, isFalse);
     expect(Directory(p.join(tmp.path, 'PartialMod')).existsSync(), isFalse);
-  }, skip: !Platform.isWindows);
+    expect(File(p.join(tmp.path, 'PartialMod.spec.json')).existsSync(), isFalse);
+  });
 
-  testWidgets('a failed re-export leaves the existing mod intact', (tester) async {
+  testWidgets('a non-spec response leaves an existing spec intact', (tester) async {
     final fake = FakeGoreCoreFfiService(responses: {
       'generate_mod': {
         'ok': true,
@@ -191,10 +177,8 @@ void main() {
     });
     final tmp = Directory.systemTemp.createTempSync('gore_mod_atomic_');
     addTearDown(() => tmp.deleteSync(recursive: true));
-    // A previously-good export already on disk.
-    final existing = Directory(p.join(tmp.path, 'AtomicMod'))
-      ..createSync(recursive: true);
-    File(p.join(existing.path, 'enabled.txt')).writeAsStringSync('OLD');
+    final existing = File(p.join(tmp.path, 'AtomicMod.spec.json'))
+      ..writeAsStringSync('OLD');
 
     final container = ProviderContainer(
       overrides: [coreServiceProvider.overrideWithValue(fake)],
@@ -207,9 +191,8 @@ void main() {
     );
 
     expect(container.read(exportProvider).result?.success, isFalse);
-    // The old mod must be untouched (staged write never reached it).
-    expect(File(p.join(existing.path, 'enabled.txt')).readAsStringSync(), 'OLD');
-  }, skip: !Platform.isWindows);
+    expect(existing.readAsStringSync(), 'OLD');
+  });
 
   testWidgets('export surfaces a generation error and writes nothing', (tester) async {
     final fake = FakeGoreCoreFfiService(responses: {
