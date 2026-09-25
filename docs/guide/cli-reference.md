@@ -276,7 +276,7 @@ command.
 
 | Subcommand | Flags |
 |---|---|
-| `build` | `--spec <SPEC>` (asset paths resolve against its directory) · `-o, --out <OUT>` (bundle goes to `<out>/<mod-name>`) · `--model <MODEL>` (validate field names/types; skipped if absent) |
+| `build` | `--spec <SPEC>` (asset paths resolve against its directory) · `-o, --out <OUT>` (bundle goes to `<out>/<mod-name>`) · `--game <GAME>` and `--work-dir <DIR>` (required when the spec contains `values`) · `--model` is ignored |
 | `inspect <BUNDLE>` | bundle directory or ZIP · `--json`; read-only full offline validation plus a bounded metadata/component/hash report |
 | `deploy` | `--bundle <BUNDLE>` · `--game <GAME>` |
 | `undeploy` | `--game <GAME>` |

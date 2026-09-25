@@ -1016,6 +1016,16 @@ fn read_bank_pristine(bank: &str) -> std::io::Result<Vec<u8>> {
     Ok(live)
 }
 
+/// Catalog ids such as `ItFo_Apple` are the Gothic instance name. The Shipping
+/// script names the class `UItFo_Apple`. A name that already has the prefix is kept.
+fn script_class_name(class: &str) -> String {
+    if class.starts_with('U') {
+        class.to_owned()
+    } else {
+        format!("U{class}")
+    }
+}
+
 fn generate_mod(payload: Value) -> Value {
     let cfg: OverridesConfig = match serde_json::from_value(payload) {
         Ok(c) => c,
@@ -1032,7 +1042,7 @@ fn generate_mod(payload: Value) -> Value {
                 gore_modgen::gen::OverrideValue::Str(text) => json!({"str": text}),
             };
             json!({
-                "class": item.class,
+                "class": script_class_name(&item.class),
                 "field": item.field,
                 "value": value,
             })
@@ -2126,7 +2136,7 @@ mod tests {
         let v: Value = serde_json::from_str(&execute_json(req)).unwrap();
         assert_eq!(v["ok"], true);
         let spec = v["files"]["spec.json"].as_str().unwrap();
-        assert!(spec.contains("ItFo_Apple"));
+        assert!(spec.contains("\"class\": \"UItFo_Apple\""));
         assert!(spec.contains("\"int\": 500") || spec.contains("\"int\":500"));
         assert!(v["files"].get("Scripts/main.lua").is_none());
     }

@@ -1,10 +1,9 @@
 # Bundling & deploying
 
-A **bundle** combines every deployable domain — item overrides, localized text,
-audio, voice archives, textures/assets, loose or packed files, scripts, and
-low-level dialog-topic registration adapters — into one mod that deploys and
-undeploys as a unit. This is the same engine
-[Mod Studio](../../apps/mod-studio/README.md) drives.
+A **bundle** combines every deployable domain — class-default values, localized
+text, audio, voice archives, textures/assets, loose or packed files, and
+scripts — into one mod that deploys and undeploys as a unit. This is the same
+engine [Mod Studio](../../apps/mod-studio/README.md) drives.
 
 ## The build spec
 
@@ -13,7 +12,7 @@ Write a `spec.json`:
 ```json
 {
   "meta": { "name": "MyMod", "version": "1.0.0", "author": "you" },
-  "overrides": [ { "class": "ItFo_Apple", "field": "m_Value", "value_int": 500 } ],
+  "values": [ { "class": "UItFo_Apple", "field": "m_Value", "value": { "int": 500 } } ],
   "loc_edits": { "ch1_bringlist_entry_3": { "german": "…", "german_new": "…" } },
   "audio":   [ { "bank": "SFX.bank", "sample": "Foo", "wav_path": "foo.wav" } ],
   "voice":   [ { "archive": "german_new.zip", "op": "replace", "archive_path": "NPC/Hero/DIA_Foo.ogg", "ogg_path": "DIA_Foo.ogg" } ],
@@ -61,11 +60,12 @@ them.** An unknown class, a wrong type, or a missing tag fails before a bundle
 is written. `--model` does not apply to that path.
 
 ```powershell
-gore mod build --spec spec.json -o build --model model.json
+gore mod build --spec spec.json --game "$GAME" --work-dir .gore-value-work -o build
 ```
 
-Every section is optional; `delay_ms` may be set alongside `overrides` to defer
-the CDO patch. Each section maps to the domain guide of the same name:
+`values` needs `--game` and `--work-dir`; without that section both can be
+omitted. `--model` is ignored. Every section is optional. Each section maps to
+the domain guide of the same name:
 [items](items.md), [text](text-and-dialogs.md), [audio](audio.md),
 [voice](voice.md), [textures](textures.md), [scripts](scripts.md).
 

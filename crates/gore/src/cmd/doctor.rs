@@ -679,7 +679,7 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
             Ok(Occupant::Obstruction) => return obstructed(
                 mods,
                 Wanted::Folder,
-                "'gore mod deploy' and 'gore gen -o <mods dir>' both create that folder, and they",
+                "'gore mod deploy' creates that folder, and it",
             ),
             Err(error) => return unreadable(error),
         };
@@ -793,8 +793,7 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
             match mods_present {
                 true => String::new(),
                 false => format!(
-                    ". There is also no {} yet; 'gore mod deploy' and 'gore gen -o <mods dir>' \
-                     both create it",
+                    ". There is also no {} yet; 'gore mod deploy' creates it",
                     mods.display()
                 ),
             }
@@ -809,7 +808,7 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
             format!("installed, but there is no {} yet", mods.display()),
         )
         .with_items(items)
-        .with_fix("'gore mod deploy' and 'gore gen -o <mods dir>' both create it");
+        .with_fix("'gore mod deploy' creates it");
     }
 
     Check::new(
