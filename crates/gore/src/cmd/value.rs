@@ -221,6 +221,7 @@ pub fn compile_values_into_scripts(
         std::fs::create_dir_all(work_dir)
             .with_context(|| format!("creating {}", work_dir.display()))?;
         std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+        clear_owned_mini_caches(out_dir)?;
         let cache_sha = hex_sha256(bytes);
         let mut scripts = Vec::new();
         for (index, module_edits) in by_module {
@@ -477,11 +478,43 @@ fn tag_map_entry(call: &str) -> Option<(String, String, String)> {
     Some((field.to_string(), tag.to_string(), literal.trim().to_string()))
 }
 
+fn clear_owned_mini_caches(out_dir: &Path) -> Result<()> {
+    let entries = std::fs::read_dir(out_dir)
+        .with_context(|| format!("reading {}", out_dir.display()))?;
+    for entry in entries {
+        let path = entry
+            .with_context(|| format!("reading {}", out_dir.display()))?
+            .path();
+        let owned = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".mini.cache"));
+        if owned && path.is_file() {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("removing leftover mini {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
 fn class_span(source: &str, class_name: &str) -> Result<(usize, usize)> {
     let marker = format!("class {class_name}");
-    let start = source
-        .find(&marker)
-        .with_context(|| format!("emitted source has no {marker}"))?;
+    let mut search_from = 0;
+    let start = loop {
+        let Some(relative) = source[search_from..].find(&marker) else {
+            bail!("emitted source has no exact declaration `{marker}`");
+        };
+        let start = search_from + relative;
+        let after = start + marker.len();
+        let boundary = source[after..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !(ch.is_ascii_alphanumeric() || ch == '_'));
+        if boundary {
+            break start;
+        }
+        search_from = after;
+    };
     let bytes = source.as_bytes();
     let mut depth = 0i32;
     let mut opened = false;
@@ -603,6 +636,46 @@ class UItMw_1H_Sword_Old_01 : USword1H {
             "default m_DamageBase.Add(GameplayTag::Item_Damage_Physical_Blunt, 2.0f);"
         ));
         prove_only_requested_statements_changed(SOURCE, &edited, &[&apple, &sword]).unwrap();
+    }
+
+    #[test]
+    fn prefix_class_name_does_not_rewrite_the_longer_class() {
+        let source = r#"
+class UFooBar : UItem {
+    default m_Value = 1;
+}
+class UFoo : UItem {
+    default m_Value = 2;
+}
+"#;
+        let shorter = edit("UFoo", "m_Value", None, ValueLiteral::Int(9));
+        let edited = apply_edits(source, &[&shorter]).unwrap();
+        assert!(edited.contains("class UFooBar : UItem {\n    default m_Value = 1;"));
+        assert!(edited.contains("class UFoo : UItem {\n    default m_Value = 9;"));
+        let longer = edit("UFooBar", "m_Value", None, ValueLiteral::Int(7));
+        let edited = apply_edits(source, &[&longer]).unwrap();
+        assert!(edited.contains("class UFooBar : UItem {\n    default m_Value = 7;"));
+        assert!(edited.contains("class UFoo : UItem {\n    default m_Value = 2;"));
+    }
+
+    #[test]
+    fn rebuild_clears_a_leftover_mini_cache() {
+        let dir = std::env::temp_dir().join(format!(
+            "gore-value-minis-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let leftover = dir.join("Module.mini.cache");
+        std::fs::write(&leftover, b"old").unwrap();
+        std::fs::write(dir.join("keep.txt"), b"keep").unwrap();
+        clear_owned_mini_caches(&dir).unwrap();
+        assert!(!leftover.exists());
+        assert_eq!(std::fs::read(dir.join("keep.txt")).unwrap(), b"keep");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
