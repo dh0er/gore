@@ -339,7 +339,7 @@ fn apply_one(source: &str, edit: &ValueEdit) -> Result<String> {
 
 fn rewrite_assignment(body: &str, field: &str, old: &str, value: &ValueLiteral) -> Result<String> {
     let old_type = classify_literal(old).0;
-    if old_type != "unsupported" && old_type != value.type_name() {
+    if old_type == "unsupported" || old_type != value.type_name() {
         bail!(
             "{field} is {old_type} ({old}); refusing to write {}",
             value.type_name()
@@ -374,7 +374,7 @@ fn rewrite_tag(body: &str, field: &str, tag: &str, value: &ValueLiteral) -> Resu
         bail!("no class default {field}.Add(GameplayTag::{tag}, ...) to edit");
     };
     let old_type = classify_literal(&old).0;
-    if old_type != "unsupported" && old_type != value.type_name() {
+    if old_type == "unsupported" || old_type != value.type_name() {
         bail!(
             "{field} tag {tag} is {old_type} ({old}); refusing to write {}",
             value.type_name()
@@ -515,25 +515,60 @@ fn class_span(source: &str, class_name: &str) -> Result<(usize, usize)> {
         }
         search_from = after;
     };
-    let bytes = source.as_bytes();
     let mut depth = 0i32;
     let mut opened = false;
-    let mut index = start;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'{' => {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut line_comment = false;
+    let mut block_comment = false;
+    let mut chars = source[start..].char_indices().peekable();
+    while let Some((offset, ch)) = chars.next() {
+        let index = start + offset;
+        if line_comment {
+            if ch == '\n' {
+                line_comment = false;
+            }
+            continue;
+        }
+        if block_comment {
+            if ch == '*' && chars.peek().is_some_and(|(_, next)| *next == '/') {
+                chars.next();
+                block_comment = false;
+            }
+            continue;
+        }
+        if let Some(end) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == end {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '/' if chars.peek().is_some_and(|(_, next)| *next == '/') => {
+                chars.next();
+                line_comment = true;
+            }
+            '/' if chars.peek().is_some_and(|(_, next)| *next == '*') => {
+                chars.next();
+                block_comment = true;
+            }
+            '"' | '\'' => quote = Some(ch),
+            '{' => {
                 depth += 1;
                 opened = true;
             }
-            b'}' => {
+            '}' => {
                 depth -= 1;
                 if opened && depth == 0 {
-                    return Ok((start, index + 1));
+                    return Ok((start, index + ch.len_utf8()));
                 }
             }
             _ => {}
         }
-        index += 1;
     }
     bail!("class {class_name} body is not closed")
 }
@@ -697,5 +732,31 @@ class UFoo : UItem {
             .unwrap_err()
             .to_string()
             .contains("unsupported"));
+    }
+
+    #[test]
+    fn unsupported_recovered_type_is_refused() {
+        let source = "class UFoo : UItem {\n    default m_Guild = EGuild::OldCamp;\n}\n";
+        let edit = edit("UFoo", "m_Guild", None, ValueLiteral::Int(1));
+        let error = apply_edits(source, &[&edit]).unwrap_err().to_string();
+        assert!(error.contains("unsupported"), "{error}");
+    }
+
+    #[test]
+    fn quoted_braces_do_not_end_the_class_span() {
+        let source = r#"
+class UFoo : UItem {
+    default m_Name = "a}b{c";
+    default m_Value = 4;
+}
+class UBar : UItem {
+    default m_Value = 4;
+}
+"#;
+        let change = edit("UFoo", "m_Value", None, ValueLiteral::Int(9));
+        let edited = apply_edits(source, &[&change]).unwrap();
+        assert!(edited.contains("default m_Name = \"a}b{c\";"));
+        assert!(edited.contains("class UFoo : UItem {\n    default m_Name = \"a}b{c\";\n    default m_Value = 9;\n}"));
+        assert!(edited.contains("class UBar : UItem {\n    default m_Value = 4;\n}"));
     }
 }
