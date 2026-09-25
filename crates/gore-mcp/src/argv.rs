@@ -1901,21 +1901,18 @@ mod tests {
 
     #[test]
     fn generating_a_mod_into_the_live_mods_folder_is_gated() {
-        // `dump-mod` and `scaffold` write a mod folder containing an executable Scripts/main.lua.
+        // `dump-mod` writes a mod folder containing an executable Scripts/main.lua.
         // Into a scratch directory that is a build artifact; into the game's own ue4ss/Mods it is
         // an installed, enabled mod.
         let dir = tempfile::tempdir().expect("tempdir");
         let scratch = dir.path().to_string_lossy().into_owned();
         let live = "D:/Games/G1R/G1R/Binaries/Win64/ue4ss/Mods";
 
-        for (tool, sub, extra) in [
-            (
-                "gore_catalog",
-                "dump-mod",
-                json!({ "model": "m.json", "catalog": "c.json" }),
-            ),
-            ("gore_project", "scaffold", json!({ "mod_name": "MyMod" })),
-        ] {
+        for (tool, sub, extra) in [(
+            "gore_catalog",
+            "dump-mod",
+            json!({ "model": "m.json", "catalog": "c.json" }),
+        )] {
             let call = |out: &str| {
                 let mut args = extra.as_object().expect("object").clone();
                 args.insert("out".into(), Value::String(out.to_string()));
@@ -2076,29 +2073,6 @@ mod tests {
             String::from_utf8_lossy(&child.stdout),
             String::from_utf8_lossy(&child.stderr)
         );
-    }
-
-    #[test]
-    fn scaffolding_over_an_existing_mod_folder_is_gated_but_a_fresh_name_is_not() {
-        // The CLI only refuses when `Scripts/main.lua` exists, so an existing non-Lua mod under
-        // the same name is entered and its `enabled.txt` truncated. The folder is `<out>/<mod_name>`
-        // -- both arguments -- so the collision can be caught without gating ordinary scaffolding.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let call = |name: &str| json!({ "mod_name": name, "out": dir.path().to_string_lossy() });
-
-        assert!(question("gore_project", "scaffold", call("BrandNew"), &options()).is_none());
-
-        std::fs::create_dir(dir.path().join("Existing")).expect("create mod dir");
-        assert!(
-            asks_about_a_write(question(
-                "gore_project",
-                "scaffold",
-                call("Existing"),
-                &options()
-            )),
-            "an occupied mod folder must be asked about"
-        );
-        assert!(question("gore_project", "scaffold", call("Existing"), &permissive()).is_none());
     }
 
     #[test]
@@ -2843,7 +2817,7 @@ mod tests {
     #[test]
     fn an_install_mutating_command_asks_and_names_the_flag_when_it_cannot() {
         let raised =
-            question("gore_project", "deploy-shared", json!({}), &options()).expect("must ask");
+            question("gore_mgr", "reset", json!({}), &options()).expect("must ask");
         assert_eq!(
             raised.needs,
             Needs {
@@ -2905,7 +2879,7 @@ mod tests {
         // sentence they read in the dialog before deciding.
         for (tool, sub, typed) in [
             ("gore_mgr", "reset", "gore mgr reset"),
-            ("gore_project", "deploy-shared", "gore deploy-shared"),
+            ("gore_mgr", "apply", "gore mgr apply"),
         ] {
             let raised = question(tool, sub, json!({}), &options()).expect("must ask");
             let shown = crate::consent::elicitation_params(&raised);
@@ -2972,18 +2946,16 @@ mod tests {
         let mut opts = options();
         opts.allow_write = true;
         let invocation =
-            build_with("gore_project", "deploy-shared", json!({}), &opts).expect("permitted");
-        assert_eq!(invocation.display, "gore deploy-shared");
+            build_with("gore_mgr", "reset", json!({}), &opts).expect("permitted");
+        assert_eq!(invocation.display, "gore mgr reset");
     }
 
     #[test]
     fn commands_that_only_write_new_files_need_no_flag() {
-        // `gen` is deliberately not here: it rewrites a mod folder inside the directory it is
-        // given, so it is a mutation. `scaffold` refuses to clobber an existing mod itself.
         assert!(build_with(
-            "gore_project",
-            "scaffold",
-            json!({ "mod_name": "MyMod", "out": "Mods" }),
+            "gore_catalog",
+            "dump",
+            json!({ "sdk_dir": "SDK", "out": "fresh-model.json" }),
             &options()
         )
         .is_ok());

@@ -135,7 +135,7 @@ gore/
 │  ├─ gore-reflect/        UE reflection model + UE4SS SDK dump parser
 │  ├─ gore-catalog/        item/npc/knowledge catalog model + pipelines
 │  ├─ gore-loc/            AlkimiaLocalization .lcache crypto + game-dir discovery + shared paths
-│  ├─ gore-modgen/         overrides.toml → UE4SS Lua mod generation + validation
+│  ├─ gore-modgen/         retired Lua override generator; the CLI no longer calls it
 │  ├─ gore-mod/            unified bundle engine (overrides + loc + audio + voice + textures + scripts)
 │  ├─ gore-fmod/           FMOD .bank decrypt/parse + Vorbis (audio backend, pure Rust)
 │  ├─ gore-vo/             safe voice ZIP index/extract/copy-on-write editor
@@ -159,9 +159,8 @@ gore/
 │  └─ gore/                assistant plugin: the MCP server registration + the gore-modding skill
 ├─ .claude-plugin/ · .cursor-plugin/ · .agents/plugins/
 │                          one marketplace manifest per client, all offering plugins/gore
-├─ lua/                    gore-lua UE4SS helper library (deployed into the game's Mods/shared)
 ├─ mods/                   first-party UE4SS mod folders
-│  ├─ example/             sample mod using gore-lua
+│  ├─ example/             old sample; not part of the current workflow
 │  ├─ g1r-hotbar-keys/     rebinds the three hotbar slots the Controls menu cannot reach
 │  └─ gore-dump/           generated dump mod (regen: `gore dump-mod`)
 ├─ vendor/
@@ -179,7 +178,7 @@ gore/
 | [`gore-reflect`](../crates/gore-reflect) | Rust lib | UE reflection model + UE4SS SDK dump parser. |
 | [`gore-catalog`](../crates/gore-catalog) | Rust lib | Item/NPC/knowledge catalog model + generation pipelines. |
 | [`gore-loc`](../crates/gore-loc) | Rust lib | AlkimiaLocalization `.lcache` crypto, game-dir discovery, shared paths. |
-| [`gore-modgen`](../crates/gore-modgen) | Rust lib | `overrides.toml` → UE4SS Lua mod generation + field-level validation. |
+| [`gore-modgen`](../crates/gore-modgen) | Rust lib | Retired. The CLI no longer generates Lua item mods. |
 | [`gore-mod`](../crates/gore-mod) | Rust lib | Unified bundle engine: `BuildSpec` → bundle (manifest + payloads) → deploy/undeploy. |
 | [`gore-fmod`](../crates/gore-fmod) | Rust lib | FMOD `.bank` decrypt/parse + Vorbis decode (audio backend; pure Rust). |
 | [`gore-vo`](../crates/gore-vo) | Rust lib | Safe voice ZIP indexing/extraction and verified copy-on-write Ogg add/replace. |

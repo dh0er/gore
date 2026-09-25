@@ -1423,6 +1423,7 @@ mod tests {
             pak_files: Vec::new(),
             scripts: Vec::new(),
             dialog_topics: Vec::new(),
+            values: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: archive.to_owned(),
                 op: VoicePatchOp::Replace,

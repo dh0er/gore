@@ -531,9 +531,9 @@ mod tests {
 
     #[test]
     fn a_group_containing_a_mutating_command_is_annotated_as_destructive() {
-        // gore_project bundles three harmless generators with `deploy-shared`, which writes into
-        // the game installation. The annotation must reflect the worst of them.
-        let annotations = tool("gore_project")["annotations"].clone();
+        // gore_mgr includes `reset`, which undeploys a Manager deployment. The annotation
+        // must reflect the worst command in the group.
+        let annotations = tool("gore_mgr")["annotations"].clone();
         assert_eq!(annotations["readOnlyHint"], json!(false));
         assert_eq!(annotations["destructiveHint"], json!(true));
     }

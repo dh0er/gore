@@ -245,9 +245,8 @@ create a selectable conversation topic in the dialog UI. A new topic needs a
 compiled AngelScript class. The current `gore dialog new-topic` path places
 that class in the shipped conversation module and stages a script-only
 `--op edit --allow-new-symbols` bundle: roots use native script discovery and
-direct sub-topics use authored `Subdialog` wiring. It does not automatically
-generate a UE4SS/`dialog_topics` adapter. The separate low-level legacy adapter
-remains available for hand-authored bundle specs; see
+direct sub-topics use authored `Subdialog` wiring. `dialog_topics` is retired
+and `gore mod build` refuses it. See
 [AngelScript dialog authoring](dialog-authoring.md).
 
 For an NPC with no root topics, `gore dialog new-conversation` instead keeps

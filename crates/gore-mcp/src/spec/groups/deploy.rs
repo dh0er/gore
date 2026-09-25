@@ -551,7 +551,22 @@ const MOD_BUILD_ARGS: &[ArgSpec] = &[
         "model",
         Long("model"),
         Path,
-        "Path to model.json for validation (optional; skips validation if absent)",
+        "Path to model.json. Ignored: class defaults are checked against the script cache.",
+        false,
+    ),
+    ArgSpec::new(
+        "game",
+        Long("game"),
+        Path,
+        "Game install root. Required when the spec contains `values`.",
+        false,
+    )
+    .with_default("the configured game path, then Steam auto-detect"),
+    ArgSpec::new(
+        "work_dir",
+        Long("work-dir"),
+        Path,
+        "Compiler workspace used when the spec contains `values`.",
         false,
     ),
 ];
@@ -600,14 +615,20 @@ const MOD_COMMANDS: &[CommandSpec] = &[
         "Build a bundle dir from a BuildSpec JSON",
         MOD_BUILD_ARGS,
         Safety::write()
-            .also_writes(&[(
-                "out",
-                Derived::ChildNamedInJson {
-                    arg: "spec",
-                    pointer: "/meta/name",
-                },
-            )])
-            .installs_via(&["out"]),
+            .also_writes(&[
+                (
+                    "out",
+                    Derived::ChildNamedInJson {
+                        arg: "spec",
+                        pointer: "/meta/name",
+                    },
+                ),
+                // Values compiles delete leftover `*.mini.cache` files in this directory.
+                ("out", Derived::Child(".value-minis")),
+                ("work_dir", Derived::Child("tree")),
+            ])
+            .clobbers_dir(&["work_dir"])
+            .installs_via(&["out", "work_dir"]),
         T_LONG,
     )
     .guide("bundles"),

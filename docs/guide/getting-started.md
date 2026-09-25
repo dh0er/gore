@@ -14,7 +14,7 @@ Two ways to get `gore.exe`:
 
 **Download a release.** Grab a `gore-cli-v*` asset from the
 [releases page](https://github.com/dh0er/gore/releases). The zip contains
-`gore.exe`, the `shared\` Lua SDK, and this whole guide under `docs\` — so the
+`gore.exe` and this whole guide under `docs\` — so the
 documentation is available offline, right next to the binary.
 
 To read it offline, open `docs\guide.html`: one browsable file with every page,
@@ -74,10 +74,9 @@ apps read too, so the install is configured in exactly one place.
 gore doctor
 ```
 
-One read-only pass over everything the rest of this guide assumes. Ten checks,
-one line each: where the install is and which of the three sources above
-answered, whether that folder holds Gothic 1 Remake, whether [UE4SS](#ue4ss) is
-present, which UE4SS mods are enabled, what is deployed, whether the `~mods`
+One read-only pass over everything the rest of this guide assumes. One line
+each: where the install is and which of the three sources above
+answered, whether that folder holds Gothic 1 Remake, what is deployed, whether the `~mods`
 override folder is there, what an interrupted run left behind, whether the
 executable is running, whether the authenticated standalone AngelScript
 compiler matches the installed cache/API, and whether the shared localized-text
@@ -88,14 +87,12 @@ check can point to the earlier missing prerequisite instead. Abridged example:
 
 ```
 ok      game path     D:\SteamLibrary\steamapps\common\Gothic 1 Remake (source: config)
-ok      UE4SS         installed at …\G1R\Binaries\Win64\ue4ss
-ok      UE4SS mods    22 mod folder(s), 7 enabled
 ok      deployment    nothing is deployed (no deploy record in the install)
 ok      AS standalone authenticated standalone compiler is compatible with this cache/API; native diagnostics are available without a game launch
 problem loc catalog   43851 ids in 19 language(s), but stale: extracted from 37081808 bytes and the installed cache is now 37093440
                       fix: … Run 'gore loc extract' so the shared catalog describes the file that is actually installed
 
-10 check(s): 9 ok, 0 note, 1 problem, 0 skipped
+check(s): the counts on the last line say how many of each verdict you have
 ```
 
 | Verdict | Meaning |
@@ -128,7 +125,6 @@ What each check reads — and therefore what it can and cannot prove — is in t
 | do the same without a terminal, for one mod | [Mod Studio](mod-studio.md) |
 | install and order **many** mods at once | [Mod Manager](../../apps/mod-manager/README.md) or [`gore mgr`](mod-manager.md) |
 | edit your saved progress | [Save Editor](../../apps/save-editor/README.md) |
-| hand-write custom Lua behavior | [gore-lua](../../lua/README.md) |
 
 The Flutter GUIs call the same Rust engine as the CLI through a `dart:ffi`
 bridge. Use the CLI for expert and automated workflows; use a GUI when its
@@ -141,7 +137,7 @@ Every domain produces a mod a different way, and each one is usable on its own:
 
 | Domain | Mechanism | Touches | Guide |
 |--------|-----------|---------|-------|
-| Item/stat values | [UE4SS](#ue4ss) Lua CDO override, applied at runtime | a new mod folder under `ue4ss\Mods\` | [items.md](items.md) |
+| Item/stat values | rewritten class `default`, compiled into the script cache | the Shipping script cache | [items.md](items.md) |
 | Text & dialogs | re-encrypted `.lcache` | the localization cache, in place | [text-and-dialogs.md](text-and-dialogs.md) |
 | Audio | re-packed FMOD `.bank` | the sound bank, in place | [audio.md](audio.md) |
 | Voice-over | copy-on-write localized ZIP edit | the selected language archive, in place | [voice.md](voice.md) |
@@ -167,118 +163,182 @@ see [Bundling & deploying](bundles.md).
   (`.gore-install-mutation.lock`) so two GORE processes cannot fight, but the
   game itself does not participate in that lock.
 
-## UE4SS
+## A first mod: Wiesel's letter
 
-Of the domains in the table above, item and stat values are the only one applied
-while the game runs: instead of changing a file the game loads, GORE emits a
-small Lua mod that sets the value in memory. Something has to run that Lua, and
-that something is UE4SS — a third-party loader that attaches to the running game
-and executes the Lua mods it finds in a `Mods\` folder. It is a separate
-community project, not part of Gothic 1 Remake and not part of GORE.
-Hand-written [gore-lua](../../lua/README.md) mods run the same way; the other
-rows of the table above never involve it.
+Diego is the first man who talks to you. This mod puts a new shadow, Wiesel,
+in the Old Camp and gives Diego two new lines. The first sends you to Wiesel
+for a tally of ore that never reached the storehouse. The second pays you once
+you bring it back. Start a new game after deploying. A save that already passed
+the opening conversation will not show a topic the game has already left behind.
 
-GORE does not install it, and no command checks whether it is there. `gore gen`
-and `gore mod build` produce a well-formed mod either way, and `gore mod deploy`
-creates `ue4ss\Mods\` itself when it is missing — so a deploy that reports
-success means the files are in place, never that anything will run them.
+Wiesel borrows Diego's appearance. A new id has no baked model of its own; the
+generated visuals keep the template's `m_PreBakedName`. That is enough for a
+first mod. Changing the face is [character authoring](npc-authoring.md).
 
-`gore doctor` answers whether you have it — the `UE4SS` line — along with which
-mods in it are enabled. To look for yourself:
+### 1. Place Wiesel
+
+List spawn points in the Old Camp and pick one that is already standing when
+you leave Diego:
 
 ```powershell
-ls "$GAME\G1R\Binaries\Win64\ue4ss"
+gore npc sites --level OldCamp
+gore npc new GORE_OC_WIESEL --from OC_STT_Diego --guild OldCamp_Shadow `
+  --at <POINT_FROM_THE_LIST> --waypoint FP_OC_SMALLTALK_33 -o work/wiesel
+gore npc text GORE_OC_WIESEL --name "Wiesel" -o work/wiesel
+gore npc check work/wiesel
+gore npc stage work/wiesel
 ```
 
-An install has `UE4SS.dll`, `UE4SS-settings.ini` and a `Mods\` directory sitting
-beside each other. If the `ue4ss` folder is not there at all, you do not have it,
-and an override mod will sit in the install doing nothing, with nothing on either
-side reporting a problem.
+`--at` must be a world point `npc sites` printed. An unknown name is refused.
+`FP_OC_SMALLTALK_33` is only the daily spot, not the spawn. `stage` prints the
+compile command. Run that, then the bundle commands it prints. The character
+guide has the contract: [Characters](npc-authoring.md).
 
-**Where to get it.** UE4SS is [UE4SS-RE/RE-UE4SS](https://github.com/UE4SS-RE/RE-UE4SS)
-on GitHub (MIT). GORE neither ships nor installs it.
-
-Read the release list before you download, because the newest *tagged* release
-is not the newest build:
-
-| Channel | What it is |
-|---|---|
-| `v3.0.1` | the latest stable tag — published **February 2024**, which predates this game |
-| `experimental-latest` | a rolling prerelease, rebuilt continuously from `main` |
-
-Everything in this guide was checked against an **experimental** build, the one
-this machine runs: `v3.0.1 Beta #0`, git `272ce2f8` (7 June 2026). Note the
-version string — experimental assets are still named `UE4SS_v3.0.1-<n>-g<sha>.zip`,
-so "v3.0.1" alone does not tell you which of the two you have. The git SHA does.
-
-To see what you have, read the second line of `UE4SS.log`:
-
-```
-[…] UE4SS - v3.0.1 Beta #0 - Git SHA #272ce2f8
-```
-
-Nothing here has been tested against the 2024 stable tag.
-
-Inside `Mods\`, each mod is one folder holding `Scripts\main.lua` and an empty
-`enabled.txt`. That empty file is the switch — UE4SS loads a folder because
-`enabled.txt` is present. `gore gen` and `gore scaffold` write both for you.
-
-**Confirming an override applied.** UE4SS writes a log next to itself,
-`G1R\Binaries\Win64\ue4ss\UE4SS.log`, and a generated override mod prints one
-line there for every override it applies:
-
-```
-[<timestamp>] [Lua] [MyBalanceMod] ItFo_Apple.m_Value 10 -> 500
-```
-
-That line is the only machine-readable evidence that the change took effect, and
-it is worth reading before you conclude a mod failed: it separates "nothing
-happened" from "something happened and you were looking at the wrong thing".
-
-Do not judge it in the first seconds. The class defaults an override targets do
-not exist yet when the mod starts, so the generated Lua polls for them — every
-1000 ms, up to 120 attempts. In the one run that was measured, the line appeared
-about four seconds after the mod started, after several retries. If a class never
-appears at all, the log says that instead:
-
-```
-[<timestamp>] [Lua] [MyBalanceMod] gave up after 120 attempts; 1 CDO(s) never appeared
-```
-
-## A first mod
-
-Make apples worth 500 gold. This is an override, so it needs UE4SS in the game
-install — see [UE4SS](#ue4ss) above if you have not checked. Save this as
-`overrides.toml`:
-
-```toml
-[meta]
-name = "MyBalanceMod"
-
-[[override]]
-class = "ItFo_Apple"
-field = "m_Value"
-value_int = 500
-```
-
-Then compile it into the game's UE4SS mods folder:
+### 2. Diego offers the errand
 
 ```powershell
-gore gen overrides.toml -o "$GAME\G1R\Binaries\Win64\ue4ss\Mods"
+gore dialog new-topic oc_stt_diego --caption "Die Liste aus dem Lager." `
+  --class UChoiceGoreWieselErrand --mod-name GoreWieselLetter -o work/diego
+gore dialog new-topic oc_stt_diego --caption "Hier ist Wiesels Liste." `
+  --class UChoiceGoreWieselReturn --mod-name GoreWieselLetter -o work/diego-return
 ```
 
-Start the game. The value is applied a few seconds in rather than at the moment
-of launch, and `UE4SS.log` is where you see it happen — see [UE4SS](#ue4ss)
-above. Details and the full override format: [Item & stat values](items.md).
+`new-topic` checks Diego's conversation out and appends one class. Open the
+generated `.as` and give the two topics these bodies. `Remembers` and
+`Remember` are the hero's knowledge flags. `AddItemToInventory` is the same
+call the game uses to put ore into a pocket.
 
-If apples still cost what they did, run [`gore doctor`](#check-the-setup) before
-anything else. Nothing in the build or the deploy would have told you that UE4SS
-is missing, that another enabled mod is setting the same value, or that the
-folder has no `enabled.txt`; that one command checks all three.
+```angelscript
+class UChoiceGoreWieselErrand : UTopic_Hero__OC_STT_DIEGO
+{
+    default Caption = FText::FromString("Die Liste aus dem Lager.");
+    default PriorityRank = 2;
+
+    UFUNCTION(BlueprintOverride)
+    bool IsVisible() const
+    {
+        AGothicCharacterState Hero = this.GetCharacter(n"Hero");
+        return Hero != nullptr && !Hero.Remembers(n"gore_wiesel_letter_started");
+    }
+
+    UFUNCTION(BlueprintOverride)
+    void Act()
+    {
+        AGothicCharacterState Hero = this.GetCharacter(n"Hero");
+        if (Hero != nullptr)
+            Hero.Remember(n"gore_wiesel_letter_started");
+        this.EndConversation();
+    }
+}
+
+class UChoiceGoreWieselReturn : UTopic_Hero__OC_STT_DIEGO
+{
+    default Caption = FText::FromString("Hier ist Wiesels Liste.");
+    default PriorityRank = 2;
+
+    UFUNCTION(BlueprintOverride)
+    bool IsVisible() const
+    {
+        AGothicCharacterState Hero = this.GetCharacter(n"Hero");
+        return Hero != nullptr
+            && Hero.Remembers(n"gore_wiesel_letter_carried")
+            && !Hero.Remembers(n"gore_wiesel_letter_paid");
+    }
+
+    UFUNCTION(BlueprintOverride)
+    void Act()
+    {
+        AGothicCharacterState Hero = this.GetCharacter(n"Hero");
+        if (Hero != nullptr && !Hero.Remembers(n"gore_wiesel_letter_paid"))
+        {
+            ::AddItemToInventory(Hero, UItMi_Orenugget, 5, EInventoryTypes(1));
+            Hero.Remember(n"gore_wiesel_letter_paid");
+        }
+        this.EndConversation();
+    }
+}
+```
+
+`dialog new-topic` already writes `DebugId`, the base class and `BlueprintOverride`.
+Keep those. Only replace `IsVisible` and `Act`. Then:
+
+```powershell
+gore dialog check work/diego
+gore dialog stage work/diego --mod-name GoreWieselLetter
+```
+
+Run the compile line `stage` prints. Same-module topics do not need a loader
+beside the game. The rules are in [Dialog authoring](dialog-authoring.md).
+
+The two topics are two workspaces because each `new-topic` starts from the
+pristine conversation. Copy the return class into the first workspace's `.as`
+before `check`, so one module carries both classes. `check` refuses a class
+that is not in that file.
+
+### 3. Wiesel hands the tally over
+
+Wiesel has no conversation yet. `new-conversation` adds the first one in the
+module `npc new` already wrote:
+
+```powershell
+gore dialog new-conversation GORE_OC_WIESEL --caption "Die Liste für Diego." `
+  --class UChoiceGoreWieselHandover --mod-name GoreWieselLetter -o work/wiesel-talk
+```
+
+Set his only topic so it shows after Diego's errand and pays the knowledge
+flag the return line is waiting for:
+
+```angelscript
+UFUNCTION(BlueprintOverride)
+bool IsVisible() const
+{
+    AGothicCharacterState Hero = this.GetCharacter(n"Hero");
+    return Hero != nullptr
+        && Hero.Remembers(n"gore_wiesel_letter_started")
+        && !Hero.Remembers(n"gore_wiesel_letter_carried");
+}
+
+UFUNCTION(BlueprintOverride)
+void Act()
+{
+    AGothicCharacterState Hero = this.GetCharacter(n"Hero");
+    if (Hero != nullptr)
+        Hero.Remember(n"gore_wiesel_letter_carried");
+    this.EndConversation();
+}
+```
+
+```powershell
+gore dialog check work/wiesel-talk
+gore dialog stage work/wiesel-talk --mod-name GoreWieselLetter
+```
+
+### 4. Build, deploy, play
+
+`stage` writes a build spec whose script mini-cache is the mod. Finish with
+the commands it prints, then:
+
+```powershell
+gore mod deploy --bundle <the bundle directory stage named>
+```
+
+Start a new game. Talk to Diego and take "Die Liste aus dem Lager." Find
+Wiesel at the Old Camp point you spawned him on and take "Die Liste für
+Diego." Bring that line back to Diego. He pays five ore nuggets, and neither
+errand line appears again.
+
+There is no journal page in this first mod. The three knowledge flags are the
+quest. A journal entry is a `UQuest` class, the same shape as the batch
+fixture under `scripts/fixtures/npc-batch-tests/quest/`, and it is more than
+this walkthrough compiles.
+
+If nobody new is standing in the camp, run `gore doctor` and `gore npc check`
+before looking at the dialog. A wrong `--at` never reaches the game.
 
 ## Next steps
 
-- [Item & stat values](items.md)
+- [Characters](npc-authoring.md)
+- [Dialog authoring](dialog-authoring.md)
 - [Text & dialogs](text-and-dialogs.md)
 - [Bundling & deploying](bundles.md)
-- [CLI reference](cli-reference.md) — every command and flag
+- [CLI reference](cli-reference.md)

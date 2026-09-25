@@ -551,8 +551,8 @@ now preserves that distinction, reuses matching names, and fails closed if a
 prepared operand has no row. Do not rewrite those numeric operands by hand; the
 wire-level contract is in [`gore-as/FORMAT.md`](../../crates/gore-as/FORMAT.md#staticnames-indices-in-raw-and-prepared-minis).
 
-The separate low-level `dialog_topics` registration-adapter composition has one
-older live observation. On 2026-08-18 the GORE-authored Viper fixture rendered
+The retired `dialog_topics` registration adapter has one older live observation.
+`gore mod build` now refuses that section. On 2026-08-18 the GORE-authored Viper fixture rendered
 `[Gore probe] UI fixture`; `UE4SS.log`
 recorded `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with `exact_count=1`. The run
 used the PR #91-fixed app-local Core DLL. It was not a genuine third-party

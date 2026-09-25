@@ -1,9 +1,9 @@
-//! Configuration, the catalog/reflection pipeline, the location lookup, and project scaffolding.
+//! Configuration, the catalog/reflection pipeline, and the location lookup.
 //!
-//! Two of these four groups are synthetic. `gore` exposes twelve commands at its top level that
-//! have no subcommand of their own; giving each a tool would make the least-reached half of the
-//! CLI take up half the tool list. They are bundled here along the lines the guide already draws:
-//! the catalog pipeline is one page (`catalogs-and-models`), project scaffolding is another.
+//! `gore` exposes several commands at its top level that have no subcommand of their own; giving
+//! each a tool would make the least-reached half of the CLI take up half the tool list. They are
+//! bundled here along the lines the guide already draws: the catalog pipeline is one page
+//! (`catalogs-and-models`).
 //!
 //! `gore_location` is not one of those bundles: `gore location` is a real subcommand family, and
 //! it is the only tool here a model reaches for *while writing a mod* rather than while
@@ -147,8 +147,8 @@ pub const DOCTOR: GroupSpec = GroupSpec {
     cli: "",
     summary: "One read-only pass over the setup, including whether the bundled standalone \
               AngelScript compiler is ready without launching the game: where the game is and where that came from, \
-              whether UE4SS is installed (item and stat overrides silently do nothing without \
-              it), which UE4SS mods are enabled, what is deployed, what is left over from an \
+              whether UE4SS is installed (only third-party Lua mods need it), which UE4SS mods \
+              are enabled, what is deployed, what is left over from an \
               interrupted run, and whether the shared text catalog still matches the install.",
     shape: GroupShape::Flat,
     commands: DOCTOR_COMMANDS,
@@ -1546,6 +1546,52 @@ const NPC_COMMANDS: &[CommandSpec] = &[
 /// gets walked. `sites` answers the other half, where the level scripts place them; `new` and
 /// `delete` write that placement, and `check` and `stage` are what stands between an authored
 /// workspace and a compile.
+const VALUE_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
+    "inspect",
+    "Show one class's recovered defaults, their types, and the current values",
+    VALUE_INSPECT_ARGS,
+    Safety::read(),
+    T_NORMAL,
+)
+.guide("items")
+.json(JsonSupport::Stdout)];
+
+const VALUE_INSPECT_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "class",
+        Long("class"),
+        Str,
+        "Exact AngelScript class, for example `UItFo_Apple`",
+        true,
+    ),
+    ArgSpec::new(
+        "cache",
+        Long("cache"),
+        Path,
+        "Pristine Shipping script cache. Overrides `--game` when both are passed.",
+        false,
+    ),
+    ArgSpec::new(
+        "game",
+        Long("game"),
+        Path,
+        "Game install root. The pristine cache is selected, including an owned backup.",
+        false,
+    )
+    .with_default("the configured game path, then Steam auto-detect"),
+];
+
+pub const VALUE: GroupSpec = GroupSpec {
+    tool: "gore_value",
+    title: "native item and stat defaults",
+    cli: "value",
+    summary: "Inspect game-defined class defaults from the Shipping script cache and matching \
+              Binds.Cache. Authoring those defaults is the `values` section of `gore mod build`, \
+              which compiles a script mini-cache. This does not read a UE4SS dump.",
+    shape: GroupShape::Nested,
+    commands: VALUE_COMMANDS,
+};
+
 pub const NPC: GroupSpec = GroupSpec {
     tool: "gore_npc",
     title: "gore character reader and authoring guard",
@@ -1564,147 +1610,6 @@ pub const NPC: GroupSpec = GroupSpec {
     commands: NPC_COMMANDS,
 };
 
-// ---------------------------------------------------------------------------------------------
-// gore_project  (synthetic: making and shipping a UE4SS Lua mod)
-// ---------------------------------------------------------------------------------------------
-
-const SCAFFOLD_ARGS: &[ArgSpec] = &[
-    ArgSpec::new(
-        "mod_name",
-        Positional { order: 0 },
-        Str,
-        "Mod name (becomes the directory name under mods-dir). Must be a single path component.",
-        true,
-    ),
-    ArgSpec::new(
-        "out",
-        Long("out"),
-        Path,
-        "Mods directory (e.g. ue4ss/Mods/)",
-        true,
-    ),
-];
-
-const GEN_ARGS: &[ArgSpec] = &[
-    ArgSpec::new(
-        "overrides",
-        Positional { order: 0 },
-        Path,
-        "Path to overrides.toml",
-        true,
-    ),
-    ArgSpec::new(
-        "out",
-        Long("out"),
-        Path,
-        "Mods directory to write the mod folder into",
-        true,
-    ),
-    ArgSpec::new(
-        "model",
-        Long("model"),
-        Path,
-        "Path to model.json for validation (optional; skips validation if absent)",
-        false,
-    ),
-];
-
-const PACKAGE_ARGS: &[ArgSpec] = &[
-    ArgSpec::new(
-        "mod_dir",
-        Positional { order: 0 },
-        Path,
-        "Path to the mod directory",
-        true,
-    ),
-    ArgSpec::new("out", Long("out"), Path, "Output zip path", true),
-];
-
-const DEPLOY_SHARED_ARGS: &[ArgSpec] = &[
-    ArgSpec::new(
-        "src",
-        Long("src"),
-        Path,
-        "Source shared/ dir. Defaults to a copy located relative to the gore executable.",
-        false,
-    ),
-    ArgSpec::new(
-        "game",
-        Long("game"),
-        Path,
-        "Game install root (the folder containing G1R/). Falls back to the configured game path, \
-         then Steam auto-detect.",
-        false,
-    )
-    .with_default("the configured game path, then Steam auto-detect"),
-];
-
-const PROJECT_COMMANDS: &[CommandSpec] = &[
-    CommandSpec::new(
-        "scaffold",
-        "Create a UE4SS Lua mod skeleton directory",
-        SCAFFOLD_ARGS,
-        // The CLI refuses only when `Scripts/main.lua` is already there, so an existing
-        // non-Lua UE4SS mod under the same name is entered and its `enabled.txt` truncated.
-        // Unlike `gen`, the folder is fully derivable -- `<out>/<mod_name>` -- so a fresh name
-        // still needs no flag and only the collision is gated.
-        Safety::write()
-            .also_writes(&[("out", Derived::ChildOfArg("mod_name"))])
-            .installs_via(&["out"]),
-        T_FAST,
-    )
-    .guide("items"),
-    CommandSpec::new(
-        "gen",
-        "Compile overrides.toml into a UE4SS Lua mod",
-        GEN_ARGS,
-        // `out` is a Mods directory that always exists, and the folder actually rewritten is
-        // `<out>/<name from overrides.toml>` -- a path this layer cannot compute without parsing
-        // that file. cmd/gen.rs rewrites enabled.txt and Scripts/main.lua unconditionally, so an
-        // existing mod (generated or hand-edited) is replaced. Not gateable, therefore gated.
-        Safety::mutate(),
-        T_NORMAL,
-    )
-    .gated_because(
-        "rewrites the `enabled.txt` and `Scripts/main.lua` of the mod folder named inside \
-         overrides.toml, whether that mod was generated or written by hand",
-    )
-    .guide("items"),
-    CommandSpec::new(
-        "package",
-        "Zip a mod folder into distributable UE4SS layout",
-        PACKAGE_ARGS,
-        Safety::write_truncating(&["out"]),
-        T_NORMAL,
-    )
-    .guide("items"),
-    // The only command in this group that reaches into the installation: it copies the shared Lua
-    // SDK into the game's ue4ss/Mods/shared.
-    CommandSpec::new(
-        "deploy-shared",
-        "Deploy the gore-lua shared SDK into the game's ue4ss/Mods/shared.",
-        DEPLOY_SHARED_ARGS,
-        Safety::mutate(),
-        T_NORMAL,
-    )
-    .gated_because(
-        "copies the shared Lua SDK into the game's own `ue4ss/Mods/shared`, replacing the copy \
-         installed there",
-    )
-    .guide("items"),
-];
-
-pub const PROJECT: GroupSpec = GroupSpec {
-    tool: "gore_project",
-    title: "gore Lua mod project",
-    cli: "",
-    summary:
-        "Author and ship a UE4SS Lua mod: scaffold a skeleton, compile overrides.toml into \
-              Lua, zip it for distribution, and install the shared Lua SDK the generated mods need.",
-    shape: GroupShape::Flat,
-    commands: PROJECT_COMMANDS,
-};
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1715,7 +1620,6 @@ mod tests {
         assert_eq!(FIND.commands.len(), 1);
         assert_eq!(CATALOG.commands.len(), 8);
         assert_eq!(LOCATION.commands.len(), 2);
-        assert_eq!(PROJECT.commands.len(), 4);
     }
 
     #[test]
@@ -1744,20 +1648,13 @@ mod tests {
 
     #[test]
     fn exactly_the_commands_whose_targets_cannot_be_checked_are_gated() {
-        // `deploy-shared` copies the SDK into the game's `ue4ss/Mods`; `gen` rewrites
-        // `<out>/<name from overrides.toml>`, and TOML is not something this layer parses. Neither
-        // path can be computed from the arguments, so both are gated outright.
-        //
-        // `stubs` is deliberately not here any more. It writes one `.lua` per class under names it
-        // takes from the model file, which is just as unpreflightable — but the directory those
-        // files land in is not, so it is gated on an occupied `out` instead of on every call.
-        let mutating: Vec<&str> = [CONFIG, FIND, CATALOG, LOCATION, PROJECT]
+        let mutating: Vec<&str> = [CONFIG, FIND, CATALOG, LOCATION]
             .iter()
             .flat_map(|group| group.commands.iter())
             .filter(|command| command.safety.worst_case().needs_write_permission())
             .map(|command| command.sub)
             .collect();
-        assert_eq!(mutating, vec!["gen", "deploy-shared"]);
+        assert!(mutating.is_empty(), "{mutating:?}");
 
         let stubs = CATALOG.command("stubs").expect("exists");
         assert!(!stubs.safety.worst_case().needs_write_permission());

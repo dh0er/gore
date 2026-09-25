@@ -1,6 +1,5 @@
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../l10n/app_localizations.dart';
 import '../../l10n/l10n_errors.dart';
@@ -18,22 +17,17 @@ class ExportDialog extends ConsumerStatefulWidget {
 
 class _ExportDialogState extends ConsumerState<ExportDialog> {
   final _nameController  = TextEditingController(text: 'MyBalanceMod');
-  final _delayController = TextEditingController(text: '0');
   String? _targetDir;
-  bool _packageAsZip = false;
   String? _nameError;
-  String? _delayError;
 
   @override
   void dispose() {
     _nameController.dispose();
-    _delayController.dispose();
     super.dispose();
   }
 
   bool get _isValid =>
       _nameError == null &&
-      _delayError == null &&
       _nameController.text.trim().isNotEmpty &&
       _targetDir != null;
 
@@ -42,15 +36,6 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
     final error = validateModName(v);
     setState(() {
       _nameError = error == null ? null : modNameErrorText(l10n, error);
-    });
-  }
-
-  void _validateDelay(String v) {
-    final l10n = AppLocalizations.of(context);
-    final n = int.tryParse(v.trim());
-    setState(() {
-      _delayError =
-          (n == null || n < 0) ? l10n.mustBeNonNegativeInteger : null;
     });
   }
 
@@ -68,8 +53,6 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
       request: ExportRequest(
         modName:      _nameController.text.trim(),
         targetDir:    _targetDir!,
-        delayMs:      int.tryParse(_delayController.text.trim()) ?? 0,
-        packageAsZip: _packageAsZip,
       ),
       overrides: overrides,
     );
@@ -105,17 +88,6 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
               onChanged: _validateName,
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _delayController,
-              decoration: InputDecoration(
-                labelText: l10n.loadDelayLabel,
-                errorText: _delayError,
-              ),
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              onChanged: _validateDelay,
-            ),
-            const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
@@ -131,13 +103,6 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
                   child: Text(l10n.chooseFolder),
                 ),
               ],
-            ),
-            const SizedBox(height: 12),
-            CheckboxListTile(
-              title: Text(l10n.packageAsZip),
-              value: _packageAsZip,
-              contentPadding: EdgeInsets.zero,
-              onChanged: (v) => setState(() => _packageAsZip = v ?? false),
             ),
             if (exportState.validationErrors.isNotEmpty) ...[
               const SizedBox(height: 8),

@@ -6751,7 +6751,6 @@ mod tests {
         build_bundle, write_bundle, AudioReplacement, BuildSpec, LooseFileReplacement, ModMeta,
         ScriptModule, TextureReplacement, VoiceArchiveEdit, VoicePatchOp,
     };
-    use gore_modgen::gen::{OverrideValue, SingleOverride};
     use std::fs;
 
     fn read_library_sidecar(library: &Path, id: &str) -> LibrarySidecar {
@@ -6909,12 +6908,7 @@ mod tests {
                 author: "tester".into(),
             },
             delay_ms: 0,
-            overrides: vec![SingleOverride {
-                class: "ItFo_Apple".into(),
-                field: "m_Value".into(),
-                module: "Angelscript".into(),
-                value: OverrideValue::Int(500),
-            }],
+            overrides: vec![],
             loc_edits: loc,
             audio: vec![],
             texture: vec![],
@@ -6926,6 +6920,7 @@ mod tests {
                 mini_cache: mini.display().to_string(),
             }],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "German.zip".into(),
                 op: VoicePatchOp::Replace,
@@ -6956,6 +6951,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         }
     }
@@ -7034,14 +7030,29 @@ mod tests {
     #[test]
     fn bundle_inspector_requires_a_ue4ss_main_script() {
         let temp = tempfile::tempdir().unwrap();
-        let mut spec = empty_build_spec("InspectLua");
-        spec.overrides.push(SingleOverride {
-            class: "ItFo_Apple".into(),
-            field: "m_Value".into(),
-            module: "Angelscript".into(),
-            value: OverrideValue::Int(500),
-        });
-        let bundle = write_spec_bundle(temp.path(), &spec);
+        let bundle = temp.path().join("InspectLua");
+        fs::create_dir_all(bundle.join("ue4ss/InspectLua/Scripts")).unwrap();
+        fs::write(bundle.join("ue4ss/InspectLua/enabled.txt"), b"").unwrap();
+        fs::write(bundle.join("ue4ss/InspectLua/Scripts/main.lua"), b"print(1)\n").unwrap();
+        let manifest = ModManifest {
+            format: 1,
+            mod_meta: ModMeta {
+                name: "InspectLua".into(),
+                version: String::new(),
+                author: String::new(),
+            },
+            components: vec![Component::Ue4ssLua {
+                name: "InspectLua".into(),
+                path: "ue4ss/InspectLua".into(),
+                targets: Vec::new(),
+                opaque: false,
+            }],
+        };
+        fs::write(
+            bundle.join("gore-mod.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
         inspect_gore_bundle(&bundle).unwrap();
 
         fs::remove_file(bundle.join("ue4ss/InspectLua/Scripts/main.lua")).unwrap();
@@ -7079,6 +7090,7 @@ mod tests {
             }],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bdir = root.join(name);
@@ -7170,6 +7182,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bdir = tmp.path().join("LooseProbe");

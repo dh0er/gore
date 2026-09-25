@@ -355,35 +355,15 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![topic("fixture")],
+            values: vec![],
             voice: vec![],
         };
-        let bundle = crate::build_bundle(&spec).unwrap();
-        let roots = bundle
-            .manifest
-            .components
-            .iter()
-            .filter(|component| matches!(component, crate::Component::Ue4ssLua { .. }))
-            .count();
-        assert_eq!(roots, 1);
-        let lua =
-            std::str::from_utf8(&bundle.files["ue4ss/CombinedRuntime/Scripts/main.lua"]).unwrap();
-        assert!(lua.contains("local OVERRIDES"));
-        assert!(lua.contains("[GoreDialogRuntime]"));
-        Lua::new().load(lua).into_function().unwrap();
-        assert!(bundle
-            .files
-            .contains_key("ue4ss/CombinedRuntime/enabled.txt"));
-        assert!(matches!(
-            bundle.manifest.components.first(),
-            Some(crate::Component::Ue4ssLua {
-                targets,
-                opaque: true,
-                ..
-            }) if targets == &["ItFo_Apple.m_Value"]
-        ));
-        let manifest_json = std::str::from_utf8(&bundle.files["gore-mod.json"]).unwrap();
-        assert!(manifest_json.contains("\"opaque\": true"));
-        assert!(manifest_json.contains("ItFo_Apple.m_Value"));
+        let error = crate::build_bundle(&spec).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("overrides are retired") || message.contains("dialog_topics is retired"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -403,22 +383,13 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![topic("fixture")],
+            values: vec![],
             voice: vec![],
         };
-        let bundle = crate::build_bundle(&spec).unwrap();
-        assert_eq!(bundle.manifest.components.len(), 1);
-        assert!(matches!(
-            bundle.manifest.components.as_slice(),
-            [crate::Component::Ue4ssLua {
-                targets,
-                opaque: true,
-                ..
-            }] if targets.is_empty()
-        ));
+        let error = crate::build_bundle(&spec).unwrap_err();
         assert!(
-            std::str::from_utf8(&bundle.files["ue4ss/DialogOnly/Scripts/main.lua"])
-                .unwrap()
-                .contains("status=%s")
+            error.to_string().contains("dialog_topics is retired"),
+            "{error}"
         );
     }
 

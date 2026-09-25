@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use gore_modgen::gen::{gen_lua, MetaConfig, OverridesConfig, SingleOverride};
+use gore_modgen::gen::SingleOverride;
 
 pub mod dialog;
 pub mod mgr;
@@ -113,6 +113,40 @@ pub struct LooseFileReplacement {
     pub game_path: String,
     /// Replacement file on disk. Resolved relative to the build spec's own directory.
     pub source_path: String,
+}
+
+/// One authored class-default edit compiled into a script mini-cache.
+///
+/// `value` is a single-key object: `{"int": n}`, `{"float": n}`, `{"bool": true}`, or
+/// `{"str": "..."}`. A `tag` selects one entry of a `GameplayTag` map such as `m_DamageBase`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ValueEdit {
+    pub class: String,
+    pub field: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    pub value: ValueLiteral,
+}
+
+/// A scalar the native default builder can write and read back from AngelScript source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ValueLiteral {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+}
+
+impl ValueLiteral {
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Self::Int(_) => "int",
+            Self::Float(_) => "float",
+            Self::Bool(_) => "bool",
+            Self::Str(_) => "str",
+        }
+    }
 }
 
 /// One AngelScript module mod: splice (`op = "add"`) or replace (`op = "edit"`) the compiled
@@ -321,6 +355,10 @@ pub struct BuildSpec {
     /// This delivery mechanism does not certify selection-side save or knowledge behavior.
     #[serde(default)]
     pub dialog_topics: Vec<DialogTopicSpec>,
+    /// Class-default edits. `gore mod build` compiles these into `scripts` before packaging.
+    /// The packager itself refuses a spec that still carries them.
+    #[serde(default)]
+    pub values: Vec<ValueEdit>,
     #[serde(default)]
     pub voice: Vec<VoiceArchiveEdit>,
 }
@@ -646,60 +684,28 @@ pub fn build_bundle_relative_to(spec: &BuildSpec, base: &Path) -> Result<Bundle>
         )));
     }
 
-    // overrides → UE4SS Lua mod
-    // Runtime UE4SS content is emitted as exactly ONE component. Dialog topic registration shares
-    // that component with generated CDO overrides; emitting two roots would otherwise reintroduce
-    // ambiguous last-wins deployment behavior.
-    let ue4ss_opaque = !spec.dialog_topics.is_empty();
-    let dialog_runtime = if spec.dialog_topics.is_empty() {
-        None
-    } else {
-        Some(
-            dialog::render_dialog_runtime(name, &spec.dialog_topics)
-                .map_err(|error| ModError::Other(format!("invalid dialog topics: {error}")))?,
-        )
-    };
-    let mut ue4ss_lua = None;
-    let mut ue4ss_targets = Vec::new();
-
+    // First-party item values and dialog registration no longer emit a UE4SS Lua component.
+    // Third-party UE4SS folders can still be imported by the mod manager.
     if !spec.overrides.is_empty() {
-        let cfg = OverridesConfig {
-            meta: MetaConfig {
-                name: name.clone(),
-                delay_ms: spec.delay_ms,
-            },
-            overrides: spec.overrides.clone(),
-        };
-        ue4ss_lua = Some(gen_lua(&cfg));
-        // The `Class.Field` CDO targets this mod sets, for the manager's conflict detection.
-        ue4ss_targets = spec
-            .overrides
-            .iter()
-            .map(|o| format!("{}.{}", o.class, o.field))
-            .collect();
-        ue4ss_targets.sort();
-        ue4ss_targets.dedup();
+        return Err(ModError::Other(
+            "bundle overrides are retired. Put item and stat edits in `values` and build with \
+             `gore mod build`, which compiles them into a script mini-cache. UE4SS is not used."
+                .into(),
+        ));
     }
-
-    if let Some(runtime) = dialog_runtime {
-        let lua = ue4ss_lua.get_or_insert_with(String::new);
-        if !lua.is_empty() && !lua.ends_with('\n') {
-            lua.push('\n');
-        }
-        lua.push_str(&runtime);
-        // Dialog registration also mutates transient topic sets. The component is marked opaque
-        // below, while its exact generated CDO-override targets remain useful partial metadata.
+    if !spec.dialog_topics.is_empty() {
+        return Err(ModError::Other(
+            "dialog_topics is retired. Dialog edits deploy as an AngelScript mini-cache. The \
+             UE4SS topic-registration adapter is no longer generated."
+                .into(),
+        ));
     }
-
-    if let Some(lua) = ue4ss_lua {
-        files.insert(format!("ue4ss/{name}/enabled.txt"), Vec::new());
-        files.insert(format!("ue4ss/{name}/Scripts/main.lua"), lua.into_bytes());
-        components.push(Component::Ue4ssLua {
-            name: name.clone(),
-            path: format!("ue4ss/{name}"),
-            targets: ue4ss_targets,
-            opaque: ue4ss_opaque,
-        });
+    if !spec.values.is_empty() {
+        return Err(ModError::Other(
+            "values must be compiled by `gore mod build` before packaging. The packager does \
+             not invoke the AngelScript compiler."
+                .into(),
+        ));
     }
 
     // loc edits → declarative patch
@@ -14703,6 +14709,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "German.zip".into(),
                 op: VoicePatchOp::Replace,
@@ -14873,12 +14880,7 @@ mod tests {
                 author: "me".into(),
             },
             delay_ms: 0,
-            overrides: vec![SingleOverride {
-                class: "ItFo_Apple".into(),
-                field: "m_Value".into(),
-                module: "Angelscript".into(),
-                value: OverrideValue::Int(500),
-            }],
+            overrides: vec![],
             loc_edits: loc,
             audio: vec![AudioReplacement {
                 bank: "SFX.bank".into(),
@@ -14890,17 +14892,17 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
 
         let bundle = build_bundle(&spec).unwrap();
-        assert!(bundle.files.contains_key("ue4ss/MyMod/Scripts/main.lua"));
-        assert!(bundle.files.contains_key("ue4ss/MyMod/enabled.txt"));
+        assert!(!bundle.files.keys().any(|path| path.contains("ue4ss/")));
         assert!(bundle.files.contains_key("loc/edits.json"));
         assert!(bundle.files.contains_key("audio/manifest.json"));
         assert!(bundle.files.contains_key("audio/0_SFX_bank__SFX_UI_X.wav"));
         assert!(bundle.files.contains_key("gore-mod.json"));
-        assert_eq!(bundle.manifest.components.len(), 3);
+        assert_eq!(bundle.manifest.components.len(), 2);
 
         // round-trip manifest
         let mj = &bundle.files["gore-mod.json"];
@@ -15145,6 +15147,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         assert!(build_bundle(&spec).is_err());
@@ -15175,6 +15178,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();
@@ -15213,6 +15217,7 @@ mod tests {
                 mini_cache: mini.display().to_string(),
             }],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();
@@ -15264,6 +15269,7 @@ mod tests {
                 mini_cache: "mod.cache".into(),
             }],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "German.zip".into(),
                 op: VoicePatchOp::Replace,
@@ -15483,6 +15489,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         }
     }
@@ -15503,6 +15510,7 @@ mod tests {
             pak_files,
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         }
     }
@@ -15949,6 +15957,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![
                 VoiceArchiveEdit {
                     archive: "German.zip".into(),
@@ -16077,6 +16086,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![
                 VoiceArchiveEdit {
                     archive: "German.zip".into(),
@@ -17074,6 +17084,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "German.zip".into(),
                 op: VoicePatchOp::Add,
@@ -17370,6 +17381,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "German.zip".into(),
                 op: VoicePatchOp::Add,
@@ -17430,6 +17442,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice,
         };
         let first_spec = voice_spec(
@@ -17558,6 +17571,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "german_new.zip".into(),
                 op: VoicePatchOp::Replace,
@@ -18072,6 +18086,7 @@ mod tests {
                 mini_cache: mini,
             }],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();
@@ -18886,27 +18901,14 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
-        let bundle = build_bundle(&spec).unwrap();
-        let expected = vec!["ClassA.FieldX".to_string(), "ClassB.FieldY".to_string()];
-        let Some(Component::Ue4ssLua {
-            targets, opaque, ..
-        }) = bundle.manifest.components.first()
-        else {
-            panic!("expected a Ue4ssLua component");
-        };
-        assert_eq!(targets, &expected);
-        assert!(!*opaque);
-        assert!(std::str::from_utf8(&bundle.files["gore-mod.json"])
-            .unwrap()
-            .contains("\"opaque\": false"));
-        // And the serialized manifest round-trips them.
-        let m: ModManifest = serde_json::from_slice(&bundle.files["gore-mod.json"]).unwrap();
-        assert!(matches!(
-            m.components.first(),
-            Some(Component::Ue4ssLua { targets, .. }) if targets == &expected
-        ));
+        let error = build_bundle(&spec).unwrap_err();
+        assert!(
+            error.to_string().contains("overrides are retired"),
+            "{error}"
+        );
     }
 
     /// A format-1 manifest written before `targets` existed must still parse, with the
@@ -19313,7 +19315,11 @@ mod tests {
         };
         std::fs::write(record_path(&game), serde_json::to_vec(&rec).unwrap()).unwrap();
 
-        // A minimal valid bundle (one override → one Ue4ssLua component).
+        let mut loc = BTreeMap::new();
+        loc.insert(
+            "itfo_cheese".to_string(),
+            BTreeMap::from([("german".to_string(), "X".to_string())]),
+        );
         let spec = BuildSpec {
             meta: ModMeta {
                 name: "Solo".into(),
@@ -19321,19 +19327,15 @@ mod tests {
                 author: String::new(),
             },
             delay_ms: 0,
-            overrides: vec![SingleOverride {
-                class: "ClassA".into(),
-                field: "FieldX".into(),
-                module: "Angelscript".into(),
-                value: OverrideValue::Int(1),
-            }],
-            loc_edits: BTreeMap::new(),
+            overrides: vec![],
+            loc_edits: loc,
             audio: vec![],
             texture: vec![],
             files: vec![],
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bundle_dir = dir.path().join("bundle");

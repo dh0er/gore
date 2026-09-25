@@ -94,7 +94,7 @@ ItFo_Potion_Health_01
 |---|---|
 | `from` | which layer carries this id, and its domain and category |
 | `name` | the display name, with the language it is written in |
-| `class` | the name the game resolves — what goes into `overrides.toml` or a script |
+| `class` | the name the game resolves — what `gore value inspect --class` and a script edit name |
 | `module` · `loc key` | knowledge entries only: where the topic is declared and where its text lives |
 | `register` | one line per register entry, each labelled with its own provenance |
 | `matched` | why this hit is here, when the id does not show it |

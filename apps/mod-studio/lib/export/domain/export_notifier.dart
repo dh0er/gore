@@ -1,6 +1,4 @@
-import 'dart:convert';
 import 'dart:io';
-import 'package:archive/archive.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:path/path.dart' as p;
 import '../../core/core_service.dart';
@@ -50,9 +48,8 @@ class ExportNotifier extends StateNotifier<ExportState> {
       clearResult: true,
     );
 
-    // The mod name becomes a directory component under the user-chosen folder
-    // (and an entry prefix inside the .zip). Reject path-escaping names before
-    // building any path with it.
+    // The mod name becomes the source-spec filename. Reject path-escaping names
+    // before building any path with it.
     // The dialog validates the name live (with localized messages) before
     // enabling Export, so this is a safety net. It surfaces an English string
     // because the notifier has no BuildContext; the live dialog error is the
@@ -73,8 +70,7 @@ class ExportNotifier extends StateNotifier<ExportState> {
     // `{meta, override:[{class, field, value_int|value_float|value_bool|value_str}]}`.
     final res = await _core.execute('generate_mod', payload: {
       'meta': {
-        'name':     request.modName,
-        'delay_ms': request.delayMs,
+        'name': request.modName,
       },
       'override': [for (final o in overrides) o.toFfiJson()],
     });
@@ -89,120 +85,63 @@ class ExportNotifier extends StateNotifier<ExportState> {
       return;
     }
 
-    // gore_core returns the mod as an in-memory `files` map (relative path ->
-    // contents); it does not touch the filesystem. Materialize it before
-    // reporting success — either as a single <modName>.zip or as the
-    // <modName>/ folder — otherwise the chosen folder stays empty.
+    // generate_mod returns a source spec, not a deployable mod. Write that one
+    // file and keep the core note. A folder or zip would look like a finished
+    // mod and cannot be deployed.
     final files = (res['files'] as Map?)?.cast<String, Object?>();
-    if (files == null) {
+    final spec = files?['spec.json'];
+    if (files == null || files.length != 1 || spec is! String) {
       state = state.copyWith(
         isExporting: false,
-        result: const ExportResult(error: 'gore_core returned no files'),
+        result: const ExportResult(
+          error: 'generate_mod did not return a source spec.json',
+        ),
       );
       return;
     }
 
-    // Every temp/backup path gets a unique suffix so a retry never collides
-    // with (and deletes) a backup a previous failed export left behind.
     final uid = DateTime.now().microsecondsSinceEpoch.toString();
     try {
-      final outputPath = request.packageAsZip
-          ? _writeZipAtomically(request, files, uid)
-          : _writeFolderAtomically(request, files, uid);
+      final outputPath = _writeSpecAtomically(request, spec, uid);
+      final note = res['note'];
       state = state.copyWith(
         isExporting: false,
-        result: ExportResult(outputPath: outputPath),
+        result: ExportResult(
+          outputPath: outputPath,
+          note: note is String ? note : null,
+        ),
       );
     } on FileSystemException catch (e) {
       state = state.copyWith(
         isExporting: false,
-        result: ExportResult(error: 'Failed to write mod files: ${e.message}'),
+        result: ExportResult(error: 'Failed to write spec: ${e.message}'),
       );
     }
   }
 
-  /// Write the mod as the `<targetDir>/<modName>/` folder. All files are staged
-  /// in a unique sibling dir; only once they are all written is the prior
-  /// export swapped out (moved to a unique backup, staging renamed in, backup
-  /// dropped). Any failure rolls back to the prior state and throws.
-  String _writeFolderAtomically(
-    ExportRequest request,
-    Map<String, Object?> files,
-    String uid,
-  ) {
-    final modDir = Directory(p.join(request.targetDir, request.modName));
-    final staging = Directory('${modDir.path}.staging-$uid');
-    final backup = Directory('${modDir.path}.backup-$uid');
+  String _writeSpecAtomically(ExportRequest request, String spec, String uid) {
+    final outFile = File(p.join(request.targetDir, '${request.modName}.spec.json'));
+    final staging = File('${outFile.path}.staging-$uid');
+    final backup = File('${outFile.path}.backup-$uid');
     var oldMoved = false;
     var promoted = false;
     try {
-      for (final entry in files.entries) {
-        final outFile = File(p.join(staging.path, entry.key));
-        outFile.parent.createSync(recursive: true);
-        outFile.writeAsStringSync(entry.value as String? ?? '');
-      }
-      if (modDir.existsSync()) {
-        modDir.renameSync(backup.path);
+      staging.writeAsStringSync(spec);
+      if (outFile.existsSync()) {
+        outFile.renameSync(backup.path);
         oldMoved = true;
       }
-      staging.renameSync(modDir.path);
-      promoted = true;
-      if (oldMoved) backup.deleteSync(recursive: true);
-      return modDir.path;
-    } on FileSystemException {
-      _rollback(
-        promotedTarget: promoted ? modDir : null,
-        staging: staging,
-        oldMoved: oldMoved,
-        backup: backup,
-        target: modDir,
-      );
-      rethrow;
-    }
-  }
-
-  /// Write the mod as a single `<targetDir>/<modName>.zip`, every entry nested
-  /// under `<modName>/` (the layout `gore-cli package` produces). Encoding and
-  /// the temp write happen first; the prior zip is only swapped out via
-  /// rename once the new archive is complete, with rollback on any failure.
-  String _writeZipAtomically(
-    ExportRequest request,
-    Map<String, Object?> files,
-    String uid,
-  ) {
-    final zipFile = File(p.join(request.targetDir, '${request.modName}.zip'));
-    final staging = File('${zipFile.path}.staging-$uid');
-    final backup = File('${zipFile.path}.backup-$uid');
-    final archive = Archive();
-    for (final entry in files.entries) {
-      final bytes = utf8.encode(entry.value as String? ?? '');
-      archive.addFile(
-        ArchiveFile('${request.modName}/${entry.key}', bytes.length, bytes),
-      );
-    }
-    final zipBytes = ZipEncoder().encode(archive);
-    if (zipBytes == null) {
-      throw const FileSystemException('zip encoding failed');
-    }
-    var oldMoved = false;
-    var promoted = false;
-    try {
-      staging.writeAsBytesSync(zipBytes);
-      if (zipFile.existsSync()) {
-        zipFile.renameSync(backup.path);
-        oldMoved = true;
-      }
-      staging.renameSync(zipFile.path);
+      staging.renameSync(outFile.path);
       promoted = true;
       if (oldMoved) backup.deleteSync();
-      return zipFile.path;
+      return outFile.path;
     } on FileSystemException {
       _rollback(
-        promotedTarget: promoted ? zipFile : null,
+        promotedTarget: promoted ? outFile : null,
         staging: staging,
         oldMoved: oldMoved,
         backup: backup,
-        target: zipFile,
+        target: outFile,
       );
       rethrow;
     }

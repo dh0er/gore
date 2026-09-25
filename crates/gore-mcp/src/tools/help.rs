@@ -219,10 +219,8 @@ fn validate(path: &[&str]) -> Result<(), String> {
                 .collect();
             if groups.is_empty() {
                 // Two different mistakes end up here and they need different answers. `catalog`
-                // and `gen` are real top-level commands that simply take no subcommand. `project`
-                // is not a command at all — it only exists as the `gore_project` tool name, and an
-                // agent mapping tool names onto the CLI will write `project gen` and be told the
-                // command "has no subcommands", which implies it exists.
+                // is a real top-level command that simply takes no subcommand. A word that is
+                // only a tool name, or nothing at all, must not be described as if it existed.
                 let is_flat_command = spec::GROUPS
                     .iter()
                     .any(|group| group.shape == GroupShape::Flat && group.command(first).is_some());
@@ -374,7 +372,7 @@ mod tests {
         call_with(json!({ "command": "as" }), &spawn);
         call_with(json!({ "command": "as patch-default" }), &spawn);
         // A flat group's subcommand is a top-level command in the CLI.
-        call_with(json!({ "command": "scaffold" }), &spawn);
+        call_with(json!({ "command": "dump" }), &spawn);
 
         let paths: Vec<String> = spawn
             .calls()
@@ -386,7 +384,7 @@ mod tests {
             vec![
                 "gore as --help",
                 "gore as patch-default --help",
-                "gore scaffold --help"
+                "gore dump --help"
             ]
         );
     }
@@ -514,17 +512,15 @@ mod tests {
 
     #[test]
     fn a_tool_name_used_as_a_cli_group_is_told_it_is_not_a_command() {
-        // `gore_catalog` and `gore_project` group top-level commands that the CLI keeps separate,
-        // so an agent reading tool names will try `project gen`. There is no `gore project`, and
-        // saying it "has no subcommands" would imply there is.
+        // A tool-shaped word that is not a CLI command must say so, and offer real commands.
         let spawn = FakeSpawn::new(Outcome::success(""));
-        let result = call_with(json!({ "command": "project gen" }), &spawn);
+        let result = call_with(json!({ "command": "project package" }), &spawn);
 
         assert_eq!(result["isError"], json!(true));
         let message = text_of(&result, 0);
         assert!(message.contains("is not a command"), "{message}");
         assert!(
-            message.contains("gen"),
+            message.contains("catalog"),
             "the real command list must be offered: {message}"
         );
         assert!(spawn.calls().is_empty());

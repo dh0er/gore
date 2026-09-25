@@ -734,7 +734,7 @@ pub const GROUPS: &[GroupSpec] = &[
     groups::core::LOCATION,
     groups::core::DIALOG,
     groups::core::NPC,
-    groups::core::PROJECT,
+    groups::core::VALUE,
     groups::files::LOC,
     groups::files::AUDIO,
     groups::files::VOICE,
@@ -753,7 +753,7 @@ pub const GROUPS: &[GroupSpec] = &[
 ///
 /// A literal, not a computed value: it is a claim about the CLI, and the integration test compares
 /// it against what clap actually exposes. Changing it should be a deliberate act.
-pub const EXPECTED_LEAF_COUNT: usize = 114;
+pub const EXPECTED_LEAF_COUNT: usize = 111;
 
 pub fn group(tool: &str) -> Option<&'static GroupSpec> {
     GROUPS.iter().find(|group| group.tool == tool)
@@ -1141,7 +1141,6 @@ mod tests {
             ("gore_dialog", "text", &["out"]),
             ("gore_loc", "export", &["out"]),
             ("gore_loc", "import", &["out"]),
-            ("gore_project", "package", &["out"]),
             ("gore_texture", "extract", &["out"]),
             ("gore_texture", "index", &["out"]),
             ("gore_as", "replace", &["out"]),
@@ -1246,7 +1245,6 @@ mod tests {
         let mut expected: Vec<(&str, &str, &[&'static str])> = vec![
             // Both write a mod folder carrying an executable Scripts/main.lua.
             ("gore_catalog", "dump-mod", &["out"]),
-            ("gore_project", "scaffold", &["out"]),
             // Both produce a Zen triplet that is a build artifact anywhere but `~mods`.
             ("gore_asset", "pack", &["out"]),
             // Writes a package pair, its sidecars and a receipt; `asset extract` refuses a
@@ -1265,7 +1263,7 @@ mod tests {
             ("gore_texture", "pack", &["out"]),
             // A bundle directory is a build artifact anywhere but the installation, where the same
             // files would be sitting in the tree the game reads without ever having been deployed.
-            ("gore_mod", "build", &["out"]),
+            ("gore_mod", "build", &["out", "work_dir"]),
         ];
         expected.sort_unstable();
 
@@ -1332,13 +1330,17 @@ mod tests {
             (
                 "gore_mod",
                 "build",
-                &[(
-                    "out",
-                    Derived::ChildNamedInJson {
-                        arg: "spec",
-                        pointer: "/meta/name",
-                    },
-                )],
+                &[
+                    (
+                        "out",
+                        Derived::ChildNamedInJson {
+                            arg: "spec",
+                            pointer: "/meta/name",
+                        },
+                    ),
+                    ("out", Derived::Child(".value-minis")),
+                    ("work_dir", Derived::Child("tree")),
+                ],
             ),
             (
                 "gore_npc",
@@ -1347,11 +1349,6 @@ mod tests {
                     ("dir", Derived::Child("spec.json")),
                     ("dir", Derived::Suffix(".work")),
                 ],
-            ),
-            (
-                "gore_project",
-                "scaffold",
-                &[("out", Derived::ChildOfArg("mod_name"))],
             ),
             (
                 "gore_texture",
@@ -1410,6 +1407,7 @@ mod tests {
             // without replacement, so its caller-selected output is covered by `writes_into`.
             // One `.lua` per class, named from the model file.
             ("gore_catalog", "stubs", &["out"]),
+            ("gore_mod", "build", &["work_dir"]),
             // One `.as` per module, laid out by the cache's own ScriptRelativeFilename.
             ("gore_as", "emit-all", &["outdir"]),
         ];
