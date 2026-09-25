@@ -1330,7 +1330,7 @@ mod tests {
         let response = session
             .handle_unasked(&request(
                 "tools/call",
-                json!({ "name": "gore_project", "arguments": { "subcommand": "deploy-shared" } }),
+                json!({ "name": "gore_mgr", "arguments": { "subcommand": "reset" } }),
             ))
             .expect("answered");
 

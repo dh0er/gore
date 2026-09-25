@@ -2912,6 +2912,12 @@ fn check(dir: &PathBuf, json: bool, cache: Option<PathBuf>, game: Option<PathBuf
         }
         Err(error) => return Err(error),
     };
+    if !manifest.dialog_topics.is_empty() {
+        bail!(
+            "dialog_topics is retired. Same-module dialog edits deploy as a script mini-cache \
+             and do not insert a UE4SS Lua adapter."
+        );
+    }
 
     if json {
         let document = serde_json::json!({
@@ -3014,7 +3020,7 @@ fn stage(
     prepare_stage_work_dir(&work_dir)?;
 
     let mini = format!("{mod_name}.mini.Cache");
-    let mut spec = serde_json::json!({
+    let spec = serde_json::json!({
         "meta": { "name": mod_name, "version": "0.1.0", "author": "" },
         "scripts": [{
             "op": manifest.operation.as_str(),
@@ -3023,7 +3029,10 @@ fn stage(
         }],
     });
     if !manifest.dialog_topics.is_empty() {
-        spec["dialog_topics"] = serde_json::to_value(&manifest.dialog_topics)?;
+        bail!(
+            "dialog_topics is retired. Same-module dialog edits deploy as a script mini-cache \
+             and do not insert a UE4SS Lua adapter."
+        );
     }
     // Replacing a fresh temporary file atomically never truncates an existing symlink or hard-link
     // target. The earlier check still gives a useful error before workspace parsing.
@@ -7593,7 +7602,11 @@ class UFirst : UTopic_Hero__NEW_NPC { }
             format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
         )
         .unwrap();
-        check(&out, true, Some(cache), Some(fake_game)).unwrap();
+        let retired = check(&out, true, Some(cache), Some(fake_game)).unwrap_err();
+        assert!(
+            retired.to_string().contains("dialog_topics is retired"),
+            "{retired}"
+        );
     }
 
     #[test]

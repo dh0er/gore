@@ -27,7 +27,7 @@ Mod Studio has no release yet; build it from source.
 | Area | Status | What you can do | What's missing |
 |---|---|---|---|
 | [Savegames](apps/save-editor/README.md) | Mostly | Edit Player and NPC values, inventories, quests and much more | Armor upgrades, chest and corpse loot, other loot points |
-| [Item & stat values](docs/guide/items.md) | Partly | Change what items are worth, what weapons do, what NPCs have | Still needs UE4SS; [native implementation plan](docs/items-values-without-ue4ss-plan.md) |
+| [Item & stat values](docs/guide/items.md) | Partly | Change class-default item and stat values without UE4SS | In-game confirmation on a clean install is still open; [plan](docs/items-values-without-ue4ss-plan.md) |
 | [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace all localized game text | ⠀⠀⠀⠀⠀ |
 | [Dialog authoring](docs/guide/dialog-authoring.md) | Full | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | ⠀⠀⠀⠀⠀ |
 | [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | ⠀⠀⠀⠀⠀ |
@@ -72,25 +72,26 @@ Check what you have before you rely on it:
 gore doctor
 ```
 
-It answers whether that path really is the game, whether UE4SS is there, what is
-deployed, and what an interrupted run left behind. Every line that is not `ok`
-carries a `fix:` line. Worth running now: the mod below is a UE4SS mod, and
-without UE4SS it installs cleanly and then does nothing at all.
+It answers whether that path really is the game, whether a third-party UE4SS
+install is present, what is deployed, and what an interrupted run left behind.
+Every line that is not `ok` carries a `fix:` line. Item and stat defaults do
+not need UE4SS.
 
-Then make apples worth 500 gold. Save this as `overrides.toml`:
+Then make apples worth 500 gold. Save this as `apple.json`:
 
-```toml
-[meta]
-name = "MyBalanceMod"
-
-[[override]]
-class = "ItFo_Apple"
-field = "m_Value"
-value_int = 500
+```json
+{
+  "meta": { "name": "MyBalanceMod", "version": "0.1.0", "author": "" },
+  "values": [
+    { "class": "UItFo_Apple", "field": "m_Value", "value": { "int": 500 } }
+  ]
+}
 ```
 
 ```powershell
-gore gen overrides.toml -o "$GAME\G1R\Binaries\Win64\ue4ss\Mods"
+gore value inspect --class UItFo_Apple
+gore mod build --spec apple.json --work-dir .gore-value-work -o mods
+gore mod deploy --bundle mods\MyBalanceMod
 ```
 
 Full walkthrough: [Getting started](docs/guide/getting-started.md).
@@ -152,7 +153,7 @@ Everything lives in [`docs/`](docs/README.md).
 | | |
 |---|---|
 | [Getting started](docs/guide/getting-started.md) | Install, configure, first mod, which tool for which job |
-| [Item & stat values](docs/guide/items.md) | `overrides.toml` → UE4SS Lua CDO override mod |
+| [Item & stat values](docs/guide/items.md) | `gore value inspect` and a `values` section compiled into a script mini-cache |
 | [Text & dialogs](docs/guide/text-and-dialogs.md) | Decrypt, edit, re-encrypt the localization `.lcache` |
 | [Dialog trees](docs/guide/dialog-trees.md) · [Dialog authoring](docs/guide/dialog-authoring.md) | Inspect conversations; edit defaults and behavior; add roots, submenus, multi-level trees and complete conversations |
 | [Audio](docs/guide/audio.md) · [Voice-over](docs/guide/voice.md) | FMOD bank samples; voice-over ZIP archives |

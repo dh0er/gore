@@ -56,14 +56,9 @@ is a property of the install's cache rather than of the spec — so the report a
 deploy time is where you find out. Check the id in a `gore loc export` and see
 [which language key to write](text-and-dialogs.md#which-language-key-to-write).
 
-**`overrides` class and field names are checked only if you ask.** Pass
-`--model model.json` and `build` rejects unknown classes, unknown fields and
-type mismatches before writing anything — the same check `gore gen --model`
-runs, through the same code. Without it the names go unchecked and the build
-says so on stderr. Nothing in the release zip is a model; building one is
-covered in [Catalogs & models](catalogs-and-models.md). An unchecked typo costs
-you a play session: the bundle builds, deploys, and its Lua polls once a second
-for 120 attempts before writing one "gave up" line to `UE4SS.log`.
+**`values` are checked against the script cache while `gore mod build` compiles
+them.** An unknown class, a wrong type, or a missing tag fails before a bundle
+is written. `--model` does not apply to that path.
 
 ```powershell
 gore mod build --spec spec.json -o build --model model.json
@@ -138,7 +133,7 @@ What deploy does per domain:
 
 | Section | Deployment |
 |---|---|
-| `overrides` | a generated UE4SS Lua mod into `ue4ss\Mods\` |
+| `values` | compiled class-default edits, shipped as a script mini-cache |
 | `loc_edits` | in-place `.lcache` rewrite, original backed up to `*.gore-bak` |
 | `audio` | in-place bank rewrite, original backed up to `*.gore-bak` |
 | `voice` | transactional ZIP rewrite under `G1R\Story\VoiceOver` |
@@ -146,7 +141,7 @@ What deploy does per domain:
 | `files` | in-place replacement of a loose game file, original backed up to `*.gore-bak` |
 | `pak_files` | packs the same files into an override `.pak` in `~mods\` (additive) |
 | `scripts` | splices the mini-caches into the script cache, backed up to `*.gore-bak` |
-| `dialog_topics` | low-level legacy UE4SS topic-registration adapter |
+| `dialog_topics` | retired; dialog edits ship as a script mini-cache |
 
 `gore mod undeploy` restores every backup and removes every additive container.
 
@@ -396,12 +391,4 @@ for that probe after a separate off-game-thread crash in its own UE4SS Lua loop.
 
 ## Other helpers
 
-```powershell
-gore scaffold MyMod -o "$GAME\...\Mods"   # empty hand-written gore-lua mod skeleton
-gore deploy-shared --game "$GAME"         # install the gore-lua helpers (for custom Lua mods)
-gore package mod_dir/ -o MyMod.zip        # zip a Lua mod for sharing
-```
-
-`deploy-shared` takes an optional `--src` for unusual layouts; by default it
-locates the shared tree relative to the `gore` executable, independent of the
-working directory.
+Ship a built bundle directory. There is no Lua skeleton and no shared Lua SDK.

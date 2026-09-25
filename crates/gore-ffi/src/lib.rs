@@ -269,7 +269,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use image::ImageEncoder;
 
 use gore_loc::{loc_store, paths};
-use gore_modgen::gen::{gen_lua, OverridesConfig};
+use gore_modgen::gen::OverridesConfig;
 use gore_modgen::validate::validate_config;
 use gore_reflect::model::ReflectionModel;
 
@@ -1021,13 +1021,34 @@ fn generate_mod(payload: Value) -> Value {
         Ok(c) => c,
         Err(e) => return err("BAD_CONFIG", format!("invalid overrides config: {e}")),
     };
-    let lua = gen_lua(&cfg);
+    let values: Vec<Value> = cfg
+        .overrides
+        .iter()
+        .map(|item| {
+            let value = match &item.value {
+                gore_modgen::gen::OverrideValue::Int(number) => json!({"int": number}),
+                gore_modgen::gen::OverrideValue::Float(number) => json!({"float": number}),
+                gore_modgen::gen::OverrideValue::Bool(flag) => json!({"bool": flag}),
+                gore_modgen::gen::OverrideValue::Str(text) => json!({"str": text}),
+            };
+            json!({
+                "class": item.class,
+                "field": item.field,
+                "value": value,
+            })
+        })
+        .collect();
+    let spec = serde_json::to_string_pretty(&json!({
+        "meta": {"name": cfg.meta.name, "version": "0.1.0", "author": ""},
+        "values": values,
+    }))
+    .unwrap_or_else(|error| format!("{{\"error\":\"{error}\"}}"));
     json!({
         "ok": true,
         "files": {
-            "enabled.txt": "",
-            "Scripts/main.lua": lua,
-        }
+            "spec.json": spec,
+        },
+        "note": "item values compile into a script mini-cache via `gore mod build`. UE4SS Lua is no longer generated."
     })
 }
 
@@ -2104,10 +2125,10 @@ mod tests {
         }}"#;
         let v: Value = serde_json::from_str(&execute_json(req)).unwrap();
         assert_eq!(v["ok"], true);
-        let lua = v["files"]["Scripts/main.lua"].as_str().unwrap();
-        assert!(lua.contains("ItFo_Apple"));
-        assert!(lua.contains("Default__"));
-        assert_eq!(v["files"]["enabled.txt"], "");
+        let spec = v["files"]["spec.json"].as_str().unwrap();
+        assert!(spec.contains("ItFo_Apple"));
+        assert!(spec.contains("\"int\": 500") || spec.contains("\"int\":500"));
+        assert!(v["files"].get("Scripts/main.lua").is_none());
     }
 
     #[test]
@@ -2574,11 +2595,15 @@ mod tests {
         .unwrap();
     }
 
-    /// Build a real goremod bundle (one item override → a UE4SS Lua component) under `root` and
-    /// return its dir, so `mgr_import` has a genuine bundle to ingest.
+    /// Build a real goremod bundle (one localization edit) under `root` and return its dir.
     fn write_goremod_bundle(root: &std::path::Path, name: &str) -> PathBuf {
         use gore_mod::{build_bundle, BuildSpec, ModMeta};
-        use gore_modgen::gen::{OverrideValue, SingleOverride};
+        use std::collections::BTreeMap;
+        let mut loc = BTreeMap::new();
+        loc.insert(
+            "itfo_cheese".to_string(),
+            BTreeMap::from([("german".to_string(), "X".to_string())]),
+        );
         let spec = BuildSpec {
             meta: ModMeta {
                 name: name.into(),
@@ -2586,19 +2611,15 @@ mod tests {
                 author: "t".into(),
             },
             delay_ms: 0,
-            overrides: vec![SingleOverride {
-                class: "ItFo_Apple".into(),
-                field: "m_Value".into(),
-                module: "Angelscript".into(),
-                value: OverrideValue::Int(500),
-            }],
-            loc_edits: Default::default(),
+            overrides: vec![],
+            loc_edits: loc,
             audio: vec![],
             texture: vec![],
             files: vec![],
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();

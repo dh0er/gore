@@ -29,7 +29,7 @@ of that page, not a second claim.
 | **All-new multi-level tree** | A wholly new three-level Diego tree rendered Root → level 2 → level 3, played a real `Say` between the two nested transitions, accepted the final choice and ended cleanly. Two directly consecutive, actionless `Subdialog` transitions instead soft-locked; `dialog check` now requires an unconditional top-level `Say` before one of those transitions. |
 | **Automatic opening** | The new Guard conversation opened without player selection and completed normally. A separate ambient fixture also entered `State.AmbientConversation` with `GA_Human_Conversation_Ambient` active. A normal 20-choice submenu separately rendered and allowed multiple selections. The crashed artificial fixture combining those two proven capabilities is diagnostic-only evidence, not a practical capability limit. |
 | **Selective complete cache** | A `gore as compile` product containing coordinated changes in multiple modules booted, loaded gameplay and executed the intended cross-module provider call. Its new same-module root was visible and selectable, the shipped automatic topic called the provider's new code, the line played and the conversation returned control. This is the complete-cache path, not two dependent mini-caches. |
-| **Historical low-level adapter** | `BuildSpec.dialog_topics` still describes a separate UE4SS insertion adapter. Earlier Viper runs rendered a root through `AddTopic` and recorded `ARMED -> CHOICE_PASS -> RENDER_PASS`. It is historical low-level evidence, not part of the current `gore dialog new-topic` root workflow. |
+| **Retired adapter** | `BuildSpec.dialog_topics` no longer builds. `gore dialog check` and `stage` refuse a workspace that still carries one. Current roots are same-module script edits. |
 
 ### Diagnostic-only evidence
 
@@ -379,12 +379,9 @@ removed for the second run and the option appeared again. The supported root
 workflow is therefore the ordinary same-module script edit: compile, package and
 deploy the mini-cache; UE4SS is not required.
 
-`BuildSpec.dialog_topics` remains a separate historical, low-level adapter
-surface. It can package generated CDO overrides plus a UE4SS Lua component that
-calls `ConversationTopicSet::AddTopic`; earlier Viper fixtures provide bounded
-render telemetry for that path. `gore dialog new-topic` and `dialog stage` do
-not need that adapter for a native same-module root, and the adapter evidence
-must not be presented as a prerequisite for current root authoring.
+`BuildSpec.dialog_topics` is retired. `gore dialog new-topic` and `dialog stage`
+ship a same-module script mini-cache and refuse a workspace that still carries
+the old adapter.
 
 ## Complete new conversations and all-new trees
 

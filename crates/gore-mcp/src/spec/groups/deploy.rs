@@ -551,7 +551,22 @@ const MOD_BUILD_ARGS: &[ArgSpec] = &[
         "model",
         Long("model"),
         Path,
-        "Path to model.json for validation (optional; skips validation if absent)",
+        "Path to model.json. Ignored: class defaults are checked against the script cache.",
+        false,
+    ),
+    ArgSpec::new(
+        "game",
+        Long("game"),
+        Path,
+        "Game install root. Required when the spec contains `values`.",
+        false,
+    )
+    .with_default("the configured game path, then Steam auto-detect"),
+    ArgSpec::new(
+        "work-dir",
+        Long("work-dir"),
+        Path,
+        "Compiler workspace used when the spec contains `values`.",
         false,
     ),
 ];

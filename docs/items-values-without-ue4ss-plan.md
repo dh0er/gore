@@ -1,6 +1,8 @@
 # Native item and stat values — greenfield plan
 
-Status: design only. This is a clean break, not a migration of `overrides.toml`,
+Status: implemented in the CLI. In-game confirmation on a clean install with no
+`ue4ss` directory is still open, so the README does not mark Items & Values
+complete. This is a clean break, not a migration of `overrides.toml`,
 `gore gen`, bundle `overrides`, or their UE4SS/Lua behavior.
 
 ## Product contract

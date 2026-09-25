@@ -3,13 +3,11 @@ pub mod asset;
 pub mod audio;
 pub mod catalog;
 pub mod config;
-pub mod deploy_shared;
 pub mod dialog;
 pub mod doctor;
 pub mod dump;
 pub mod dump_mod;
 pub mod find;
-pub mod gen;
 pub mod gui_model;
 pub mod guide;
 pub mod loc;
@@ -19,12 +17,11 @@ pub mod mcp;
 pub mod mgr;
 pub mod modcmd;
 pub mod npc;
-pub mod package;
-pub mod scaffold;
 pub mod story_catalog;
 pub mod stubs;
 pub mod sync;
 pub mod texture;
+pub mod value;
 pub mod voice;
 
 /// Case-insensitive substring test shared by every bounded listing's `--filter`.
@@ -50,48 +47,6 @@ pub fn contains_case_insensitive(haystack: &str, lowercase_needle: &str) -> bool
 /// scaffolding, Lua generation, packaging, bundle building, and dialog staging agree on portability.
 pub fn validate_mod_name(name: &str) -> anyhow::Result<()> {
     gore_mod::validate_mod_name(name).map_err(anyhow::Error::from)
-}
-
-/// Validate override class/field names against a reflection model.
-///
-/// Shared by `gore gen --model` and `gore mod build --model` so the two paths
-/// that generate the same Lua cannot drift into two different verdicts or two
-/// different error texts. `source` is the file the overrides were authored in
-/// (an `overrides.toml` for `gen`, a build spec for `mod build`), so the message
-/// names the file the reader has to edit.
-pub fn validate_overrides_against_model(
-    cfg: &gore_modgen::gen::OverridesConfig,
-    model_path: &std::path::Path,
-    source: &str,
-) -> anyhow::Result<()> {
-    use anyhow::Context;
-    let json = std::fs::read_to_string(model_path)
-        .with_context(|| format!("reading model.json '{}'", model_path.display()))?;
-    let model: gore_reflect::model::ReflectionModel =
-        serde_json::from_str(&json).with_context(|| "parsing model.json")?;
-
-    let errors = gore_modgen::validate::validate_config(cfg, &model);
-    if errors.is_empty() {
-        return Ok(());
-    }
-    // validate_config emits at most one error per override, so the ratio is honest.
-    let list = errors
-        .iter()
-        .map(|e| format!("  - {e}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    anyhow::bail!(
-        "{} of {} override(s) in '{}' do not match the model '{}':\n{}\n\
-         The generated Lua resolves each class by name at runtime, so a name this model does \
-         not carry is one the game will not resolve either: the mod retries once a second for \
-         120 attempts, then writes one \"gave up\" line to UE4SS.log and changes nothing. \
-         Correct the names, or run without --model if the model is older than your game build.",
-        errors.len(),
-        cfg.overrides.len(),
-        source,
-        model_path.display(),
-        list
-    );
 }
 
 #[cfg(test)]

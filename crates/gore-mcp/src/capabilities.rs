@@ -252,7 +252,7 @@ TOOLS
   gore_location  Check a waypoint or spot name before a script uses it. Offline, no install.
   gore_dialog    Read and safely author bounded same-module dialog edits: complete defaults, bodies, topics, and new conversations.
   gore_npc       Read the game's characters, and author new ones: class chain, spawn sites, workspace.
-  gore_project   Scaffold, compile and package a UE4SS Lua mod; install the shared Lua SDK.
+  gore_value     Inspect one class's recovered defaults from the Shipping script cache.
   gore_loc       Localized text: decrypt the .lcache to JSON, edit it, re-encrypt.
   gore_audio     FMOD sound banks: list samples, extract to WAV, inject replacements, ship patches.
   gore_voice     Voice-over archives. Strictly copy-on-write; recorded audio is never overwritten.

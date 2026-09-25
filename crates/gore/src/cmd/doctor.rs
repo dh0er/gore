@@ -707,14 +707,13 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
         return Check::new(
             "ue4ss",
             "UE4SS",
-            Verdict::Problem,
+            Verdict::Note,
             format!("not installed: there is no {}", ue4ss.display()),
         )
         .with_fix(
-            "item and stat overrides are Lua, and UE4SS is the loader that runs it — without it a \
-             deployed override mod sits in the install doing nothing and no command reports a \
-             problem. Install UE4SS into that folder; GORE does not ship or install it. See the \
-             UE4SS section of docs\\guide\\getting-started.md",
+            "first-party item values, dialogs, and scripts do not need UE4SS. Install it only \
+             for a third-party Lua mod. GORE does not ship or install it. See the UE4SS section \
+             of docs\\guide\\getting-started.md",
         );
     }
 
@@ -989,9 +988,8 @@ fn check_ue4ss_mods(gp: &GamePaths) -> Check {
     Check::new("ue4ss_mods", "UE4SS mods", Verdict::Ok, detail).with_items(items)
 }
 
-/// Directories under `Mods\`, sorted, with `shared` left out: that is the gore-lua SDK namespace
-/// `gore deploy-shared` installs for other mods to `require`, not a mod, and it has no enabled.txt
-/// by design.
+/// Directories under `Mods\`, sorted, with `shared` left out: that folder is a shared namespace,
+/// not a mod, and it has no enabled.txt by design.
 ///
 /// A directory that cannot be read is reported rather than counted as empty. "No mod folders" is
 /// exactly the answer that hides a competing override mod, and this check exists to find those.
@@ -2919,10 +2917,9 @@ mod tests {
         make_install(root);
 
         let check = check_ue4ss(&paths(root));
-        assert_eq!(check.verdict, Verdict::Problem);
+        assert_eq!(check.verdict, Verdict::Note);
         assert!(check.detail.contains("not installed"), "{}", check.detail);
-        // The point of the check is the consequence, not the missing file.
-        assert!(check.fix.unwrap().contains("doing nothing"));
+        assert!(check.fix.unwrap().contains("do not need UE4SS"));
     }
 
     #[test]
