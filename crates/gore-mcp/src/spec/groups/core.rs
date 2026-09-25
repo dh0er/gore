@@ -1579,7 +1579,6 @@ const VALUE_INSPECT_ARGS: &[ArgSpec] = &[
         false,
     )
     .with_default("the configured game path, then Steam auto-detect"),
-    ArgSpec::new("json", Long("json"), Bool, "Emit one JSON document", false),
 ];
 
 pub const VALUE: GroupSpec = GroupSpec {

@@ -563,7 +563,7 @@ const MOD_BUILD_ARGS: &[ArgSpec] = &[
     )
     .with_default("the configured game path, then Steam auto-detect"),
     ArgSpec::new(
-        "work-dir",
+        "work_dir",
         Long("work-dir"),
         Path,
         "Compiler workspace used when the spec contains `values`.",
@@ -615,14 +615,18 @@ const MOD_COMMANDS: &[CommandSpec] = &[
         "Build a bundle dir from a BuildSpec JSON",
         MOD_BUILD_ARGS,
         Safety::write()
-            .also_writes(&[(
-                "out",
-                Derived::ChildNamedInJson {
-                    arg: "spec",
-                    pointer: "/meta/name",
-                },
-            )])
-            .installs_via(&["out"]),
+            .also_writes(&[
+                (
+                    "out",
+                    Derived::ChildNamedInJson {
+                        arg: "spec",
+                        pointer: "/meta/name",
+                    },
+                ),
+                ("work_dir", Derived::Child("tree")),
+            ])
+            .clobbers_dir(&["work_dir"])
+            .installs_via(&["out", "work_dir"]),
         T_LONG,
     )
     .guide("bundles"),

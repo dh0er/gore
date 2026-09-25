@@ -1263,7 +1263,7 @@ mod tests {
             ("gore_texture", "pack", &["out"]),
             // A bundle directory is a build artifact anywhere but the installation, where the same
             // files would be sitting in the tree the game reads without ever having been deployed.
-            ("gore_mod", "build", &["out"]),
+            ("gore_mod", "build", &["out", "work_dir"]),
         ];
         expected.sort_unstable();
 
@@ -1330,13 +1330,16 @@ mod tests {
             (
                 "gore_mod",
                 "build",
-                &[(
-                    "out",
-                    Derived::ChildNamedInJson {
-                        arg: "spec",
-                        pointer: "/meta/name",
-                    },
-                )],
+                &[
+                    (
+                        "out",
+                        Derived::ChildNamedInJson {
+                            arg: "spec",
+                            pointer: "/meta/name",
+                        },
+                    ),
+                    ("work_dir", Derived::Child("tree")),
+                ],
             ),
             (
                 "gore_npc",
@@ -1403,6 +1406,7 @@ mod tests {
             // without replacement, so its caller-selected output is covered by `writes_into`.
             // One `.lua` per class, named from the model file.
             ("gore_catalog", "stubs", &["out"]),
+            ("gore_mod", "build", &["work_dir"]),
             // One `.as` per module, laid out by the cache's own ScriptRelativeFilename.
             ("gore_as", "emit-all", &["outdir"]),
         ];
