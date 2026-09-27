@@ -173,6 +173,8 @@ pub struct Class {
     pub ctors: Vec<Func>,
     /// asCObjectType flags (asOBJ_* bitfield) from the cache Class record.
     pub flags: u32,
+    /// Preprocessor `bAbstract`, i.e. the class was declared `UCLASS(Abstract)`.
+    pub is_abstract: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -407,13 +409,17 @@ fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
     }
     skip_tarray_fixed_checked(c, 4, "Class.BehaviorFunctionTypes")?;
     let mut super_class = None;
+    let mut is_abstract = false;
     if c.read_bool4()? {
         super_class = Some(c.read_sia()?); // SuperClass
         c.read_sia()?; // CodeSuperClass
-                       // bSuperIsCodeClass + six serialized class flags. ConfigName follows
-                       // as a variable-width FStringInArchive; treating an empty ConfigName's
-                       // four-byte length as an eighth bool desynchronizes any non-empty one.
-        for _ in 0..7 {
+                       // bSuperIsCodeClass, bAbstract, then five more serialized class flags.
+                       // ConfigName follows as a variable-width FStringInArchive; treating an
+                       // empty ConfigName's four-byte length as an eighth bool desynchronizes
+                       // any non-empty one.
+        c.read_bool4()?; // bSuperIsCodeClass
+        is_abstract = c.read_bool4()?;
+        for _ in 0..5 {
             c.read_bool4()?;
         }
         c.read_sia()?; // ConfigName
@@ -431,6 +437,7 @@ fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
         methods,
         ctors,
         flags,
+        is_abstract,
     })
 }
 

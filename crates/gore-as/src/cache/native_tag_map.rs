@@ -686,6 +686,7 @@ mod tests {
                 }],
                 ctors: Vec::new(),
                 flags: 0,
+                is_abstract: false,
             }],
             enums: Vec::new(),
             globals: Vec::new(),

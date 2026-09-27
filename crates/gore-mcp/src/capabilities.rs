@@ -124,8 +124,12 @@ pub fn instructions(opts: &Options, policy: Policy) -> String {
          `work_dir/tree` and outputs outside the installation they need no consent. The mixed \
          `gore_as` tool does the same with explicit `backend: standalone`. \
          A `game` or `standalone-then-game` backend, including the omitted default, may open a real \
-         game window and stage sources in the installation: {}.\n",
-        will_be(&LAUNCHES, opts, policy)
+         game window and stage sources in the installation: {}. A compile/decompile refusal that \
+         suggests --force (typical after a game update) is lifted with `\"force\": true` on any \
+         tool: ask the user once whether to force, saying the result may be broken, never per \
+         command. Forced calls are {}.\n",
+        will_be(&LAUNCHES, opts, policy),
+        force_will_be(opts, policy)
     ));
     text.push_str(match policy {
         Policy::Ask => CONSENT_ASK,
@@ -139,7 +143,6 @@ pub fn instructions(opts: &Options, policy: Policy) -> String {
         "\nMany commands sidestep the question entirely by writing somewhere new: passing an \
          output argument turns an in-place rewrite into a new file. Prefer that.\n",
     );
-
     text.push_str(HOW_IT_BEHAVES);
     text
 }
@@ -179,10 +182,12 @@ fn always_gated() -> Vec<String> {
 const WRITES: Needs = Needs {
     write: true,
     game_launch: false,
+    force: false,
 };
 const LAUNCHES: Needs = Needs {
     write: true,
     game_launch: true,
+    force: false,
 };
 
 /// What becomes of a call in one tier, in one phrase.
@@ -199,6 +204,29 @@ fn will_be(needs: &Needs, opts: &Options, policy: Policy) -> String {
         Policy::CannotAsk | Policy::NeverAsk => format!(
             "REFUSED; only the user can change that, by restarting this server with {}",
             needs.flags()
+        ),
+    }
+}
+
+fn force_will_be(opts: &Options, policy: Policy) -> String {
+    const FORCE: Needs = Needs {
+        write: false,
+        game_launch: false,
+        force: true,
+    };
+    if opts.pre_approves(&FORCE) {
+        return "PRE-APPROVED, so they run without asking".into();
+    }
+    match policy {
+        Policy::Ask => "confirmed with the user on the first one; after that the session \
+                        remembers the answer"
+            .into(),
+        Policy::CannotAsk => "REFUSED on the first one until you relay the user's answer as the \
+                              refusal describes; after that the session remembers it"
+            .into(),
+        Policy::NeverAsk => format!(
+            "REFUSED; only the user can change that, by restarting this server with {}",
+            FORCE.flags()
         ),
     }
 }
@@ -465,6 +493,7 @@ mod tests {
             let gate_stays_silent = opts.pre_approves(&Needs {
                 write: required.write,
                 game_launch: required.game_launch,
+                force: false,
             });
             let claims_unattended =
                 instructions(&opts, Policy::Ask).contains("installation: PRE-APPROVED");

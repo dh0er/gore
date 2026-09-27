@@ -479,7 +479,7 @@ mod tests {
             "guide html",
             "help",
             "help mgr",
-            "help gen",
+            "help value",
             // clap's explorer takes a whole path, not one token.
             "help as compile",
             "help mgr reset",

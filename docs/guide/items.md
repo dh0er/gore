@@ -43,7 +43,11 @@ gore mod deploy --bundle mods\MyBalanceMod
 `value` is one of `int`, `float`, `bool`, or `str`. The type has to match the
 recovered default. Two mods that edit the same script module conflict. A build
 is tied to the script cache it inspected; a later game update refuses the old
-mini-cache.
+mini-cache. Rebuild it against the new game. If that rebuild refuses because
+the new build is not verified yet, and the message suggests `--force`, you can
+rerun the build with `--force`. It continues with a warning per skipped check,
+but the result may be broken, so test it in a new game (see
+[game updates](../reference/game-updates.md#forcing-compile-and-decompile-before-qualification)).
 
 `overrides.toml` and `gore gen` are retired. They are not translated into this
 format.

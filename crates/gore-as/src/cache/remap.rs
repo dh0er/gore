@@ -2391,6 +2391,26 @@ fn missing_declaration_membership(
     }
 }
 
+/// Refuses an engine/native row that neither the pristine base nor a qualified native API
+/// snapshot vouches for; `--force` admits it instead because a game update changes exactly these.
+fn unqualified_native_row(
+    table: usize,
+    row_key: i64,
+    detail: impl Into<String>,
+) -> Result<(), RemapError> {
+    if crate::force::enabled() {
+        crate::force::warn(
+            "engine/native declarations are not covered by the pristine base or a qualified native API snapshot",
+        );
+        return Ok(());
+    }
+    Err(missing_declaration_membership(
+        table,
+        row_key,
+        crate::force::refusal(detail.into()),
+    ))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TypeDeclarationKind {
     ScriptLeaf,
@@ -3114,14 +3134,14 @@ fn validate_novel_declaration_membership(
                 .as_ref()
                 .is_some_and(|snapshot| snapshot.allows_type(row, meta, syms));
             if !exact_pristine && !qualified_native {
-                return Err(missing_declaration_membership(
+                unqualified_native_row(
                     0,
                     row.key,
                     format!(
                         "engine/native and $__T__ type rows require an exact pristine TypeReferences identity (module {:?}, namespace {:?}, type {:?})",
                         row.module, row.namespace, row.name
                     ),
-                ));
+                )?;
             }
         } else {
             let identity = DeclarationIdentity {
@@ -3203,14 +3223,14 @@ fn validate_novel_declaration_membership(
                 && !exact_pristine
                 && !qualified_native
             {
-                return Err(missing_declaration_membership(
+                unqualified_native_row(
                     2,
                     row.key,
                     format!(
                         "method/native function {}::{} in module {:?} has neither an exact current/pristine function record nor an exact pristine FunctionReferences identity: {identity:?}",
                         row.namespace, row.name, row.module
                     ),
-                ));
+                )?;
             }
         } else {
             if !has_authority(&row.module) {
@@ -3382,11 +3402,11 @@ fn validate_novel_property_membership(
                         .is_some_and(|snapshot| snapshot.allows_property(row, owner_identity)))
             });
             if !exact {
-                return Err(missing_declaration_membership(
+                unqualified_native_row(
                     6,
                     row.key,
                     "engine/template properties require an exact pristine property row",
-                ));
+                )?;
             }
         }
     }
@@ -5761,14 +5781,15 @@ impl FinalDeclarationQueries {
                 {
                     continue;
                 }
-                return Err(missing_declaration_membership(
-                    2,
-                    row_key,
-                    format!(
-                        "final module output has no exact function record for runtime signature {}",
-                        identity.display
-                    ),
-                ));
+                let detail = format!(
+                    "final module output has no exact function record for runtime signature {}",
+                    identity.display
+                );
+                if declaration_match == FunctionDeclarationMatch::Missing {
+                    unqualified_native_row(2, row_key, detail)?;
+                    continue;
+                }
+                return Err(missing_declaration_membership(2, row_key, detail));
             }
         }
         for row in &self.properties {

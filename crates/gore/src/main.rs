@@ -8,6 +8,11 @@ mod cmd;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+    /// Continue past compile/decompile safety checks that refuse because the game build, its
+    /// Binds.Cache or the regenerated output could not be verified (e.g. after a game update).
+    /// Each skipped check is reported as a warning; the result may be broken.
+    #[arg(long, global = true)]
+    force: bool,
 }
 
 #[derive(Subcommand)]
@@ -245,6 +250,11 @@ enum McpAction {
         /// Also settable as GORE_MCP_ALLOW_GAME_LAUNCH=1
         #[arg(long)]
         allow_game_launch: bool,
+        /// Pre-approve calls that pass `force` (the CLI's global --force), which continue past
+        /// compile/decompile checks for an unverified game build. Without this the first forced
+        /// call in a session is confirmed with you. Also settable as GORE_MCP_ALLOW_FORCE=1
+        #[arg(long)]
+        allow_force: bool,
         /// Never ask, and refuse anything that would need confirming. The strict posture, for a
         /// server exposed to an agent whose calls nobody reviews.
         /// Also settable as GORE_MCP_NO_CONSENT_PROMPTS=1
@@ -470,6 +480,9 @@ fn main() {
 
 fn run_cli() {
     let cli = Cli::parse();
+    if cli.force {
+        gore_as::force::enable();
+    }
     let result = match cli.command {
         Commands::Dump { sdk_dir, out } => cmd::dump::run(sdk_dir, out),
         Commands::Stubs { model, out, filter } => cmd::stubs::run(model, out, filter),
@@ -575,12 +588,14 @@ fn run_cli() {
             McpAction::Serve {
                 allow_write,
                 allow_game_launch,
+                allow_force,
                 no_consent_prompts,
                 timeout_secs,
                 max_output_kib,
             } => cmd::mcp::serve(cmd::mcp::ServeOptions {
                 allow_write,
                 allow_game_launch,
+                allow_force,
                 no_consent_prompts,
                 timeout_secs,
                 max_output_kib,

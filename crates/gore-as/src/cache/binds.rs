@@ -67,6 +67,14 @@ const HOTFIX_25168047_GUID: [u8; 16] = [
     0xc7, 0xce,
 ];
 
+const HOTFIX_25414091_GUID: [u8; 16] = [
+    0xed, 0xb6, 0x7c, 0x64, 0x0f, 0x24, 0x6e, 0x45, 0x8d, 0x8e, 0x1f, 0x50, 0xce, 0x36,
+    0x79, 0xd7,
+];
+
+/// Later caches that shipped the audited 24878692 Binds file unchanged.
+const SAME_BINDS_HOTFIX_GUIDS: [[u8; 16]; 2] = [HOTFIX_25168047_GUID, HOTFIX_25414091_GUID];
+
 type VerifiedDefaultClassProfileDigests = ([u8; 32], [u8; 32]);
 
 /// Native AngelScript method/function arities extracted from `Binds.Cache`.
@@ -291,11 +299,26 @@ impl NativeApi {
         if let Some(known) = self.verified_default_field_type(script_cache_guid, class, field) {
             return Some(known);
         }
-        if script_cache_guid != &HOTFIX_25168047_GUID
+        if !SAME_BINDS_HOTFIX_GUIDS.contains(script_cache_guid)
             || self.verified_default_binds_sha256.as_ref()
                 != Some(&gore_generation::ROW_G1R_24878692.binds_cache.sha256)
         {
-            return None;
+            if !crate::force::enabled() {
+                return None;
+            }
+            let key = (class.to_string(), field.to_string());
+            let forced = self
+                .verified_default_field_types
+                .get(&key)
+                .or_else(|| self.plain_field_types.get(&key))
+                .map(String::as_str);
+            if forced.is_some() {
+                crate::force::warn(
+                    "class default field types come from a Binds.Cache that is not verified for \
+                     this script cache",
+                );
+            }
+            return forced;
         }
         self.verified_default_field_types
             .get(&(class.to_string(), field.to_string()))

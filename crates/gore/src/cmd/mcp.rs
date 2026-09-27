@@ -20,6 +20,7 @@ use anyhow::{bail, Context, Result};
 pub struct ServeOptions {
     pub allow_write: bool,
     pub allow_game_launch: bool,
+    pub allow_force: bool,
     pub no_consent_prompts: bool,
     pub timeout_secs: u64,
     pub max_output_kib: usize,
@@ -39,6 +40,7 @@ pub struct ServeOptions {
 /// someone who already controls how the server is launched.
 const ALLOW_WRITE_ENV: &str = "GORE_MCP_ALLOW_WRITE";
 const ALLOW_GAME_LAUNCH_ENV: &str = "GORE_MCP_ALLOW_GAME_LAUNCH";
+const ALLOW_FORCE_ENV: &str = "GORE_MCP_ALLOW_FORCE";
 const NO_CONSENT_PROMPTS_ENV: &str = "GORE_MCP_NO_CONSENT_PROMPTS";
 
 pub fn serve(flags: ServeOptions) -> Result<()> {
@@ -63,6 +65,7 @@ fn with_environment(
         allow_write: flags.allow_write || switched_on(ALLOW_WRITE_ENV, lookup(ALLOW_WRITE_ENV))?,
         allow_game_launch: flags.allow_game_launch
             || switched_on(ALLOW_GAME_LAUNCH_ENV, lookup(ALLOW_GAME_LAUNCH_ENV))?,
+        allow_force: flags.allow_force || switched_on(ALLOW_FORCE_ENV, lookup(ALLOW_FORCE_ENV))?,
         no_consent_prompts: flags.no_consent_prompts
             || switched_on(NO_CONSENT_PROMPTS_ENV, lookup(NO_CONSENT_PROMPTS_ENV))?,
         ..flags
@@ -102,10 +105,12 @@ fn serve_resolved(flags: ServeOptions) -> Result<()> {
     // Saying "do not ask me" and "here is what you may do without asking" at once is a
     // contradiction, and silently picking one would leave someone believing the other. It matters:
     // one of the two readings runs commands that change the installation.
-    if flags.no_consent_prompts && (flags.allow_write || flags.allow_game_launch) {
+    if flags.no_consent_prompts
+        && (flags.allow_write || flags.allow_game_launch || flags.allow_force)
+    {
         bail!(
             "--no-consent-prompts refuses everything that would need confirming, so pairing it \
-             with --allow-write or --allow-game-launch asks for both a stricter and a looser \
+             with --allow-write, --allow-game-launch or --allow-force asks for both a stricter and a looser \
              server at once. Pass one or the other."
         );
     }
@@ -113,6 +118,7 @@ fn serve_resolved(flags: ServeOptions) -> Result<()> {
     let mut opts = gore_mcp::Options::new(resolve_self()?, env!("CARGO_PKG_VERSION"));
     opts.allow_write = flags.allow_write;
     opts.allow_game_launch = flags.allow_game_launch;
+    opts.allow_force = flags.allow_force;
     opts.never_ask = flags.no_consent_prompts;
     opts.timeout_override_secs = flags.timeout_secs;
     opts.max_stdout_bytes = stdout_cap_bytes(flags.max_output_kib);
@@ -143,6 +149,7 @@ mod tests {
         ServeOptions {
             allow_write: false,
             allow_game_launch: false,
+            allow_force: false,
             no_consent_prompts: false,
             timeout_secs: 0,
             max_output_kib: 256,

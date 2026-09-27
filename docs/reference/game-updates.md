@@ -133,6 +133,36 @@ Nothing produced a wrong answer in the historical fail-closed state, and the
 admitted row does not widen its recorded proof. Anything that cannot prove the
 evidence required by its own contract still refuses to act on it.
 
+## Forcing compile and decompile before qualification
+
+A game update must never leave the compiler or decompiler with no way forward.
+Every refusal in those paths that exists because the build, its `Binds.Cache`
+or the regenerated output could not be verified ends with:
+
+```text
+hint: rerun with --force to proceed anyway. This skips a safety check that exists because the game build or the regenerated output could not be verified; the result may be broken
+```
+
+`--force` is a global CLI flag (`gore --force as compile ...`,
+`gore mod build ... --force`). It relaxes exactly these checks:
+
+- decompile/emit: class default field types are taken from the installed
+  `Binds.Cache` even when no generation row pairs it with the script cache;
+- compile/edit: the default-target, function-metadata, generated-default and
+  class-structure preservation proofs, and engine/native declarations that no
+  pristine row or qualified native API snapshot covers.
+
+Each skipped check prints one `warning: --force: continuing despite: ...`
+line, so the output records what was not proven. A forced cache can compile and
+still be wrong in the game: test it in a new save, and qualify the build with
+the checklist below before relying on it. Integrity refusals (tampered or
+missing backups, a running game, compiler diagnostics) are not forceable, and
+Mod Studio never forces.
+
+If the standalone compiler has no matching profile, the default
+`standalone-then-game` backend already falls back to the game compiler
+without `--force`; only `--backend standalone` refuses.
+
 ## The checklist
 
 Run this when the game updates. Steps 1–4 are cheap and answer whether anything

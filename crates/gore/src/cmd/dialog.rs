@@ -6802,6 +6802,7 @@ class UFirst : UTopic_Hero__NEW_NPC { }
                 methods: Vec::new(),
                 ctors: Vec::new(),
                 flags: 0,
+                is_abstract: false,
             })
             .collect(),
             enums: Vec::new(),

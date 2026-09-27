@@ -40,6 +40,7 @@ fn class_with(name: &str, methods: Vec<Func>) -> Class {
         methods,
         ctors: Vec::new(),
         flags: 0,
+        is_abstract: false,
     }
 }
 

@@ -415,6 +415,16 @@ pub fn build(
     })
 }
 
+/// Add the CLI's global `--force` in front of the command path.
+pub fn with_force(mut invocation: Invocation, opts: &Options) -> Invocation {
+    invocation.argv.insert(0, "--force".into());
+    invocation.display = render(&opts.exe, &invocation.argv);
+    if let Some(consent) = invocation.consent.as_mut() {
+        consent.command_line = invocation.display.clone();
+    }
+    invocation
+}
+
 fn reject_unknown_arguments(
     command: &CommandSpec,
     args: &Map<String, Value>,
@@ -517,6 +527,7 @@ fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> 
             Needs {
                 write: required.write,
                 game_launch: true,
+                force: false,
             },
         );
     }
@@ -525,6 +536,7 @@ fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> 
         let needs = Needs {
             write: true,
             game_launch: false,
+            force: false,
         };
         if required.rewrites_in_place {
             let escape = command.safety.in_place_without.unwrap_or("out");
@@ -557,6 +569,7 @@ fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> 
             Needs {
                 write: true,
                 game_launch: false,
+                force: false,
             },
         );
     }
@@ -568,6 +581,7 @@ fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> 
         let needs = Needs {
             write: true,
             game_launch: false,
+            force: false,
         };
         return match occupancy {
             Occupancy::Existing(target) => question(
@@ -1311,6 +1325,7 @@ mod tests {
                 == Needs {
                     write: true,
                     game_launch: false,
+                    force: false,
                 }
         })
     }
@@ -2151,7 +2166,8 @@ mod tests {
             raised.needs,
             Needs {
                 write: true,
-                game_launch: true
+                game_launch: true,
+                force: false,
             }
         );
         assert_eq!(raised.needs.flags(), "--allow-game-launch --allow-write");
@@ -2276,6 +2292,7 @@ mod tests {
                     Needs {
                         write: true,
                         game_launch: false,
+                        force: false,
                     },
                     "{tool} `{output}`"
                 );
@@ -2352,6 +2369,7 @@ mod tests {
                 Needs {
                     write: true,
                     game_launch: false,
+                    force: false,
                 },
                 "{tool}"
             );
@@ -2378,7 +2396,8 @@ mod tests {
                 raised.needs,
                 Needs {
                     write: true,
-                    game_launch: true
+                    game_launch: true,
+                    force: false,
                 }
             );
             assert!(
@@ -2822,7 +2841,8 @@ mod tests {
             raised.needs,
             Needs {
                 write: true,
-                game_launch: false
+                game_launch: false,
+                force: false,
             }
         );
 
@@ -2897,7 +2917,8 @@ mod tests {
             raised.needs,
             Needs {
                 write: true,
-                game_launch: true
+                game_launch: true,
+                force: false,
             }
         );
 

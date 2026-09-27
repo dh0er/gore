@@ -42,6 +42,13 @@ Commands that need the install (`mod`, `mgr`, `texture`,
 from an explicit `--game` (or `--lcache` / `--exe` / an explicit source path),
 then the configured game path, then Steam auto-detect.
 
+The global `--force` flag (accepted by every command) lets compile, decompile,
+`value inspect` and `mod build` continue past checks that refuse because the
+game build, its `Binds.Cache` or the regenerated output could not be verified,
+typically right after a game update. Refusals that `--force` can override say
+so. Every skipped check prints a warning, and the result may be broken; see
+[game updates](../reference/game-updates.md#forcing-compile-and-decompile-before-qualification).
+
 ## `config`
 
 | Subcommand | Arguments |
@@ -451,7 +458,7 @@ setup, the tool list, and how the guide is exposed.
 
 | Subcommand | Arguments and flags |
 |---|---|
-| `serve` | `--allow-write` · `--allow-game-launch` · `--no-consent-prompts` · `--timeout-secs <SECS>` · `--max-output-kib <KIB>` |
+| `serve` | `--allow-write` · `--allow-game-launch` · `--allow-force` · `--no-consent-prompts` · `--timeout-secs <SECS>` · `--max-output-kib <KIB>` |
 | `tools` | — (prints the tool definitions as JSON and exits) |
 
 `serve` speaks JSON-RPC on stdin/stdout; it is not interactive. Every command

@@ -259,6 +259,24 @@ the refusal, bound id, question put to you, your answer, and note on the run.
 The field is refused under `--no-consent-prompts` — that flag exists so that an
 agent nobody is reviewing cannot talk its own way past the gate.
 
+### Forcing after a game update
+
+After a game update, compile and decompile steps that cannot verify the new
+build refuse with a hint to rerun with `--force` (see
+[game updates](../reference/game-updates.md#forcing-compile-and-decompile-before-qualification)).
+Every tool accepts `"force": true`, which adds the CLI's global `--force`:
+
+```json
+{ "name": "gore_mod", "arguments": { "subcommand": "build", "args": { "…": "…" }, "force": true } }
+```
+
+A result that offers the override tells the assistant to ask you **once**
+whether to force, not per command. The first forced call is then confirmed
+through the same dialog (or conversation relay) as any other protected call.
+After a yes, every later forced call in that session runs without asking again.
+After a no, the next forced call asks again. `--allow-force` /
+`GORE_MCP_ALLOW_FORCE` pre-approves it, and `--no-consent-prompts` refuses it.
+
 ### Answering in advance
 
 Where nobody is watching — CI, a scripted batch, an agent that already has its own
@@ -268,7 +286,8 @@ approval layer — you can answer once at startup instead:
 |---|---|---|
 | `--allow-write` | `GORE_MCP_ALLOW_WRITE` | Installation changes, Manager-library mutations, deletions, and in-place rewrites run without asking |
 | `--allow-game-launch` | `GORE_MCP_ALLOW_GAME_LAUNCH` | The same for compiler policies that may start the game. `game`, `standalone-then-game`, and an omitted backend need **both** flags; explicit strict `standalone` needs neither |
-| `--no-consent-prompts` | `GORE_MCP_NO_CONSENT_PROMPTS` | Never ask, and refuse anything that would need it. The strict posture, for a server exposed to an agent whose calls nobody reviews. It cannot be combined with the two above — that would be asking for a looser and a stricter server at once, and the server refuses to start rather than pick one |
+| `--allow-force` | `GORE_MCP_ALLOW_FORCE` | Calls with `"force": true` run without the one-time confirmation |
+| `--no-consent-prompts` | `GORE_MCP_NO_CONSENT_PROMPTS` | Never ask, and refuse anything that would need it. The strict posture, for a server exposed to an agent whose calls nobody reviews. It cannot be combined with the three above — that would be asking for a looser and a stricter server at once, and the server refuses to start rather than pick one |
 
 ```powershell
 gore mcp serve --allow-write

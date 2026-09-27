@@ -23,7 +23,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 
-use crate::consent::{self, Decision, Needs, Peer, Policy, APPROVAL_FIELD, APPROVAL_REQUEST_FIELD};
+use crate::consent::{
+    self, Decision, Needs, Peer, Policy, APPROVAL_FIELD, APPROVAL_REQUEST_FIELD, FORCE_FIELD,
+};
 use crate::exec::{self, ProcessSpawn, Spawn};
 use crate::rpc::{errors, Frame, OutRequest, Request, Response, Transport, MAX_FRAME_BYTES};
 use crate::{argv, capabilities, resources, spec, tools};
@@ -43,6 +45,8 @@ pub struct Options {
     pub allow_write: bool,
     /// The same pre-approval for commands that launch the game executable.
     pub allow_game_launch: bool,
+    /// The same pre-approval for calls that pass `force`, i.e. the CLI's global `--force`.
+    pub allow_force: bool,
     /// Never put a question to the user; refuse anything that would need one.
     ///
     /// This is the strict posture, for a server exposed to something whose calls nobody reviews.
@@ -81,6 +85,7 @@ impl Options {
             server_version: server_version.into(),
             allow_write: false,
             allow_game_launch: false,
+            allow_force: false,
             never_ask: false,
             timeout_override_secs: 0,
             max_stdout_bytes: DEFAULT_MAX_STDOUT_BYTES,
@@ -91,7 +96,9 @@ impl Options {
     ///
     /// Pre-approval, not permission: an uncovered call is not refused, it is put to the user.
     pub fn pre_approves(&self, needs: &Needs) -> bool {
-        (!needs.write || self.allow_write) && (!needs.game_launch || self.allow_game_launch)
+        (!needs.write || self.allow_write)
+            && (!needs.game_launch || self.allow_game_launch)
+            && (!needs.force || self.allow_force)
     }
 }
 
@@ -109,6 +116,8 @@ pub struct Session {
     /// was actually refused, not merely to a tool or subcommand name.
     pending_approvals: VecDeque<PendingApproval>,
     next_approval_id: u64,
+    /// Set once the user allowed one forced call; later `force` calls no longer ask.
+    force_allowed: bool,
 }
 
 impl Session {
@@ -128,6 +137,7 @@ impl Session {
             client_can_elicit: false,
             pending_approvals: VecDeque::new(),
             next_approval_id: 0,
+            force_allowed: false,
         }
     }
 
@@ -428,10 +438,40 @@ impl Session {
             );
         }
 
-        let invocation = match argv::build(group, &subcommand, &args, &self.opts) {
+        let force = match arguments.get(FORCE_FIELD) {
+            None | Some(Value::Null) | Some(Value::Bool(false)) => false,
+            Some(Value::Bool(true)) => true,
+            Some(_) => {
+                return Response::ok(
+                    id,
+                    exec::to_error_result(format!("`{FORCE_FIELD}` must be a boolean.")),
+                )
+            }
+        };
+
+        let mut invocation = match argv::build(group, &subcommand, &args, &self.opts) {
             Ok(invocation) => invocation,
             Err(error) => return Response::ok(id, exec::to_error_result(error.to_string())),
         };
+        if force {
+            invocation = argv::with_force(invocation, &self.opts);
+            if !self.force_allowed && !self.opts.allow_force {
+                let (path, command_line) = (invocation.path.clone(), invocation.display.clone());
+                let consent = invocation.consent.get_or_insert_with(|| consent::Consent {
+                    path,
+                    reason: String::new(),
+                    remedy: None,
+                    command_line,
+                    needs: Needs::default(),
+                });
+                consent.reason = if consent.reason.is_empty() {
+                    consent::FORCE_REASON.to_owned()
+                } else {
+                    format!("{}, and {}", consent.reason, consent::FORCE_REASON)
+                };
+                consent.needs.force = true;
+            }
+        }
         let command = group
             .command(&subcommand)
             .expect("argv::build validated the subcommand");
@@ -461,6 +501,9 @@ impl Session {
                     )),
                 );
             }
+            if request.needs.force {
+                self.force_allowed = true;
+            }
             if let Decision::AllowedByAssertion(words) = decision {
                 asserted = Some(words);
             }
@@ -482,6 +525,10 @@ impl Session {
                 // nobody here confirmed should say so where the run itself is recorded.
                 if let Some(words) = &asserted {
                     exec::append_note(&mut result, consent::assertion_note(words));
+                }
+                if !force && exec::offers_force(&outcome) {
+                    let allowed = self.force_allowed || self.opts.allow_force;
+                    exec::append_note(&mut result, consent::force_hint_note(allowed));
                 }
                 Response::ok(id, result)
             }
@@ -530,7 +577,7 @@ fn normalize_group_arguments(
     let is_meta = |key: &str| {
         matches!(
             key,
-            "subcommand" | "args" | APPROVAL_FIELD | APPROVAL_REQUEST_FIELD
+            "subcommand" | "args" | APPROVAL_FIELD | APPROVAL_REQUEST_FIELD | FORCE_FIELD
         )
     };
 
@@ -2000,6 +2047,102 @@ mod tests {
             .unwrap();
         assert_eq!(result["isError"], json!(false));
         assert_eq!(spawn.calls().len(), 1);
+    }
+
+    fn a_forced_config_path() -> Request {
+        request(
+            "tools/call",
+            json!({
+                "name": "gore_config",
+                "arguments": { "subcommand": "path", "force": true },
+            }),
+        )
+    }
+
+    #[test]
+    fn force_is_confirmed_once_and_then_remembered_for_the_session() {
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+
+        let mut peer = Canned::allowing();
+        let first = session
+            .handle(&a_forced_config_path(), &mut peer)
+            .expect("answered")
+            .result
+            .unwrap();
+        assert_eq!(first["isError"], json!(false));
+        assert_eq!(peer.asked, 1, "the first forced call is confirmed");
+
+        // `NoOneToAsk` panics if reached: the second forced call must not ask again.
+        let second = session
+            .handle_unasked(&a_forced_config_path())
+            .expect("answered")
+            .result
+            .unwrap();
+        assert_eq!(second["isError"], json!(false));
+
+        let calls = spawn.calls();
+        assert_eq!(calls.len(), 2);
+        for call in calls.iter() {
+            let argv: Vec<String> = call
+                .argv
+                .iter()
+                .map(|token| token.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(argv, vec!["--force", "config", "path"]);
+        }
+    }
+
+    #[test]
+    fn a_declined_force_is_not_remembered() {
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+
+        let mut peer = Canned::declining();
+        let refused = session
+            .handle(&a_forced_config_path(), &mut peer)
+            .expect("answered")
+            .result
+            .unwrap();
+        assert_eq!(refused["isError"], json!(true));
+        assert!(spawn.calls().is_empty());
+
+        let mut peer = Canned::declining();
+        session
+            .handle(&a_forced_config_path(), &mut peer)
+            .expect("answered");
+        assert_eq!(
+            peer.asked, 1,
+            "a no does not stop the next forced call from asking"
+        );
+    }
+
+    #[test]
+    fn a_refusal_offering_force_tells_the_model_to_ask_once() {
+        let (mut session, _spawn) = faked(exec::Outcome::success(
+            "error: refusing structure preservation\nhint: rerun with --force to proceed anyway.\n",
+        ));
+        let result = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({ "name": "gore_config", "arguments": { "subcommand": "path" } }),
+            ))
+            .expect("answered")
+            .result
+            .unwrap();
+        let notes: Vec<&str> = result["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|block| block["text"].as_str())
+            .collect();
+        assert!(
+            notes.iter().any(|text| text.contains("\"force\": true")
+                && text.contains("Do not ask them per command")),
+            "{notes:?}"
+        );
     }
 
     /// The same call, carrying what the caller says the user already answered.

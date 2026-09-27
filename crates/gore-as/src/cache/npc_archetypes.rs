@@ -2085,6 +2085,7 @@ mod tests {
             methods,
             ctors: Vec::new(),
             flags: 1,
+            is_abstract: false,
         }
     }
 

@@ -525,7 +525,11 @@ dependency against the effective base-plus-mini tables before it creates a game
 backup, deploy record, or mutation lock. A mini built for an older game cache is
 therefore refused rather than spliced. After a game update, compile or remap the
 module again against the new pristine `PrecompiledScript_Shipping.Cache`; do not
-reuse the previous mini-cache or copy its old GUID.
+reuse the previous mini-cache or copy its old GUID. When that compile or a
+decompile refuses because the new build is not qualified yet, the error says
+whether the global `--force` flag can override it. A forced result may be
+broken; see
+[game updates](../reference/game-updates.md#forcing-compile-and-decompile-before-qualification).
 
 These checks depend only on the cache contents, never on where the mod came
 from. A GORE bundle, a community download, and a manually prepared package all

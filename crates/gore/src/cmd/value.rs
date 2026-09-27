@@ -235,6 +235,11 @@ pub fn compile_values_into_scripts(
                 .with_context(|| format!("emitting {module_name}"))?;
             let rewritten = apply_edits(&source, &module_edits)?;
             prove_only_requested_statements_changed(&source, &rewritten, &module_edits)?;
+            let module_work = work_dir.join(sanitize(&module_name));
+            // The compiler reads this directory before it creates anything inside it.
+            std::fs::create_dir_all(&module_work).with_context(|| {
+                format!("creating compiler workspace {}", module_work.display())
+            })?;
             let source_path = work_dir.join(format!("{}.as", sanitize(&module_name)));
             std::fs::write(&source_path, &rewritten)
                 .with_context(|| format!("writing {}", source_path.display()))?;
@@ -244,7 +249,7 @@ pub fn compile_values_into_scripts(
                 module: module_name.clone(),
                 rel_path: relative,
                 source: source_path,
-                work_dir: work_dir.join(sanitize(&module_name)),
+                work_dir: module_work,
                 allow_new_symbols: false,
                 out: mini_path.clone(),
                 game: Some(game.to_path_buf()),
@@ -255,7 +260,7 @@ pub fn compile_values_into_scripts(
                 diagnostics_hook: None,
                 diagnostics_inject_delay_ms: 0,
                 compiler: AsCompilerBackendArgsV1 {
-                    backend: AsCompilerBackendV1::Standalone,
+                    backend: AsCompilerBackendV1::StandaloneThenGame,
                     standalone_sidecar: None,
                     standalone_sidecar_sha256: None,
                     compiler_profile_manifest: None,
