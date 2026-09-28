@@ -73,29 +73,16 @@ Check what you have before you rely on it:
 gore doctor
 ```
 
-It answers whether that path really is the game, whether a third-party UE4SS
-install is present, what is deployed, and what an interrupted run left behind.
-Every line that is not `ok` carries a `fix:` line. Item and stat defaults do
-not need UE4SS.
-
-Then make apples worth 500 gold. Save this as `apple.json`:
-
-```json
-{
-  "meta": { "name": "MyBalanceMod", "version": "0.1.0", "author": "" },
-  "values": [
-    { "class": "UItFo_Apple", "field": "m_Value", "value": { "int": 500 } }
-  ]
-}
-```
+Install the plugin for your favorite AI client, e.g. Claude:
 
 ```powershell
-gore value inspect --class UItFo_Apple
-gore mod build --spec apple.json --work-dir .gore-value-work -o mods
-gore mod deploy --bundle mods\MyBalanceMod
+claude plugin marketplace add dh0er/gore
+claude plugin install gore@gore
 ```
 
-Full walkthrough: [Getting started](docs/guide/getting-started.md).
+Tell the agent what you want and then let him deploy the mod.
+
+If you want to start manually, follow the chapter "A first mod: Wiesel's letter" in this guide: [Getting started](docs/guide/getting-started.md).
 
 ## 🤖 Vibe Modding
 
