@@ -8,8 +8,7 @@
   <a href="https://github.com/dh0er/gore/blob/main/LICENSE"><img src="https://img.shields.io/github/license/dh0er/gore?style=flat&label=License" alt="License"></a>
 </p>
 
-
----
+#
 
 **GORE** (Go-thic Re-make) is a modding and save-editing toolkit for Gothic 1 Remake which works 
 completely without UE4SS. It comes with a plugin for your agents, so you can easily mod using AI.
