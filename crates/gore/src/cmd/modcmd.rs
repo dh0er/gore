@@ -2,7 +2,7 @@
 //! Thin CLI over the `gore-mod` crate; same engine the mod-studio GUI uses via FFI.
 
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// `gore mod build --spec spec.json --out DIR` → write the bundle dir.
 /// What `--model` validation actually establishes, said so that the part it does not cover is
@@ -25,6 +25,45 @@ fn absolute_path(path: &Path) -> PathBuf {
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(path)
     }
+}
+
+fn canonical_destination(path: &Path) -> Result<PathBuf> {
+    let absolute = absolute_path(path);
+    for ancestor in absolute.ancestors() {
+        match std::fs::canonicalize(ancestor) {
+            Ok(mut resolved) => {
+                for component in absolute.strip_prefix(ancestor)?.components() {
+                    match component {
+                        Component::CurDir => {}
+                        Component::ParentDir => {
+                            resolved.pop();
+                        }
+                        Component::Normal(name) => resolved.push(name),
+                        Component::Prefix(_) | Component::RootDir => unreachable!(),
+                    }
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("resolving {}", path.display()));
+            }
+        }
+    }
+    anyhow::bail!("could not resolve {}", path.display())
+}
+
+fn reject_work_dir_inside_bundle(work_dir: &Path, out: &Path, mod_name: &str) -> Result<()> {
+    let bundle = canonical_destination(&out.join(mod_name))?;
+    let work = canonical_destination(work_dir)?;
+    if work.starts_with(&bundle) {
+        anyhow::bail!(
+            "--work-dir {} is inside the published bundle {}; choose a directory outside it",
+            work_dir.display(),
+            out.join(mod_name).display()
+        );
+    }
+    Ok(())
 }
 
 fn checked_against_model<'a>(
@@ -77,6 +116,7 @@ pub fn build(
         let work_dir = work_dir.ok_or_else(|| {
             anyhow::anyhow!("`--work-dir` is required when the spec contains `values`")
         })?;
+        reject_work_dir_inside_bundle(&work_dir, &out, &spec.meta.name)?;
         let source = gore_mod::pristine_script_cache_source(&game)?;
         let mini_dir = absolute_path(&out).join(".value-minis");
         let occupied: Vec<String> = spec
@@ -304,5 +344,49 @@ mod validation_message_tests {
         )
         .unwrap();
         assert!(super::spec_has_deployable_content(&with_script));
+    }
+
+    #[test]
+    fn value_work_dir_cannot_be_inside_the_published_bundle() {
+        let temp = tempfile::tempdir().unwrap();
+        let out = temp.path().join("build");
+        let bundle = out.join("MyMod");
+        std::fs::create_dir_all(&bundle).unwrap();
+        assert!(super::reject_work_dir_inside_bundle(&bundle, &out, "MyMod").is_err());
+        assert!(super::reject_work_dir_inside_bundle(
+            &bundle.join("work"),
+            &out,
+            "MyMod"
+        )
+        .is_err());
+        assert!(super::reject_work_dir_inside_bundle(
+            &bundle.join("other/../work"),
+            &out,
+            "MyMod"
+        )
+        .is_err());
+        assert!(super::reject_work_dir_inside_bundle(
+            &out.join("work"),
+            &out,
+            "MyMod"
+        )
+        .is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn value_work_dir_symlink_into_bundle_is_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let out = temp.path().join("build");
+        let bundle = out.join("MyMod");
+        std::fs::create_dir_all(&bundle).unwrap();
+        let link = temp.path().join("linked-bundle");
+        std::os::unix::fs::symlink(&bundle, &link).unwrap();
+        assert!(super::reject_work_dir_inside_bundle(
+            &link.join("work"),
+            &out,
+            "MyMod"
+        )
+        .is_err());
     }
 }
