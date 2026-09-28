@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// A mod-name validation failure, decoupled from any language. The UI maps each
 /// case to a localized message via `AppLocalizations` (see `modNameErrorText`).
 enum ModNameError {
@@ -9,27 +11,46 @@ enum ModNameError {
 
 /// Validate a mod name before it is appended to a user-chosen output path.
 ///
-/// Mirrors gore-cli's `validate_mod_name`: the name becomes a single directory
-/// component under the export folder (and an entry prefix inside the .zip), so
-/// it must not contain path separators, the `..` parent reference, or control
-/// characters (a newline could also terminate a comment in the generated Lua
-/// and inject code). `.value-minis` is reserved for value-build intermediates.
+/// Mirrors gore-cli's `validate_mod_name`: the name becomes a portable single
+/// directory component under the export folder (and an entry prefix inside the
+/// .zip). `.value-minis` is reserved for value-build intermediates.
 /// Returns null when valid, else a [ModNameError].
 ModNameError? validateModName(String name) {
-  final trimmed = name.trim();
-  if (trimmed.isEmpty) return ModNameError.required;
-  if (trimmed.runes.any((r) => r < 0x20 || r == 0x7f)) {
+  if (name.trim().isEmpty) return ModNameError.required;
+  if (name.runes.any((r) => r < 0x20 || (r >= 0x7f && r <= 0x9f))) {
     return ModNameError.controlCharacters;
   }
-  if (trimmed.contains('/') || trimmed.contains('\\')) {
+  if (name.contains('/') || name.contains('\\')) {
     return ModNameError.pathSeparators;
   }
-  if (trimmed == '.' ||
-      trimmed == '..' ||
-      trimmed.toLowerCase() == '.value-minis') {
+  if (name == '.' ||
+      name == '..' ||
+      name.toLowerCase() == '.value-minis' ||
+      utf8.encode(name).length > 198 ||
+      name.endsWith(' ') ||
+      name.endsWith('.') ||
+      RegExp(r'[:<>"|?*]').hasMatch(name) ||
+      _isWindowsDeviceName(name)) {
     return ModNameError.notAFolderName;
   }
   return null;
+}
+
+bool _isWindowsDeviceName(String name) {
+  final stem = name.split('.').first.replaceFirst(RegExp(r'[ .]+$'), '');
+  final folded = stem.toUpperCase();
+  if (const {
+    'CON',
+    'PRN',
+    'AUX',
+    'NUL',
+    r'CLOCK$',
+    r'CONIN$',
+    r'CONOUT$',
+  }.contains(folded)) {
+    return true;
+  }
+  return RegExp(r'^(COM|LPT)[1-9¹²³]$').hasMatch(folded);
 }
 
 /// Plain-English message for a [ModNameError], for the rare path with no

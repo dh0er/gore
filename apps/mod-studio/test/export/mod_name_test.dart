@@ -32,6 +32,40 @@ void main() {
     test('rejects control characters', () {
       expect(validateModName('Bad\nMod'), isNotNull);
       expect(validateModName('Bad\tMod'), isNotNull);
+      expect(validateModName('Bad\u0085Mod'), isNotNull);
+    });
+
+    test('rejects names the core cannot publish portably', () {
+      for (final name in [
+        'CON',
+        'NUL.txt',
+        'COM1.lua',
+        'COM¹.lua',
+        'LPT².bank',
+        'LPT³',
+        r'CLOCK$',
+        r'CONIN$',
+        r'CONOUT$',
+        'CON .txt',
+        'Bad:Name',
+        'Bad<Name',
+        'Bad>Name',
+        'Bad"Name',
+        'Bad|Name',
+        'Bad?Name',
+        'Bad*Name',
+        'Name.',
+        'Name ',
+      ]) {
+        expect(validateModName(name), isNotNull, reason: name);
+      }
+    });
+
+    test('enforces the core UTF-8 byte limit', () {
+      expect(validateModName('a' * 198), isNull);
+      expect(validateModName('a' * 199), isNotNull);
+      expect(validateModName('é' * 99), isNull);
+      expect(validateModName('é' * 100), isNotNull);
     });
   });
 }

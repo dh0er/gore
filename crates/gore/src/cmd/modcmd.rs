@@ -53,10 +53,20 @@ fn canonical_destination(path: &Path) -> Result<PathBuf> {
     anyhow::bail!("could not resolve {}", path.display())
 }
 
+fn path_starts_with_portably(path: &Path, prefix: &Path) -> bool {
+    let mut parts = path.components();
+    prefix.components().all(|expected| {
+        parts.next().is_some_and(|actual| {
+            actual.as_os_str().to_string_lossy().to_lowercase()
+                == expected.as_os_str().to_string_lossy().to_lowercase()
+        })
+    })
+}
+
 fn reject_work_dir_inside_bundle(work_dir: &Path, out: &Path, mod_name: &str) -> Result<()> {
     let bundle = canonical_destination(&out.join(mod_name))?;
     let work = canonical_destination(work_dir)?;
-    if work.starts_with(&bundle) {
+    if path_starts_with_portably(&work, &bundle) {
         anyhow::bail!(
             "--work-dir {} is inside the published bundle {}; choose a directory outside it",
             work_dir.display(),
@@ -368,6 +378,19 @@ mod validation_message_tests {
         assert!(super::reject_work_dir_inside_bundle(
             &out.join("work"),
             &out,
+            "MyMod"
+        )
+        .is_ok());
+        let fresh_out = temp.path().join("fresh");
+        assert!(super::reject_work_dir_inside_bundle(
+            &fresh_out.join("mymod/work"),
+            &fresh_out,
+            "MyMod"
+        )
+        .is_err());
+        assert!(super::reject_work_dir_inside_bundle(
+            &fresh_out.join("MyModOther/work"),
+            &fresh_out,
             "MyMod"
         )
         .is_ok());
