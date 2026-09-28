@@ -3,15 +3,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/dh0er/gore/actions/workflows/ci.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/dh0er/gore/ci.yml?style=flat&label=Build" alt="Build Status"/>
-  </a>
-  <a href="https://github.com/dh0er/gore/issues">
-    <img src="https://img.shields.io/github/issues/dh0er/gore?style=flat&label=Issues" alt="Issues"/>
-  </a>
-  <a href="https://github.com/dh0er/gore/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/dh0er/gore?style=flat&label=License" alt="License"/>
-  </a>
+  <a href="https://github.com/dh0er/gore/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/dh0er/gore/ci.yml?style=flat&label=Build" alt="Build Status"></a>
+  <a href="https://github.com/dh0er/gore/issues"><img src="https://img.shields.io/github/issues/dh0er/gore?style=flat&label=Issues" alt="Issues"></a>
+  <a href="https://github.com/dh0er/gore/blob/main/LICENSE"><img src="https://img.shields.io/github/license/dh0er/gore?style=flat&label=License" alt="License"></a>
 </p>
 
 
