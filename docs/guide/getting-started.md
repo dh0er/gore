@@ -171,28 +171,39 @@ for a tally of ore that never reached the storehouse. The second pays you once
 you bring it back. Start a new game after deploying. A save that already passed
 the opening conversation will not show a topic the game has already left behind.
 
+Diego himself spawns in the Exchange Zone. In the commands below,
+`--from OC_STT_Diego` copies his character template; `--at` places Wiesel at a
+separate world point in the Old Camp.
+
 Wiesel borrows Diego's appearance. A new id has no baked model of its own; the
 generated visuals keep the template's `m_PreBakedName`. That is enough for a
 first mod. Changing the face is [character authoring](npc-authoring.md).
 
 ### 1. Place Wiesel
 
-List spawn points in the Old Camp and pick one that is already standing when
-you leave Diego:
+List free world points in the Old Camp level script and pick one for Wiesel:
 
 ```powershell
-gore npc sites --level OldCamp
+gore npc levels
+gore npc sites --level Map_x2_y1_OldCamp_AI_script --free
 gore npc new GORE_OC_WIESEL --from OC_STT_Diego --guild OldCamp_Shadow `
   --at <POINT_FROM_THE_LIST> --waypoint FP_OC_SMALLTALK_33 -o work/wiesel
-gore npc text GORE_OC_WIESEL --name "Wiesel" -o work/wiesel
+gore npc text GORE_OC_WIESEL --name "Wiesel" -o work/wiesel-name.json
 gore npc check work/wiesel
-gore npc stage work/wiesel
+gore npc stage work/wiesel --tree work/npc-tree
 ```
 
-`--at` must be a world point `npc sites` printed. An unknown name is refused.
-`FP_OC_SMALLTALK_33` is only the daily spot, not the spawn. `stage` prints the
-compile command. Run that, then the bundle commands it prints. The character
-guide has the contract: [Characters](npc-authoring.md).
+`levels` lists the available level-script modules. `--at` must be a world point
+`npc sites` printed. An unknown name is refused.
+The listing shows 50 points by default; increase `--max` to see more. `--free`
+avoids placing Wiesel on top of an existing character. `FP_OC_SMALLTALK_33` is
+only the daily spot, not the spawn. `stage` needs a source tree for a new NPC;
+the first run creates it and prints the compile command. Run that, then the
+bundle commands it prints. The name file is a separate localization edit; add
+it to the bundle's `loc_edits` if you want Wiesel's name displayed. To inspect
+Diego's own sites, use `gore npc show OC_STT_Diego` or
+`gore npc sites --npc OC_STT_Diego`. The character guide has the contract:
+[Characters](npc-authoring.md).
 
 ### 2. Diego offers the errand
 

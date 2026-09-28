@@ -1056,6 +1056,8 @@ const NPC_SHOW_ARGS: &[ArgSpec] = &[
     NPC_CACHE_ARGS[1],
 ];
 
+const NPC_LEVELS_ARGS: &[ArgSpec] = &[NPC_CACHE_ARGS[0], NPC_CACHE_ARGS[1]];
+
 const NPC_SITES_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "level",
@@ -1417,6 +1419,15 @@ const NPC_COMMANDS: &[CommandSpec] = &[
         "show",
         "Print one character in full: its class chain, where it spawns, and what it inherits",
         NPC_SHOW_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("npc-authoring"),
+    CommandSpec::new(
+        "levels",
+        "List every level script with world points for character placement",
+        NPC_LEVELS_ARGS,
         Safety::read(),
         T_NORMAL,
     )

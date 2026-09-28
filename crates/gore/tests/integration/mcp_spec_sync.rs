@@ -16,8 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use assert_cmd::Command;
 use gore_mcp::spec::{self, GroupShape, GroupSpec, JsonSupport};
 
-/// Flags clap adds to every command, which the table deliberately does not model.
-const KNOWN_OMISSIONS: &[&str] = &["help", "version"];
+/// Flags clap adds to every command, which the per-command table deliberately does not model.
+/// `force` is exposed through the MCP server's separate, consent-gated global field.
+const KNOWN_OMISSIONS: &[&str] = &["help", "version", "force"];
 
 /// Run `gore … --help` and return its stdout.
 fn help(argv: &[&str]) -> String {

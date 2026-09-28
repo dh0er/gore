@@ -198,6 +198,18 @@ pub enum NpcAction {
         #[arg(short, long)]
         out: PathBuf,
     },
+    /// List every level script that offers world points for character placement
+    Levels {
+        /// Read this script cache instead of the installed one
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// Game install root. Falls back to configured path, then Steam auto-detect
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Emit one JSON document instead of the human-readable lines
+        #[arg(long)]
+        json: bool,
+    },
     /// List the world points the level scripts can place characters at
     Sites {
         /// Keep only sites whose level-script module contains this text
@@ -317,6 +329,7 @@ pub fn run(action: NpcAction) -> Result<()> {
             game,
             &out,
         ),
+        NpcAction::Levels { cache, game, json } => list_levels(cache, game, json),
         NpcAction::Sites {
             level,
             free,
@@ -743,6 +756,93 @@ fn show(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, json: bool) ->
         println!("  {}  in {}", site.world_point, site.module);
         println!("    {}", render::translation_line(&emitted, &site.module));
     }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Level {
+    name: String,
+    module: String,
+    world_points: usize,
+    occupied_points: usize,
+}
+
+/// Short, readable label alongside the exact module name accepted by `sites --level`.
+fn level_name(module: &str) -> String {
+    let mut name = module.strip_prefix(LEVEL_SCRIPT_PREFIX).unwrap_or(module);
+    if let Some(rest) = name.strip_prefix("Map_") {
+        let mut parts = rest.splitn(3, '_');
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some(x), Some(y), Some(tail))
+                if x.strip_prefix('x')
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                    && y.strip_prefix('y').is_some_and(|n| {
+                        !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
+                    }) =>
+            {
+                name = tail;
+            }
+            _ => name = rest,
+        }
+    }
+    for suffix in ["_AI_script", "_AI", "_script"] {
+        if let Some(short) = name.strip_suffix(suffix) {
+            name = short;
+            break;
+        }
+    }
+    name.to_string()
+}
+
+fn levels_from_world_points(points: &[sites::WorldPoint]) -> Vec<Level> {
+    let mut by_module: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    for point in points {
+        let entry = by_module.entry(&point.module).or_default();
+        entry.0 += 1;
+        entry.1 += usize::from(point.is_occupied());
+    }
+    let mut levels: Vec<Level> = by_module
+        .into_iter()
+        .map(|(module, (world_points, occupied_points))| Level {
+            name: level_name(module),
+            module: module.to_string(),
+            world_points,
+            occupied_points,
+        })
+        .collect();
+    levels.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.module.cmp(&b.module)));
+    levels
+}
+
+fn list_levels(cache: Option<PathBuf>, game: Option<PathBuf>, json: bool) -> Result<()> {
+    let emitted = emit_index(cache, game, None)?;
+    let levels = levels_from_world_points(&emitted.world_points);
+    if json {
+        let rows: Vec<serde_json::Value> = levels
+            .iter()
+            .map(|level| {
+                serde_json::json!({
+                    "name": level.name,
+                    "module": level.module,
+                    "world_points": level.world_points,
+                    "occupied_points": level.occupied_points,
+                    "free_points": level.world_points - level.occupied_points,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "count": rows.len(),
+                "levels": rows,
+            }))?
+        );
+        return Ok(());
+    }
+    for level in &levels {
+        println!("{:<22} {}", level.name, level.module);
+    }
+    println!("{} level(s)", levels.len());
     Ok(())
 }
 
@@ -1294,7 +1394,9 @@ fn validate_manifest_modules(manifest: &workspace::Manifest) -> Result<()> {
         .context("the manifest names no edited level script")?;
     if let Some(authored) = manifest.authored_module() {
         ensure!(
-            !authored.source_file.eq_ignore_ascii_case(&level.source_file),
+            !authored
+                .source_file
+                .eq_ignore_ascii_case(&level.source_file),
             "the NPC and level modules share a source filename: {}",
             level.source_file
         );
@@ -1466,7 +1568,10 @@ fn workspace_source_findings(
         let source = fs::read_to_string(&source_path)
             .with_context(|| format!("reading {}", source_path.display()))?;
         module_sources.insert(authored.source_file.clone(), source.clone());
-        let from = manifest.derived_from.as_deref().context("the authored NPC has no template id")?;
+        let from = manifest
+            .derived_from
+            .as_deref()
+            .context("the authored NPC has no template id")?;
         let template_spawn = generate::spawn_class(from);
         let template = emit_index(Some(cache.to_path_buf()), None, Some(&template_spawn))?;
         let (_, spawn_defaults) = derivable_parent(
@@ -1479,7 +1584,11 @@ fn workspace_source_findings(
             .rev()
             .find_map(|line| line.strip_prefix("AIAgentCharacterClass = "))
             .with_context(|| format!("template {from} has no inherited actor blueprint"))?;
-        findings.extend(check::guard_authored_module(&source, &manifest.npc_id, expected_actor));
+        findings.extend(check::guard_authored_module(
+            &source,
+            &manifest.npc_id,
+            expected_actor,
+        ));
 
         let modules = model::parse_modules(&read_module_cache(cache)?)
             .context("parsing modules for NPC class validation")?;
@@ -1738,7 +1847,11 @@ fn write_stage_output_atomic(path: &Path, bytes: &[u8], kind: &str) -> Result<()
         .flush()
         .with_context(|| format!("flushing temporary {kind} for {}", path.display()))?;
     temporary.persist(path).map_err(|error| {
-        anyhow::anyhow!("publishing NPC stage {kind} {}: {}", path.display(), error.error)
+        anyhow::anyhow!(
+            "publishing NPC stage {kind} {}: {}",
+            path.display(),
+            error.error
+        )
     })?;
     Ok(())
 }
@@ -1794,10 +1907,18 @@ fn stage_workspace(
             staged.display().to_string()
         }
         (stage::Route::SingleModule, _) => {
-            let level = manifest.level_edit().expect("single-module route has a level edit");
-            let source = inspection.module_sources.get(&level.source_file).with_context(|| {
-                format!("the validated NPC source snapshot is missing {}", level.source_file)
-            })?;
+            let level = manifest
+                .level_edit()
+                .expect("single-module route has a level edit");
+            let source = inspection
+                .module_sources
+                .get(&level.source_file)
+                .with_context(|| {
+                    format!(
+                        "the validated NPC source snapshot is missing {}",
+                        level.source_file
+                    )
+                })?;
             write_staged_source(dir, source)?;
             "(not needed)".to_string()
         }
@@ -1838,7 +1959,13 @@ fn stage_workspace(
     }
     println!(
         "then: gore mod deploy --bundle {}",
-        stage::shell_quote(&command_dir.join("build").join(mod_name).display().to_string())
+        stage::shell_quote(
+            &command_dir
+                .join("build")
+                .join(mod_name)
+                .display()
+                .to_string()
+        )
     );
     println!(
         "offline-prepared only: whether this character appears in game is decided by that run, \
@@ -1884,8 +2011,7 @@ fn write_display_name(id: &str, name: &str, english: Option<&str>, out: &Path) -
         .create_new(true)
         .open(out)
         .with_context(|| format!("creating new NPC text file {}", out.display()))?;
-    writeln!(file, "{content}")
-        .with_context(|| format!("writing {}", out.display()))?;
+    writeln!(file, "{content}").with_context(|| format!("writing {}", out.display()))?;
     println!("wrote {}", out.display());
     println!("  {} -> {name:?} in both German columns", id.to_lowercase());
     println!("next: gore loc import --edits {}", out.display());
@@ -2137,7 +2263,9 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
             .map(|class| (class.name.clone(), class))
             .collect();
         let error = ensure_human_template(&classes, "Creature_Molerat").unwrap_err();
-        assert!(error.to_string().contains("not a supported human NPC template"));
+        assert!(error
+            .to_string()
+            .contains("not a supported human NPC template"));
 
         let human_source = source
             .replace(
@@ -2391,7 +2519,10 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
         }
 
         let error = stage_workspace(temp.path(), None, "TestMod", None, None).unwrap_err();
-        assert!(error.to_string().contains("link or reparse point"), "{error:#}");
+        assert!(
+            error.to_string().contains("link or reparse point"),
+            "{error:#}"
+        );
         assert_eq!(fs::read(&outside).unwrap(), b"keep this file");
     }
 
@@ -2413,7 +2544,10 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
         }
 
         let error = prepare_stage_work_dir(&work).unwrap_err();
-        assert!(error.to_string().contains("not a real directory"), "{error:#}");
+        assert!(
+            error.to_string().contains("not a real directory"),
+            "{error:#}"
+        );
         assert!(outside.is_dir());
     }
 
@@ -2537,6 +2671,33 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
     }
 
     #[test]
+    fn levels_include_free_only_modules_and_keep_old_camp_variants_distinct() {
+        let point = |name: &str, module: &str, occupied: bool| sites::WorldPoint {
+            name: name.to_string(),
+            module: module.to_string(),
+            occupants: if occupied {
+                vec!["USpawnAIAgentDefinition_Test".to_string()]
+            } else {
+                Vec::new()
+            },
+        };
+        let levels = levels_from_world_points(&[
+            point("UWP_A", "LevelScripts.Map_x2_y1_OldCamp_AI_script", true),
+            point("UWP_B", "LevelScripts.Map_x2_y1_OldCamp_AI_script", false),
+            point("UWP_C", "LevelScripts.Map_OldCamp_IE_script", false),
+            point("UWP_D", "LevelScripts.TrollCanyon_AI_script", false),
+        ]);
+        assert_eq!(levels.len(), 3);
+        assert_eq!(levels[0].name, "OldCamp");
+        assert_eq!(levels[0].world_points, 2);
+        assert_eq!(levels[0].occupied_points, 1);
+        assert_eq!(levels[1].name, "OldCamp_IE");
+        assert_eq!(levels[1].module, "LevelScripts.Map_OldCamp_IE_script");
+        assert_eq!(levels[2].name, "TrollCanyon");
+        assert_eq!(levels[2].occupied_points, 0);
+    }
+
+    #[test]
     fn sites_for_returns_every_world_point_that_sets_the_same_character() {
         // Dieselbe Figur kann an mehreren Weltpunkten stehen; wer nur den ersten meldet,
         // schickt einen Mod an eine Stelle und verschweigt die zweite.
@@ -2581,11 +2742,17 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
         let spawn = "USpawnAIAgentDefinition_MINE";
         let first = "LevelScripts.First";
         let second = "LevelScripts.Second";
-        let single = emitted(vec![site("UWP_A", first, spawn), site("UWP_B", first, spawn)]);
+        let single = emitted(vec![
+            site("UWP_A", first, spawn),
+            site("UWP_B", first, spawn),
+        ]);
         assert!(suppression_scope_finding(&single, spawn, first).is_none());
         assert!(suppression_scope_finding(&single, spawn, second).is_some());
 
-        let multiple = emitted(vec![site("UWP_A", first, spawn), site("UWP_B", second, spawn)]);
+        let multiple = emitted(vec![
+            site("UWP_A", first, spawn),
+            site("UWP_B", second, spawn),
+        ]);
         let finding = suppression_scope_finding(&multiple, spawn, first).unwrap();
         assert_eq!(finding.severity, check::Severity::Blocking);
         assert!(finding.message.contains(first) && finding.message.contains(second));
