@@ -139,7 +139,7 @@ fn kind_label(kind: &DefaultKind) -> &'static str {
 pub fn inspect_class(cache: &Path, class_name: &str) -> Result<ClassInspection> {
     with_prepared(cache, |modules, prepared, bytes, binds_sha256| {
         let (module_index, module_name) = module_of_class(modules, class_name)
-            .with_context(|| format!("no shipped class {class_name} in {}", cache.display()))?;
+            .with_context(|| format!("in {}", cache.display()))?;
         let source = prepared
             .emit_module(module_index)
             .with_context(|| format!("emitting {module_name}"))?;
@@ -225,8 +225,7 @@ pub fn compile_values_into_scripts(
     with_prepared(cache, |modules, prepared, bytes, _binds| {
         let mut by_module: BTreeMap<usize, Vec<&ValueEdit>> = BTreeMap::new();
         for edit in edits {
-            let (index, _) = module_of_class(modules, &edit.class)
-                .with_context(|| format!("unknown class {}", edit.class))?;
+            let (index, _) = module_of_class(modules, &edit.class)?;
             by_module.entry(index).or_default().push(edit);
         }
         let cache_sha = hex_sha256(bytes);
@@ -346,16 +345,23 @@ fn apply_one(source: &str, edit: &ValueEdit) -> Result<String> {
     let class = matches[0];
     let (start, end) = class_span(source, &class.name)?;
     let body = &source[start..end];
+    let assignments: Vec<&str> = class
+        .assignments
+        .iter()
+        .filter(|(field, _)| field == &edit.field)
+        .map(|(_, rhs)| rhs.as_str())
+        .collect();
     let rewritten = if let Some(tag) = &edit.tag {
         rewrite_tag(body, &edit.field, tag, &edit.value)?
-    } else if class.assignments.iter().any(|(field, _)| field == &edit.field) {
-        let old = class
-            .assignments
-            .iter()
-            .find(|(field, _)| field == &edit.field)
-            .map(|(_, rhs)| rhs.as_str())
-            .unwrap();
+    } else if let [old] = assignments.as_slice() {
         rewrite_assignment(body, &edit.field, old, &edit.value)?
+    } else if assignments.len() > 1 {
+        bail!(
+            "{}.{} is assigned {} times; refusing an ambiguous default",
+            edit.class,
+            edit.field,
+            assignments.len()
+        );
     } else {
         let entries: Vec<_> = class
             .calls
@@ -403,22 +409,18 @@ fn rewrite_assignment(body: &str, field: &str, old: &str, value: &ValueLiteral) 
 
 fn rewrite_tag(body: &str, field: &str, tag: &str, value: &ValueLiteral) -> Result<String> {
     let classes = defaults::parse_classes(body);
-    let Some(class) = classes.iter().find(|class| {
-        class
-            .calls
-            .iter()
-            .filter_map(|call| tag_map_entry(call))
-            .any(|(name, found, _)| name == field && found == tag)
-    }) else {
-        bail!("could not re-read {field}");
-    };
-    let Some((_, _, old)) = class
-        .calls
+    let olds: Vec<String> = classes
         .iter()
+        .flat_map(|class| class.calls.iter())
         .filter_map(|call| tag_map_entry(call))
-        .find(|(name, found, _)| name == field && found == tag)
-    else {
-        bail!("no class default {field}.Add(GameplayTag::{tag}, ...) to edit");
+        .filter(|(name, found, _)| name == field && found == tag)
+        .map(|(_, _, old)| old)
+        .collect();
+    let [old] = olds.as_slice() else {
+        bail!(
+            "{field} tag {tag} occurs {} times; refusing an ambiguous default",
+            olds.len()
+        );
     };
     let old_type = classify_literal(&old).0;
     if old_type == "unsupported" || old_type != value.type_name() {
@@ -695,14 +697,25 @@ fn with_prepared<T>(
     body(&modules, &prepared, &bytes, binds_sha256)
 }
 
-fn module_of_class(modules: &[model::Module], class_name: &str) -> Option<(usize, String)> {
-    modules.iter().enumerate().find_map(|(index, module)| {
-        module
-            .classes
-            .iter()
-            .any(|class| class.name == class_name)
-            .then(|| (index, module.name.clone()))
-    })
+fn module_of_class(modules: &[model::Module], class_name: &str) -> Result<(usize, String)> {
+    let hits: Vec<(usize, &str)> = modules
+        .iter()
+        .enumerate()
+        .filter(|(_, module)| module.classes.iter().any(|class| class.name == class_name))
+        .map(|(index, module)| (index, module.name.as_str()))
+        .collect();
+    match hits.as_slice() {
+        [(index, name)] => Ok((*index, (*name).to_string())),
+        [] => bail!("no shipped class {class_name}"),
+        many => {
+            let names = many
+                .iter()
+                .map(|(_, name)| *name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!("class {class_name} occurs in more than one module ({names})")
+        }
+    }
 }
 
 fn resolve_cache(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<PathBuf> {
@@ -896,6 +909,78 @@ class UFoo : UItem {
         assert!(edited.contains("default m_Name = \"class UFoo\";"));
         assert!(edited.contains("class UFoo : UItem {\n    default m_Value = 9;\n}"));
         assert!(edited.contains("default m_Value = 1;"));
+    }
+
+    #[test]
+    fn duplicate_assignments_are_refused_before_the_first_is_rewritten() {
+        let source = r#"
+class UFoo : UItem {
+    default m_Value = 4;
+    default m_Value = 9;
+}
+"#;
+        let change = edit("UFoo", "m_Value", None, ValueLiteral::Int(1));
+        let error = apply_edits(source, &[&change]).unwrap_err().to_string();
+        assert!(error.contains("ambiguous"), "{error}");
+        assert!(error.contains("2"), "{error}");
+        assert!(!error.contains("default m_Value = 1"), "{error}");
+    }
+
+    #[test]
+    fn duplicate_tag_entries_are_refused_before_the_first_is_rewritten() {
+        let source = r#"
+class UFoo : UItem {
+    default m_DamageBase.Add(GameplayTag::Item_Damage_Physical_Edge, 10.0f);
+    default m_DamageBase.Add(GameplayTag::Item_Damage_Physical_Edge, 3.0f);
+}
+"#;
+        let change = edit(
+            "UFoo",
+            "m_DamageBase",
+            Some("Item_Damage_Physical_Edge"),
+            ValueLiteral::Float(1.0),
+        );
+        let error = apply_edits(source, &[&change]).unwrap_err().to_string();
+        assert!(error.contains("ambiguous"), "{error}");
+        assert!(error.contains("2"), "{error}");
+    }
+
+    #[test]
+    fn the_same_class_name_in_two_modules_is_refused() {
+        let modules = [
+            module_with("A.Item", "UFoo"),
+            module_with("B.Item", "UFoo"),
+        ];
+        let error = module_of_class(&modules, "UFoo").unwrap_err().to_string();
+        assert!(error.contains("more than one module"), "{error}");
+        assert!(error.contains("A.Item"), "{error}");
+        assert!(error.contains("B.Item"), "{error}");
+        let unique = [module_with("A.Item", "UFoo")];
+        assert_eq!(
+            module_of_class(&unique, "UFoo").unwrap(),
+            (0, "A.Item".to_string())
+        );
+        assert!(module_of_class(&unique, "UMissing").is_err());
+    }
+
+    fn module_with(name: &str, class_name: &str) -> model::Module {
+        model::Module {
+            name: name.to_string(),
+            file: String::new(),
+            functions: Vec::new(),
+            classes: vec![model::Class {
+                name: class_name.to_string(),
+                namespace: String::new(),
+                super_class: None,
+                fields: Vec::new(),
+                methods: Vec::new(),
+                ctors: Vec::new(),
+                flags: 0,
+                is_abstract: false,
+            }],
+            enums: Vec::new(),
+            globals: Vec::new(),
+        }
     }
 
     #[test]

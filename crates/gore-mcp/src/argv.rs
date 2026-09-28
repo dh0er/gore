@@ -699,16 +699,23 @@ fn output_paths(
         })
         .collect();
 
-    paths.extend(command.safety.derives.iter().filter_map(|(name, how)| {
-        let given = args.get(*name)?.as_str()?;
+    for (name, how) in command
+        .safety
+        .derives
+        .iter()
+        .chain(command.safety.installs_derived.iter())
+    {
+        let Some(given) = args.get(*name).and_then(Value::as_str) else {
+            continue;
+        };
         // An underivable last component leaves the directory it would have gone in, which is the
         // part that decides whether this lands in the game tree.
         let derived = match derived_target(args, std::path::Path::new(given), *how) {
             DerivedTarget::At(path) => path,
             DerivedTarget::Unknown { .. } => std::path::PathBuf::from(given),
         };
-        Some((*name, derived))
-    }));
+        paths.push((*name, derived));
+    }
 
     paths
 }
@@ -1683,6 +1690,36 @@ mod tests {
         assert!(
             question("gore_mod", "build", call, &options()).is_none(),
             "private invocation directories are not the bundle this command replaces"
+        );
+    }
+
+    #[test]
+    fn a_value_mini_link_into_the_game_tree_asks_for_consent() {
+        // `out` itself can sit outside the installation while `out/.value-minis` is a
+        // junction into it. The values compiler follows that link. Occupancy on the
+        // same directory would ask about every leftover invocation child.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("spec.json");
+        std::fs::write(
+            &spec,
+            br#"{"meta":{"name":"DaniTestMod","version":"1.0.0"}}"#,
+        )
+        .expect("write");
+        let out = dir.path().join("build");
+        std::fs::create_dir_all(&out).expect("mkdir");
+        let install = dir.path().join("G1R").join("Script");
+        std::fs::create_dir_all(&install).expect("install-like tree");
+        if !symlink_directory(&install, &out.join(".value-minis")) {
+            eprintln!("skipping: this platform/user cannot create symlinks");
+            return;
+        }
+        let call = json!({
+            "spec": spec.to_string_lossy(),
+            "out": out.to_string_lossy(),
+        });
+        assert!(
+            asks_about_a_write(question("gore_mod", "build", call, &options())),
+            "a mini-cache link into the installation is a deployment"
         );
     }
 

@@ -622,10 +622,9 @@ const MOD_COMMANDS: &[CommandSpec] = &[
                     pointer: "/meta/name",
                 },
             )])
-            // Values compilation writes `out/.value-minis/<invocation>/` and
-            // `work_dir/<invocation>/`. Those parents stay occupied after the first
-            // build, and a later build adds another child instead of replacing one.
-            // Occupancy on the parent would ask for consent on every retry.
+            // `out/.value-minis` can be a symlink into the game while `out` is not.
+            // Later builds add an invocation child there; the parent is not a clobber.
+            .installs_derived(&[("out", Derived::Child(".value-minis"))])
             .installs_via(&["out", "work_dir"]),
         T_LONG,
     )

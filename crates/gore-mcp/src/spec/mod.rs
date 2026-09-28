@@ -317,6 +317,9 @@ pub struct Safety {
     /// `installs_into_game_tree`, which is how `audio extract` briefly became able to fill the game
     /// installation with WAVs without asking anybody.
     pub writes_into: &'static [&'static str],
+    /// Derived paths included in install-path classification and excluded from occupancy.
+    /// See [`Safety::installs_derived`].
+    pub installs_derived: &'static [(&'static str, Derived)],
 }
 
 impl Safety {
@@ -332,6 +335,7 @@ impl Safety {
             installs_via: &[],
             clobbers_dir: &[],
             writes_into: &[],
+            installs_derived: &[],
         }
     }
 
@@ -415,6 +419,17 @@ impl Safety {
     /// For commands that check collisions themselves, per file, in the CLI.
     pub const fn writes_into(mut self, args: &'static [&'static str]) -> Self {
         self.writes_into = args;
+        self
+    }
+
+    /// Register derived paths for install-path classification without asking about occupancy.
+    ///
+    /// A fixed child such as `out/.value-minis` can be a symlink into the game while `out`
+    /// itself is not. Following that child is what the install check has to see. The directory
+    /// normally already holds earlier invocation folders, so an occupancy check on it would ask
+    /// on every later build.
+    pub const fn installs_derived(mut self, derived: &'static [(&'static str, Derived)]) -> Self {
+        self.installs_derived = derived;
         self
     }
 
@@ -1195,6 +1210,11 @@ mod tests {
                         || command.safety.clobbers_dir.contains(&name)
                         || command.safety.writes_into.contains(&name)
                         || command.safety.derives.iter().any(|(arg, _)| *arg == name)
+                        || command
+                            .safety
+                            .installs_derived
+                            .iter()
+                            .any(|(arg, _)| *arg == name)
                         // A command gated outright needs no per-argument check. Asked of the
                         // gate rather than of `Class`, because a GameLaunch command requires write
                         // permission even though its class alone does not say so.
@@ -1376,6 +1396,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn exactly_the_known_install_only_derived_outputs_are_classified() {
+        let mut derived: Vec<(&str, &str, &[(&'static str, Derived)])> = Vec::new();
+        for group in GROUPS {
+            for command in group.commands {
+                if !command.safety.installs_derived.is_empty() {
+                    derived.push((group.tool, command.sub, command.safety.installs_derived));
+                }
+            }
+        }
+        derived.sort_unstable_by_key(|(tool, sub, _)| (*tool, *sub));
+        assert_eq!(
+            derived,
+            vec![(
+                "gore_mod",
+                "build",
+                &[("out", Derived::Child(".value-minis"))] as &[_],
+            )]
+        );
     }
 
     /// Directories a command fills under names of its own choosing.
