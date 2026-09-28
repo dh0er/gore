@@ -59,10 +59,11 @@ qualified and admitted:
 | **Degraded** | `as default-sites`, `as patch-default`. They fall back to scalar-only: sites the script cache can type on its own stay editable, anything needing native ancestry does not. |
 | **Refused** | `as tag-map-sites`, `as patch-tag-map`, and Mod Studio's story, NPC, quest and item authoring. |
 
-After qualification, the central registry contains exactly five reviewed Steam
-rows: Steam 1.0.3 Hotfix 1, build `24169431`, build `24340829`, and build
-`24878692` from the 2026-08-27/28 update, and build `25168047` from the
-2026-09-21 1.0.5 hotfix. Each row is a closed exact-generation
+After qualification, the central registry contains exactly six reviewed Steam
+rows: Steam 1.0.3 Hotfix 1, build `24169431`, build `24340829`, build
+`24878692` from the 2026-08-27/28 update, build `25168047` from the
+2026-09-21 1.0.5 hotfix, and build `25414091` from the 2026-09-25 update.
+Each row is a closed exact-generation
 admission, not a range or a promise about nearby builds.
 
 The `24340829` row retains its bounded offline qualification: no class was
@@ -122,12 +123,25 @@ source seal. Its `ParentQuestClass` default is checked separately in the
 defaults-bearing 662-byte emission. The other five curated modules retain
 their source seals, and all six reproduce on the hotfix.
 
+Build `25414091` (Steam `LastUpdated` 2026-09-25) again keeps `Binds.Cache`
+byte-identical, so it keeps the `24878692` standalone API profile. No new
+compiler profile and no full-tree game comparison were run. Its fresh 174209
+USMAP has the same 6,602 class rows, direct-parent graph, 6,582-class bridge,
+402/402 native-base resolution and GameplayTag-to-float32 profile. All 26,389
+scalar default windows still resolve, and none of the compared counts fell.
+The Shipping cache and executable are new. The six curated modules, emitted
+from the pristine cache, reproduce their V5 source seals, including the
+600-byte defaults-free Swamp Camp chapter quest. V6 rebinds those seals to
+this generation. The previous Shipping cache was not available, so this record
+does not say which other functions moved. `Default__Class` remains the one
+USMAP name the executable does not spell.
+
 Mod Studio's Story/NPC/Quest authoring recognizes each exact registered triple
 only within its existing project-only contract. Item authoring is separately
 admitted by the row selected from the exact executable seal and its audited Item
-field matrix; it does not use Shipping or Binds as Item evidence. Neither row
-grants dialog-runtime, production-build, deployment, live-game, or DataAsset
-qualification; every other consumer keeps its own independent gate.
+field matrix; it does not use Shipping or Binds as Item evidence. No
+generation row grants dialog-runtime, production-build, deployment, live-game,
+or DataAsset qualification; every other consumer keeps its own independent gate.
 
 Nothing produced a wrong answer in the historical fail-closed state, and the
 admitted row does not widen its recorded proof. Anything that cannot prove the
@@ -266,8 +280,10 @@ rebuild and test the sidecar but do not rerun the private game comparison.
 the evidence is the evidence, never that the game agrees with it. Patch one
 default you can see and look before claiming that live behavior. When the
 admitted scope stops at bounded offline authoring, record that boundary instead
-of implying this step happened: none of builds `24340829`, `24878692`, or
-`25168047` gains dialog-runtime qualification from its central generation row.
+of implying this step happened: none of builds `24340829`, `24878692`,
+`25168047`, or `25414091` gains dialog-runtime qualification from its central
+generation row. Item and stat defaults on `25414091` were confirmed in game
+separately; that result is in [Item & stat values](../guide/items.md#tested-in-game).
 
 ## What is deliberately not automated
 

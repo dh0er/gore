@@ -1,33 +1,41 @@
-# ⚔️ GORE
+<p align="center">
+  <img src="docs/images/gore_logo.png" alt="GORE Logo" width="400"/>
+</p>
 
-**GORE** (Go-thic Re-make) is a vibe-coded modding and save-editing toolsuite for Gothic 1 Remake. One Rust engine, one CLI, and three Windows apps built on top of it.
+<p align="center">
+  <a href="https://github.com/dh0er/gore/actions/workflows/ci.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/dh0er/gore/ci.yml?style=flat&label=Build" alt="Build Status"/>
+  </a>
+  <a href="https://github.com/dh0er/gore/issues">
+    <img src="https://img.shields.io/github/issues/dh0er/gore?style=flat&label=Issues" alt="Issues"/>
+  </a>
+  <a href="https://github.com/dh0er/gore/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/dh0er/gore?style=flat&label=License" alt="License"/>
+  </a>
+</p>
+
+
+---
+
+**GORE** (Go-thic Re-make) is a modding and save-editing toolkit for Gothic 1 Remake which works 
+completely without UE4SS. It comes with a plugin for your agents, so you can easily mod using AI.
 
 ## 🧰 Tools
 
 | Tool⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀ | What it does | Status⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀ | Download |
 |---|---|---|---|
-| **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing savegames. | ✅ Ready to use | [1.4.1](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.4.1) |
+| **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing savegames. | ✅ Ready to use | [1.5.0](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.5.0) |
 | **[CLI](docs/guide/README.md)** | All-in-one command-line tool for all modding tasks. | ⚗️ Experimental use | [0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.3.0) |
 | **[Mod Manager](apps/mod-manager/README.md)** | Windows GUI for installing and ordering *many* mods together. | ⚗️ Experimental use | [0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
 | **[AI Plugins](plugins/gore/README.md)** | MCP server and skill for the CLI. | ⚗️ Experimental use | ⠀⠀⠀⠀⠀ |
 | **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the GORE engine, for *authoring* mods. | 📋 Planned | ⠀⠀⠀⠀⠀ |
 
-## ⬇️ Downloads
-
-| Tool | Version | Release page |
-|---|---|---|
-| **CLI** | 0.3.0 | [gore-cli-v0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.3.0) |
-| **Mod Manager** | 0.2.0 | [gore-mod-manager-v0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
-| **Save Editor** | 1.4.1 | [gore-save-editor-v1.4.1](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.4.1) |
-
-Mod Studio has no release yet; build it from source.
-
 ## 📊 Status
 
 | Area | Status | What you can do | What's missing |
 |---|---|---|---|
-| [Savegames](apps/save-editor/README.md) | Mostly | Edit Player and NPC values, inventories, quests and much more | Armor upgrades, chest and corpse loot, other loot points |
-| [Item & stat values](docs/guide/items.md) | Partly | Change class-default item and stat values without UE4SS | In-game confirmation on a clean install is still open; [plan](docs/items-values-without-ue4ss-plan.md) |
+| [Savegames](apps/save-editor/README.md) | Mostly | Edit Player and NPC values, inventories, quests and much more | Armor upgrades, chest and corpse loot, other loot points. No CLI support yet. |
+| [Item & stat values](docs/guide/items.md) | Partly | Change values, damage, icons and costs of existing items and abilities. | New items, and copies of existing items under a new name |
 | [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace all localized game text | ⠀⠀⠀⠀⠀ |
 | [Dialog authoring](docs/guide/dialog-authoring.md) | Full | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | ⠀⠀⠀⠀⠀ |
 | [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | ⠀⠀⠀⠀⠀ |

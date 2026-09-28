@@ -1,0 +1,31 @@
+{
+  "generation_id": "g1r-steam-25414091",
+  "label": "Steam build 25414091 (2026-09-25 update)",
+  "native_ancestry_profile_id": "sha256:dda4a44cc0b7ed3be94b3520530c341f3c212b1a74cf93095f15376f411c1b17",
+  "gameplay_tag_float32_map_proof_id": "sha256:f3e88a4e98b5f14edc081b134be491aa2cc0d8180cd0a1ed6e4f47f18cdd260c",
+  "scalar_default_operand_count": 26389,
+  "gameplay_tag_float32_operand_count": 1432,
+  "class_count": 6582,
+  "gameplay_tag_float32_map_field_count": 8,
+  "unresolved_fields_with_ancestry": 0,
+  "direct_windows": 26389,
+  "binds_field_row_count": 27435,
+  "binds_class_path_row_count": 11196,
+  "witnesses": {
+    "class_count": "gore as qualify (QualifyClassBridge::bridged_class_count)",
+    "direct_windows": "gore as qualify (gore_as::cache::default_patch::default_sites)",
+    "gameplay_tag_float32_map_field_count": "gore as qualify (gore_asset::SchemaDb::exact_declared_property_shape)",
+    "gameplay_tag_float32_map_proof_id": "gore as qualify (gore_generation::qualify::derive_published_ids)",
+    "gameplay_tag_float32_operand_count": "gore as qualify (gore_as::cache::default_fingerprint::combined_default_cache_fingerprint)",
+    "native_ancestry_profile_id": "gore as qualify (gore_generation::qualify::derive_published_ids)",
+    "scalar_default_operand_count": "gore as qualify (gore_as::cache::default_fingerprint::combined_default_cache_fingerprint)",
+    "unresolved_fields_with_ancestry": "unchanged resolved profile of gore_generation::ROW_G1R_25168047"
+  },
+  "notes": [
+    "Qualified from Steam BuildID 25414091. The executable and Binds.Cache were the live install. The Shipping cache was the pristine deploy backup of ValueStartProof (sha256 6c1e1fbb9de3bc92064bd472905d6d3708261fb1323dc21321fbe10579ab4c24), not the cache the mod had spliced. The USMAP is the fresh UE4SS 174209 dump from 2026-09-28. Steam's LastUpdated for this buildid is 2026-09-25.",
+    "Binds.Cache is byte-identical to builds 24878692 and 25168047, so the standalone compiler keeps that ordered API profile. No new compiler profile and no full-tree game comparison were run. The USMAP class graph, resolved class profile and GameplayTag-to-float32 profile are unchanged. 26389 scalar windows, 1432 tag operands, 8 tag-map declarations, 27435 Binds field rows, 11196 class-path rows and 6582 bridged classes are unchanged. 402 of 402 native bases resolve. Default__Class is the one USMAP class name the executable does not spell, as on the previous dumps.",
+    "The six curated modules were emitted from the pristine cache with defaults omitted. Each source matches its V5 seal, including the 600-byte Swamp Camp chapter quest. The defaults-bearing emission of that quest is the previously sealed 662 bytes and still contains ParentQuestClass = G1R::Quest::UQuest_SwampCamp. V6 reuses those source seals and rebinds them to this generation. The previous Shipping cache was not on disk, so this record does not say which other functions moved.",
+    "unresolved_fields_with_ancestry stays 0 because the resolved class profile digest is the one build 25168047 measured at 0 and this run's direct-window count did not move. from_schema_db cannot place fields for a cache until its row is in the binary, so this zero was not produced by a second ancestry pass.",
+    "Item and stat defaults on this build were confirmed in game separately (docs/guide/items.md). This row does not add dialog-runtime, deployment or DataAsset qualification."
+  ]
+}

@@ -6,9 +6,11 @@ the AngelScript `default` statement, and compiles that module into a script
 mini-cache. Deploy uses the same script splice as other script mods. UE4SS is
 not involved.
 
-It edits the class **default**, so it does not change objects already
-serialized into an existing save. Trader stock, instance inventories, and save
-values are separate and are not written by this command.
+It edits the class **default**. A save records an inventory item as its class
+and a count, so an item's value, damage and icon follow the default in an
+existing save too. A value the save records per object keeps the saved number
+(see [Existing saves](#existing-saves)). Trader stock, instance inventories, and
+save values are separate and are not written by this command.
 
 ## Inspect
 
@@ -93,8 +95,41 @@ gore mod build --spec apple.json --work-dir .gore-value-work -o mods
 gore mod deploy --bundle mods\MyBalanceMod
 ```
 
-Confirm the new number on a new game. A save that already stored the item
-keeps the old value. Details are in the build section at the top of this page.
+Confirm the new number in game. [Tested in game](#tested-in-game) lists what
+was checked and where each value shows up.
+
+## Tested in game
+
+On game build 25414091, with no `ue4ss` directory, one bundle changed these
+defaults. Each one showed up in game:
+
+| Class | Field | Type | New value | Where it showed |
+|---|---|---|---|---|
+| `UHumanFist_NoWeapon` | `m_Icon` | `str` | the apple icon | the fists slot in the inventory |
+| `UHumanFists` | `m_DamageBase`, `Item_Damage_Physical_Blunt` | `float` | 150 | the fists tooltip |
+| `UItFo_Apple` | `m_Value` | `int` | 12345 | Fisk's trade screen |
+| `UItMw_1H_Sword_Old_01` | `m_Value` | `int` | 22222 | Fisk's trade screen |
+| `UItMw_1H_Sword_Old_01` | `m_DamageBase`, `Item_Damage_Physical_Edge` | `float` | 150 | the sword tooltip |
+| `UItAr_Scroll_Light_Base` | `m_CanEquipAfterUse` | `bool` | `true` | the light scroll stays in hand after the cast |
+| `UGE_Skill_Melee_OneHanded_Master` | `SPCost` | `float` | 13 | Scatty's cost tooltip, his dialog line, the learning points taken |
+| `UGE_Skill_Melee_OneHanded_Master` | `OreCost` | `int` | 133 | the same three places, in ore |
+
+Not every changed default is visible. The Strength teaching cost is always the
+number of points bought; `SPCost` on the Strength skill classes only goes to
+telemetry and is never charged. The hero also starts with one-handed combat already
+trained, so from a new game Scatty offers only the master level.
+
+### Existing saves
+
+The test save was created under an earlier version of the bundle that did not
+touch the master costs. Loaded under the version that did, Scatty charged the
+new costs. The test items were added to that save offline and carried the new
+value and damage. A save records an inventory item by class and count, and a
+learnable skill by class, so both read the class default when the save loads.
+
+A save also records some values per object, for example each character's
+attributes (health, level, learning points). Such a value keeps the number the
+save holds. This case was not tested in game.
 
 ## Finding class and field names
 
@@ -155,8 +190,11 @@ and scripts. See [Bundling & deploying](bundles.md).
 
 ## Limits
 
-- Edits change **class defaults**. They do not change objects already
-  serialized into an existing save.
+- Edits change **class defaults**. A value an existing save records per
+  object, such as a character's attributes, keeps the saved number.
+- No new items. An edit changes a class the game already has; a new item, or a
+  copy of an existing one under another name, would be a new class, which this
+  command does not create.
 - Two mods that edit the same script module conflict. Field-level merge is
   not done.
 

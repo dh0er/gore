@@ -28,6 +28,9 @@ const _authoringRevision3NpcExecutableSha256V4 =
 const _authoringRevision3NpcExecutableByteLengthV5 = 171796992;
 const _authoringRevision3NpcExecutableSha256V5 =
     'dafd816b62230087cdb65ad504f4d8d003cd6013dba1b2b5b4f51457d78f729a';
+const _authoringRevision3NpcExecutableByteLengthV6 = 171798528;
+const _authoringRevision3NpcExecutableSha256V6 =
+    '7394f840702df3ddb94d1a45a43c2a81ff36d7d65325047c698dfb65337b99b5';
 
 typedef _AuthoringRevision3NpcParentEvidence = ({
   String role,
@@ -681,7 +684,9 @@ bool _authoringRevision3NpcIsSupportedExecutable(
     (byteLength == _authoringRevision3NpcExecutableByteLengthV4 &&
         sha256 == _authoringRevision3NpcExecutableSha256V4) ||
     (byteLength == _authoringRevision3NpcExecutableByteLengthV5 &&
-        sha256 == _authoringRevision3NpcExecutableSha256V5);
+        sha256 == _authoringRevision3NpcExecutableSha256V5) ||
+    (byteLength == _authoringRevision3NpcExecutableByteLengthV6 &&
+        sha256 == _authoringRevision3NpcExecutableSha256V6);
 
 bool _authoringRevision3NpcIsSupportedGeneration(
   ({Map<String, Object?> json, int byteLength, String sha256}) generation,

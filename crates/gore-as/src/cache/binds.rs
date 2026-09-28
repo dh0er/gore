@@ -288,8 +288,9 @@ impl NativeApi {
             .then_some("float32")
     }
 
-    /// Read-only source evidence for the 25168047 cache, which shipped the identical audited
-    /// Binds file. This does not extend the mutation gate in `verified_default_field_type`.
+    /// Read-only source evidence for caches that shipped the audited 24878692 `Binds.Cache`
+    /// unchanged (25168047 and 25414091). This does not extend the mutation gate in
+    /// `verified_default_field_type`.
     pub(crate) fn emittable_default_field_type(
         &self,
         script_cache_guid: &[u8; 16],
