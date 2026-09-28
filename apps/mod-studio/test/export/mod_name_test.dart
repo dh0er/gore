@@ -22,6 +22,7 @@ void main() {
     test('rejects the reserved value workspace name', () {
       expect(validateModName('.value-minis'), isNotNull);
       expect(validateModName('.VALUE-MINIS'), isNotNull);
+      expect(validateModName(' .value-minis'), isNotNull);
     });
 
     test('rejects parent reference', () {
@@ -38,6 +39,7 @@ void main() {
     test('rejects names the core cannot publish portably', () {
       for (final name in [
         'CON',
+        ' CON',
         'NUL.txt',
         'COM1.lua',
         'COM¹.lua',
@@ -56,6 +58,7 @@ void main() {
         'Bad*Name',
         'Name.',
         'Name ',
+        ' Name',
       ]) {
         expect(validateModName(name), isNotNull, reason: name);
       }

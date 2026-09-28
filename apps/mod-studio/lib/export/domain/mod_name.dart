@@ -13,13 +13,17 @@ enum ModNameError {
 ///
 /// Mirrors gore-cli's `validate_mod_name`: the name becomes a portable single
 /// directory component under the export folder (and an entry prefix inside the
-/// .zip). `.value-minis` is reserved for value-build intermediates.
+/// .zip). The dialog trims on export, so surrounding whitespace is rejected
+/// here to keep live validation and the exported name in agreement.
+/// `.value-minis` is reserved for value-build intermediates.
 /// Returns null when valid, else a [ModNameError].
 ModNameError? validateModName(String name) {
-  if (name.trim().isEmpty) return ModNameError.required;
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) return ModNameError.required;
   if (name.runes.any((r) => r < 0x20 || (r >= 0x7f && r <= 0x9f))) {
     return ModNameError.controlCharacters;
   }
+  if (name != trimmed) return ModNameError.notAFolderName;
   if (name.contains('/') || name.contains('\\')) {
     return ModNameError.pathSeparators;
   }
