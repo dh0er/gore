@@ -5,7 +5,7 @@
 //! or one `Field.Add(GameplayTag::Tag, scalar)` entry is writable. Trader stock, instance
 //! inventories, and values already stored in a save are reported as outside this mechanism.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -224,6 +224,7 @@ pub fn compile_values_into_scripts(
     if edits.is_empty() {
         return Ok((Vec::new(), String::new()));
     }
+    refuse_duplicate_value_targets(edits)?;
     with_prepared(cache, |modules, prepared, bytes, _binds| {
         let mut by_module: BTreeMap<usize, Vec<&ValueEdit>> = BTreeMap::new();
         for edit in edits {
@@ -316,6 +317,26 @@ pub fn compile_values_into_scripts(
         }
         Ok((scripts, cache_sha))
     })
+}
+
+fn refuse_duplicate_value_targets(edits: &[ValueEdit]) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for edit in edits {
+        let key = (edit.class.clone(), edit.field.clone(), edit.tag.clone());
+        if !seen.insert(key) {
+            match &edit.tag {
+                Some(tag) => bail!(
+                    "{}.{} tag {tag} is requested more than once; refusing an order-dependent value",
+                    edit.class, edit.field
+                ),
+                None => bail!(
+                    "{}.{} is requested more than once; refusing an order-dependent value",
+                    edit.class, edit.field
+                ),
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn apply_edits(source: &str, edits: &[&ValueEdit]) -> Result<String> {
@@ -951,6 +972,29 @@ class UFoo : UItem {
         let error = apply_edits(source, &[&change]).unwrap_err().to_string();
         assert!(error.contains("ambiguous"), "{error}");
         assert!(error.contains("2"), "{error}");
+    }
+
+    #[test]
+    fn duplicate_value_targets_are_refused_before_they_are_applied() {
+        let first = edit("UFoo", "m_Value", None, ValueLiteral::Int(1));
+        let second = edit("UFoo", "m_Value", None, ValueLiteral::Int(9));
+        let error = refuse_duplicate_value_targets(&[first, second])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("more than once"), "{error}");
+        let edge = edit(
+            "USword",
+            "m_DamageBase",
+            Some("Item_Damage_Physical_Edge"),
+            ValueLiteral::Float(1.0),
+        );
+        let blunt = edit(
+            "USword",
+            "m_DamageBase",
+            Some("Item_Damage_Physical_Blunt"),
+            ValueLiteral::Float(2.0),
+        );
+        assert!(refuse_duplicate_value_targets(&[edge, blunt]).is_ok());
     }
 
     #[test]

@@ -19,6 +19,11 @@ void main() {
       expect(validateModName('sub/MyMod'), isNotNull);
     });
 
+    test('rejects the reserved value workspace name', () {
+      expect(validateModName('.value-minis'), isNotNull);
+      expect(validateModName('.VALUE-MINIS'), isNotNull);
+    });
+
     test('rejects parent reference', () {
       expect(validateModName('..'), isNotNull);
       expect(validateModName('.'), isNotNull);

@@ -1038,6 +1038,9 @@ fn generate_mod(payload: Value) -> Value {
     if cfg.overrides.is_empty() {
         return err("BAD_CONFIG", "at least one value edit is required");
     }
+    if let Err(error) = gore_mod::validate_mod_name(&cfg.meta.name) {
+        return err("BAD_CONFIG", error.to_string());
+    }
     let values: Vec<Value> = cfg
         .overrides
         .iter()
@@ -2148,6 +2151,24 @@ mod tests {
         assert_eq!(super::script_class_name("UItFo_Apple"), "UItFo_Apple");
         assert!(spec.contains("\"int\": 500") || spec.contains("\"int\":500"));
         assert!(v["files"].get("Scripts/main.lua").is_none());
+    }
+
+    #[test]
+    fn generate_mod_rejects_the_reserved_workspace_name() {
+        let req = r#"{"command":"generate_mod","payload":{
+            "meta":{"name":".VALUE-MINIS"},
+            "override":[{"class":"ItFo_Apple","field":"m_Value","value_int":500}]
+        }}"#;
+        let v: Value = serde_json::from_str(&execute_json(req)).unwrap();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "BAD_CONFIG");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("reserved"),
+            "{v}"
+        );
     }
 
     #[test]

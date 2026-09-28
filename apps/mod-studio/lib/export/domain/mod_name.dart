@@ -13,7 +13,8 @@ enum ModNameError {
 /// component under the export folder (and an entry prefix inside the .zip), so
 /// it must not contain path separators, the `..` parent reference, or control
 /// characters (a newline could also terminate a comment in the generated Lua
-/// and inject code). Returns null when valid, else a [ModNameError].
+/// and inject code). `.value-minis` is reserved for value-build intermediates.
+/// Returns null when valid, else a [ModNameError].
 ModNameError? validateModName(String name) {
   final trimmed = name.trim();
   if (trimmed.isEmpty) return ModNameError.required;
@@ -23,7 +24,9 @@ ModNameError? validateModName(String name) {
   if (trimmed.contains('/') || trimmed.contains('\\')) {
     return ModNameError.pathSeparators;
   }
-  if (trimmed == '.' || trimmed == '..') {
+  if (trimmed == '.' ||
+      trimmed == '..' ||
+      trimmed.toLowerCase() == '.value-minis') {
     return ModNameError.notAFolderName;
   }
   return null;
