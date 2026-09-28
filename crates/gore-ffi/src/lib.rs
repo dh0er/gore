@@ -7,7 +7,8 @@
 //! Commands:
 //! - `core_info` — returns the stable FFI ABI, crate version, and sorted command capabilities.
 //! - `generate_mod` — payload is an [`OverridesConfig`] (keys `meta` +
-//!   `override`); returns `{ok, files:{"enabled.txt":"","Scripts/main.lua":...}}`.
+//!   `override`); an empty override list is refused. A non-empty list returns
+//!   `{ok, files:{"spec.json":...}}`.
 //! - `validate` — payload `{config: OverridesConfig, model: ReflectionModel}`;
 //!   returns `{ok, valid, errors:[..]}`.
 //! - `authoring_npc_archetype_catalog_v1_build_for_game_root` accepts only one game root and
@@ -1034,6 +1035,9 @@ fn generate_mod(payload: Value) -> Value {
         Ok(c) => c,
         Err(e) => return err("BAD_CONFIG", format!("invalid overrides config: {e}")),
     };
+    if cfg.overrides.is_empty() {
+        return err("BAD_CONFIG", "at least one value edit is required");
+    }
     let values: Vec<Value> = cfg
         .overrides
         .iter()
@@ -2144,6 +2148,25 @@ mod tests {
         assert_eq!(super::script_class_name("UItFo_Apple"), "UItFo_Apple");
         assert!(spec.contains("\"int\": 500") || spec.contains("\"int\":500"));
         assert!(v["files"].get("Scripts/main.lua").is_none());
+    }
+
+    #[test]
+    fn generate_mod_rejects_an_empty_override_list() {
+        let req = r#"{"command":"generate_mod","payload":{
+            "meta":{"name":"M"},
+            "override":[]
+        }}"#;
+        let v: Value = serde_json::from_str(&execute_json(req)).unwrap();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "BAD_CONFIG");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("at least one value edit"),
+            "{}",
+            v
+        );
     }
 
     #[test]

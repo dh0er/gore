@@ -193,6 +193,32 @@ void main() {
     expect(existing.readAsStringSync(), 'OLD');
   });
 
+  testWidgets('export refuses an empty value list before generation', (
+    tester,
+  ) async {
+    final fake = FakeGoreCoreFfiService(responses: {
+      'generate_mod': {'ok': true, 'files': {'spec.json': '{}'}},
+    });
+    final tmp = Directory.systemTemp.createTempSync('gore_mod_export_empty_');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+    final container = ProviderContainer(
+      overrides: [coreServiceProvider.overrideWithValue(fake)],
+    );
+    addTearDown(container.dispose);
+
+    await container.read(exportProvider.notifier).export(
+      request: ExportRequest(modName: 'Empty', targetDir: tmp.path),
+      overrides: const [],
+    );
+
+    expect(fake.calls, isEmpty);
+    expect(
+      container.read(exportProvider).result?.error,
+      contains('at least one value edit'),
+    );
+    expect(File(p.join(tmp.path, 'Empty.spec.json')).existsSync(), isFalse);
+  });
+
   testWidgets('export surfaces a generation error and writes nothing', (tester) async {
     final fake = FakeGoreCoreFfiService(responses: {
       'generate_mod': {

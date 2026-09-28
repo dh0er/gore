@@ -54,6 +54,14 @@ class ExportNotifier extends StateNotifier<ExportState> {
     // enabling Export, so this is a safety net. It surfaces an English string
     // because the notifier has no BuildContext; the live dialog error is the
     // one users normally see.
+    if (overrides.isEmpty) {
+      state = state.copyWith(
+        isExporting: false,
+        result: const ExportResult(error: 'at least one value edit is required'),
+      );
+      return;
+    }
+
     final nameError = validateModName(request.modName);
     if (nameError != null) {
       state = state.copyWith(

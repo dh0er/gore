@@ -62,6 +62,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
   @override
   Widget build(BuildContext context) {
     final exportState = ref.watch(exportProvider);
+    final hasValues = ref.watch(overridesProvider).entries.isNotEmpty;
     final l10n = AppLocalizations.of(context);
 
     // Close on success
@@ -141,7 +142,9 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
           child: Text(l10n.cancel),
         ),
         FilledButton(
-          onPressed: (!_isValid || exportState.isExporting) ? null : _confirm,
+          onPressed: (!_isValid || !hasValues || exportState.isExporting)
+              ? null
+              : _confirm,
           child: exportState.isExporting
               ? const SizedBox(
                   width: 16,
