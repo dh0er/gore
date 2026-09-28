@@ -1658,6 +1658,35 @@ mod tests {
     }
 
     #[test]
+    fn private_value_workspaces_left_behind_do_not_ask_for_consent() {
+        // A values build writes `out/.value-minis/<invocation>/` and
+        // `work_dir/<invocation>/`, then leaves both parents in place. The next
+        // build with the same roots adds another child. Treating the parent as
+        // occupied blocked every retry and every other mod that shares them.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("spec.json");
+        std::fs::write(
+            &spec,
+            br#"{"meta":{"name":"DaniTestMod","version":"1.0.0"}}"#,
+        )
+        .expect("write");
+        let out = dir.path().join("build");
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(out.join(".value-minis").join("111-earlier")).expect("mkdir");
+        std::fs::create_dir_all(work.join("111-earlier")).expect("mkdir");
+        std::fs::create_dir_all(work.join("tree")).expect("mkdir");
+        let call = json!({
+            "spec": spec.to_string_lossy(),
+            "out": out.to_string_lossy(),
+            "work_dir": work.to_string_lossy(),
+        });
+        assert!(
+            question("gore_mod", "build", call, &options()).is_none(),
+            "private invocation directories are not the bundle this command replaces"
+        );
+    }
+
+    #[test]
     fn a_bundle_name_that_is_not_one_component_is_a_spec_defect_not_a_consent_question() {
         // This test used to assert the opposite, on the premise that the spec is fine and
         // `gore mod build` would run it. It does not: `build_bundle_relative_to` rejects an unsafe

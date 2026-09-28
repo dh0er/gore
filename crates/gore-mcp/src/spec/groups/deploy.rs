@@ -615,20 +615,17 @@ const MOD_COMMANDS: &[CommandSpec] = &[
         "Build a bundle dir from a BuildSpec JSON",
         MOD_BUILD_ARGS,
         Safety::write()
-            .also_writes(&[
-                (
-                    "out",
-                    Derived::ChildNamedInJson {
-                        arg: "spec",
-                        pointer: "/meta/name",
-                    },
-                ),
-                // Each values build writes a private subdirectory here. It does not
-                // delete another build's mini-caches.
-                ("out", Derived::Child(".value-minis")),
-                ("work_dir", Derived::Child("tree")),
-            ])
-            .clobbers_dir(&["work_dir"])
+            .also_writes(&[(
+                "out",
+                Derived::ChildNamedInJson {
+                    arg: "spec",
+                    pointer: "/meta/name",
+                },
+            )])
+            // Values compilation writes `out/.value-minis/<invocation>/` and
+            // `work_dir/<invocation>/`. Those parents stay occupied after the first
+            // build, and a later build adds another child instead of replacing one.
+            // Occupancy on the parent would ask for consent on every retry.
             .installs_via(&["out", "work_dir"]),
         T_LONG,
     )

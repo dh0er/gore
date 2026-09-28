@@ -1338,8 +1338,6 @@ mod tests {
                             pointer: "/meta/name",
                         },
                     ),
-                    ("out", Derived::Child(".value-minis")),
-                    ("work_dir", Derived::Child("tree")),
                 ],
             ),
             (
@@ -1407,7 +1405,6 @@ mod tests {
             // without replacement, so its caller-selected output is covered by `writes_into`.
             // One `.lua` per class, named from the model file.
             ("gore_catalog", "stubs", &["out"]),
-            ("gore_mod", "build", &["work_dir"]),
             // One `.as` per module, laid out by the cache's own ScriptRelativeFilename.
             ("gore_as", "emit-all", &["outdir"]),
         ];
