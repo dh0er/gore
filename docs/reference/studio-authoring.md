@@ -163,11 +163,16 @@ The `25414091` row uses a fresh 174209 USMAP. `Binds.Cache` and the class
 graph stay those of `25168047`, so it keeps that standalone API profile. The
 six curated modules reproduce their V5 source seals and V6 rebinds them. The
 previous Shipping cache was not on disk, so this row records no function-level
-diff. It does not add a live-game or dialog-runtime qualification.
+diff. It does not add a live-game or dialog-runtime qualification. It also has
+no qualified native API snapshot. Mod Studio therefore does not accept this
+triple for revision-3 project creation or NPC drafts: NPC and head scripts
+that reference the sealed native declarations would fail closed, and Studio
+has no `--force` hatch.
 
-Those rows therefore admit the existing bounded project-only Story/NPC/Quest
-routes for their exact triples and the Item route for each exact executable
-seal. They grant no dialog-runtime, production-build, deployment, live-game, or
+The five earlier rows admit the existing bounded project-only Story/NPC/Quest
+routes for their exact triples. Build `25414091` remains a registry row for
+its curated catalog and for the Item route selected by its executable seal.
+The Item route stays available for each exact executable seal. They grant no dialog-runtime, production-build, deployment, live-game, or
 DataAsset authority, and do not promise that future or non-Steam builds are
 compatible without their own reviewed row. Standalone compiler-core parity is
 a separate frozen-corpus/full-tree qualification and is not implied by Studio's

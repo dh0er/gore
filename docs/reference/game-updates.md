@@ -137,11 +137,14 @@ does not say which other functions moved. `Default__Class` remains the one
 USMAP name the executable does not spell.
 
 Mod Studio's Story/NPC/Quest authoring recognizes each exact registered triple
-only within its existing project-only contract. Item authoring is separately
-admitted by the row selected from the exact executable seal and its audited Item
-field matrix; it does not use Shipping or Binds as Item evidence. No
-generation row grants dialog-runtime, production-build, deployment, live-game,
-or DataAsset qualification; every other consumer keeps its own independent gate.
+that has a qualified native API snapshot, only within its existing project-only
+contract. Build `25414091` is registered, but Studio revision-3 projects and
+NPC drafts do not accept it until that snapshot exists. Item authoring is
+separately admitted by the row selected from the exact executable seal and its
+audited Item field matrix; it does not use Shipping or Binds as Item evidence.
+No generation row grants dialog-runtime, production-build, deployment,
+live-game, or DataAsset qualification; every other consumer keeps its own
+independent gate.
 
 Nothing produced a wrong answer in the historical fail-closed state, and the
 admitted row does not widen its recorded proof. Anything that cannot prove the
