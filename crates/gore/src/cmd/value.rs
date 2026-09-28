@@ -212,7 +212,9 @@ const VALUE_COMPILE_BACKEND: AsCompilerBackendV1 = AsCompilerBackendV1::Standalo
 /// the emitted default. Skipping that module first would let the supplied script set the field
 /// to something else. A module whose edits already match, and which no script replaces, is
 /// omitted. Intermediates go in a private subdirectory of `out_dir`, and each filename includes
-/// the module index so sanitized names cannot collide.
+/// the module index so sanitized names cannot collide. The returned directories are that
+/// invocation's compiler workspace and mini-cache folder. The caller deletes them after the
+/// bundle has copied the mini-caches; a failed compile leaves them in place.
 pub fn compile_values_into_scripts(
     game: &Path,
     work_dir: &Path,
@@ -220,9 +222,9 @@ pub fn compile_values_into_scripts(
     edits: &[ValueEdit],
     out_dir: &Path,
     occupied_modules: &[String],
-) -> Result<(Vec<ScriptModule>, String)> {
+) -> Result<(Vec<ScriptModule>, String, Vec<PathBuf>)> {
     if edits.is_empty() {
-        return Ok((Vec::new(), String::new()));
+        return Ok((Vec::new(), String::new(), Vec::new()));
     }
     refuse_duplicate_value_targets(edits)?;
     with_prepared(cache, |modules, prepared, bytes, _binds| {
@@ -262,7 +264,7 @@ pub fn compile_values_into_scripts(
             );
         }
         if planned.is_empty() {
-            return Ok((Vec::new(), cache_sha));
+            return Ok((Vec::new(), cache_sha, Vec::new()));
         }
         let invocation = invocation_id();
         let work_root = work_dir.join(&invocation);
@@ -315,8 +317,20 @@ pub fn compile_values_into_scripts(
                 mini_cache: mini_path.display().to_string(),
             });
         }
-        Ok((scripts, cache_sha))
+        Ok((scripts, cache_sha, vec![work_root, mini_root]))
     })
+}
+
+/// Delete one successful values invocation. Parents such as `work_dir` and `.value-minis` stay.
+pub fn remove_value_invocation_dirs(dirs: &[PathBuf]) -> Result<()> {
+    for dir in dirs {
+        if !dir.exists() {
+            continue;
+        }
+        std::fs::remove_dir_all(dir)
+            .with_context(|| format!("removing value workspace {}", dir.display()))?;
+    }
+    Ok(())
 }
 
 fn refuse_duplicate_value_targets(edits: &[ValueEdit]) -> Result<()> {
@@ -866,6 +880,30 @@ class UFoo : UItem {
         let edited = apply_edits(source, &[&longer]).unwrap();
         assert!(edited.contains("class UFooBar : UItem {\n    default m_Value = 7;"));
         assert!(edited.contains("class UFoo : UItem {\n    default m_Value = 2;"));
+    }
+
+    #[test]
+    fn a_successful_value_build_removes_only_its_invocation_directories() {
+        let parent = std::env::temp_dir().join(format!(
+            "gore-value-cleanup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let work = parent.join("work").join("111");
+        let mini = parent.join(".value-minis").join("111");
+        std::fs::create_dir_all(work.join("Module")).unwrap();
+        std::fs::write(work.join("Module").join("tree.as"), b"source").unwrap();
+        std::fs::create_dir_all(&mini).unwrap();
+        std::fs::write(mini.join("Module.mini.cache"), b"cache").unwrap();
+        remove_value_invocation_dirs(&[work.clone(), mini.clone()]).unwrap();
+        assert!(!work.exists());
+        assert!(!mini.exists());
+        assert!(parent.join("work").exists());
+        assert!(parent.join(".value-minis").exists());
+        std::fs::remove_dir_all(&parent).unwrap();
     }
 
     #[test]

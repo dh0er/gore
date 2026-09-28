@@ -69,6 +69,7 @@ pub fn build(
              a UE4SS registration adapter."
         );
     }
+    let mut value_invocation_dirs = Vec::new();
     let value_generation = if spec.values.is_empty() {
         None
     } else {
@@ -83,7 +84,7 @@ pub fn build(
             .iter()
             .map(|existing| existing.module_name.clone())
             .collect();
-        let (scripts, cache_sha) = crate::cmd::value::compile_values_into_scripts(
+        let (scripts, cache_sha, invocation_dirs) = crate::cmd::value::compile_values_into_scripts(
             &game,
             &work_dir,
             &source.path,
@@ -91,6 +92,7 @@ pub fn build(
             &mini_dir,
             &occupied,
         )?;
+        value_invocation_dirs = invocation_dirs;
         let compiled_any_value = !scripts.is_empty();
         spec.scripts.extend(scripts);
         let targets: Vec<String> = spec
@@ -133,6 +135,7 @@ pub fn build(
     }
     let dir = out.join(&spec.meta.name);
     gore_mod::write_bundle(&dir, &bundle).map_err(|e| anyhow::anyhow!("{e}"))?;
+    crate::cmd::value::remove_value_invocation_dirs(&value_invocation_dirs)?;
     println!(
         "built bundle: {} ({} components, {} files)",
         dir.display(),
