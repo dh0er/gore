@@ -321,8 +321,16 @@ pub fn compile_values_into_scripts(
 
 fn refuse_duplicate_value_targets(edits: &[ValueEdit]) -> Result<()> {
     let mut seen = BTreeSet::new();
+    let mut tagged = BTreeSet::new();
+    let mut untagged = BTreeSet::new();
     for edit in edits {
-        let key = (edit.class.clone(), edit.field.clone(), edit.tag.clone());
+        let field = (edit.class.clone(), edit.field.clone());
+        if edit.tag.is_some() {
+            tagged.insert(field.clone());
+        } else {
+            untagged.insert(field.clone());
+        }
+        let key = (field.0, field.1, edit.tag.clone());
         if !seen.insert(key) {
             match &edit.tag {
                 Some(tag) => bail!(
@@ -335,6 +343,13 @@ fn refuse_duplicate_value_targets(edits: &[ValueEdit]) -> Result<()> {
                 ),
             }
         }
+    }
+    // An omitted tag rewrites the only map entry of that field, so it is the same
+    // target as a tagged edit of the same field.
+    for (class, field) in untagged.intersection(&tagged) {
+        bail!(
+            "{class}.{field} is requested both with and without a tag; refusing an order-dependent value"
+        );
     }
     Ok(())
 }
@@ -994,7 +1009,12 @@ class UFoo : UItem {
             Some("Item_Damage_Physical_Blunt"),
             ValueLiteral::Float(2.0),
         );
-        assert!(refuse_duplicate_value_targets(&[edge, blunt]).is_ok());
+        assert!(refuse_duplicate_value_targets(&[edge.clone(), blunt]).is_ok());
+        let bare = edit("USword", "m_DamageBase", None, ValueLiteral::Float(3.0));
+        let mixed = refuse_duplicate_value_targets(&[edge, bare])
+            .unwrap_err()
+            .to_string();
+        assert!(mixed.contains("with and without a tag"), "{mixed}");
     }
 
     #[test]
