@@ -392,11 +392,17 @@ pub fn build(
         }
     }
 
-    let timeout = Duration::from_secs(if opts.timeout_override_secs > 0 {
+    let timeout_secs = if opts.timeout_override_secs > 0 {
         opts.timeout_override_secs
+    } else if group.tool == "gore_mod" && command.sub == "build" {
+        // A values build compiles one module at a time. Each call has its own sidecar
+        // deadline, so the static cap would kill a later module, or a hung first one
+        // before that deadline can report and clean up.
+        mod_build_timeout_secs(&args, command.timeout_secs)
     } else {
         command.timeout_secs
-    });
+    };
+    let timeout = Duration::from_secs(timeout_secs);
 
     // One rendering, used in both places: what the user is asked about and what the tool result
     // reports as having run are then the same line by construction, not by agreement.
@@ -930,6 +936,37 @@ fn derived_target(
         }
         Derived::Child(child) => DerivedTarget::At(base.join(child)),
     }
+}
+
+/// Outer deadline for `gore mod build`.
+///
+/// Without `values`, the static command cap stands. Each value edit can be its own module, and
+/// each module starts a standalone sidecar with a 30-minute deadline (`standalone_sidecar.rs`).
+/// The edit count is an upper bound on those sequential calls. The extra quarter hour is the same
+/// headroom [`crate::spec::T_COMPILE`] leaves so the inner timeout can report and clean up before
+/// the wrapper is killed.
+fn mod_build_timeout_secs(args: &Map<String, Value>, fallback: u64) -> u64 {
+    const SIDECAR_TIMEOUT_SECS: u64 = 30 * 60;
+    const CLEANUP_HEADROOM_SECS: u64 = 15 * 60;
+    let Some(spec) = args.get("spec").and_then(Value::as_str) else {
+        return fallback;
+    };
+    let Ok(text) = std::fs::read_to_string(spec) else {
+        return fallback;
+    };
+    let Ok(document) = serde_json::from_str::<Value>(&text) else {
+        return fallback;
+    };
+    let Some(values) = document.pointer("/values").and_then(Value::as_array) else {
+        return fallback;
+    };
+    if values.is_empty() {
+        return fallback;
+    }
+    (values.len() as u64)
+        .saturating_mul(SIDECAR_TIMEOUT_SECS)
+        .saturating_add(CLEANUP_HEADROOM_SECS)
+        .max(fallback)
 }
 
 /// Read one string out of a JSON file, and refuse anything that would not be a single path
@@ -3083,6 +3120,49 @@ mod tests {
             &options()
         )
         .is_ok());
+    }
+
+    #[test]
+    fn a_values_build_outlives_every_sequential_compiler_call() {
+        const SIDECAR_TIMEOUT_SECS: u64 = 30 * 60;
+        const CLEANUP_HEADROOM_SECS: u64 = 15 * 60;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("spec.json");
+        let out = dir.path().join("build");
+        let call = |body: &[u8]| {
+            std::fs::write(&spec, body).expect("write");
+            build_with(
+                "gore_mod",
+                "build",
+                json!({
+                    "spec": spec.to_string_lossy(),
+                    "out": out.to_string_lossy(),
+                }),
+                &permissive(),
+            )
+            .expect("build")
+        };
+
+        let plain = call(br#"{"meta":{"name":"DaniTestMod","version":"1.0.0"}}"#);
+        assert_eq!(plain.timeout, Duration::from_secs(spec::T_LONG));
+
+        let one = call(
+            br#"{"meta":{"name":"DaniTestMod","version":"1.0.0"},"values":[{"class":"UFoo","field":"m_Value","value":{"int":1}}]}"#,
+        );
+        assert_eq!(
+            one.timeout,
+            Duration::from_secs(SIDECAR_TIMEOUT_SECS + CLEANUP_HEADROOM_SECS)
+        );
+        assert!(one.timeout > Duration::from_secs(SIDECAR_TIMEOUT_SECS));
+
+        let two = call(
+            br#"{"meta":{"name":"DaniTestMod","version":"1.0.0"},"values":[{"class":"UFoo","field":"m_Value","value":{"int":1}},{"class":"UBar","field":"m_Value","value":{"int":2}}]}"#,
+        );
+        assert_eq!(
+            two.timeout,
+            Duration::from_secs(2 * SIDECAR_TIMEOUT_SECS + CLEANUP_HEADROOM_SECS)
+        );
+        assert!(two.timeout > Duration::from_secs(2 * SIDECAR_TIMEOUT_SECS));
     }
 
     #[test]

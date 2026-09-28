@@ -626,6 +626,8 @@ const MOD_COMMANDS: &[CommandSpec] = &[
             // Later builds add an invocation child there; the parent is not a clobber.
             .installs_derived(&[("out", Derived::Child(".value-minis"))])
             .installs_via(&["out", "work_dir"]),
+        // Floor only. A spec that contains `values` lengthens this in
+        // `mod_build_timeout_secs`, because each module gets its own sidecar deadline.
         T_LONG,
     )
     .guide("bundles"),
