@@ -267,20 +267,22 @@ pub fn compile_values_into_scripts(
         if planned.is_empty() {
             return Ok((Vec::new(), cache_sha));
         }
-        std::fs::create_dir_all(work_dir)
-            .with_context(|| format!("creating {}", work_dir.display()))?;
-        let mini_root = unique_mini_dir(out_dir);
+        let invocation = invocation_id();
+        let work_root = work_dir.join(&invocation);
+        let mini_root = out_dir.join(&invocation);
+        std::fs::create_dir_all(&work_root)
+            .with_context(|| format!("creating {}", work_root.display()))?;
         std::fs::create_dir_all(&mini_root)
             .with_context(|| format!("creating {}", mini_root.display()))?;
         let mut scripts = Vec::new();
         for (index, module_name, relative, rewritten) in planned {
             let stem = intermediate_stem(index, &module_name);
-            let module_work = work_dir.join(&stem);
+            let module_work = work_root.join(&stem);
             // The compiler reads this directory before it creates anything inside it.
             std::fs::create_dir_all(&module_work).with_context(|| {
                 format!("creating compiler workspace {}", module_work.display())
             })?;
-            let source_path = work_dir.join(format!("{stem}.as"));
+            let source_path = work_root.join(format!("{stem}.as"));
             std::fs::write(&source_path, &rewritten)
                 .with_context(|| format!("writing {}", source_path.display()))?;
             let mini_path = mini_root.join(format!("{stem}.mini.cache"));
@@ -729,14 +731,18 @@ fn intermediate_stem(index: usize, module_name: &str) -> String {
     format!("{index:05}_{}", sanitize(module_name))
 }
 
-fn unique_mini_dir(parent: &Path) -> PathBuf {
+fn invocation_id() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let ticket = NEXT.fetch_add(1, Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_nanos())
         .unwrap_or(0);
-    parent.join(format!("{}-{nanos}-{ticket}", std::process::id()))
+    format!("{}-{nanos}-{ticket}", std::process::id())
+}
+
+fn unique_mini_dir(parent: &Path) -> PathBuf {
+    parent.join(invocation_id())
 }
 
 #[cfg(test)]
@@ -909,6 +915,16 @@ class UFoo : UItem {
     fn each_values_build_gets_its_own_mini_directory() {
         let parent = Path::new(".value-minis");
         assert_ne!(unique_mini_dir(parent), unique_mini_dir(parent));
+    }
+
+    #[test]
+    fn one_invocation_isolates_the_workspace_and_the_mini_cache() {
+        let id = invocation_id();
+        let work = Path::new("work").join(&id);
+        let mini = Path::new("out").join(&id);
+        assert_eq!(work.file_name(), mini.file_name());
+        assert_ne!(work, mini);
+        assert_ne!(invocation_id(), id);
     }
 
     #[test]

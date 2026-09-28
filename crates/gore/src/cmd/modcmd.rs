@@ -88,6 +88,7 @@ pub fn build(
             &mini_dir,
             &occupied,
         )?;
+        let compiled_any_value = !scripts.is_empty();
         spec.scripts.extend(scripts);
         let targets: Vec<String> = spec
             .values
@@ -98,6 +99,12 @@ pub fn build(
             })
             .collect();
         spec.values.clear();
+        if !compiled_any_value && !spec_has_deployable_content(&spec) {
+            anyhow::bail!(
+                "every requested value already matches the installed default, so there is \
+                 nothing to build"
+            );
+        }
         Some(serde_json::json!({
             "cache_sha256": cache_sha,
             "from_backup": source.from_backup,
@@ -130,6 +137,16 @@ pub fn build(
         bundle.files.len()
     );
     Ok(())
+}
+
+fn spec_has_deployable_content(spec: &gore_mod::BuildSpec) -> bool {
+    !spec.scripts.is_empty()
+        || !spec.loc_edits.is_empty()
+        || !spec.audio.is_empty()
+        || !spec.texture.is_empty()
+        || !spec.files.is_empty()
+        || !spec.pak_files.is_empty()
+        || !spec.voice.is_empty()
 }
 
 /// `gore mod inspect BUNDLE_OR_ZIP` → validate and summarize a built GORE bundle offline.
@@ -269,5 +286,17 @@ mod validation_message_tests {
         // And no run of spaces from a mangled line continuation, because this is the one line a
         // reader is meant to actually read.
         assert!(!message.contains("  "), "{message}");
+    }
+
+    #[test]
+    fn a_values_only_spec_with_no_compiled_script_has_nothing_to_deploy() {
+        let empty: gore_mod::BuildSpec =
+            serde_json::from_str(r#"{"meta":{"name":"M"}}"#).unwrap();
+        assert!(!super::spec_has_deployable_content(&empty));
+        let with_script: gore_mod::BuildSpec = serde_json::from_str(
+            r#"{"meta":{"name":"M"},"scripts":[{"op":"edit","module_name":"Mod","mini_cache":"a.mini.cache"}]}"#,
+        )
+        .unwrap();
+        assert!(super::spec_has_deployable_content(&with_script));
     }
 }
