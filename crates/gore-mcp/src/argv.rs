@@ -996,9 +996,10 @@ fn name_in_json(path: &str, pointer: &str) -> Result<String, SourceProblem> {
 /// The child's rule for a bundle directory name, restated.
 ///
 /// `gore_mod::is_safe_mod_name` is the 198-UTF-8-byte limit plus `!contains('/') &&
-/// !contains('\\')` and `gore_vo::validate_archive_entry_path` for one component. This crate
-/// cannot call either validator: it depends on `serde` alone and reaches the toolkit by spawning
-/// it. Restating the rule is the cost of that, so it is restated in full rather than in part.
+/// !contains('\\')` and `gore_vo::validate_archive_entry_path` for one component, and it reserves
+/// `.value-minis` for the values compiler. This crate cannot call that validator: it depends on
+/// `serde` alone and reaches the toolkit by spawning it. Restating the rule is the cost of that,
+/// so it is restated in full rather than in part.
 ///
 /// An earlier version kept only the escape-relevant half — separators, `..`, drive letters — on
 /// the grounds that a rule copied imperfectly could refuse a call the child accepts. The half left
@@ -1009,7 +1010,12 @@ fn name_in_json(path: &str, pointer: &str) -> Result<String, SourceProblem> {
 fn is_safe_mod_name(name: &str) -> bool {
     const MAX_PORTABLE_MOD_NAME_BYTES: usize = 198;
 
-    if name.is_empty() || name.len() > MAX_PORTABLE_MOD_NAME_BYTES || name == "." || name == ".." {
+    if name.is_empty()
+        || name.len() > MAX_PORTABLE_MOD_NAME_BYTES
+        || name == "."
+        || name == ".."
+        || name.eq_ignore_ascii_case(".value-minis")
+    {
         return false;
     }
     if name.contains(['/', '\\', ':', '\0'])
@@ -1808,7 +1814,7 @@ mod tests {
         let out = dir.path().join("build");
         let spec = dir.path().join("spec.json");
 
-        let elsewhere: [&[u8]; 9] = [
+        let elsewhere: [&[u8]; 11] = [
             br#"{"meta":{"name":"../escape"}}"#,
             br#"{"meta":{"name":"nested/mod"}}"#,
             br#"{"meta":{"name":"C:\\elsewhere"}}"#,
@@ -1824,6 +1830,10 @@ mod tests {
             br#"{"meta":{"name":"MyMod "}}"#,
             br#"{"meta":{"name":"CON"}}"#,
             br#"{"meta":{"name":"bad?"}}"#,
+            // The values compiler writes `out/.value-minis/<invocation>/`. That name as the
+            // bundle is the same directory, so a failed rebuild would edit the published bundle.
+            br#"{"meta":{"name":".value-minis"}}"#,
+            br#"{"meta":{"name":".VALUE-MINIS"}}"#,
         ];
         for body in elsewhere {
             std::fs::write(&spec, body).expect("write");

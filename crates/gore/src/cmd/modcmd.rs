@@ -54,6 +54,9 @@ pub fn build(
     let json = std::fs::read_to_string(&spec_path)
         .with_context(|| format!("reading spec '{}'", spec_path.display()))?;
     let mut spec: gore_mod::BuildSpec = serde_json::from_str(&json).context("parsing build spec")?;
+    // `.value-minis` is the compiler workspace under `out`. Rejecting it here is before that
+    // workspace is created, so a rebuild cannot write an invocation child into the old bundle.
+    gore_mod::validate_mod_name(&spec.meta.name)?;
     if !spec.overrides.is_empty() {
         anyhow::bail!(
             "bundle overrides are retired. Author item and stat defaults in the `values` section \

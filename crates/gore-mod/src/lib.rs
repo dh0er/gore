@@ -2145,6 +2145,12 @@ fn sanitize(s: &str) -> String {
 /// syntax, trailing dots/spaces, and names too long for GORE's decorated output filenames, so a
 /// name accepted while scaffolding cannot fail later when the bundle is built or published.
 pub fn validate_mod_name(name: &str) -> std::result::Result<(), ModError> {
+    if is_value_intermediate_dirname(name) {
+        return Err(ModError::Other(format!(
+            "invalid mod name {name:?}: `.value-minis` is reserved for value-build intermediates \
+             under the output directory"
+        )));
+    }
     if is_safe_mod_name(name) {
         Ok(())
     } else {
@@ -2156,10 +2162,18 @@ pub fn validate_mod_name(name: &str) -> std::result::Result<(), ModError> {
     }
 }
 
+/// `out/.value-minis` holds per-invocation compiler files. The same string as a bundle name
+/// makes that directory the published bundle, so a failed rebuild writes into the previous one.
+fn is_value_intermediate_dirname(name: &str) -> bool {
+    name.eq_ignore_ascii_case(".value-minis")
+}
+
 /// A safe mod name is a single normal path component: non-empty, no path separators, no `..`,
 /// no control characters — so it can't escape the bundle/UE4SS Mods directory.
 fn is_safe_mod_name(name: &str) -> bool {
-    name.len() <= MAX_PORTABLE_MOD_NAME_BYTES && is_safe_filename(name)
+    name.len() <= MAX_PORTABLE_MOD_NAME_BYTES
+        && !is_value_intermediate_dirname(name)
+        && is_safe_filename(name)
 }
 
 /// A safe single filename: non-empty, no separators, no `..`, no control chars.
@@ -18641,6 +18655,10 @@ mod tests {
         }
         assert!(!is_safe_rel_path("payload\\file.bin"));
         assert!(is_safe_mod_name("Normal-Mod_1"));
+        assert!(!is_safe_mod_name(".value-minis"));
+        assert!(!is_safe_mod_name(".VALUE-MINIS"));
+        let reserved = validate_mod_name(".value-minis").unwrap_err().to_string();
+        assert!(reserved.contains("reserved"), "{reserved}");
         assert!(is_safe_rel_path("payload/sub/file.bin"));
         assert!(is_safe_mod_name(&"a".repeat(MAX_PORTABLE_MOD_NAME_BYTES)));
         assert!(!is_safe_mod_name(
