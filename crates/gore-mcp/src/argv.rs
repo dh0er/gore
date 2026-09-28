@@ -557,7 +557,27 @@ fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> 
 
     // Some outputs are only harmless because of where they usually point. Aim one at the game tree
     // and the command has installed something, which is what the question is really about.
-    if let Some((name, target)) = installs_into_game_tree(command, args) {
+    if let Some((name, target, derived)) = installs_into_game_tree(command, args) {
+        let needs = Needs {
+            write: true,
+            game_launch: false,
+            force: false,
+        };
+        // A derived child can land in the game while the argument that produced it does not.
+        // Saying the argument itself points there tells the caller to move the wrong path.
+        if derived {
+            return question(
+                format!(
+                    "writes `{target}`, a path it derives from `{name}` rather than being given, \
+                     and that path is inside the game installation, so writing there installs the \
+                     result instead of producing a file to deploy later"
+                ),
+                Some(format!(
+                    "Keep the path derived from `{name}` outside the installation"
+                )),
+                needs,
+            );
+        }
         return question(
             format!(
                 "`{name}` points at `{target}`, inside the game installation, so writing there \
@@ -566,11 +586,7 @@ fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> 
             Some(format!(
                 "Point `{name}` outside the installation to produce a file to deploy later"
             )),
-            Needs {
-                write: true,
-                game_launch: false,
-                force: false,
-            },
+            needs,
         );
     }
 
@@ -639,7 +655,7 @@ fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> 
 fn installs_into_game_tree(
     command: &CommandSpec,
     args: &Map<String, Value>,
-) -> Option<(&'static str, String)> {
+) -> Option<(&'static str, String, bool)> {
     let game = args
         .get("game")
         .and_then(Value::as_str)
@@ -655,13 +671,17 @@ fn installs_into_game_tree(
     // a link into the installation while the PNG beside it is not.
     output_paths(command, args)
         .into_iter()
-        .find_map(|(name, path)| {
+        .find_map(|(name, path, derived)| {
             // Resolved first, always. A relative output is resolved by the *child* against this
             // process's working directory, so comparing it lexically would miss `--out .` run from
             // inside the installation — which is the same deployment by a shorter name.
             let Some(path) = resolve(&path) else {
                 // Too many links to follow. Where the write lands is unknown, so it is gated.
-                return Some((name, "a symlink chain too deep to follow".to_string()));
+                return Some((
+                    name,
+                    "a symlink chain too deep to follow".to_string(),
+                    derived,
+                ));
             };
 
             let under_game = game.as_ref().is_some_and(|root| path.starts_with(root));
@@ -670,7 +690,7 @@ fn installs_into_game_tree(
                 .any(|part| part.as_os_str().eq_ignore_ascii_case("G1R"));
 
             (under_game || names_the_game_folder)
-                .then(|| (name, path.to_string_lossy().into_owned()))
+                .then(|| (name, path.to_string_lossy().into_owned(), derived))
         })
 }
 
@@ -678,7 +698,7 @@ fn installs_into_game_tree(
 fn output_paths(
     command: &CommandSpec,
     args: &Map<String, Value>,
-) -> Vec<(&'static str, std::path::PathBuf)> {
+) -> Vec<(&'static str, std::path::PathBuf, bool)> {
     let named = command
         .safety
         .installs_via
@@ -692,10 +712,10 @@ fn output_paths(
         // occupancy facet to be classified by.
         .chain(command.safety.writes_into.iter().copied());
 
-    let mut paths: Vec<(&'static str, std::path::PathBuf)> = named
+    let mut paths: Vec<(&'static str, std::path::PathBuf, bool)> = named
         .filter_map(|name| {
             let given = args.get(name)?.as_str()?;
-            Some((name, std::path::PathBuf::from(given)))
+            Some((name, std::path::PathBuf::from(given), false))
         })
         .collect();
 
@@ -714,7 +734,7 @@ fn output_paths(
             DerivedTarget::At(path) => path,
             DerivedTarget::Unknown { .. } => std::path::PathBuf::from(given),
         };
-        paths.push((*name, derived));
+        paths.push((*name, derived, true));
     }
 
     paths
@@ -901,7 +921,10 @@ fn derived_target(
         }
         Derived::Extension(extension) => DerivedTarget::At(base.with_extension(extension)),
         Derived::Suffix(suffix) => {
-            let mut path = base.components().collect::<std::path::PathBuf>().into_os_string();
+            let mut path = base
+                .components()
+                .collect::<std::path::PathBuf>()
+                .into_os_string();
             path.push(suffix);
             DerivedTarget::At(path.into())
         }
@@ -1717,10 +1740,23 @@ mod tests {
             "spec": spec.to_string_lossy(),
             "out": out.to_string_lossy(),
         });
+        let raised = question("gore_mod", "build", call, &options())
+            .expect("a mini-cache link into the installation is a deployment");
+        assert!(asks_about_a_write(Some(raised.clone())));
         assert!(
-            asks_about_a_write(question("gore_mod", "build", call, &options())),
-            "a mini-cache link into the installation is a deployment"
+            raised.reason.contains("derives from `out`"),
+            "{}",
+            raised.reason
         );
+        assert!(
+            !raised.reason.contains("`out` points at"),
+            "{}",
+            raised.reason
+        );
+        let remedy = raised
+            .remedy
+            .expect("a derived install path names a remedy");
+        assert!(remedy.contains("derived from `out`"), "{remedy}");
     }
 
     #[test]
@@ -2143,7 +2179,10 @@ mod tests {
         // A process-wide cwd change would race every parallel test that resolves relative paths.
         // Run just this assertion in a child whose cwd already is the simulated installation.
         let child = std::process::Command::new(std::env::current_exe().expect("test executable"))
-            .args(["--exact", "argv::tests::a_relative_output_is_resolved_before_the_game_tree_is_judged"])
+            .args([
+                "--exact",
+                "argv::tests::a_relative_output_is_resolved_before_the_game_tree_is_judged",
+            ])
             .env(CHILD, "1")
             .current_dir(&inside)
             .output()
@@ -2663,15 +2702,13 @@ mod tests {
                 "--json"
             ]
         );
-        assert!(
-            build_with(
-                "gore_npc",
-                "routine spots",
-                json!({ "activity": "invented" }),
-                &permissive()
-            )
-            .is_err()
-        );
+        assert!(build_with(
+            "gore_npc",
+            "routine spots",
+            json!({ "activity": "invented" }),
+            &permissive()
+        )
+        .is_err());
         assert!(build_with("gore_npc", "routine invented", json!({}), &permissive()).is_err());
     }
 
@@ -2758,7 +2795,9 @@ mod tests {
             std::path::Path::new("npc-work/"),
             Derived::Suffix(".work"),
         );
-        assert!(matches!(target, DerivedTarget::At(path) if path == std::path::Path::new("npc-work.work")));
+        assert!(
+            matches!(target, DerivedTarget::At(path) if path == std::path::Path::new("npc-work.work"))
+        );
     }
 
     #[test]
@@ -2901,8 +2940,7 @@ mod tests {
 
     #[test]
     fn an_install_mutating_command_asks_and_names_the_flag_when_it_cannot() {
-        let raised =
-            question("gore_mgr", "reset", json!({}), &options()).expect("must ask");
+        let raised = question("gore_mgr", "reset", json!({}), &options()).expect("must ask");
         assert_eq!(
             raised.needs,
             Needs {
@@ -3032,8 +3070,7 @@ mod tests {
     fn the_same_command_builds_once_allow_write_is_set() {
         let mut opts = options();
         opts.allow_write = true;
-        let invocation =
-            build_with("gore_mgr", "reset", json!({}), &opts).expect("permitted");
+        let invocation = build_with("gore_mgr", "reset", json!({}), &opts).expect("permitted");
         assert_eq!(invocation.display, "gore mgr reset");
     }
 

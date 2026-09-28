@@ -208,9 +208,11 @@ const VALUE_COMPILE_BACKEND: AsCompilerBackendV1 = AsCompilerBackendV1::Standalo
 /// Compile every `values` edit into `op = "edit"` script modules and append them to `scripts`.
 ///
 /// `occupied_modules` are script entries already in the spec. An overlap is refused before any
-/// workspace is created or the compiler runs. A module whose edits already match the emitted
-/// defaults is omitted. Intermediates go in a private subdirectory of `out_dir`, and each
-/// filename includes the module index so sanitized names cannot collide.
+/// workspace is created or the compiler runs, including when the requested value already matches
+/// the emitted default. Skipping that module first would let the supplied script set the field
+/// to something else. A module whose edits already match, and which no script replaces, is
+/// omitted. Intermediates go in a private subdirectory of `out_dir`, and each filename includes
+/// the module index so sanitized names cannot collide.
 pub fn compile_values_into_scripts(
     game: &Path,
     work_dir: &Path,
@@ -230,6 +232,7 @@ pub fn compile_values_into_scripts(
         }
         let cache_sha = hex_sha256(bytes);
         let mut planned = Vec::new();
+        let mut resolved_names = Vec::new();
         for (index, module_edits) in by_module {
             let module_name = modules[index].name.clone();
             let relative = prepared
@@ -240,21 +243,15 @@ pub fn compile_values_into_scripts(
                 .emit_module(index)
                 .with_context(|| format!("emitting {module_name}"))?;
             let rewritten = apply_edits(&source, &module_edits)?;
+            resolved_names.push(module_name.clone());
+            // A no-op is still a claim on the module. The overlap check below sees this name.
             if rewritten == source {
                 continue;
             }
             prove_only_requested_statements_changed(&source, &rewritten, &module_edits)?;
             planned.push((index, module_name, relative, rewritten));
         }
-        let overlap: Vec<String> = planned
-            .iter()
-            .filter(|(_, module_name, _, _)| {
-                occupied_modules
-                    .iter()
-                    .any(|existing| existing == module_name)
-            })
-            .map(|(_, module_name, _, _)| module_name.clone())
-            .collect();
+        let overlap = modules_claimed_by_values_and_scripts(&resolved_names, occupied_modules);
         if !overlap.is_empty() {
             bail!(
                 "values and scripts both replace module(s) {}. A generated value mini is a full \
@@ -697,6 +694,17 @@ fn with_prepared<T>(
     body(&modules, &prepared, &bytes, binds_sha256)
 }
 
+fn modules_claimed_by_values_and_scripts(
+    resolved: &[String],
+    occupied: &[String],
+) -> Vec<String> {
+    resolved
+        .iter()
+        .filter(|module_name| occupied.iter().any(|existing| existing == *module_name))
+        .cloned()
+        .collect()
+}
+
 fn module_of_class(modules: &[model::Module], class_name: &str) -> Result<(usize, String)> {
     let hits: Vec<(usize, &str)> = modules
         .iter()
@@ -943,6 +951,17 @@ class UFoo : UItem {
         let error = apply_edits(source, &[&change]).unwrap_err().to_string();
         assert!(error.contains("ambiguous"), "{error}");
         assert!(error.contains("2"), "{error}");
+    }
+
+    #[test]
+    fn a_noop_value_still_conflicts_with_a_script_for_the_same_module() {
+        let resolved = vec!["Item.Apple".to_string(), "Item.Sword".to_string()];
+        let occupied = vec!["Item.Apple".to_string()];
+        assert_eq!(
+            modules_claimed_by_values_and_scripts(&resolved, &occupied),
+            vec!["Item.Apple".to_string()]
+        );
+        assert!(modules_claimed_by_values_and_scripts(&resolved, &[]).is_empty());
     }
 
     #[test]
