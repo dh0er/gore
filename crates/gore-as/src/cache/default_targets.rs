@@ -404,7 +404,9 @@ fn call_receiver(instructions: &[Instr], index: usize) -> CallReceiver<'_> {
             return CallReceiver::Unproven;
         };
         match instruction.op.name {
-            "CHKREF" => {}
+            // A null check may sit between `this` and its member. It is not the
+            // instruction the handle-adjacency rule has to see.
+            "CHKREF" => continue,
             "RDSPtr" => dereferenced = true,
             "ADDSi" => root = Some(instruction),
             "PshVPtr" if instruction.words.first() == Some(&0) => {
@@ -1104,6 +1106,19 @@ mod tests {
         ];
         let CallReceiver::Member(root) = call_receiver(&through_handle, 4) else {
             panic!("handle member receiver is rooted in this");
+        };
+        assert_eq!(root.words, vec![2688]);
+
+        let checked_handle = vec![
+            instruction("PshVPtr", &[0], &[]),
+            instruction("CHKREF", &[], &[]),
+            instruction("ADDSi", &[2688], &[1]),
+            instruction("RDSPtr", &[], &[]),
+            instruction("ADDSi", &[40], &[2]),
+            instruction("CALLSYS", &[], &[]),
+        ];
+        let CallReceiver::Member(root) = call_receiver(&checked_handle, 5) else {
+            panic!("a null check before the handle member stays rooted in this");
         };
         assert_eq!(root.words, vec![2688]);
 
