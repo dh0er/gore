@@ -623,7 +623,8 @@ const MOD_COMMANDS: &[CommandSpec] = &[
                         pointer: "/meta/name",
                     },
                 ),
-                // Values compiles delete leftover `*.mini.cache` files in this directory.
+                // Each values build writes a private subdirectory here. It does not
+                // delete another build's mini-caches.
                 ("out", Derived::Child(".value-minis")),
                 ("work_dir", Derived::Child("tree")),
             ])

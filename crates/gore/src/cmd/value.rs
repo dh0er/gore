@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
@@ -200,13 +201,23 @@ fn inspected_defaults(class: &EmittedClass) -> Vec<InspectedDefault> {
     out
 }
 
+/// Value edits never fall back to the game compiler. A missing standalone compiler fails the
+/// build instead of launching the game.
+const VALUE_COMPILE_BACKEND: AsCompilerBackendV1 = AsCompilerBackendV1::Standalone;
+
 /// Compile every `values` edit into `op = "edit"` script modules and append them to `scripts`.
+///
+/// `occupied_modules` are script entries already in the spec. An overlap is refused before any
+/// workspace is created or the compiler runs. A module whose edits already match the emitted
+/// defaults is omitted. Intermediates go in a private subdirectory of `out_dir`, and each
+/// filename includes the module index so sanitized names cannot collide.
 pub fn compile_values_into_scripts(
     game: &Path,
     work_dir: &Path,
     cache: &Path,
     edits: &[ValueEdit],
     out_dir: &Path,
+    occupied_modules: &[String],
 ) -> Result<(Vec<ScriptModule>, String)> {
     if edits.is_empty() {
         return Ok((Vec::new(), String::new()));
@@ -218,12 +229,8 @@ pub fn compile_values_into_scripts(
                 .with_context(|| format!("unknown class {}", edit.class))?;
             by_module.entry(index).or_default().push(edit);
         }
-        std::fs::create_dir_all(work_dir)
-            .with_context(|| format!("creating {}", work_dir.display()))?;
-        std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
-        clear_owned_mini_caches(out_dir)?;
         let cache_sha = hex_sha256(bytes);
-        let mut scripts = Vec::new();
+        let mut planned = Vec::new();
         for (index, module_edits) in by_module {
             let module_name = modules[index].name.clone();
             let relative = prepared
@@ -234,16 +241,49 @@ pub fn compile_values_into_scripts(
                 .emit_module(index)
                 .with_context(|| format!("emitting {module_name}"))?;
             let rewritten = apply_edits(&source, &module_edits)?;
+            if rewritten == source {
+                continue;
+            }
             prove_only_requested_statements_changed(&source, &rewritten, &module_edits)?;
-            let module_work = work_dir.join(sanitize(&module_name));
+            planned.push((index, module_name, relative, rewritten));
+        }
+        let overlap: Vec<String> = planned
+            .iter()
+            .filter(|(_, module_name, _, _)| {
+                occupied_modules
+                    .iter()
+                    .any(|existing| existing == module_name)
+            })
+            .map(|(_, module_name, _, _)| module_name.clone())
+            .collect();
+        if !overlap.is_empty() {
+            bail!(
+                "values and scripts both replace module(s) {}. A generated value mini is a full \
+                 module edit and would discard the supplied script. Put the value change in that \
+                 script, or drop the overlapping script entry.",
+                overlap.join(", ")
+            );
+        }
+        if planned.is_empty() {
+            return Ok((Vec::new(), cache_sha));
+        }
+        std::fs::create_dir_all(work_dir)
+            .with_context(|| format!("creating {}", work_dir.display()))?;
+        let mini_root = unique_mini_dir(out_dir);
+        std::fs::create_dir_all(&mini_root)
+            .with_context(|| format!("creating {}", mini_root.display()))?;
+        let mut scripts = Vec::new();
+        for (index, module_name, relative, rewritten) in planned {
+            let stem = intermediate_stem(index, &module_name);
+            let module_work = work_dir.join(&stem);
             // The compiler reads this directory before it creates anything inside it.
             std::fs::create_dir_all(&module_work).with_context(|| {
                 format!("creating compiler workspace {}", module_work.display())
             })?;
-            let source_path = work_dir.join(format!("{}.as", sanitize(&module_name)));
+            let source_path = work_dir.join(format!("{stem}.as"));
             std::fs::write(&source_path, &rewritten)
                 .with_context(|| format!("writing {}", source_path.display()))?;
-            let mini_path = out_dir.join(format!("{}.mini.cache", sanitize(&module_name)));
+            let mini_path = mini_root.join(format!("{stem}.mini.cache"));
             super::as_cache::run(AsCmd::CompileModule {
                 op: "edit".into(),
                 module: module_name.clone(),
@@ -260,7 +300,7 @@ pub fn compile_values_into_scripts(
                 diagnostics_hook: None,
                 diagnostics_inject_delay_ms: 0,
                 compiler: AsCompilerBackendArgsV1 {
-                    backend: AsCompilerBackendV1::StandaloneThenGame,
+                    backend: VALUE_COMPILE_BACKEND,
                     standalone_sidecar: None,
                     standalone_sidecar_sha256: None,
                     compiler_profile_manifest: None,
@@ -502,24 +542,77 @@ fn clear_owned_mini_caches(out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn declaration_start(source: &str, marker: &str) -> Result<usize> {
+    let bytes = source.as_bytes();
+    let marker_bytes = marker.as_bytes();
+    let mut index = 0;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut line_comment = false;
+    let mut block_comment = false;
+    while index < bytes.len() {
+        let ch = bytes[index];
+        if line_comment {
+            if ch == b'\n' {
+                line_comment = false;
+            }
+            index += 1;
+            continue;
+        }
+        if block_comment {
+            if ch == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                block_comment = false;
+                index += 2;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+        if let Some(end) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == b'\\' {
+                escaped = true;
+            } else if ch == end {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if ch == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            line_comment = true;
+            index += 2;
+            continue;
+        }
+        if ch == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            block_comment = true;
+            index += 2;
+            continue;
+        }
+        if ch == b'"' || ch == b'\'' {
+            quote = Some(ch);
+            index += 1;
+            continue;
+        }
+        let preceded = index == 0
+            || !bytes[index - 1].is_ascii_alphanumeric() && bytes[index - 1] != b'_';
+        if preceded && bytes[index..].starts_with(marker_bytes) {
+            let after = index + marker_bytes.len();
+            let boundary = bytes
+                .get(after)
+                .is_none_or(|next| !next.is_ascii_alphanumeric() && *next != b'_');
+            if boundary {
+                return Ok(index);
+            }
+        }
+        index += 1;
+    }
+    bail!("emitted source has no exact declaration `{marker}`")
+}
+
 fn class_span(source: &str, class_name: &str) -> Result<(usize, usize)> {
     let marker = format!("class {class_name}");
-    let mut search_from = 0;
-    let start = loop {
-        let Some(relative) = source[search_from..].find(&marker) else {
-            bail!("emitted source has no exact declaration `{marker}`");
-        };
-        let start = search_from + relative;
-        let after = start + marker.len();
-        let boundary = source[after..]
-            .chars()
-            .next()
-            .is_none_or(|ch| !(ch.is_ascii_alphanumeric() || ch == '_'));
-        if boundary {
-            break start;
-        }
-        search_from = after;
-    };
+    let start = declaration_start(source, &marker)?;
     let mut depth = 0i32;
     let mut opened = false;
     let mut quote = None;
@@ -630,6 +723,20 @@ fn sanitize(name: &str) -> String {
     name.chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
         .collect()
+}
+
+fn intermediate_stem(index: usize, module_name: &str) -> String {
+    format!("{index:05}_{}", sanitize(module_name))
+}
+
+fn unique_mini_dir(parent: &Path) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let ticket = NEXT.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    parent.join(format!("{}-{nanos}-{ticket}", std::process::id()))
 }
 
 #[cfg(test)]
@@ -763,5 +870,49 @@ class UBar : UItem {
         assert!(edited.contains("default m_Name = \"a}b{c\";"));
         assert!(edited.contains("class UFoo : UItem {\n    default m_Name = \"a}b{c\";\n    default m_Value = 9;\n}"));
         assert!(edited.contains("class UBar : UItem {\n    default m_Value = 4;\n}"));
+    }
+
+    #[test]
+    fn a_quoted_or_commented_class_name_is_not_the_declaration() {
+        let source = r#"
+class UEarlier : UItem {
+    default m_Name = "class UFoo";
+    // class UFoo
+    /* class UFoo { } */
+    default m_Value = 1;
+}
+class UFoo : UItem {
+    default m_Value = 2;
+}
+"#;
+        let change = edit("UFoo", "m_Value", None, ValueLiteral::Int(9));
+        let edited = apply_edits(source, &[&change]).unwrap();
+        assert!(edited.contains("default m_Name = \"class UFoo\";"));
+        assert!(edited.contains("class UFoo : UItem {\n    default m_Value = 9;\n}"));
+        assert!(edited.contains("default m_Value = 1;"));
+    }
+
+    #[test]
+    fn an_edit_that_already_matches_the_default_is_unchanged() {
+        let same = edit("UItFo_Apple", "m_Value", None, ValueLiteral::Int(4));
+        let edited = apply_edits(SOURCE, &[&same]).unwrap();
+        assert_eq!(edited, SOURCE);
+    }
+
+    #[test]
+    fn sanitized_module_names_keep_distinct_intermediate_stems() {
+        assert_eq!(sanitize("A.B"), sanitize("A_B"));
+        assert_ne!(intermediate_stem(1, "A.B"), intermediate_stem(2, "A_B"));
+    }
+
+    #[test]
+    fn each_values_build_gets_its_own_mini_directory() {
+        let parent = Path::new(".value-minis");
+        assert_ne!(unique_mini_dir(parent), unique_mini_dir(parent));
+    }
+
+    #[test]
+    fn value_compiles_stay_on_the_standalone_compiler() {
+        assert_eq!(VALUE_COMPILE_BACKEND, AsCompilerBackendV1::Standalone);
     }
 }

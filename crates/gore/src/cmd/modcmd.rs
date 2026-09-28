@@ -75,31 +75,19 @@ pub fn build(
         })?;
         let source = gore_mod::pristine_script_cache_source(&game)?;
         let mini_dir = absolute_path(&out).join(".value-minis");
+        let occupied: Vec<String> = spec
+            .scripts
+            .iter()
+            .map(|existing| existing.module_name.clone())
+            .collect();
         let (scripts, cache_sha) = crate::cmd::value::compile_values_into_scripts(
             &game,
             &work_dir,
             &source.path,
             &spec.values,
             &mini_dir,
+            &occupied,
         )?;
-        let overlap: Vec<String> = spec
-            .scripts
-            .iter()
-            .filter(|existing| {
-                scripts
-                    .iter()
-                    .any(|generated| generated.module_name == existing.module_name)
-            })
-            .map(|existing| existing.module_name.clone())
-            .collect();
-        if !overlap.is_empty() {
-            anyhow::bail!(
-                "values and scripts both replace module(s) {}. A generated value mini is a full \
-                 module edit and would discard the supplied script. Put the value change in that \
-                 script, or drop the overlapping script entry.",
-                overlap.join(", ")
-            );
-        }
         spec.scripts.extend(scripts);
         let targets: Vec<String> = spec
             .values

@@ -30,7 +30,7 @@ class _Probe implements CoreBootstrapProbe {
 }
 
 String _coreInfo({
-  int abi = 2,
+  int abi = 3,
   Object? commands,
   String version = '0.1.0',
   Map<String, Object?> extra = const {},

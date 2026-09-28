@@ -1017,9 +1017,12 @@ fn read_bank_pristine(bank: &str) -> std::io::Result<Vec<u8>> {
 }
 
 /// Catalog ids such as `ItFo_Apple` are the Gothic instance name. The Shipping
-/// script names the class `UItFo_Apple`. A name that already has the prefix is kept.
+/// script names the class `UItFo_Apple`. A leading `U` is already that prefix
+/// only when the next character is uppercase, matching `runtime_class_name`.
+/// `Underground` is a bare name and still needs the prefix.
 fn script_class_name(class: &str) -> String {
-    if class.starts_with('U') {
+    let bytes = class.as_bytes();
+    if bytes.first() == Some(&b'U') && bytes.get(1).is_some_and(u8::is_ascii_uppercase) {
         class.to_owned()
     } else {
         format!("U{class}")
@@ -2137,6 +2140,8 @@ mod tests {
         assert_eq!(v["ok"], true);
         let spec = v["files"]["spec.json"].as_str().unwrap();
         assert!(spec.contains("\"class\": \"UItFo_Apple\""));
+        assert_eq!(super::script_class_name("Underground"), "UUnderground");
+        assert_eq!(super::script_class_name("UItFo_Apple"), "UItFo_Apple");
         assert!(spec.contains("\"int\": 500") || spec.contains("\"int\":500"));
         assert!(v["files"].get("Scripts/main.lua").is_none());
     }
