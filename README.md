@@ -57,13 +57,13 @@ Get `gore.exe` from a `gore-cli-v*`
 [release](https://github.com/dh0er/gore/releases), or build it:
 
 ```powershell
-cargo build --release -p gore     # → target\release\gore.exe
+python build.py gore-cli build     # → target\release\gore.exe
 ```
 
 Point it at your game once:
 
 ```powershell
-$GAME = 'D:\SteamLibrary\steamapps\common\Gothic 1 Remake'
+$GAME = 'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake'
 gore config set game-path $GAME     # or: gore config detect
 ```
 
