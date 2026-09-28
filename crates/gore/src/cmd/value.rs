@@ -143,10 +143,8 @@ pub fn inspect_class(cache: &Path, class_name: &str) -> Result<ClassInspection> 
         let source = prepared
             .emit_module(module_index)
             .with_context(|| format!("emitting {module_name}"))?;
-        let class = defaults::parse_classes(&source)
-            .into_iter()
-            .find(|class| class.name == class_name)
-            .with_context(|| format!("{class_name} was not recovered from {module_name}"))?;
+        let class = unique_emitted_class(&source, class_name)
+            .with_context(|| format!("locating {class_name} in {module_name}"))?;
         let relative_path = prepared
             .module_relative_path(module_index)
             .unwrap_or("")
@@ -376,20 +374,22 @@ pub fn apply_edits(source: &str, edits: &[&ValueEdit]) -> Result<String> {
     Ok(current)
 }
 
-fn apply_one(source: &str, edit: &ValueEdit) -> Result<String> {
-    let classes = defaults::parse_classes(source);
-    let matches: Vec<_> = classes
-        .iter()
-        .filter(|class| class.name == edit.class)
+fn unique_emitted_class(source: &str, class_name: &str) -> Result<EmittedClass> {
+    let mut matches: Vec<_> = defaults::parse_classes(source)
+        .into_iter()
+        .filter(|class| class.name == class_name)
         .collect();
     if matches.len() != 1 {
         bail!(
-            "class {} must occur once in the emitted module, found {}",
-            edit.class,
+            "class {class_name} must occur once in the emitted module, found {}",
             matches.len()
         );
     }
-    let class = matches[0];
+    Ok(matches.pop().expect("one matching class"))
+}
+
+fn apply_one(source: &str, edit: &ValueEdit) -> Result<String> {
+    let class = unique_emitted_class(source, &edit.class)?;
     let (start, end) = class_span(source, &class.name)?;
     let body = &source[start..end];
     let assignments: Vec<&str> = class
@@ -1082,6 +1082,29 @@ class UFoo : UItem {
             (0, "A.Item".to_string())
         );
         assert!(module_of_class(&unique, "UMissing").is_err());
+    }
+
+    #[test]
+    fn the_same_class_name_in_two_namespaces_is_refused() {
+        let source = r#"
+namespace First {
+class UFoo : UItem {
+    default m_Value = 1;
+}
+}
+namespace Second {
+class UFoo : UItem {
+    default m_Value = 2;
+}
+}
+"#;
+        let error = unique_emitted_class(source, "UFoo")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("found 2"), "{error}");
+        let change = edit("UFoo", "m_Value", None, ValueLiteral::Int(3));
+        let error = apply_edits(source, &[&change]).unwrap_err().to_string();
+        assert!(error.contains("found 2"), "{error}");
     }
 
     fn module_with(name: &str, class_name: &str) -> model::Module {
