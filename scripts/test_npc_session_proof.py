@@ -211,6 +211,27 @@ class NpcSessionProofTests(unittest.TestCase):
             self.assertFalse(proof.output_path_allowed(root / "library.dll", [save]))
             self.assertTrue(proof.output_path_allowed(root / "report.json", [save]))
 
+    def test_report_symlink_cannot_truncate_an_unlisted_save_or_dll(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            save, dll = root / "input.sav", root / "core.dll"
+            save.write_bytes(b"input")
+            dll.write_bytes(b"core")
+            output = root / "report.json"
+            for suffix in (".sav", ".dll"):
+                target = root / f"unlisted{suffix}"
+                target.write_bytes(b"must remain intact")
+                try:
+                    output.symlink_to(target)
+                except OSError as error:
+                    self.skipTest(f"file symlinks unavailable: {error}")
+                self.assertFalse(proof.output_path_allowed(output, [save, dll]))
+                with self.assertRaises(SystemExit):
+                    proof.main(["--save", str(save), "--dll", str(dll),
+                                "--phase", "running", "--output", str(output)])
+                self.assertEqual(target.read_bytes(), b"must remain intact")
+                output.unlink()
+
     def test_cli_writes_machine_readable_hash_bound_report_without_restart_claim(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

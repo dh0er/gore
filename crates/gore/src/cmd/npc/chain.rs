@@ -84,6 +84,7 @@ mod tests {
                 .map(|(a, b)| (a.to_string(), b.to_string()))
                 .collect(),
             calls: Vec::new(),
+            member_declarations: Vec::new(),
         }
     }
 

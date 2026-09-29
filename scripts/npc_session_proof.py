@@ -257,7 +257,9 @@ def persistence_checks(current: dict, previous: dict) -> list[dict]:
 
 
 def output_path_allowed(output: Path, protected: list[Path]) -> bool:
-    if output.suffix.casefold() in (".sav", ".dll"):
+    if output.is_symlink() or output.suffix.casefold() in (".sav", ".dll"):
+        return False
+    if output.resolve().suffix.casefold() in (".sav", ".dll"):
         return False
     for path in protected:
         if output.resolve() == path.resolve() or (output.exists() and path.exists() and output.samefile(path)):

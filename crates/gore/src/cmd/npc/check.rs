@@ -435,6 +435,12 @@ pub fn guard_checkout_diff(pristine: &str, edited: &str) -> Vec<Finding> {
                 )));
             }
             [other] => {
+                if class.member_declarations != other.member_declarations {
+                    findings.push(Finding::blocking(format!(
+                        "class {} changes its method or constructor declarations. A checkout must preserve shipped declarations and their order",
+                        class.name
+                    )));
+                }
                 let retained = default_targets(other);
                 for (target, expected_count) in default_targets(class) {
                     let count = retained.get(target).copied().unwrap_or(0);
@@ -1061,6 +1067,39 @@ class UDailyRoutine_MINE_Start : UAIState_DailyRoutine_Human
         let edited = pristine.replace("Before();", "After();");
         assert_eq!(defaults::parse_classes(pristine), defaults::parse_classes(&edited));
         assert!(guard_checkout_diff(pristine, &edited).is_empty());
+    }
+
+    #[test]
+    fn checkout_rejects_removed_methods_and_constructors_despite_a_changed_default() {
+        let pristine = "class UChild : UBase\n{\n    default Health = 1;\n    UChild() { super(); }\n    void Run(int count) { Before(count); }\n}\n";
+        for removed in [
+            "    UChild() { super(); }\n",
+            "    void Run(int count) { Before(count); }\n",
+        ] {
+            let edited = pristine
+                .replace(removed, "")
+                .replace("Health = 1", "Health = 2");
+            let findings = guard_checkout_diff(pristine, &edited);
+            assert!(findings.iter().any(|finding| {
+                finding.severity == Severity::Blocking
+                    && finding
+                        .message
+                        .contains("method or constructor declarations")
+            }));
+        }
+    }
+
+    #[test]
+    fn checkout_allows_method_body_and_layout_edits_but_rejects_signature_changes() {
+        let pristine = "class UChild : UBase\n{\n    void Run(int count) { Before(count); }\n}\n";
+        let body_and_layout = "class UChild : UBase\n{\n    void Run( int count )\n    {\n        After(count);\n    }\n}\n";
+        assert!(guard_checkout_diff(pristine, body_and_layout).is_empty());
+        let changed_signature = pristine.replace("int count", "float count");
+        assert!(guard_checkout_diff(pristine, &changed_signature)
+            .iter()
+            .any(|finding| finding
+                .message
+                .contains("method or constructor declarations")));
     }
 
     #[test]

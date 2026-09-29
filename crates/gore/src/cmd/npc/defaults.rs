@@ -15,6 +15,61 @@ pub struct EmittedClass {
     pub assignments: Vec<(String, String)>,
     /// `default f(...);` unverändert, ohne führendes `default ` und ohne Semikolon.
     pub calls: Vec<String>,
+    /// Method and constructor declarations in source order, without their editable bodies.
+    pub member_declarations: Vec<String>,
+}
+
+/// Canonicalize a declaration as tokens so changing only its layout remains allowed.
+fn declaration_tokens(header: &str) -> String {
+    let mut tokens = Vec::new();
+    let mut word = String::new();
+    let mut chars = header.chars();
+    while let Some(ch) = chars.next() {
+        if ch.is_alphanumeric() || ch == '_' {
+            word.push(ch);
+            continue;
+        }
+        if !word.is_empty() {
+            tokens.push(std::mem::take(&mut word));
+        }
+        if ch == '"' || ch == '\'' {
+            let mut quoted = String::from(ch);
+            while let Some(next) = chars.next() {
+                quoted.push(next);
+                if next == '\\' {
+                    if let Some(escaped) = chars.next() {
+                        quoted.push(escaped);
+                    }
+                } else if next == ch {
+                    break;
+                }
+            }
+            tokens.push(quoted);
+        } else if !ch.is_whitespace() {
+            tokens.push(ch.to_string());
+        }
+    }
+    if !word.is_empty() {
+        tokens.push(word);
+    }
+    tokens.join(" ")
+}
+
+fn member_declaration(header: &str) -> Option<String> {
+    let open = header.find('(')?;
+    let close = header.rfind(')')?;
+    if open >= close || header[..open].contains('=') {
+        return None;
+    }
+    let suffix = header[close + 1..].trim();
+    if !suffix.is_empty()
+        && !suffix
+            .split_whitespace()
+            .all(|word| matches!(word, "const" | "override" | "final"))
+    {
+        return None;
+    }
+    Some(declaration_tokens(header))
 }
 
 /// Keep line boundaries while removing comments; quoted comment markers remain literal text.
@@ -125,6 +180,7 @@ pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
     let mut pending_namespace = None;
     let mut pending_class = None;
     let mut class_body: Option<(usize, usize)> = None;
+    let mut pending_member = String::new();
     for line in source.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("namespace ") {
@@ -152,6 +208,7 @@ pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
                 super_class,
                 assignments: Vec::new(),
                 calls: Vec::new(),
+                member_declarations: Vec::new(),
             });
             pending_class = Some(out.len() - 1);
         } else if let (Some(rest), Some((index, class_depth))) =
@@ -169,6 +226,35 @@ pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
                         statement[at + 1..].trim().to_string(),
                     )),
                     None => current.calls.push(statement.to_string()),
+                }
+            }
+        }
+
+        if let Some((index, class_depth)) = class_body {
+            if depth == class_depth {
+                match trimmed {
+                    "{" => {
+                        if let Some(declaration) = member_declaration(&pending_member) {
+                            out[index].member_declarations.push(declaration);
+                        }
+                        pending_member.clear();
+                    }
+                    "}" => pending_member.clear(),
+                    _ if trimmed.starts_with("default ") => pending_member.clear(),
+                    _ if trimmed.ends_with(';') => {
+                        pending_member.push_str(trimmed.trim_end_matches(';'));
+                        if let Some(declaration) = member_declaration(&pending_member) {
+                            out[index].member_declarations.push(declaration);
+                        }
+                        pending_member.clear();
+                    }
+                    _ if !trimmed.is_empty() && !trimmed.ends_with(':') => {
+                        if !pending_member.is_empty() {
+                            pending_member.push(' ');
+                        }
+                        pending_member.push_str(trimmed);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -196,6 +282,7 @@ pub fn parse_classes(source: &str) -> Vec<EmittedClass> {
                         namespaces.push((depth, name));
                     } else if let Some(index) = pending_class.take() {
                         class_body = Some((index, depth));
+                        pending_member.clear();
                     }
                 }
                 '}' => {
