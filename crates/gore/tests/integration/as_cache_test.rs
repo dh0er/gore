@@ -247,7 +247,7 @@ fn cli_command_graph_has_stack_headroom_for_version_and_help() {
         ),
         (
             &["as", "decode-header", "--help"][..],
-            "decode-header <FILE>",
+            "decode-header [OPTIONS] <FILE>",
             false,
         ),
     ] {
