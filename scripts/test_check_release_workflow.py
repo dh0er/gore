@@ -19,7 +19,7 @@ from check_release_workflow import (
 
 ROOT = Path(__file__).resolve().parent.parent
 
-CLI_ROW_PATTERN = "(?m)^" + re.escape("| **CLI** |") + ".*" + chr(10)
+CLI_ROW_PATTERN = "(?m)^" + re.escape("| **[CLI]") + ".*" + chr(10)
 
 
 def replace_once(text: str, old: str, new: str) -> str:
@@ -81,10 +81,10 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_release_tag_must_match_the_advertised_version(self) -> None:
         self.assertEqual(
-            validate_download_table(self.readme, "gore-save-editor-v1.4.1"), []
+            validate_download_table(self.readme, "gore-save-editor-v1.5.0"), []
         )
         self.assert_invalid(
-            self.readme, "gore-save-editor-v1.4.0", "the release tag is"
+            self.readme, "gore-save-editor-v1.4.1", "the release tag is"
         )
 
     def test_releasing_an_unreleased_product_requires_a_row(self) -> None:
@@ -98,19 +98,19 @@ class DownloadTableContractTest(unittest.TestCase):
         self.assert_invalid(
             replace_once(
                 self.readme,
-                "[gore-cli-v0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.3.0)",
+                "[0.4.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.4.0)",
                 # Deliberately wrong test-only version: the checker must reject this link.
-                "[gore-cli-v0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v9.9.9)",
+                "[0.4.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v9.9.9)",
             ),
             None,
             "CLI must link to",
         )
 
-    def test_link_text_must_be_the_release_tag(self) -> None:
+    def test_link_text_must_be_a_plain_version(self) -> None:
         self.assert_invalid(
-            replace_once(self.readme, "[gore-cli-v0.3.0]", "[latest]"),
+            replace_once(self.readme, "[0.4.0]", "[latest]"),
             None,
-            "link text must be the release tag",
+            "link text must be a plain version",
         )
 
     def test_every_tool_needs_a_row(self) -> None:
@@ -119,15 +119,15 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_download_section_and_header_are_pinned(self) -> None:
         self.assert_invalid(
-            replace_once(self.readme, "## ⬇️ Downloads", "## Downloads"),
+            replace_once(self.readme, "## 🧰 Tools", "## Tools"),
             None,
-            "missing '## ⬇️ Downloads' section",
+            "missing '## 🧰 Tools' section",
         )
         self.assert_invalid(
             replace_once(
                 self.readme,
-                "| Tool | Version | Release page |",
-                "| Tool | Release page | Version |",
+                "| What it does |",
+                "| What it costs |",
             ),
             None,
             "download table must start with",
@@ -135,12 +135,16 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_unreadable_and_unknown_rows_fail_closed(self) -> None:
         self.assert_invalid(
-            replace_once(self.readme, "| **CLI** | 0.3.0 |", "| **CLI** | v0.3.0 |"),
+            replace_once(
+                self.readme,
+                "[0.4.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.4.0)",
+                "0.4.0",
+            ),
             None,
             "unreadable download row",
         )
         self.assert_invalid(
-            replace_once(self.readme, "| **CLI** |", "| **gore.exe** |"),
+            replace_once(self.readme, "**[CLI]", "**[gore.exe]"),
             None,
             "unknown download tool",
         )

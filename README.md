@@ -13,12 +13,18 @@
 **GORE** (Go-thic Re-make) is a modding and save-editing toolkit for Gothic 1 Remake which works 
 completely without UE4SS. It comes with a plugin for your agents, so you can easily mod using AI.
 
+In fact, the whole CLI is intended to be used by AI agents only. You can of course use it manually,
+but except for this README, the whole documentation is written by AI and might be incomplete and/or
+hard to understand.
+
+A no-code GUI is planned for future.
+
 ## 🧰 Tools
 
 | Tool⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀ | What it does | Status⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀ | Download |
 |---|---|---|---|
 | **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing savegames. | ✅ Ready to use | [1.5.0](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.5.0) |
-| **[CLI](docs/guide/README.md)** | All-in-one command-line tool for all modding tasks. | ⚗️ Experimental use | [0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.3.0) |
+| **[CLI](docs/guide/README.md)** | All-in-one command-line tool for all modding tasks. | ⚗️ Experimental use | [0.4.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.4.0) |
 | **[Mod Manager](apps/mod-manager/README.md)** | Windows GUI for installing and ordering *many* mods together. | ⚗️ Experimental use | [0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
 | **[AI Plugins](plugins/gore/README.md)** | MCP server and skill for the CLI. | ⚗️ Experimental use | ⠀⠀⠀⠀⠀ |
 | **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the GORE engine, for *authoring* mods. | 📋 Planned | ⠀⠀⠀⠀⠀ |
@@ -82,7 +88,7 @@ claude plugin install gore@gore
 
 Tell the agent what you want and then let him deploy the mod.
 
-If you want to start manually, follow the chapter "A first mod: Wiesel's letter" in this guide: [Getting started](docs/guide/getting-started.md).
+If you want to start manually, follow the section "A first mod: Wiesel's letter" in this guide: [Getting started](docs/guide/getting-started.md).
 
 ## 🤖 Vibe Modding
 
