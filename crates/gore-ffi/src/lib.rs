@@ -2687,6 +2687,35 @@ mod tests {
         dir
     }
 
+    /// An explicit UE4SS bundle for Manager import tests; the authoring builder emits no Lua.
+    fn write_ue4ss_goremod_bundle(root: &std::path::Path, name: &str, opaque: bool) -> PathBuf {
+        let dir = root.join(name);
+        let component = dir.join("ue4ss").join(name);
+        std::fs::create_dir_all(component.join("Scripts")).unwrap();
+        std::fs::write(component.join("Scripts/main.lua"), b"return {}").unwrap();
+        std::fs::write(component.join("enabled.txt"), b"").unwrap();
+        let manifest = gore_mod::ModManifest {
+            format: 1,
+            mod_meta: gore_mod::ModMeta {
+                name: name.into(),
+                version: "1.0".into(),
+                author: "t".into(),
+            },
+            components: vec![gore_mod::Component::Ue4ssLua {
+                name: name.into(),
+                path: format!("ue4ss/{name}"),
+                targets: vec!["ADamageData.Health".into()],
+                opaque,
+            }],
+        };
+        std::fs::write(
+            dir.join("gore-mod.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        dir
+    }
+
     fn copy_mgr_test_tree(source: &std::path::Path, destination: &std::path::Path) {
         std::fs::create_dir_all(destination).unwrap();
         for entry in std::fs::read_dir(source).unwrap() {
@@ -3666,24 +3695,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("library");
         let lo = tmp.path().join("loadout.json");
-        let opaque_bundle = write_goremod_bundle(tmp.path(), "Opaque");
-        let precise_bundle = write_goremod_bundle(tmp.path(), "Precise");
-
-        let manifest_path = opaque_bundle.join("gore-mod.json");
-        let mut manifest: Value =
-            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
-        let lua = manifest["components"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|component| component["type"] == "ue4ss_lua")
-            .unwrap();
-        lua["opaque"] = Value::Bool(true);
-        std::fs::write(
-            &manifest_path,
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
+        let opaque_bundle = write_ue4ss_goremod_bundle(tmp.path(), "Opaque", true);
+        let precise_bundle = write_ue4ss_goremod_bundle(tmp.path(), "Precise", false);
 
         let opaque = mgr_call(
             "mgr_import",
@@ -3791,8 +3804,8 @@ mod tests {
 
     /// After importing + enabling a mod and applying it, `mgr_status` against the SAME library
     /// reports `in_sync` — the deploy record's per-mod fingerprints match the current library, so
-    /// the fingerprint gate the same-id-update fix added does not falsely fire. Uses a UE4SS mod
-    /// (apply only copies its dir — no .lcache/bank fixture needed).
+    /// the fingerprint gate the same-id-update fix added does not falsely fire. Uses an explicit
+    /// UE4SS bundle (apply only copies its dir — no .lcache/bank fixture needed).
     #[test]
     fn mgr_status_in_sync_after_apply() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3803,7 +3816,7 @@ mod tests {
         std::fs::create_dir_all(game.join("G1R/Binaries/Win64/ue4ss/Mods")).unwrap();
 
         // Import a UE4SS bundle → it registers a disabled loadout slot.
-        let bdir = write_goremod_bundle(tmp.path(), "Probe");
+        let bdir = write_ue4ss_goremod_bundle(tmp.path(), "Probe", false);
         let imp = mgr_call(
             "mgr_import",
             json!({
