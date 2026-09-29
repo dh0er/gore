@@ -443,13 +443,13 @@ fn spec_dir_with_overrides(root: &Path) -> (std::path::PathBuf, std::path::PathB
     (dir, model)
 }
 
-/// Without `--model` nothing is checked, and the build must SAY so. A typo that silently produces
-/// a mod which never resolves in game is the failure this note exists to pre-empt: the only other
-/// report of it is a "gave up" line in UE4SS.log, two minutes into a play session.
+/// `overrides` no longer builds a bundle. The refusal happens before any write, with or without
+/// `--model`, because the section itself is retired.
 #[test]
-fn build_without_a_model_says_the_override_names_went_unchecked() {
+fn build_without_a_model_rejects_retired_overrides_and_writes_nothing() {
     let tmp = TempDir::new().unwrap();
     let (spec_dir, _model) = spec_dir_with_overrides(tmp.path());
+    let out = tmp.path().join("out");
 
     let output = gore(tmp.path())
         .arg("mod")
@@ -457,33 +457,26 @@ fn build_without_a_model_says_the_override_names_went_unchecked() {
         .arg("--spec")
         .arg(spec_dir.join("spec.json"))
         .arg("-o")
-        .arg(tmp.path().join("out"))
+        .arg(&out)
         .assert()
-        .success()
+        .failure()
         .get_output()
         .stderr
         .clone();
     let stderr = String::from_utf8_lossy(&output);
 
     assert!(
-        stderr.contains("no --model") && stderr.contains("were checked"),
-        "an unvalidated build must say the names went unchecked: {stderr}"
+        stderr.contains("overrides are retired"),
+        "a spec with overrides must be refused: {stderr}"
     );
     assert!(
-        stderr.contains(" 2 "),
-        "the note must say how many overrides went unchecked: {stderr}"
-    );
-    assert!(
-        tmp.path().join("out").join("MyMod").is_dir(),
-        "the bundle is still built — the note is a note, not a refusal"
+        !out.join("MyMod").exists(),
+        "the refusal happens before write_bundle"
     );
 }
 
-/// With `--model` the bundle path validates exactly as `gore gen --model` does. This is the
-/// asymmetry the check closes: the bundle path is the one the guide recommends, and it used to be
-/// the unchecked one.
 #[test]
-fn build_with_a_model_rejects_an_unknown_class_and_writes_nothing() {
+fn build_with_a_model_rejects_retired_overrides_and_writes_nothing() {
     let tmp = TempDir::new().unwrap();
     let (spec_dir, model) = spec_dir_with_overrides(tmp.path());
     let out = tmp.path().join("out");
@@ -505,19 +498,11 @@ fn build_with_a_model_rejects_an_unknown_class_and_writes_nothing() {
     let stderr = String::from_utf8_lossy(&output);
 
     assert!(
-        stderr.contains("ItFo_Aple"),
-        "the failure must name the class that does not match: {stderr}"
-    );
-    assert!(
-        !stderr.contains("'ItFo_Apple' not found"),
-        "the class the model does carry must not be reported: {stderr}"
-    );
-    assert!(
-        stderr.contains("1 of 2 override(s)"),
-        "the failure must say how many of how many failed: {stderr}"
+        stderr.contains("overrides are retired"),
+        "a model does not revive a retired overrides section: {stderr}"
     );
     assert!(
         !out.join("MyMod").exists(),
-        "validation runs before the build, so a rejected spec never reaches write_bundle"
+        "the refusal happens before write_bundle"
     );
 }

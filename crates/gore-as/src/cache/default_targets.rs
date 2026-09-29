@@ -15,6 +15,7 @@ use super::refs::RefResolver;
 
 const MAX_AUTHORED_DEFAULTS: usize = 250_000;
 const MAX_CALL_RECEIVER_INSTRUCTIONS: usize = 32;
+const MAX_FLUENT_CHAIN: usize = 64;
 
 type TargetCounts = BTreeMap<String, usize>;
 type ClassTargets = BTreeMap<ClassIdentity, TargetCounts>;
@@ -159,6 +160,7 @@ fn bytecode_targets(
 ) -> Result<TargetCounts, String> {
     let instructions = disassemble(bytecode).map_err(|error| error.to_string())?;
     let refcpy_entries = refcpy_branch_entries(&instructions)?;
+    let fluent_entries = branch_entries(&instructions).ok();
     let mut targets = BTreeMap::new();
     for (index, instruction) in instructions.iter().enumerate() {
         if matches!(instruction.op.name, "STOREOBJ" | "CpyRtoV8") {
@@ -197,6 +199,7 @@ fn bytecode_targets(
         if !is_call(instruction)
             || is_argument_constructor(&instructions, index)
             || is_value_call(&instructions, index)
+            || is_hidden_return_value_call(&instructions, index, refs)
         {
             continue;
         }
@@ -219,6 +222,13 @@ fn bytecode_targets(
             }
             Err(()) if is_compiler_internal(&symbol) => continue,
             Err(()) => {
+                if let Some(target) = fluent_entries
+                    .as_ref()
+                    .and_then(|entries| fluent_root_target(&instructions, index, refs, entries))
+                {
+                    increment(&mut targets, target)?;
+                    continue;
+                }
                 return Err(format!(
                     "cannot prove receiver target for method call {symbol} at dword {}",
                     instruction.offset_dw
@@ -270,26 +280,92 @@ fn stack_member_operand(instructions: &[Instr], end: usize) -> Option<&Instr> {
 /// A lexical REFCPY suffix is evidence only if no jump bypasses its `this` push.
 /// This needs entry offsets, not a general control-flow or alias analysis.
 fn refcpy_branch_entries(instructions: &[Instr]) -> Result<BTreeSet<i64>, String> {
-    let mut entries = BTreeSet::new();
     if !instructions.iter().any(|ins| ins.op.name == "REFCPY") {
-        return Ok(entries);
+        return Ok(BTreeSet::new());
     }
+    branch_entries(instructions).map_err(|error| match error {
+        BranchEntryError::MissingOperand => "missing REFCPY proof branch operand".to_owned(),
+        BranchEntryError::ComputedJump => {
+            "cannot prove REFCPY member targets across a computed jump".to_owned()
+        }
+    })
+}
+
+enum BranchEntryError {
+    MissingOperand,
+    ComputedJump,
+}
+
+fn branch_entries(instructions: &[Instr]) -> Result<BTreeSet<i64>, BranchEntryError> {
+    let mut entries = BTreeSet::new();
     for ins in instructions {
         match ins.op.name {
             "JMP" | "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ" => {
                 let offset = ins
                     .dwords
                     .first()
-                    .ok_or("missing REFCPY proof branch operand")?;
+                    .ok_or(BranchEntryError::MissingOperand)?;
                 entries.insert(ins.offset_dw as i64 + 2 + (*offset as i32 as i64));
             }
-            "JMPP" => {
-                return Err("cannot prove REFCPY member targets across a computed jump".to_owned())
-            }
+            "JMPP" => return Err(BranchEntryError::ComputedJump),
             _ => {}
         }
     }
     Ok(entries)
+}
+
+/// A fluent link hands one call's object result directly to the next call as its receiver:
+/// `STOREOBJ wN; PshVPtr wN` or `PshRPtr`, with no branch entering between producer and call.
+/// The whole chain then targets whatever its first call targets, which is also the root the
+/// authored `default` statement names. Any other receiver shape stays unproven.
+fn fluent_root_target(
+    instructions: &[Instr],
+    index: usize,
+    refs: &RefResolver,
+    entries: &BTreeSet<i64>,
+) -> Option<String> {
+    let mut at = index;
+    for _ in 0..MAX_FLUENT_CHAIN {
+        let producer = fluent_producer(instructions, at, entries)?;
+        let is_method = is_method_call(&instructions[producer], refs);
+        if !is_method {
+            return None;
+        }
+        match proven_call_member_receiver(instructions, producer, true) {
+            Ok(Some(member)) => return resolve_member(member, refs),
+            Ok(None) => {
+                return call_symbol(&instructions[producer], refs)
+                    .filter(|symbol| !is_compiler_internal(symbol))
+            }
+            Err(()) => at = producer,
+        }
+    }
+    None
+}
+
+fn fluent_producer(
+    instructions: &[Instr],
+    index: usize,
+    entries: &BTreeSet<i64>,
+) -> Option<usize> {
+    let receiver = index.checked_sub(1)?;
+    let push = instructions.get(receiver)?;
+    let producer = match push.op.name {
+        "PshRPtr" => receiver.checked_sub(1)?,
+        "PshVPtr" => {
+            let slot = push.words.first().filter(|slot| **slot != 0)?;
+            let store = instructions.get(receiver.checked_sub(1)?)?;
+            if store.op.name != "STOREOBJ" || store.words.first() != Some(slot) {
+                return None;
+            }
+            receiver.checked_sub(2)?
+        }
+        _ => return None,
+    };
+    let first = instructions.get(producer + 1)?.offset_dw as i64;
+    let finish = instructions.get(index)?.offset_dw as i64;
+    (is_call(instructions.get(producer)?) && entries.range(first..=finish).next().is_none())
+        .then_some(producer)
 }
 
 fn refcpy_member_operand<'a>(
@@ -312,26 +388,36 @@ enum CallReceiver<'a> {
     Unproven,
 }
 
-/// Prove only a direct receiver rooted in `this`. `CHKREF` may decorate a nested member chain,
-/// but a receiver produced through locals, globals, or another call stays unproven so a fluent
+/// Prove only a direct receiver rooted in `this`. `CHKREF` may decorate a nested member chain and
+/// `RDSPtr` may follow a handle member into its object; the outermost `this` member stays the
+/// root. A receiver produced through locals, globals, or another call stays unproven so a fluent
 /// expression can never be mistaken for a free call target.
 fn call_receiver(instructions: &[Instr], index: usize) -> CallReceiver<'_> {
     let floor = index.saturating_sub(MAX_CALL_RECEIVER_INSTRUCTIONS);
     let mut at = index;
     let mut root = None;
+    let mut dereferenced = false;
+    let mut next: Option<&Instr> = None;
     while at > floor {
         at -= 1;
         let Some(instruction) = instructions.get(at) else {
             return CallReceiver::Unproven;
         };
         match instruction.op.name {
-            "CHKREF" => {}
+            // A null check may sit between `this` and its member. It is not the
+            // instruction the handle-adjacency rule has to see.
+            "CHKREF" => continue,
+            "RDSPtr" => dereferenced = true,
             "ADDSi" => root = Some(instruction),
             "PshVPtr" if instruction.words.first() == Some(&0) => {
+                if dereferenced && next.map(|next| next.op.name) != Some("ADDSi") {
+                    return CallReceiver::Unproven;
+                }
                 return root.map_or(CallReceiver::DirectThis, CallReceiver::Member);
             }
             _ => return CallReceiver::Unproven,
         }
+        next = Some(instruction);
     }
     CallReceiver::Unproven
 }
@@ -449,6 +535,85 @@ fn is_argument_constructor(instructions: &[Instr], index: usize) -> bool {
         && after.op.name == "PSF"
         && before.words.first().is_some()
         && before.words.first() == after.words.first()
+}
+
+/// A method returning a value struct writes through a hidden destination pushed directly below
+/// its receiver: `PSF wN; <this chain>; CALL`. It only produces a value when that slot is pushed
+/// again right after the call and consumed as an argument by the next call, whose own receiver
+/// is rooted in `this`. A consumer that itself returns a value struct could be reusing `wN` as its
+/// destination, so it proves nothing.
+fn is_hidden_return_value_call(instructions: &[Instr], index: usize, refs: &RefResolver) -> bool {
+    let (Some(call), Some(start)) = (
+        instructions.get(index),
+        this_receiver_start(instructions, index),
+    ) else {
+        return false;
+    };
+    if !is_method_call(call, refs) || !returns_value_struct(call, refs) {
+        return false;
+    }
+    let Some(slot) = start
+        .checked_sub(1)
+        .and_then(|at| instructions.get(at))
+        .filter(|push| push.op.name == "PSF")
+        .and_then(|push| push.words.first().copied())
+        .filter(|slot| *slot != 0)
+    else {
+        return false;
+    };
+    let Some(read) = instructions.get(index + 1) else {
+        return false;
+    };
+    if read.op.name != "PSF" || read.words.first() != Some(&slot) {
+        return false;
+    }
+    let Some(consumer) = (index + 2..instructions.len())
+        .take(MAX_CALL_RECEIVER_INSTRUCTIONS)
+        .find(|at| is_call(&instructions[*at]))
+    else {
+        return false;
+    };
+    let consumer_call = &instructions[consumer];
+    this_receiver_start(instructions, consumer) == Some(index + 2)
+        && is_method_call(consumer_call, refs)
+        && call_params(consumer_call, refs).is_some_and(|params| !params.is_empty())
+        && !returns_value_struct(consumer_call, refs)
+}
+
+/// Index of the `PshVPtr w0` that starts a call's `this`-rooted receiver chain.
+fn this_receiver_start(instructions: &[Instr], index: usize) -> Option<usize> {
+    if matches!(call_receiver(instructions, index), CallReceiver::Unproven) {
+        return None;
+    }
+    (index.saturating_sub(MAX_CALL_RECEIVER_INSTRUCTIONS)..index)
+        .rev()
+        .find(|at| {
+            let push = &instructions[*at];
+            push.op.name == "PshVPtr" && push.words.first() == Some(&0)
+        })
+}
+
+fn call_params<'a>(instruction: &Instr, refs: &'a RefResolver) -> Option<&'a [super::types::DataType]> {
+    match instruction.op.name {
+        "CALLSYS" => refs.func_params_by_ptr(*instruction.qwords.first()? as i64),
+        "CALL" | "CALLBND" | "CALLINTF" => refs.func_params_by_id(*instruction.dwords.first()? as i32),
+        _ => None,
+    }
+}
+
+fn returns_value_struct(instruction: &Instr, refs: &RefResolver) -> bool {
+    let ret = match instruction.op.name {
+        "CALLSYS" => instruction
+            .qwords
+            .first()
+            .and_then(|ptr| refs.func_ret_by_ptr(*ptr as i64)),
+        "CALL" | "CALLBND" | "CALLINTF" => instruction
+            .dwords
+            .first()
+            .and_then(|id| refs.func_ret_by_id(*id as i32)),
+        _ => None,
+    };
+    ret.is_some_and(|ret| ret.token == 5 && !ret.is_reference && !ret.is_object_handle)
 }
 
 fn is_value_call(instructions: &[Instr], index: usize) -> bool {
@@ -928,6 +1093,100 @@ mod tests {
             proven_call_member_receiver(&trailing_member_argument, 2, false),
             Ok(None)
         ));
+    }
+
+    #[test]
+    fn handle_member_receivers_keep_the_outer_this_member_as_root() {
+        let through_handle = vec![
+            instruction("PshVPtr", &[0], &[]),
+            instruction("ADDSi", &[2688], &[1]),
+            instruction("RDSPtr", &[], &[]),
+            instruction("ADDSi", &[40], &[2]),
+            instruction("CALLSYS", &[], &[]),
+        ];
+        let CallReceiver::Member(root) = call_receiver(&through_handle, 4) else {
+            panic!("handle member receiver is rooted in this");
+        };
+        assert_eq!(root.words, vec![2688]);
+
+        let checked_handle = vec![
+            instruction("PshVPtr", &[0], &[]),
+            instruction("CHKREF", &[], &[]),
+            instruction("ADDSi", &[2688], &[1]),
+            instruction("RDSPtr", &[], &[]),
+            instruction("ADDSi", &[40], &[2]),
+            instruction("CALLSYS", &[], &[]),
+        ];
+        let CallReceiver::Member(root) = call_receiver(&checked_handle, 5) else {
+            panic!("a null check before the handle member stays rooted in this");
+        };
+        assert_eq!(root.words, vec![2688]);
+
+        let handle_object = vec![
+            instruction("PshVPtr", &[0], &[]),
+            instruction("ADDSi", &[2688], &[1]),
+            instruction("RDSPtr", &[], &[]),
+            instruction("CALLSYS", &[], &[]),
+        ];
+        assert!(matches!(
+            call_receiver(&handle_object, 3),
+            CallReceiver::Member(_)
+        ));
+
+        for unproven in [
+            vec![
+                instruction("PshVPtr", &[0], &[]),
+                instruction("RDSPtr", &[], &[]),
+                instruction("ADDSi", &[40], &[2]),
+                instruction("CALLSYS", &[], &[]),
+            ],
+            vec![
+                instruction("PshVPtr", &[4], &[]),
+                instruction("ADDSi", &[2688], &[1]),
+                instruction("RDSPtr", &[], &[]),
+                instruction("CALLSYS", &[], &[]),
+            ],
+        ] {
+            assert!(matches!(
+                call_receiver(&unproven, unproven.len() - 1),
+                CallReceiver::Unproven
+            ));
+        }
+    }
+
+    #[test]
+    fn fluent_links_require_an_adjacent_result_handoff() {
+        let mut chain = vec![
+            instruction("PshVPtr", &[0], &[]),
+            instruction("CALLSYS", &[], &[]),
+            instruction("STOREOBJ", &[8], &[]),
+            instruction("PshVPtr", &[8], &[]),
+            instruction("CALLSYS", &[], &[]),
+            instruction("PshRPtr", &[], &[]),
+            instruction("CALLSYS", &[], &[]),
+        ];
+        for (offset, instruction) in chain.iter_mut().enumerate() {
+            instruction.offset_dw = offset * 3;
+        }
+        let none = BTreeSet::new();
+        assert_eq!(fluent_producer(&chain, 4, &none), Some(1));
+        assert_eq!(fluent_producer(&chain, 6, &none), Some(4));
+        assert_eq!(fluent_producer(&chain, 1, &none), None, "this is not a fluent link");
+
+        let entered = BTreeSet::from([chain[3].offset_dw as i64]);
+        assert_eq!(fluent_producer(&chain, 4, &entered), None);
+
+        let mut other_slot = chain.clone();
+        other_slot[3].words[0] = 12;
+        assert_eq!(fluent_producer(&other_slot, 4, &none), None);
+
+        let mut no_store = chain.clone();
+        no_store[2] = instruction("PshVPtr", &[8], &[]);
+        assert_eq!(fluent_producer(&no_store, 4, &none), None);
+
+        let mut not_call = chain;
+        not_call[1] = instruction("PshC4", &[], &[1]);
+        assert_eq!(fluent_producer(&not_call, 4, &none), None);
     }
 
     #[test]

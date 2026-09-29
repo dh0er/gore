@@ -1,39 +1,58 @@
-# Item & stat values (overrides)
+# Item & stat values
 
-Change any default value on an item, NPC, or ability class — weapon damage,
-item value, weight, and so on. GORE compiles a declarative `overrides.toml`
-into a self-contained UE4SS Lua mod that patches the class default object (CDO)
-at load.
+Change a class-default value on an item, NPC, or ability — weapon damage,
+item value, weight, and so on. GORE reads the Shipping script cache, rewrites
+the AngelScript `default` statement, and compiles that module into a script
+mini-cache. Deploy uses the same script splice as other script mods. UE4SS is
+not involved.
 
-It patches the class **default**, so it does not change objects already
-serialized into an existing save. Settle that first — it decides whether this
-mechanism can reach your case at all. The remaining limits are
-[below](#limits).
+It edits the class **default**. A save records an inventory item as its class
+and a count, so an item's value, damage and icon follow the default in an
+existing save too. A value the save records per object keeps the saved number
+(see [Existing saves](#existing-saves)). Trader stock, instance inventories, and
+save values are separate and are not written by this command.
 
-## The override file
+## Inspect
 
-```toml
-[meta]
-name = "MyBalanceMod"
-delay_ms = 0            # 0 = start on the first tick; >0 = start after N ms
-
-[[override]]
-class = "ItFo_Apple"    # AngelScript class name
-field = "m_Value"
-value_int = 500
-
-[[override]]
-class = "ItMw_1H_Sword_01"
-field = "m_Weight"
-value_float = 1.5
+```powershell
+gore value inspect --class UItFo_Apple
+gore value inspect --class UItFo_Apple --json
 ```
 
-- `[meta].name` becomes the mod folder name under `ue4ss\Mods\`.
-- `[meta].delay_ms` defers the *first* attempt. `0` starts on the first tick,
-  which is what you normally want — the retry loop described below already
-  covers classes that are not resolvable that early.
-- Each `[[override]]` names one `class`, one `field`, and exactly one typed
-  value: `value_int`, `value_float`, `value_bool`, or `value_str`.
+The report names the module, each recovered default, its type, and the current
+value. A damage map entry includes its gameplay tag. Anything that is not a
+recovered class-default assignment or a single `Field.Add(GameplayTag::Tag, …)`
+entry is unsupported.
+
+## Build
+
+```json
+{
+  "meta": { "name": "MyBalanceMod", "version": "0.1.0", "author": "" },
+  "values": [
+    { "class": "UItFo_Apple", "field": "m_Value", "value": { "int": 500 } },
+    { "class": "UItMw_1H_Sword_Old_01", "field": "m_DamageBase",
+      "tag": "Item_Damage_Physical_Edge", "value": { "float": 15.0 } }
+  ]
+}
+```
+
+```powershell
+gore mod build --spec apple.json --work-dir .gore-value-work -o mods
+gore mod deploy --bundle mods\MyBalanceMod
+```
+
+`value` is one of `int`, `float`, `bool`, or `str`. The type has to match the
+recovered default. Two mods that edit the same script module conflict. A build
+is tied to the script cache it inspected; a later game update refuses the old
+mini-cache. Rebuild it against the new game. If that rebuild refuses because
+the new build is not verified yet, and the message suggests `--force`, you can
+rerun the build with `--force`. It continues with a warning per skipped check,
+but the result may be broken, so test it in a new game (see
+[game updates](../reference/game-updates.md#forcing-compile-and-decompile-before-qualification)).
+
+`overrides.toml` and `gore gen` are retired. They are not translated into this
+format.
 
 ## What m_Value does to prices
 
@@ -67,62 +86,50 @@ nothing here establishes what a different trader charges.
 
 ## Compile it
 
-```powershell
-gore gen overrides.toml -o "$GAME\G1R\Binaries\Win64\ue4ss\Mods"
-```
-
-`-o` is the UE4SS `Mods` directory the mod folder is written into. Writing
-straight into the game install is the fast path; write it elsewhere if you want
-to inspect or package the result first.
-
-Optionally validate the class and field names against a reflection model before
-generating:
+`gore mod build` rewrites the recovered `default` statement, compiles that
+module once, and writes a script mini-cache. Unknown classes, wrong types and
+a cache that is not the one you inspected fail before anything is deployed.
 
 ```powershell
-gore gen overrides.toml -o "$GAME\...\Mods" --model model.json
+gore mod build --spec apple.json --work-dir .gore-value-work -o mods
+gore mod deploy --bundle mods\MyBalanceMod
 ```
 
-With `--model`, unknown classes, unknown fields, and type mismatches are
-rejected at generation time instead of silently doing nothing in game. Without
-it, validation is skipped. Building `model.json` is covered in
-[Catalogs & data models](catalogs-and-models.md).
+Confirm the new number in game. [Tested in game](#tested-in-game) lists what
+was checked and where each value shows up.
 
-## What the generated mod does
+## Tested in game
 
-The emitted Lua mod looks up each class's CDO
-(`StaticFindObject("/Script/<module>.Default__<class>")`) and assigns the field.
+On game build 25414091, with no `ue4ss` directory, one bundle changed these
+defaults. Each one showed up in game:
 
-That lookup does not succeed at launch — the target classes do not exist yet
-when the mod first runs. So the mod polls: every 1000 ms, up to 120 attempts,
-applying each override the first time its CDO appears and leaving it alone
-afterwards. If a CDO never turns up, it logs that it gave up and stops.
+| Class | Field | Type | New value | Where it showed |
+|---|---|---|---|---|
+| `UHumanFist_NoWeapon` | `m_Icon` | `str` | the apple icon | the fists slot in the inventory |
+| `UHumanFists` | `m_DamageBase`, `Item_Damage_Physical_Blunt` | `float` | 150 | the fists tooltip |
+| `UItFo_Apple` | `m_Value` | `int` | 12345 | Fisk's trade screen |
+| `UItMw_1H_Sword_Old_01` | `m_Value` | `int` | 22222 | Fisk's trade screen |
+| `UItMw_1H_Sword_Old_01` | `m_DamageBase`, `Item_Damage_Physical_Edge` | `float` | 150 | the sword tooltip |
+| `UItAr_Scroll_Light_Base` | `m_CanEquipAfterUse` | `bool` | `true` | the light scroll stays in hand after the cast |
+| `UGE_Skill_Melee_OneHanded_Master` | `SPCost` | `float` | 13 | Scatty's cost tooltip, his dialog line, the learning points taken |
+| `UGE_Skill_Melee_OneHanded_Master` | `OreCost` | `int` | 133 | the same three places, in ore |
 
-Measured once, on Steam build 24539464: the mod started at 10:58:03.4 and the
-override landed at 10:58:07.5 — about four seconds and several retries later.
-Quitting as soon as the main menu is up can therefore show you nothing, and
-that is not the same as the mod being broken.
+Not every changed default is visible. The Strength teaching cost is always the
+number of points bought; `SPCost` on the Strength skill classes only goes to
+telemetry and is never charged. The hero also starts with one-handed combat already
+trained, so from a new game Scatty offers only the master level.
 
-It is fully self-contained: it does **not** require the
-[gore-lua helpers](../../lua/README.md). Those are for hand-written mods, a
-different path.
+### Existing saves
 
-## Checking that it applied
+The test save was created under an earlier version of the bundle that did not
+touch the master costs. Loaded under the version that did, Scatty charged the
+new costs. The test items were added to that save offline and carried the new
+value and damage. A save records an inventory item by class and count, and a
+learnable skill by class, so both read the class default when the save loads.
 
-`$GAME\G1R\Binaries\Win64\ue4ss\UE4SS.log` gets one line per applied override:
-
-```
-[<ModName>] <Class>.<Field> <old> -> <new>
-```
-
-UE4SS timestamps each line and prefixes it with `[Lua]`, so search the log for
-your mod name. The new value is read back off the CDO after the assignment, so
-the line is evidence that the write took — not merely that the mod ran. No line
-for a class means its CDO was never found; look for the mod's "gave up" line
-towards the end of the run.
-
-Nothing in this toolkit watches the game, so this log is the only place the
-applied-or-not question gets answered without inferring it from numbers on
-screen.
+A save also records some values per object, for example each character's
+attributes (health, level, learning points). Such a value keeps the number the
+save holds. This case was not tested in game.
 
 ## Finding class and field names
 
@@ -135,9 +142,8 @@ gore find healing potion         # by display name, after `gore loc extract`
 gore find --domain item rune     # one namespace only
 ```
 
-Each hit prints the class the game resolves — `/Script/Angelscript.ItFo_Apple` —
-which is what an `[[override]]` names, and anything the effect register records
-about that id. Display names need `gore loc extract` first; every result says
+Each hit prints the class the game resolves. `gore value inspect --class`
+then shows the defaults that class can take. Display names need `gore loc extract` first; every result says
 which of the two states you are in, so an empty answer can be told apart from an
 answer that could not look. The whole command is [Finding things](find.md).
 
@@ -159,14 +165,9 @@ field for whatever you are after (`m_Weight`, `m_MaxStack`, …), or add
 
 Two things about that listing:
 
-- It spells classes **with the UE `U` prefix** — `UItFo_Apple`, where this page
-  writes `ItFo_Apple`. Both spellings work in `overrides.toml`:
-  `runtime_class_name` in `crates/gore-modgen/src/gen.rs` strips a leading `U`
-  that is followed by an uppercase letter before the CDO lookup, and leaves a
-  bare name untouched.
-- Its `module=` column is the AngelScript module, which is *not* the `module`
-  an override uses. Leave `module` out of `overrides.toml`; its default is the
-  right one.
+- It spells classes **with the UE `U` prefix** — `UItFo_Apple`. `gore value inspect`
+  wants that spelling.
+- Its `module=` column is the AngelScript module the value edit compiles.
 
 The command only reads. It is the inspection half of [Offline AngelScript
 default patching](angelscript-defaults.md), borrowed here as a lookup, and it
@@ -180,33 +181,22 @@ stderr. Read the stderr before concluding that a class has no such field.
 
 To regenerate the catalogs `find` reads, or the field schema, or to fold the
 game's *real* default values into the model, see
-[Catalogs & data models](catalogs-and-models.md). Both start from a UE4SS
-object dump, so neither is a way in while you are still setting UE4SS up.
+[Catalogs & data models](catalogs-and-models.md).
 
 ## Shipping it
 
-Two options:
-
-```powershell
-gore package mod_dir/ -o MyMod.zip     # zip the Lua mod folder for distribution
-```
-
-or fold the overrides into a unified bundle together with text, audio,
-textures, and scripts — see [Bundling & deploying](bundles.md). In a bundle,
-overrides are declared inline:
-
-```json
-{ "overrides": [ { "class": "ItFo_Apple", "field": "m_Value", "value_int": 500 } ] }
-```
+The `values` section is compiled into the same bundle as text, audio, textures
+and scripts. See [Bundling & deploying](bundles.md).
 
 ## Limits
 
-- Overrides change **class defaults**. They do not retroactively change objects
-  already serialized into an existing save.
-- One value per `class` + `field` pair. When several mods override the same
-  pair, [Mod Manager](mod-manager.md) reports the conflict and the later mod in
-  load order wins.
-- The mechanism requires UE4SS to be installed and enabled in the game.
+- Edits change **class defaults**. A value an existing save records per
+  object, such as a character's attributes, keeps the saved number.
+- No new items. An edit changes a class the game already has; a new item, or a
+  copy of an existing one under another name, would be a new class, which this
+  command does not create.
+- Two mods that edit the same script module conflict. Field-level merge is
+  not done.
 
 ## Related
 

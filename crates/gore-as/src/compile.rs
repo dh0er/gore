@@ -3955,38 +3955,47 @@ fn prepare_full_graph_request_v1(
                 overlay_authors_defaults,
             )?;
             let default_targets = if overlay_authors_defaults {
-                crate::cache::default_targets::ExistingDefaultTargetPlan::prepare(
-                    &opts.base_cache,
-                    module_name,
-                    source,
+                crate::force::gate(
+                    crate::cache::default_targets::ExistingDefaultTargetPlan::prepare(
+                        &opts.base_cache,
+                        module_name,
+                        source,
+                    )
+                    .map_err(|reason| {
+                        format!(
+                            "refusing default-target preservation for FullGraph edit module {module_name:?}: {reason}"
+                        )
+                    }),
                 )
-                .map_err(|reason| {
-                    CompileError::Other(format!(
-                        "refusing default-target preservation for FullGraph edit module {module_name:?}: {reason}"
-                    ))
-                })?
+                .map_err(CompileError::Other)?
+                .flatten()
             } else {
                 None
             };
-            let metadata =
+            let metadata = crate::force::gate(
                 crate::cache::generated_defaults::ExistingFunctionMetadataPlan::prepare(
                     &opts.base_cache,
                     module_name,
                 )
                 .map_err(|reason| {
-                    CompileError::Other(format!(
+                    format!(
                         "refusing function-metadata preservation for FullGraph edit module {module_name:?}: {reason}"
-                    ))
-                })?;
-            let structure = crate::cache::generated_defaults::ExistingModuleStructurePlan::prepare(
-                &opts.base_cache,
-                module_name,
+                    )
+                }),
             )
-            .map_err(|reason| {
-                CompileError::Other(format!(
-                    "refusing structure preservation for FullGraph edit module {module_name:?}: {reason}"
-                ))
-            })?;
+            .map_err(CompileError::Other)?;
+            let structure = crate::force::gate(
+                crate::cache::generated_defaults::ExistingModuleStructurePlan::prepare(
+                    &opts.base_cache,
+                    module_name,
+                )
+                .map_err(|reason| {
+                    format!(
+                        "refusing structure preservation for FullGraph edit module {module_name:?}: {reason}"
+                    )
+                }),
+            )
+            .map_err(CompileError::Other)?;
             selective_changes.push(
                 crate::cache::selective_fullgraph::SelectiveFullGraphChange::edit(
                     module_name.clone(),
@@ -8316,33 +8325,38 @@ where
         opts.allow_new_symbols,
     )?;
     let existing_default_targets = if opts.op == "edit" && baseline_defaults {
-        crate::cache::default_targets::ExistingDefaultTargetPlan::prepare(
-            &base,
-            &effective_module_name,
-            &overlay,
+        crate::force::gate(
+            crate::cache::default_targets::ExistingDefaultTargetPlan::prepare(
+                &base,
+                &effective_module_name,
+                &overlay,
+            )
+            .map_err(|reason| {
+                format!(
+                    "refusing default-target preservation for edit module {:?}: {reason}",
+                    effective_module_name
+                )
+            }),
         )
-        .map_err(|reason| {
-            CompileError::Other(format!(
-                "refusing default-target preservation for edit module {:?}: {reason}",
-                effective_module_name
-            ))
-        })?
+        .map_err(CompileError::Other)?
+        .flatten()
     } else {
         None
     };
     let existing_function_metadata = if opts.op == "edit" {
-        Some(
+        crate::force::gate(
             crate::cache::generated_defaults::ExistingFunctionMetadataPlan::prepare(
                 &base,
                 &effective_module_name,
             )
             .map_err(|reason| {
-                CompileError::Other(format!(
+                format!(
                     "refusing function-metadata preservation for edit module {:?}: {reason}",
                     effective_module_name
-                ))
-            })?,
+                )
+            }),
         )
+        .map_err(CompileError::Other)?
     } else {
         None
     };
@@ -8350,18 +8364,19 @@ where
     // an existing one.  Verify this only after all qualified repairs (defaults, function metadata
     // and authored-default targets) have completed; the plan copies no base structure itself.
     let existing_module_structure = if opts.op == "edit" {
-        Some(
+        crate::force::gate(
             crate::cache::generated_defaults::ExistingModuleStructurePlan::prepare(
                 &base,
                 &effective_module_name,
             )
             .map_err(|reason| {
-                CompileError::Other(format!(
+                format!(
                     "refusing structure preservation for edit module {:?}: {reason}",
                     effective_module_name
-                ))
-            })?,
+                )
+            }),
         )
+        .map_err(CompileError::Other)?
     } else {
         None
     };
@@ -8446,42 +8461,58 @@ where
         .0
     };
     if generated_defaults.is_some() {
-        let plan = existing_function_metadata.as_ref().ok_or_else(|| {
-            CompileError::Other(format!(
-                "internal error: generated-default carry for edit module {:?} has no function-metadata preservation plan",
-                effective_module_name
-            ))
-        })?;
-        mini = plan.apply_present(&mini).map_err(|reason| {
-            CompileError::Other(format!(
-                "refusing pre-carry function-metadata normalization for edit module {:?}: {reason}",
-                effective_module_name
-            ))
-        })?;
+        match existing_function_metadata.as_ref() {
+            Some(plan) => {
+                let normalized = plan.apply_present(&mini).map_err(|reason| {
+                    format!(
+                        "refusing pre-carry function-metadata normalization for edit module {:?}: {reason}",
+                        effective_module_name
+                    )
+                });
+                mini = crate::force::gate(normalized)
+                    .map_err(CompileError::Other)?
+                    .unwrap_or(mini);
+            }
+            // Only a forced run can have skipped the plan; that skip has already been reported.
+            None if crate::force::enabled() => {}
+            None => {
+                return Err(CompileError::Other(format!(
+                    "internal error: generated-default carry for edit module {:?} has no function-metadata preservation plan",
+                    effective_module_name
+                )));
+            }
+        }
     }
     if let Some(plan) = generated_defaults {
-        mini = plan.apply(&mini).map_err(|reason| {
-            CompileError::Other(format!(
+        let carried = plan.apply(&mini).map_err(|reason| {
+            format!(
                 "refusing generated-default carry for edit module {:?}: {reason}",
                 effective_module_name
-            ))
-        })?;
+            )
+        });
+        mini = crate::force::gate(carried)
+            .map_err(CompileError::Other)?
+            .unwrap_or(mini);
     }
     if let Some(plan) = existing_function_metadata {
-        mini = plan.apply(&mini).map_err(|reason| {
-            CompileError::Other(format!(
+        let restored = plan.apply(&mini).map_err(|reason| {
+            format!(
                 "refusing function-metadata preservation for edit module {:?}: {reason}",
                 effective_module_name
-            ))
-        })?;
+            )
+        });
+        mini = crate::force::gate(restored)
+            .map_err(CompileError::Other)?
+            .unwrap_or(mini);
     }
     if let Some(plan) = existing_module_structure {
-        plan.verify(&mini).map_err(|reason| {
-            CompileError::Other(format!(
+        crate::force::gate(plan.verify(&mini).map_err(|reason| {
+            format!(
                 "refusing structure preservation for edit module {:?}: {reason}",
                 effective_module_name
-            ))
-        })?;
+            )
+        }))
+        .map_err(CompileError::Other)?;
     }
     canonicalize_mini_guid(&mut mini, &base).map_err(CompileError::Other)?;
     if let Some(plan) = existing_default_targets.as_ref() {
@@ -8500,12 +8531,13 @@ where
                     effective_module_name
                 ))
             })?;
-        plan.verify(&composed).map_err(|reason| {
-            CompileError::Other(format!(
+        crate::force::gate(plan.verify(&composed).map_err(|reason| {
+            format!(
                 "refusing default-target preservation for edit module {:?}: {reason}",
                 effective_module_name
-            ))
-        })?;
+            )
+        }))
+        .map_err(CompileError::Other)?;
     }
 
     let mini_path = opts.work_dir.join("module.cache");
@@ -12078,6 +12110,7 @@ mod tests {
                 methods: vec![test_function("Tick"), test_function("__InitDefaults")],
                 ctors: Vec::new(),
                 flags: 0,
+                is_abstract: false,
             }],
             enums: Vec::new(),
             globals: Vec::new(),
@@ -12178,6 +12211,7 @@ mod tests {
                 methods: vec![test_function("__InitDefaults")],
                 ctors: Vec::new(),
                 flags: 0,
+                is_abstract: false,
             }],
             enums: Vec::new(),
             globals: Vec::new(),
@@ -12209,6 +12243,7 @@ mod tests {
                 methods: vec![test_function("__InitDefaults")],
                 ctors: Vec::new(),
                 flags: 0,
+                is_abstract: false,
             }],
             enums: Vec::new(),
             globals: Vec::new(),
@@ -12257,6 +12292,7 @@ mod tests {
             methods,
             ctors: Vec::new(),
             flags: 0,
+            is_abstract: false,
         };
         let module = |classes| {
             vec![Module {
@@ -12328,6 +12364,7 @@ mod tests {
             methods,
             ctors: Vec::new(),
             flags: 0,
+            is_abstract: false,
         };
 
         let duplicate_modules = vec![module(Vec::new()), module(Vec::new())];

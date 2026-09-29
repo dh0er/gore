@@ -429,10 +429,10 @@ runtime. That is a negative runtime result, not an offline uncertainty.
 stages an edit; it does not claim that an arbitrary new module, or a wholly new
 NPC without a runtime-loaded settings anchor, will be discovered.
 
-The remainder of this section documents the separate historical
-`BuildSpec.dialog_topics` insertion adapter. It is retained as a low-level
-bundle surface and evidence record; it is not emitted as a prerequisite for the
-current `gore dialog new-topic` same-module root path.
+The remainder of this section documents the retired
+`BuildSpec.dialog_topics` insertion adapter. `gore mod build` refuses that
+section. It is an evidence record, not a current bundle surface, and it is not
+a prerequisite for the `gore dialog new-topic` same-module root path.
 
 The reviewed fixture rules are now parameterized by `BuildSpec.dialog_topics`;
 there are no Viper or Asghan constants in the generated runtime. During each
@@ -643,8 +643,8 @@ shapes that the current pipeline cannot produce safely.
   when no closing key is known; it skips forced rank `-1`. Sub-topics default to
   rank 0 so equal-rank `Subdialog` slot order remains authoritative. Explicit
   `--priority-rank` values win exactly, including an intentional `-1`.
-  `BuildSpec.dialog_topics` remains only the separate low-level adapter contract
-  documented above.
+  `BuildSpec.dialog_topics` is retired. `gore mod build` refuses it. The notes
+  above are the historical adapter record.
 - Source checking, strict standalone compilation, bundle packaging, deployment
   and runtime observation are separate claims. On BuildID `24878692`, the
   source-identical complete Diego recompile, Caption edit, native root, direct

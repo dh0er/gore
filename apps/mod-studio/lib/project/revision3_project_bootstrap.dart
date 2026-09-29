@@ -127,6 +127,9 @@ typedef _SupportedStoryGeneration = ({
   String bindsCacheSha256,
 });
 
+/// Studio revision-3 projects. Steam build 25414091 stays out of this list:
+/// its Shipping cache has no qualified native API snapshot, so NPC and head
+/// scripts that use those declarations cannot compile.
 const List<_SupportedStoryGeneration> _supportedStoryGenerations = [
   (
     edition: 'g1r-steam',

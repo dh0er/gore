@@ -551,7 +551,22 @@ const MOD_BUILD_ARGS: &[ArgSpec] = &[
         "model",
         Long("model"),
         Path,
-        "Path to model.json for validation (optional; skips validation if absent)",
+        "Path to model.json. Ignored: class defaults are checked against the script cache.",
+        false,
+    ),
+    ArgSpec::new(
+        "game",
+        Long("game"),
+        Path,
+        "Game install root. Required when the spec contains `values`.",
+        false,
+    )
+    .with_default("the configured game path, then Steam auto-detect"),
+    ArgSpec::new(
+        "work_dir",
+        Long("work-dir"),
+        Path,
+        "Compiler workspace used when the spec contains `values`.",
         false,
     ),
 ];
@@ -607,7 +622,12 @@ const MOD_COMMANDS: &[CommandSpec] = &[
                     pointer: "/meta/name",
                 },
             )])
-            .installs_via(&["out"]),
+            // `out/.value-minis` can be a symlink into the game while `out` is not.
+            // Later builds add an invocation child there; the parent is not a clobber.
+            .installs_derived(&[("out", Derived::Child(".value-minis"))])
+            .installs_via(&["out", "work_dir"]),
+        // Floor only. A spec that contains `values` lengthens this in
+        // `mod_build_timeout_secs`, because each module gets its own sidecar deadline.
         T_LONG,
     )
     .guide("bundles"),

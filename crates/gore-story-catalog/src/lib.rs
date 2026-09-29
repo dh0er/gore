@@ -1297,14 +1297,23 @@ fn curated_records_v1() -> VerifiedExtractionRecords {
     curated_records_for(&gore_generation::ROW_G1R_1_0_3)
 }
 
+/// Record sets that seal the defaults-free Swamp Camp chapter source the current emitter
+/// produces. Older revisions keep the source they published.
+fn uses_current_swamp_chapter_source(record_set_id: &str) -> bool {
+    matches!(
+        record_set_id,
+        "g1r-steam-1.0.3-curated-story-v5" | "g1r-steam-1.0.3-curated-story-v6"
+    )
+}
+
 fn curated_records(
     generation: GameGenerationSeal,
     record_set_id: &str,
 ) -> VerifiedExtractionRecords {
-    // V5 seals the current defaults-free PreparedEmit source for this quest. The class default
-    // remains independently verified against the cache; older catalog revisions retain their
-    // published source seal.
-    let swamp_chapter_source = if record_set_id == "g1r-steam-1.0.3-curated-story-v5" {
+    // V5 seals the current defaults-free PreparedEmit source for this quest. V6 reuses it:
+    // build 25414091 emits the same 600 bytes. The class default remains independently verified
+    // against the cache; older catalog revisions retain their published source seal.
+    let swamp_chapter_source = if uses_current_swamp_chapter_source(record_set_id) {
         known_seal(
             600,
             "ea45a6346358315601f752172b48bd076ed3f3af0b17e4746a1318cc66e52f5b",
@@ -2620,7 +2629,7 @@ mod tests {
             let mut rebound = curated_records_v1();
             rebound.generation = generation_seal(row);
             rebound.record_set_id = row.record_set_id.to_owned();
-            if row.id == gore_generation::ROW_G1R_25168047.id {
+            if uses_current_swamp_chapter_source(row.record_set_id) {
                 rebound.quest_parents[0].quest_class.source_seal = known_seal(
                     600,
                     "ea45a6346358315601f752172b48bd076ed3f3af0b17e4746a1318cc66e52f5b",

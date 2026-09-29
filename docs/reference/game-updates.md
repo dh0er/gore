@@ -59,10 +59,11 @@ qualified and admitted:
 | **Degraded** | `as default-sites`, `as patch-default`. They fall back to scalar-only: sites the script cache can type on its own stay editable, anything needing native ancestry does not. |
 | **Refused** | `as tag-map-sites`, `as patch-tag-map`, and Mod Studio's story, NPC, quest and item authoring. |
 
-After qualification, the central registry contains exactly five reviewed Steam
-rows: Steam 1.0.3 Hotfix 1, build `24169431`, build `24340829`, and build
-`24878692` from the 2026-08-27/28 update, and build `25168047` from the
-2026-09-21 1.0.5 hotfix. Each row is a closed exact-generation
+After qualification, the central registry contains exactly six reviewed Steam
+rows: Steam 1.0.3 Hotfix 1, build `24169431`, build `24340829`, build
+`24878692` from the 2026-08-27/28 update, build `25168047` from the
+2026-09-21 1.0.5 hotfix, and build `25414091` from the 2026-09-25 update.
+Each row is a closed exact-generation
 admission, not a range or a promise about nearby builds.
 
 The `24340829` row retains its bounded offline qualification: no class was
@@ -122,16 +123,62 @@ source seal. Its `ParentQuestClass` default is checked separately in the
 defaults-bearing 662-byte emission. The other five curated modules retain
 their source seals, and all six reproduce on the hotfix.
 
+Build `25414091` (Steam `LastUpdated` 2026-09-25) again keeps `Binds.Cache`
+byte-identical, so it keeps the `24878692` standalone API profile. No new
+compiler profile and no full-tree game comparison were run. Its fresh 174209
+USMAP has the same 6,602 class rows, direct-parent graph, 6,582-class bridge,
+402/402 native-base resolution and GameplayTag-to-float32 profile. All 26,389
+scalar default windows still resolve, and none of the compared counts fell.
+The Shipping cache and executable are new. The six curated modules, emitted
+from the pristine cache, reproduce their V5 source seals, including the
+600-byte defaults-free Swamp Camp chapter quest. V6 rebinds those seals to
+this generation. The previous Shipping cache was not available, so this record
+does not say which other functions moved. `Default__Class` remains the one
+USMAP name the executable does not spell.
+
 Mod Studio's Story/NPC/Quest authoring recognizes each exact registered triple
-only within its existing project-only contract. Item authoring is separately
-admitted by the row selected from the exact executable seal and its audited Item
-field matrix; it does not use Shipping or Binds as Item evidence. Neither row
-grants dialog-runtime, production-build, deployment, live-game, or DataAsset
-qualification; every other consumer keeps its own independent gate.
+that has a qualified native API snapshot, only within its existing project-only
+contract. Build `25414091` is registered, but Studio revision-3 projects and
+NPC drafts do not accept it until that snapshot exists. Item authoring is
+separately admitted by the row selected from the exact executable seal and its
+audited Item field matrix; it does not use Shipping or Binds as Item evidence.
+No generation row grants dialog-runtime, production-build, deployment,
+live-game, or DataAsset qualification; every other consumer keeps its own
+independent gate.
 
 Nothing produced a wrong answer in the historical fail-closed state, and the
 admitted row does not widen its recorded proof. Anything that cannot prove the
 evidence required by its own contract still refuses to act on it.
+
+## Forcing compile and decompile before qualification
+
+A game update must never leave the compiler or decompiler with no way forward.
+Every refusal in those paths that exists because the build, its `Binds.Cache`
+or the regenerated output could not be verified ends with:
+
+```text
+hint: rerun with --force to proceed anyway. This skips a safety check that exists because the game build or the regenerated output could not be verified; the result may be broken
+```
+
+`--force` is a global CLI flag (`gore --force as compile ...`,
+`gore mod build ... --force`). It relaxes exactly these checks:
+
+- decompile/emit: class default field types are taken from the installed
+  `Binds.Cache` even when no generation row pairs it with the script cache;
+- compile/edit: the default-target, function-metadata, generated-default and
+  class-structure preservation proofs, and engine/native declarations that no
+  pristine row or qualified native API snapshot covers.
+
+Each skipped check prints one `warning: --force: continuing despite: ...`
+line, so the output records what was not proven. A forced cache can compile and
+still be wrong in the game: test it in a new save, and qualify the build with
+the checklist below before relying on it. Integrity refusals (tampered or
+missing backups, a running game, compiler diagnostics) are not forceable, and
+Mod Studio never forces.
+
+If the standalone compiler has no matching profile, the default
+`standalone-then-game` backend already falls back to the game compiler
+without `--force`; only `--backend standalone` refuses.
 
 ## The checklist
 
@@ -236,8 +283,10 @@ rebuild and test the sidecar but do not rerun the private game comparison.
 the evidence is the evidence, never that the game agrees with it. Patch one
 default you can see and look before claiming that live behavior. When the
 admitted scope stops at bounded offline authoring, record that boundary instead
-of implying this step happened: none of builds `24340829`, `24878692`, or
-`25168047` gains dialog-runtime qualification from its central generation row.
+of implying this step happened: none of builds `24340829`, `24878692`,
+`25168047`, or `25414091` gains dialog-runtime qualification from its central
+generation row. Item and stat defaults on `25414091` were confirmed in game
+separately; that result is in [Item & stat values](../guide/items.md#tested-in-game).
 
 ## What is deliberately not automated
 

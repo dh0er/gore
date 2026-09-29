@@ -1,7 +1,14 @@
 # Native item and stat values — greenfield plan
 
-Status: design only. This is a clean break, not a migration of `overrides.toml`,
-`gore gen`, bundle `overrides`, or their UE4SS/Lua behavior.
+Status: implemented in the CLI and confirmed in game on build 25414091 with no
+`ue4ss` directory: item value, weapon damage, an ability cost, and every value
+type (`int`, `float`, `bool`, `str`, plus a gameplay-tag map entry). The results
+and the existing-save behavior are in
+[Tested in game](guide/items.md#tested-in-game). The README keeps Items &
+Values at "Partly": new items and copies of existing items are outside this
+plan and not implemented. This is a clean break, not a
+migration of `overrides.toml`, `gore gen`, bundle `overrides`, or their
+UE4SS/Lua behavior.
 
 ## Product contract
 

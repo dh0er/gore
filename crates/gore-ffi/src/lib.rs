@@ -7,7 +7,8 @@
 //! Commands:
 //! - `core_info` — returns the stable FFI ABI, crate version, and sorted command capabilities.
 //! - `generate_mod` — payload is an [`OverridesConfig`] (keys `meta` +
-//!   `override`); returns `{ok, files:{"enabled.txt":"","Scripts/main.lua":...}}`.
+//!   `override`); an empty override list is refused. A non-empty list returns
+//!   `{ok, files:{"spec.json":...}}`.
 //! - `validate` — payload `{config: OverridesConfig, model: ReflectionModel}`;
 //!   returns `{ok, valid, errors:[..]}`.
 //! - `authoring_npc_archetype_catalog_v1_build_for_game_root` accepts only one game root and
@@ -269,7 +270,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use image::ImageEncoder;
 
 use gore_loc::{loc_store, paths};
-use gore_modgen::gen::{gen_lua, OverridesConfig};
+use gore_modgen::gen::OverridesConfig;
 use gore_modgen::validate::validate_config;
 use gore_reflect::model::ReflectionModel;
 
@@ -279,7 +280,7 @@ pub use transport::{
 };
 
 /// Increment only when the current JSON command/response protocol changes incompatibly.
-const CORE_PROTOCOL_ABI: u32 = 2;
+const CORE_PROTOCOL_ABI: u32 = 3;
 
 /// Every command understood by [`dispatch`], kept in bytewise ascending order so capability
 /// negotiation is deterministic across builds and platforms.
@@ -1016,18 +1017,58 @@ fn read_bank_pristine(bank: &str) -> std::io::Result<Vec<u8>> {
     Ok(live)
 }
 
+/// Catalog ids such as `ItFo_Apple` are the Gothic instance name. The Shipping
+/// script names the class `UItFo_Apple`. A leading `U` is already that prefix
+/// only when the next character is uppercase, matching `runtime_class_name`.
+/// `Underground` is a bare name and still needs the prefix.
+fn script_class_name(class: &str) -> String {
+    let bytes = class.as_bytes();
+    if bytes.first() == Some(&b'U') && bytes.get(1).is_some_and(u8::is_ascii_uppercase) {
+        class.to_owned()
+    } else {
+        format!("U{class}")
+    }
+}
+
 fn generate_mod(payload: Value) -> Value {
     let cfg: OverridesConfig = match serde_json::from_value(payload) {
         Ok(c) => c,
         Err(e) => return err("BAD_CONFIG", format!("invalid overrides config: {e}")),
     };
-    let lua = gen_lua(&cfg);
+    if cfg.overrides.is_empty() {
+        return err("BAD_CONFIG", "at least one value edit is required");
+    }
+    if let Err(error) = gore_mod::validate_mod_name(&cfg.meta.name) {
+        return err("BAD_CONFIG", error.to_string());
+    }
+    let values: Vec<Value> = cfg
+        .overrides
+        .iter()
+        .map(|item| {
+            let value = match &item.value {
+                gore_modgen::gen::OverrideValue::Int(number) => json!({"int": number}),
+                gore_modgen::gen::OverrideValue::Float(number) => json!({"float": number}),
+                gore_modgen::gen::OverrideValue::Bool(flag) => json!({"bool": flag}),
+                gore_modgen::gen::OverrideValue::Str(text) => json!({"str": text}),
+            };
+            json!({
+                "class": script_class_name(&item.class),
+                "field": item.field,
+                "value": value,
+            })
+        })
+        .collect();
+    let spec = serde_json::to_string_pretty(&json!({
+        "meta": {"name": cfg.meta.name, "version": "0.1.0", "author": ""},
+        "values": values,
+    }))
+    .unwrap_or_else(|error| format!("{{\"error\":\"{error}\"}}"));
     json!({
         "ok": true,
         "files": {
-            "enabled.txt": "",
-            "Scripts/main.lua": lua,
-        }
+            "spec.json": spec,
+        },
+        "note": "item values compile into a script mini-cache via `gore mod build`. UE4SS Lua is no longer generated."
     })
 }
 
@@ -2104,10 +2145,49 @@ mod tests {
         }}"#;
         let v: Value = serde_json::from_str(&execute_json(req)).unwrap();
         assert_eq!(v["ok"], true);
-        let lua = v["files"]["Scripts/main.lua"].as_str().unwrap();
-        assert!(lua.contains("ItFo_Apple"));
-        assert!(lua.contains("Default__"));
-        assert_eq!(v["files"]["enabled.txt"], "");
+        let spec = v["files"]["spec.json"].as_str().unwrap();
+        assert!(spec.contains("\"class\": \"UItFo_Apple\""));
+        assert_eq!(super::script_class_name("Underground"), "UUnderground");
+        assert_eq!(super::script_class_name("UItFo_Apple"), "UItFo_Apple");
+        assert!(spec.contains("\"int\": 500") || spec.contains("\"int\":500"));
+        assert!(v["files"].get("Scripts/main.lua").is_none());
+    }
+
+    #[test]
+    fn generate_mod_rejects_the_reserved_workspace_name() {
+        let req = r#"{"command":"generate_mod","payload":{
+            "meta":{"name":".VALUE-MINIS"},
+            "override":[{"class":"ItFo_Apple","field":"m_Value","value_int":500}]
+        }}"#;
+        let v: Value = serde_json::from_str(&execute_json(req)).unwrap();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "BAD_CONFIG");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("reserved"),
+            "{v}"
+        );
+    }
+
+    #[test]
+    fn generate_mod_rejects_an_empty_override_list() {
+        let req = r#"{"command":"generate_mod","payload":{
+            "meta":{"name":"M"},
+            "override":[]
+        }}"#;
+        let v: Value = serde_json::from_str(&execute_json(req)).unwrap();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "BAD_CONFIG");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("at least one value edit"),
+            "{}",
+            v
+        );
     }
 
     #[test]
@@ -2129,7 +2209,7 @@ mod tests {
             v,
             json!({
                 "ok": true,
-                "abi": 2,
+                "abi": 3,
                 "version": env!("CARGO_PKG_VERSION"),
                 "commands": [
                     "audio_extract",
@@ -2574,11 +2654,15 @@ mod tests {
         .unwrap();
     }
 
-    /// Build a real goremod bundle (one item override → a UE4SS Lua component) under `root` and
-    /// return its dir, so `mgr_import` has a genuine bundle to ingest.
+    /// Build a real goremod bundle (one localization edit) under `root` and return its dir.
     fn write_goremod_bundle(root: &std::path::Path, name: &str) -> PathBuf {
         use gore_mod::{build_bundle, BuildSpec, ModMeta};
-        use gore_modgen::gen::{OverrideValue, SingleOverride};
+        use std::collections::BTreeMap;
+        let mut loc = BTreeMap::new();
+        loc.insert(
+            "itfo_cheese".to_string(),
+            BTreeMap::from([("german".to_string(), "X".to_string())]),
+        );
         let spec = BuildSpec {
             meta: ModMeta {
                 name: name.into(),
@@ -2586,19 +2670,15 @@ mod tests {
                 author: "t".into(),
             },
             delay_ms: 0,
-            overrides: vec![SingleOverride {
-                class: "ItFo_Apple".into(),
-                field: "m_Value".into(),
-                module: "Angelscript".into(),
-                value: OverrideValue::Int(500),
-            }],
-            loc_edits: Default::default(),
+            overrides: vec![],
+            loc_edits: loc,
             audio: vec![],
             texture: vec![],
             files: vec![],
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();

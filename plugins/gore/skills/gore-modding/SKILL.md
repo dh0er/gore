@@ -229,6 +229,21 @@ displayed operation is enough. The opaque id expires, works once, and is bound
 to the normalized call, so changing any argument or reusing it is refused. Never
 invent either field or fill the words without having asked.
 
+## Forcing after a game update
+
+After a Steam update, compile, decompile, `value inspect` or `mod build` steps
+that cannot verify the new build refuse with a hint to rerun with `--force`.
+The result then names `"force": true`. Ask the user **once** whether GORE should
+force such steps for this game build, and say plainly that the result may be
+broken. Do not ask again for every command: if they agree, pass
+`"force": true` on every later call that needs it. The server confirms the
+first forced call once and remembers the answer for the session. If they
+decline, stop and point them to the game-updates reference instead of retrying.
+
+Forcing does not replace testing: the warnings the forced command prints are
+the checks it skipped. Tell the user which ones appeared, and put a new-game
+check of the affected change on the in-game checklist.
+
 ## Two things that will cost you a build
 
 Asset paths in a bundle spec (`wav_path`, `ogg_path`, `image_path`,

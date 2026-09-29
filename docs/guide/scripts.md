@@ -525,7 +525,11 @@ dependency against the effective base-plus-mini tables before it creates a game
 backup, deploy record, or mutation lock. A mini built for an older game cache is
 therefore refused rather than spliced. After a game update, compile or remap the
 module again against the new pristine `PrecompiledScript_Shipping.Cache`; do not
-reuse the previous mini-cache or copy its old GUID.
+reuse the previous mini-cache or copy its old GUID. When that compile or a
+decompile refuses because the new build is not qualified yet, the error says
+whether the global `--force` flag can override it. A forced result may be
+broken; see
+[game updates](../reference/game-updates.md#forcing-compile-and-decompile-before-qualification).
 
 These checks depend only on the cache contents, never on where the mod came
 from. A GORE bundle, a community download, and a manually prepared package all
@@ -551,8 +555,8 @@ now preserves that distinction, reuses matching names, and fails closed if a
 prepared operand has no row. Do not rewrite those numeric operands by hand; the
 wire-level contract is in [`gore-as/FORMAT.md`](../../crates/gore-as/FORMAT.md#staticnames-indices-in-raw-and-prepared-minis).
 
-The separate low-level `dialog_topics` registration-adapter composition has one
-older live observation. On 2026-08-18 the GORE-authored Viper fixture rendered
+The retired `dialog_topics` registration adapter has one older live observation.
+`gore mod build` now refuses that section. On 2026-08-18 the GORE-authored Viper fixture rendered
 `[Gore probe] UI fixture`; `UE4SS.log`
 recorded `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with `exact_count=1`. The run
 used the PR #91-fixed app-local Core DLL. It was not a genuine third-party

@@ -8569,7 +8569,7 @@ impl RefResolver {
         r.global_by_ptr.insert(994,"Distance to target too close to required distance to move".into()); r.global_is_string.insert(994);
         let getter=super::model::Func {name:"GetMeasure".into(),param_defaults:vec![],namespace:String::new(),ret:plain(0x51),params:vec![],
             bytecode:vec![],variable_space:0,obj_locals:vec![],is_ufunction:false,traits:0x204};
-        let class=super::model::Class {name:"UMeasured".into(),namespace:String::new(),super_class:None,fields:vec![],methods:vec![getter],ctors:vec![],flags:0};
+        let class=super::model::Class {name:"UMeasured".into(),namespace:String::new(),super_class:None,fields:vec![],methods:vec![getter],ctors:vec![],flags:0,is_abstract:false};
         let mut mods=vec![super::model::Module {name:"Fixture".into(),file:String::new(),functions:vec![],classes:vec![class],enums:vec![],globals:vec![]}];
         match fault {
             1=>r.func_params.get_mut(&103).unwrap()[0].is_reference=false,

@@ -8,7 +8,7 @@ exists) and **reflection models** (what shape it has).
 **Most people never run any of this.** The catalogs bundled with the save editor
 (`apps/save-editor/assets/*_catalog.json`) already cover everyday modding. Reach
 for this page only when you are regenerating that data yourself — after a game
-update, or when you want `gore gen --model` to validate your overrides.
+update. Class defaults are checked by `gore value inspect`, not by a dump.
 
 ## Catalogs from a UE4SS object dump
 
@@ -134,8 +134,7 @@ gore stubs model.json -o stubs              # optional LuaLS/EmmyLua type stubs
 gore stubs model.json -o stubs --filter It  # …only classes with this name prefix
 ```
 
-`model.json` is what `gore gen --model` validates overrides against, and what
-the GUI shape model is derived from.
+`model.json` is the reflection dump used by older catalog tools and the source of the GUI shape model. `gore value inspect` does not read it.
 
 ## Real in-game default values
 

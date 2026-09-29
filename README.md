@@ -1,33 +1,40 @@
-# ⚔️ GORE
+<p align="center">
+  <img src="docs/images/gore_logo.png" alt="GORE Logo" width="400"/>
+</p>
 
-**GORE** (Go-thic Re-make) is a vibe-coded modding and save-editing toolsuite for Gothic 1 Remake. One Rust engine, one CLI, and three Windows apps built on top of it.
+<p align="center">
+  <a href="https://github.com/dh0er/gore/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/dh0er/gore/ci.yml?style=flat&label=Build" alt="Build Status"></a>
+  <a href="https://github.com/dh0er/gore/issues"><img src="https://img.shields.io/github/issues/dh0er/gore?style=flat&label=Issues" alt="Issues"></a>
+  <a href="https://github.com/dh0er/gore/blob/main/LICENSE"><img src="https://img.shields.io/github/license/dh0er/gore?style=flat&label=License" alt="License"></a>
+</p>
+
+#
+
+**GORE** (Go-thic Re-make) is a modding and save-editing toolkit for Gothic 1 Remake which works 
+completely without UE4SS. It comes with a plugin for your agents, so you can easily mod using AI.
+
+In fact, the whole CLI is intended to be used by AI agents only. You can of course use it manually,
+but except for this README, the whole documentation is written by AI and might be incomplete and/or
+hard to understand.
+
+A no-code GUI is planned for future.
 
 ## 🧰 Tools
 
 | Tool⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀ | What it does | Status⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀ | Download |
 |---|---|---|---|
-| **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing savegames. | ✅ Ready to use | [1.4.1](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.4.1) |
-| **[CLI](docs/guide/README.md)** | All-in-one command-line tool for all modding tasks. | ⚗️ Experimental use | [0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.3.0) |
+| **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing savegames. | ✅ Ready to use | [1.5.0](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.5.0) |
+| **[CLI](docs/guide/README.md)** | All-in-one command-line tool for all modding tasks. | ⚗️ Experimental use | [0.4.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.4.0) |
 | **[Mod Manager](apps/mod-manager/README.md)** | Windows GUI for installing and ordering *many* mods together. | ⚗️ Experimental use | [0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
 | **[AI Plugins](plugins/gore/README.md)** | MCP server and skill for the CLI. | ⚗️ Experimental use | ⠀⠀⠀⠀⠀ |
 | **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the GORE engine, for *authoring* mods. | 📋 Planned | ⠀⠀⠀⠀⠀ |
-
-## ⬇️ Downloads
-
-| Tool | Version | Release page |
-|---|---|---|
-| **CLI** | 0.3.0 | [gore-cli-v0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.3.0) |
-| **Mod Manager** | 0.2.0 | [gore-mod-manager-v0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
-| **Save Editor** | 1.4.1 | [gore-save-editor-v1.4.1](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.4.1) |
-
-Mod Studio has no release yet; build it from source.
 
 ## 📊 Status
 
 | Area | Status | What you can do | What's missing |
 |---|---|---|---|
-| [Savegames](apps/save-editor/README.md) | Mostly | Edit Player and NPC values, inventories, quests and much more | Armor upgrades, chest and corpse loot, other loot points |
-| [Item & stat values](docs/guide/items.md) | Partly | Change what items are worth, what weapons do, what NPCs have | Still needs UE4SS; [native implementation plan](docs/items-values-without-ue4ss-plan.md) |
+| [Savegames](apps/save-editor/README.md) | Mostly | Edit Player and NPC values, inventories, quests and much more | Armor upgrades, chest and corpse loot, other loot points. No CLI support yet. |
+| [Item & stat values](docs/guide/items.md) | Partly | Change values, damage, icons and costs of existing items and abilities. | New items, and copies of existing items under a new name |
 | [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace all localized game text | ⠀⠀⠀⠀⠀ |
 | [Dialog authoring](docs/guide/dialog-authoring.md) | Full | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | ⠀⠀⠀⠀⠀ |
 | [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | ⠀⠀⠀⠀⠀ |
@@ -56,13 +63,13 @@ Get `gore.exe` from a `gore-cli-v*`
 [release](https://github.com/dh0er/gore/releases), or build it:
 
 ```powershell
-cargo build --release -p gore     # → target\release\gore.exe
+python build.py gore-cli build     # → target\release\gore.exe
 ```
 
 Point it at your game once:
 
 ```powershell
-$GAME = 'D:\SteamLibrary\steamapps\common\Gothic 1 Remake'
+$GAME = 'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake'
 gore config set game-path $GAME     # or: gore config detect
 ```
 
@@ -72,28 +79,16 @@ Check what you have before you rely on it:
 gore doctor
 ```
 
-It answers whether that path really is the game, whether UE4SS is there, what is
-deployed, and what an interrupted run left behind. Every line that is not `ok`
-carries a `fix:` line. Worth running now: the mod below is a UE4SS mod, and
-without UE4SS it installs cleanly and then does nothing at all.
-
-Then make apples worth 500 gold. Save this as `overrides.toml`:
-
-```toml
-[meta]
-name = "MyBalanceMod"
-
-[[override]]
-class = "ItFo_Apple"
-field = "m_Value"
-value_int = 500
-```
+Install the plugin for your favorite AI client, e.g. Claude:
 
 ```powershell
-gore gen overrides.toml -o "$GAME\G1R\Binaries\Win64\ue4ss\Mods"
+claude plugin marketplace add dh0er/gore
+claude plugin install gore@gore
 ```
 
-Full walkthrough: [Getting started](docs/guide/getting-started.md).
+Tell the agent what you want and then let him deploy the mod.
+
+If you want to start manually, follow the section "A first mod: Wiesel's letter" in this guide: [Getting started](docs/guide/getting-started.md).
 
 ## 🤖 Vibe Modding
 
@@ -152,7 +147,7 @@ Everything lives in [`docs/`](docs/README.md).
 | | |
 |---|---|
 | [Getting started](docs/guide/getting-started.md) | Install, configure, first mod, which tool for which job |
-| [Item & stat values](docs/guide/items.md) | `overrides.toml` → UE4SS Lua CDO override mod |
+| [Item & stat values](docs/guide/items.md) | `gore value inspect` and a `values` section compiled into a script mini-cache |
 | [Text & dialogs](docs/guide/text-and-dialogs.md) | Decrypt, edit, re-encrypt the localization `.lcache` |
 | [Dialog trees](docs/guide/dialog-trees.md) · [Dialog authoring](docs/guide/dialog-authoring.md) | Inspect conversations; edit defaults and behavior; add roots, submenus, multi-level trees and complete conversations |
 | [Audio](docs/guide/audio.md) · [Voice-over](docs/guide/voice.md) | FMOD bank samples; voice-over ZIP archives |

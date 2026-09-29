@@ -71,6 +71,7 @@ fn input_schema(group: &GroupSpec) -> Value {
                                 call with this id and `user_approved`; changed arguments, reuse, or \
                                 an invented id are refused.",
             },
+            crate::consent::FORCE_FIELD: force_schema(),
         },
         "required": ["subcommand"],
         "additionalProperties": false,
@@ -122,6 +123,7 @@ fn direct_input_schema(command: &CommandSpec) -> Value {
         crate::consent::APPROVAL_REQUEST_FIELD.into(),
         approval_request_schema(),
     );
+    direct_properties.insert(crate::consent::FORCE_FIELD.into(), force_schema());
 
     let mut schema = json!({
         "type": "object",
@@ -206,6 +208,17 @@ fn approval_request_schema() -> Value {
         "type": "string",
         "description": "Opaque one-time id printed by a consent refusal. It expires and is bound \
                         to the exact normalized invocation.",
+    })
+}
+
+fn force_schema() -> Value {
+    json!({
+        "type": "boolean",
+        "description": "Adds the CLI's global --force: continue past compile/decompile checks \
+                        that refuse because the game build or the regenerated output could not \
+                        be verified (e.g. after a game update). The result may be broken. Set it \
+                        only after the user agreed; the first forced call in a session is \
+                        confirmed once, later ones run without asking again.",
     })
 }
 
@@ -531,9 +544,9 @@ mod tests {
 
     #[test]
     fn a_group_containing_a_mutating_command_is_annotated_as_destructive() {
-        // gore_project bundles three harmless generators with `deploy-shared`, which writes into
-        // the game installation. The annotation must reflect the worst of them.
-        let annotations = tool("gore_project")["annotations"].clone();
+        // gore_mgr includes `reset`, which undeploys a Manager deployment. The annotation
+        // must reflect the worst command in the group.
+        let annotations = tool("gore_mgr")["annotations"].clone();
         assert_eq!(annotations["readOnlyHint"], json!(false));
         assert_eq!(annotations["destructiveHint"], json!(true));
     }

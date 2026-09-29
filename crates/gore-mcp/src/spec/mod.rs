@@ -317,6 +317,9 @@ pub struct Safety {
     /// `installs_into_game_tree`, which is how `audio extract` briefly became able to fill the game
     /// installation with WAVs without asking anybody.
     pub writes_into: &'static [&'static str],
+    /// Derived paths included in install-path classification and excluded from occupancy.
+    /// See [`Safety::installs_derived`].
+    pub installs_derived: &'static [(&'static str, Derived)],
 }
 
 impl Safety {
@@ -332,6 +335,7 @@ impl Safety {
             installs_via: &[],
             clobbers_dir: &[],
             writes_into: &[],
+            installs_derived: &[],
         }
     }
 
@@ -415,6 +419,17 @@ impl Safety {
     /// For commands that check collisions themselves, per file, in the CLI.
     pub const fn writes_into(mut self, args: &'static [&'static str]) -> Self {
         self.writes_into = args;
+        self
+    }
+
+    /// Register derived paths for install-path classification without asking about occupancy.
+    ///
+    /// A fixed child such as `out/.value-minis` can be a symlink into the game while `out`
+    /// itself is not. Following that child is what the install check has to see. The directory
+    /// normally already holds earlier invocation folders, so an occupancy check on it would ask
+    /// on every later build.
+    pub const fn installs_derived(mut self, derived: &'static [(&'static str, Derived)]) -> Self {
+        self.installs_derived = derived;
         self
     }
 
@@ -734,7 +749,7 @@ pub const GROUPS: &[GroupSpec] = &[
     groups::core::LOCATION,
     groups::core::DIALOG,
     groups::core::NPC,
-    groups::core::PROJECT,
+    groups::core::VALUE,
     groups::files::LOC,
     groups::files::AUDIO,
     groups::files::VOICE,
@@ -753,7 +768,7 @@ pub const GROUPS: &[GroupSpec] = &[
 ///
 /// A literal, not a computed value: it is a claim about the CLI, and the integration test compares
 /// it against what clap actually exposes. Changing it should be a deliberate act.
-pub const EXPECTED_LEAF_COUNT: usize = 114;
+pub const EXPECTED_LEAF_COUNT: usize = 112;
 
 pub fn group(tool: &str) -> Option<&'static GroupSpec> {
     GROUPS.iter().find(|group| group.tool == tool)
@@ -1141,7 +1156,6 @@ mod tests {
             ("gore_dialog", "text", &["out"]),
             ("gore_loc", "export", &["out"]),
             ("gore_loc", "import", &["out"]),
-            ("gore_project", "package", &["out"]),
             ("gore_texture", "extract", &["out"]),
             ("gore_texture", "index", &["out"]),
             ("gore_as", "replace", &["out"]),
@@ -1196,6 +1210,11 @@ mod tests {
                         || command.safety.clobbers_dir.contains(&name)
                         || command.safety.writes_into.contains(&name)
                         || command.safety.derives.iter().any(|(arg, _)| *arg == name)
+                        || command
+                            .safety
+                            .installs_derived
+                            .iter()
+                            .any(|(arg, _)| *arg == name)
                         // A command gated outright needs no per-argument check. Asked of the
                         // gate rather than of `Class`, because a GameLaunch command requires write
                         // permission even though its class alone does not say so.
@@ -1246,7 +1265,6 @@ mod tests {
         let mut expected: Vec<(&str, &str, &[&'static str])> = vec![
             // Both write a mod folder carrying an executable Scripts/main.lua.
             ("gore_catalog", "dump-mod", &["out"]),
-            ("gore_project", "scaffold", &["out"]),
             // Both produce a Zen triplet that is a build artifact anywhere but `~mods`.
             ("gore_asset", "pack", &["out"]),
             // Writes a package pair, its sidecars and a receipt; `asset extract` refuses a
@@ -1265,7 +1283,7 @@ mod tests {
             ("gore_texture", "pack", &["out"]),
             // A bundle directory is a build artifact anywhere but the installation, where the same
             // files would be sitting in the tree the game reads without ever having been deployed.
-            ("gore_mod", "build", &["out"]),
+            ("gore_mod", "build", &["out", "work_dir"]),
         ];
         expected.sort_unstable();
 
@@ -1332,13 +1350,15 @@ mod tests {
             (
                 "gore_mod",
                 "build",
-                &[(
-                    "out",
-                    Derived::ChildNamedInJson {
-                        arg: "spec",
-                        pointer: "/meta/name",
-                    },
-                )],
+                &[
+                    (
+                        "out",
+                        Derived::ChildNamedInJson {
+                            arg: "spec",
+                            pointer: "/meta/name",
+                        },
+                    ),
+                ],
             ),
             (
                 "gore_npc",
@@ -1347,11 +1367,6 @@ mod tests {
                     ("dir", Derived::Child("spec.json")),
                     ("dir", Derived::Suffix(".work")),
                 ],
-            ),
-            (
-                "gore_project",
-                "scaffold",
-                &[("out", Derived::ChildOfArg("mod_name"))],
             ),
             (
                 "gore_texture",
@@ -1381,6 +1396,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn exactly_the_known_install_only_derived_outputs_are_classified() {
+        let mut derived: Vec<(&str, &str, &[(&'static str, Derived)])> = Vec::new();
+        for group in GROUPS {
+            for command in group.commands {
+                if !command.safety.installs_derived.is_empty() {
+                    derived.push((group.tool, command.sub, command.safety.installs_derived));
+                }
+            }
+        }
+        derived.sort_unstable_by_key(|(tool, sub, _)| (*tool, *sub));
+        assert_eq!(
+            derived,
+            vec![(
+                "gore_mod",
+                "build",
+                &[("out", Derived::Child(".value-minis"))] as &[_],
+            )]
+        );
     }
 
     /// Directories a command fills under names of its own choosing.

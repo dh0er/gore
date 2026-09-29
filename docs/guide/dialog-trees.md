@@ -277,9 +277,8 @@ requirement of this workflow. `check` instead binds direct roots and sub-topics
 to their source shape: a root must not set `bIsSubTopic`, while a direct child
 must be referenced once from a shipped `Subdialog` body and set it true.
 
-`BuildSpec.dialog_topics` is retained as a separate historical low-level
-adapter surface for hand-authored bundles. It packages UE4SS insertion and its
-telemetry; it is not emitted as the normal `dialog new-topic` root recipe.
+`BuildSpec.dialog_topics` is retired. `gore mod build` refuses it, and it is
+not emitted as the `dialog new-topic` root recipe.
 
 Full-graph V2 gives one standalone compiler request the complete sealed base
 graph plus all coordinated Add/Edit sources, so visible symbols in different

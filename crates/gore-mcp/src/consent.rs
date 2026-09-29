@@ -67,6 +67,9 @@ pub struct Needs {
     pub write: bool,
     /// Starts the game executable.
     pub game_launch: bool,
+    /// Passes the CLI's global `--force`, skipping build-verification checks. Once allowed, it
+    /// stays allowed for the rest of the session.
+    pub force: bool,
 }
 
 impl Needs {
@@ -75,12 +78,41 @@ impl Needs {
     /// A game launch always writes as well — compiling drives the game to regenerate its cache and
     /// then stages the result — so the launch flag never appears alone. Naming it by itself would
     /// send someone to restart with a flag set that still would not cover the call.
-    pub fn flags(&self) -> &'static str {
-        match (self.game_launch, self.write) {
-            (true, _) => "--allow-game-launch --allow-write",
-            (false, true) => "--allow-write",
-            (false, false) => "",
+    pub fn flags(&self) -> String {
+        let mut flags: Vec<&str> = match (self.game_launch, self.write) {
+            (true, _) => vec!["--allow-game-launch", "--allow-write"],
+            (false, true) => vec!["--allow-write"],
+            (false, false) => Vec::new(),
+        };
+        if self.force {
+            flags.push("--allow-force");
         }
+        flags.join(" ")
+    }
+}
+
+/// The tool argument that adds the CLI's global `--force` to a call.
+pub const FORCE_FIELD: &str = "force";
+
+/// Completes "`gore <path>` …" for a call that asks to be forced.
+pub const FORCE_REASON: &str = "would run with --force: it continues past safety checks that \
+refuse because the game build, its Binds.Cache or the regenerated output could not be verified \
+(typically after a game update), and the result may be broken. Agreeing once allows `force` for \
+every later call in this session";
+
+/// Appended to a result whose command refused with the CLI's `--force` hint.
+pub fn force_hint_note(already_allowed: bool) -> String {
+    if already_allowed {
+        "The user already allowed `force` in this session: repeat the call with `\"force\": true`; \
+         it will not ask again."
+            .into()
+    } else {
+        "This refusal can be overridden with `\"force\": true`. Ask the user once whether GORE \
+         should force compile/decompile steps that cannot be verified for this game build, and say \
+         that the result may be broken. If they agree, repeat the call with `\"force\": true`; the \
+         first forced call is confirmed once and every later one in this session runs without \
+         asking again. Do not ask them per command."
+            .into()
     }
 }
 
@@ -415,6 +447,7 @@ mod tests {
             needs: Needs {
                 write: true,
                 game_launch: false,
+                force: false,
             },
         }
     }
@@ -691,6 +724,7 @@ mod tests {
             needs: Needs {
                 write: true,
                 game_launch: false,
+                force: false,
             },
         };
         let message = elicitation_params(&in_place)["message"]
@@ -737,7 +771,8 @@ mod tests {
         assert_eq!(
             Needs {
                 write: true,
-                game_launch: true
+                game_launch: true,
+                force: false,
             }
             .flags(),
             "--allow-game-launch --allow-write"
@@ -745,7 +780,8 @@ mod tests {
         assert_eq!(
             Needs {
                 write: false,
-                game_launch: true
+                game_launch: true,
+                force: false,
             }
             .flags(),
             "--allow-game-launch --allow-write"
@@ -753,7 +789,8 @@ mod tests {
         assert_eq!(
             Needs {
                 write: true,
-                game_launch: false
+                game_launch: false,
+                force: false,
             }
             .flags(),
             "--allow-write"

@@ -8,6 +8,11 @@ mod cmd;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+    /// Continue past compile/decompile safety checks that refuse because the game build, its
+    /// Binds.Cache or the regenerated output could not be verified (e.g. after a game update).
+    /// Each skipped check is reported as a warning; the result may be broken.
+    #[arg(long, global = true)]
+    force: bool,
 }
 
 #[derive(Subcommand)]
@@ -141,35 +146,10 @@ enum Commands {
         #[command(subcommand)]
         action: LocAction,
     },
-    /// Create a UE4SS Lua mod skeleton directory
-    Scaffold {
-        /// Mod name (becomes the directory name under mods-dir)
-        mod_name: String,
-        /// Mods directory (e.g. ue4ss/Mods/)
-        #[arg(short = 'o', long)]
-        out: PathBuf,
-    },
-    /// Compile overrides.toml into a UE4SS Lua mod
-    Gen {
-        /// Path to overrides.toml
-        overrides: PathBuf,
-        /// Mods directory to write the mod folder into
-        #[arg(short = 'o', long)]
-        out: PathBuf,
-        /// Path to model.json for validation (optional; skips validation if absent)
-        #[arg(long)]
-        model: Option<PathBuf>,
-    },
-    /// Deploy the gore-lua shared SDK into the game's ue4ss/Mods/shared.
-    DeployShared {
-        /// Source shared/ dir. Defaults to a copy located relative to the gore-cli
-        /// executable (cwd-independent); pass this when running from an unusual layout.
-        #[arg(long)]
-        src: Option<std::path::PathBuf>,
-        /// Game install root (the folder containing G1R/). Falls back to the
-        /// configured game path, then Steam auto-detect.
-        #[arg(long)]
-        game: Option<std::path::PathBuf>,
+    /// Inspect and describe game-defined class defaults from the Shipping script cache
+    Value {
+        #[command(subcommand)]
+        action: cmd::value::ValueAction,
     },
     /// AngelScript precompiled-cache tooling (decode/emit/splice/decompile).
     As {
@@ -180,14 +160,6 @@ enum Commands {
     Asset {
         #[command(subcommand)]
         action: cmd::asset::AssetAction,
-    },
-    /// Zip a mod folder into distributable UE4SS layout
-    Package {
-        /// Path to the mod directory
-        mod_dir: PathBuf,
-        /// Output zip path
-        #[arg(short = 'o', long)]
-        out: PathBuf,
     },
     /// Read/replace audio in the game's encrypted FMOD sound banks (.bank)
     Audio {
@@ -278,6 +250,11 @@ enum McpAction {
         /// Also settable as GORE_MCP_ALLOW_GAME_LAUNCH=1
         #[arg(long)]
         allow_game_launch: bool,
+        /// Pre-approve calls that pass `force` (the CLI's global --force), which continue past
+        /// compile/decompile checks for an unverified game build. Without this the first forced
+        /// call in a session is confirmed with you. Also settable as GORE_MCP_ALLOW_FORCE=1
+        #[arg(long)]
+        allow_force: bool,
         /// Never ask, and refuse anything that would need confirming. The strict posture, for a
         /// server exposed to an agent whose calls nobody reviews.
         /// Also settable as GORE_MCP_NO_CONSENT_PROMPTS=1
@@ -304,9 +281,15 @@ enum ModAction {
         /// Output directory (the bundle is written to <out>/<mod-name>)
         #[arg(short = 'o', long)]
         out: PathBuf,
-        /// Path to model.json for validation (optional; skips validation if absent)
+        /// Path to model.json. Ignored: class defaults are checked against the script cache.
         #[arg(long)]
         model: Option<PathBuf>,
+        /// Game install root. Required when the spec contains `values`.
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Compiler workspace used when the spec contains `values`.
+        #[arg(long)]
+        work_dir: Option<PathBuf>,
     },
     /// Validate and summarize a built GORE bundle without importing or deploying it
     Inspect {
@@ -497,6 +480,9 @@ fn main() {
 
 fn run_cli() {
     let cli = Cli::parse();
+    if cli.force {
+        gore_as::force::enable();
+    }
     let result = match cli.command {
         Commands::Dump { sdk_dir, out } => cmd::dump::run(sdk_dir, out),
         Commands::Stubs { model, out, filter } => cmd::stubs::run(model, out, filter),
@@ -548,16 +534,9 @@ fn run_cli() {
                 add_missing,
             } => cmd::loc::import(lcache, edits, out, add_missing),
         },
-        Commands::Scaffold { mod_name, out } => cmd::scaffold::run(mod_name, out),
-        Commands::Gen {
-            overrides,
-            out,
-            model,
-        } => cmd::gen::run(overrides, out, model),
-        Commands::DeployShared { src, game } => cmd::deploy_shared::run(src, game),
+        Commands::Value { action } => cmd::value::run(action),
         Commands::As { cmd } => cmd::as_cache::run(cmd),
         Commands::Asset { action } => cmd::asset::run(action),
-        Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
         Commands::Audio { action } => match action {
             AudioAction::Banks { game, json, key } => cmd::audio::banks(game, json, key),
             AudioAction::List {
@@ -591,7 +570,13 @@ fn run_cli() {
         },
         Commands::Voice { action } => cmd::voice::run(action),
         Commands::Mod { action } => match action {
-            ModAction::Build { spec, out, model } => cmd::modcmd::build(spec, out, model),
+            ModAction::Build {
+                spec,
+                out,
+                model,
+                game,
+                work_dir,
+            } => cmd::modcmd::build(spec, out, model, game, work_dir),
             ModAction::Inspect { bundle, json } => cmd::modcmd::inspect(bundle, json),
             ModAction::Deploy { bundle, game } => cmd::modcmd::deploy(bundle, game),
             ModAction::Undeploy { game } => cmd::modcmd::undeploy(game),
@@ -603,12 +588,14 @@ fn run_cli() {
             McpAction::Serve {
                 allow_write,
                 allow_game_launch,
+                allow_force,
                 no_consent_prompts,
                 timeout_secs,
                 max_output_kib,
             } => cmd::mcp::serve(cmd::mcp::ServeOptions {
                 allow_write,
                 allow_game_launch,
+                allow_force,
                 no_consent_prompts,
                 timeout_secs,
                 max_output_kib,

@@ -168,7 +168,7 @@ The decision is made **per subcommand**, not per tool.
 | | What it covers | Examples |
 |---|---|---|
 | Runs straight away | Reading, commands writing to a free path outside the game installation, and explicit strict standalone compilation | `texture list`, `loc export` to a new file, `as decompile`, `voice extract`, `as compile --backend standalone`, `as compile-module --backend standalone` |
-| Asks you first, whatever is on disk | Changing the game installation, deleting or replacing Manager-library content, deleting other user content, or replacing a shared catalog — nothing you pass can make these harmless | `mod deploy`, `mod undeploy`, `mgr apply`, `mgr reset`, `mgr recover`, `mgr remove`, `mgr import`, `texture deploy`, `texture undeploy`, `texture replace`, `gen`, `deploy-shared`, `loc extract`, `audio restore` |
+| Asks you first, whatever is on disk | Changing the game installation, deleting or replacing Manager-library content, deleting other user content, or replacing a shared catalog — nothing you pass can make these harmless | `mod deploy`, `mod undeploy`, `mgr apply`, `mgr reset`, `mgr recover`, `mgr remove`, `mgr import`, `texture deploy`, `texture undeploy`, `texture replace`, `loc extract`, `audio restore` |
 | Asks you only when something is in the way | Overwriting an output file that already exists, writing into a directory that already holds files, rebuilding a bundle folder that is there, or rewriting a file in place | `catalog dump` onto an existing file, `texture index` without an output path, `loc import` without an output path, `mod build` over an existing bundle, `stubs`, `audio extract` and `as emit-all` into a non-empty directory |
 | Asks you first | A compiler policy that may start the game and stage sources in the installation | `as compile --backend game`, `as compile-module --backend standalone-then-game`, or either command with the backend omitted |
 
@@ -259,6 +259,24 @@ the refusal, bound id, question put to you, your answer, and note on the run.
 The field is refused under `--no-consent-prompts` — that flag exists so that an
 agent nobody is reviewing cannot talk its own way past the gate.
 
+### Forcing after a game update
+
+After a game update, compile and decompile steps that cannot verify the new
+build refuse with a hint to rerun with `--force` (see
+[game updates](../reference/game-updates.md#forcing-compile-and-decompile-before-qualification)).
+Every tool accepts `"force": true`, which adds the CLI's global `--force`:
+
+```json
+{ "name": "gore_mod", "arguments": { "subcommand": "build", "args": { "…": "…" }, "force": true } }
+```
+
+A result that offers the override tells the assistant to ask you **once**
+whether to force, not per command. The first forced call is then confirmed
+through the same dialog (or conversation relay) as any other protected call.
+After a yes, every later forced call in that session runs without asking again.
+After a no, the next forced call asks again. `--allow-force` /
+`GORE_MCP_ALLOW_FORCE` pre-approves it, and `--no-consent-prompts` refuses it.
+
 ### Answering in advance
 
 Where nobody is watching — CI, a scripted batch, an agent that already has its own
@@ -268,7 +286,8 @@ approval layer — you can answer once at startup instead:
 |---|---|---|
 | `--allow-write` | `GORE_MCP_ALLOW_WRITE` | Installation changes, Manager-library mutations, deletions, and in-place rewrites run without asking |
 | `--allow-game-launch` | `GORE_MCP_ALLOW_GAME_LAUNCH` | The same for compiler policies that may start the game. `game`, `standalone-then-game`, and an omitted backend need **both** flags; explicit strict `standalone` needs neither |
-| `--no-consent-prompts` | `GORE_MCP_NO_CONSENT_PROMPTS` | Never ask, and refuse anything that would need it. The strict posture, for a server exposed to an agent whose calls nobody reviews. It cannot be combined with the two above — that would be asking for a looser and a stricter server at once, and the server refuses to start rather than pick one |
+| `--allow-force` | `GORE_MCP_ALLOW_FORCE` | Calls with `"force": true` run without the one-time confirmation |
+| `--no-consent-prompts` | `GORE_MCP_NO_CONSENT_PROMPTS` | Never ask, and refuse anything that would need it. The strict posture, for a server exposed to an agent whose calls nobody reviews. It cannot be combined with the three above — that would be asking for a looser and a stricter server at once, and the server refuses to start rather than pick one |
 
 ```powershell
 gore mcp serve --allow-write
@@ -310,18 +329,15 @@ line:
   that writes a *named* output file replaces it without asking, so pointing one
   at a path that already exists asks first; a fresh path does not. That covers the catalog and model generators, `loc export`,
   `loc import`, `audio replace`, `audio export-patch`, `audio apply-patch`,
-  `texture extract`, `texture index --out`, `project package`, and the
+  `texture extract`, `texture index --out`, and the
   cache-producing `as` commands (`replace`, `splice`, `extract`,
   `extract-remap`, and `bytediff --json`). Passing an input's own path as the
   output counts too — that is an in-place rewrite wearing a safe name.
   The `asset` and `voice` families, `texture pack` and `as patch-default` need
-  no confirmation at all — their CLI refuses an existing output on its own. `scaffold`
-  refuses too, but only when `Scripts/main.lua` is already there, which is why
-  its mod folder is checked here as well.
-  Four commands write a path no argument spells out, and are checked all the
+  no confirmation at all — their CLI refuses an existing output on its own.
+  Three commands write a path no argument spells out, and are checked all the
   same: `texture extract` also writes `<out>.png.json`, `dump-mod` writes a
-  `gore-dump/` folder inside the directory it is given, `scaffold` writes
-  `<out>/<mod_name>/`, and `mod build` clears and rebuilds
+  `gore-dump/` folder inside the directory it is given, and `mod build` clears and rebuilds
   `<out>/<meta.name from the spec>` — so a fresh mod name runs straight away and
   only a collision with a folder already there asks. A spec that cannot be read,
   or whose name is not a single folder name, counts as a collision: not knowing
@@ -333,7 +349,6 @@ line:
   has nothing to lose either way, and those calls run without asking; one that
   already holds files asks first, and names the directory. Where the names
   cannot be checked *and* the folder cannot either, the command asks outright:
-  `gen` (target folder named inside the `overrides.toml` it reads),
   `texture replace` (cooked files under a path derived from the asset name,
   deleting a stale `.ubulk`), and `mgr import`. The latter resolves a verified
   existing entry by entry id, source identity, or content identity; a changed
@@ -346,7 +361,7 @@ line:
   which is the one thing they exist to do.
 - **Where a file lands can matter more than what writes it.** `texture pack`,
   `asset pack` and `mod build` normally produce an artifact you deploy later,
-  and `dump-mod` and `scaffold` normally produce a mod folder you install
+  and `dump-mod` normally produces a mod folder you install
   afterwards — so none of them asks. Point an output inside the game tree and
   the same call
   writes straight into the live installation — the `~mods` override, `ue4ss\Mods`,
@@ -401,7 +416,7 @@ to the server.
 | `gore_find` | `find` | [find](find.md) |
 | `gore_catalog` | `dump` · `stubs` · `catalog` · `story-catalog` · `location-catalog` · `gui-model` · `sync` · `dump-mod` | [catalogs](catalogs-and-models.md) |
 | `gore_location` | `location` | [catalogs](catalogs-and-models.md) |
-| `gore_project` | `scaffold` · `gen` · `package` · `deploy-shared` | [items](items.md) |
+| `gore_value` | `inspect` | [items](items.md) |
 | `gore_dialog` | `dialog` | [dialog-trees](dialog-trees.md) |
 | `gore_npc` | `npc` | [npc-authoring](npc-authoring.md) |
 | `gore_loc` | `loc` | [text-and-dialogs](text-and-dialogs.md) |
@@ -430,8 +445,8 @@ routes exist because MCP annotations apply to a whole tool: mixed `gore_mod`
 and `gore_mgr` must advertise their install-changing worst cases, while
 `gore_mod_inspect` and `gore_mgr_preflight` can truthfully advertise read-only,
 while the standalone compile aliases advertise non-destructive offline writes.
-`gore_catalog` and `gore_project` have no matching CLI subcommand — they group
-top-level commands that belong to one workflow.
+`gore_catalog` has no matching CLI subcommand — it groups top-level commands
+that belong to one workflow.
 
 ## The documentation, over MCP
 

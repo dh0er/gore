@@ -88,8 +88,6 @@ listed under [What it can do](#what-it-can-do) and
   compiler acceptance proves only one exact generated source and keeps output
   discarded. Managed Voice has a separately labelled offline-only bundle.
 - Edit **save files** — that's the [Save Editor](../save-editor/README.md).
-- Hand-write custom Lua logic — use `gore scaffold` plus the
-  [gore-lua helpers](../../lua/README.md).
 - Patch arbitrary game files outside the supported domains.
 - Manage a *collection* of mods together — that's the
   [Mod Manager](../mod-manager/README.md).

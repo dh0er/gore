@@ -86,6 +86,18 @@ pass its module to `gore npc sites --level`:
 | Sunken Tower | `LevelScripts.SunkenTower_OldCamp_AI_script` | 3 |
 | Xardas' Tower | `LevelScripts.XardasTower_AI` | 2 |
 
+List the available level scripts directly from your installed game:
+
+```powershell
+gore npc levels
+```
+
+Each line gives a short name and the exact level-script module. The command
+includes every module with a world point, even when none currently spawns an
+NPC. In the documented game build, it lists 21 modules; the table above shows
+the 17 that already spawn characters. `--json` includes point counts, and
+`--cache` / `--game` select a different script cache or installation.
+
 `--level` matches on the module name, so a distinctive fragment such as
 `XardasTower` or `OldCamp` is enough.
 
@@ -141,20 +153,27 @@ That is not an optimisation detail you can ignore: one shipped module,
 own to recover its class defaults, against about two seconds for an ordinary
 module. A command that emitted the whole tree would not answer.
 
-## `npc sites` — where the level scripts spawn
+## `npc sites` — world points in the level scripts
 
 ```
-$ gore npc sites --level XardasTower
-UOW_XT_DEMON_LESSER_SPAWN_WP  USpawnAIAgentDefinition_XT_XardasDemon  LevelScripts.XardasTower_AI
-UXT_Skeleton_SPAWN_WP  USpawnAIAgentDefinition_Skeleton_XardasServant  LevelScripts.XardasTower_AI
-2 of 2 shown
+$ gore npc sites --npc OC_STT_Diego
+UWP_INTRO_FALL3  USpawnAIAgentDefinition_OC_STT_Diego  LevelScripts.Map_x2_y2_ExchangeZone_AI_script
+UWP_EZ_START_DIEGO_SPAWN  USpawnAIAgentDefinition_OC_STT_Diego  LevelScripts.Map_x2_y2_ExchangeZone_AI_script
+2 of 2 shown, 0 of them free
 ```
 
-Each row is the world point, the spawn definition it names, and the level
-script it lives in. `--level <TEXT>` keeps the sites whose module contains that
-text, `--npc <ID>` keeps only the sites that spawn one character, `--max <N>`
-caps the printed rows, and `--json` returns them as one document. Like `show`,
-it reads the installed cache and takes `--cache` / `--game`.
+Each row is a world point, its current spawn definitions (or `(free)`), and its
+level-script module. With no filter, `sites` includes both free and occupied
+points. `--level <TEXT>` keeps points whose module contains that text; use
+`--level Map_x2_y1_OldCamp_AI_script` to select the main Old Camp level rather
+than every module with `OldCamp` in its name. `--free` keeps points with nobody
+spawned there; `--occupied` keeps points with at least one occupant.
+`--npc <ID>` takes the exact character id and keeps its spawn points.
+
+The output defaults to 50 rows. Raise `--max <N>` to see more; it also limits
+the rows in `--json` output. For example, `gore npc sites --max 10000` lists all
+3939 world points in the documented game build. Like `show`, `sites` reads the
+installed cache and accepts `--cache` / `--game`.
 
 ## Reading the `translation:` verdict
 

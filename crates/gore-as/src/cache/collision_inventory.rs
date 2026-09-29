@@ -476,6 +476,7 @@ mod tests {
                 methods: vec![function("MemberCall")],
                 ctors: vec![function(&format!("U{name}"))],
                 flags: 0,
+                is_abstract: false,
             }],
             enums: vec![EnumDef {
                 name: "EMode".to_owned(),

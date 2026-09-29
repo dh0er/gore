@@ -6506,6 +6506,7 @@ mod default_cli_tests {
             methods: Vec::new(),
             ctors: Vec::new(),
             flags: 0,
+            is_abstract: false,
         };
         let module = Module {
             name: "QualificationFixture".to_owned(),

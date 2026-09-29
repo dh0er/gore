@@ -124,11 +124,12 @@ the vanilla identity; it is not a substitute for this new linked class chain.
 
 ### Mod Studio boundary
 
-The central closed generation registry currently contains exactly five reviewed
+The central closed generation registry currently contains exactly six reviewed
 Steam generation triples: the retained Steam 1.0.3 Hotfix 1 seal set, Steam
-build `24169431`, Steam build `24340829` from the 2026-07-31 update, and Steam
-build `24878692` from the 2026-08-27/28 update, and Steam build `25168047`
-from the 2026-09-21 1.0.5 hotfix.
+build `24169431`, Steam build `24340829` from the 2026-07-31 update, Steam
+build `24878692` from the 2026-08-27/28 update, Steam build `25168047`
+from the 2026-09-21 1.0.5 hotfix, and Steam build `25414091` from the
+2026-09-25 update.
 For Story/NPC/Quest, executable, deployment-aware pristine Shipping cache, and
 `Binds.Cache` must all match the same registered row; nearby hashes and cross-
 generation mixtures fail closed. Item authoring has a separate narrower gate:
@@ -158,9 +159,20 @@ seal, with its `ParentQuestClass` default verified separately. The full offline
 source-tree comparison has 164,724 aligned functions and no semantic differences.
 It does not add a live-game or dialog-runtime qualification.
 
-Those rows therefore admit the existing bounded project-only Story/NPC/Quest
-routes for their exact triples and the Item route for each exact executable
-seal. They grant no dialog-runtime, production-build, deployment, live-game, or
+The `25414091` row uses a fresh 174209 USMAP. `Binds.Cache` and the class
+graph stay those of `25168047`, so it keeps that standalone API profile. The
+six curated modules reproduce their V5 source seals and V6 rebinds them. The
+previous Shipping cache was not on disk, so this row records no function-level
+diff. It does not add a live-game or dialog-runtime qualification. It also has
+no qualified native API snapshot. Mod Studio therefore does not accept this
+triple for revision-3 project creation or NPC drafts: NPC and head scripts
+that reference the sealed native declarations would fail closed, and Studio
+has no `--force` hatch.
+
+The five earlier rows admit the existing bounded project-only Story/NPC/Quest
+routes for their exact triples. Build `25414091` remains a registry row for
+its curated catalog and for the Item route selected by its executable seal.
+The Item route stays available for each exact executable seal. They grant no dialog-runtime, production-build, deployment, live-game, or
 DataAsset authority, and do not promise that future or non-Steam builds are
 compatible without their own reviewed row. Standalone compiler-core parity is
 a separate frozen-corpus/full-tree qualification and is not implied by Studio's

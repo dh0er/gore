@@ -2912,33 +2912,20 @@ fn check(dir: &PathBuf, json: bool, cache: Option<PathBuf>, game: Option<PathBuf
         }
         Err(error) => return Err(error),
     };
+    if !manifest.dialog_topics.is_empty() && !json {
+        bail!(
+            "dialog_topics is retired. Same-module dialog edits deploy as a script mini-cache \
+             and do not insert a UE4SS Lua adapter."
+        );
+    }
 
     if json {
-        let document = serde_json::json!({
-            "operation": manifest.operation.as_str(),
-            "module": manifest.module,
-            "participant": manifest.participant,
-            "unchanged": report.unchanged,
-            "safe": report.is_carryable(),
-            "requires_new_symbols": report.requires_new_symbols(),
-            "changed": report.changed.iter().map(|body| {
-                serde_json::json!({ "class": body.class, "member": body.member })
-            }).collect::<Vec<_>>(),
-            "changed_defaults": report.changed_defaults.iter().map(|change| {
-                serde_json::json!({ "class": change.class, "target": change.target })
-            }).collect::<Vec<_>>(),
-            "added_classes": report.added_classes,
-            "added_functions": report.added_functions,
-            "new_strings": report.new_strings,
-            "new_static_names": report.new_static_names,
-            "violations": report.violations.iter().map(|violation| violation.explain())
-                .collect::<Vec<_>>(),
-        });
+        let (document, problems) = check_json_document(&manifest, &report);
         println!("{}", serde_json::to_string_pretty(&document)?);
-        return if report.is_carryable() {
+        return if problems == 0 {
             Ok(())
         } else {
-            bail!("{} problem(s)", report.violations.len())
+            bail!("{problems} problem(s)")
         };
     }
 
@@ -2985,6 +2972,45 @@ fn check(dir: &PathBuf, json: bool, cache: Option<PathBuf>, game: Option<PathBuf
     Ok(())
 }
 
+fn check_json_document(
+    manifest: &EditManifest,
+    report: &dialog::EditReport,
+) -> (serde_json::Value, usize) {
+    let mut violations: Vec<String> = report
+        .violations
+        .iter()
+        .map(|violation| violation.explain())
+        .collect();
+    if !manifest.dialog_topics.is_empty() {
+        violations.push(
+            "dialog_topics is retired. Same-module dialog edits deploy as a script mini-cache \
+             and do not insert a UE4SS Lua adapter."
+                .to_string(),
+        );
+    }
+    let problems = violations.len();
+    let document = serde_json::json!({
+        "operation": manifest.operation.as_str(),
+        "module": manifest.module,
+        "participant": manifest.participant,
+        "unchanged": report.unchanged,
+        "safe": problems == 0,
+        "requires_new_symbols": report.requires_new_symbols(),
+        "changed": report.changed.iter().map(|body| {
+            serde_json::json!({ "class": body.class, "member": body.member })
+        }).collect::<Vec<_>>(),
+        "changed_defaults": report.changed_defaults.iter().map(|change| {
+            serde_json::json!({ "class": change.class, "target": change.target })
+        }).collect::<Vec<_>>(),
+        "added_classes": report.added_classes,
+        "added_functions": report.added_functions,
+        "new_strings": report.new_strings,
+        "new_static_names": report.new_static_names,
+        "violations": violations,
+    });
+    (document, problems)
+}
+
 fn stage(
     dir: &PathBuf,
     mod_name: &str,
@@ -3014,7 +3040,7 @@ fn stage(
     prepare_stage_work_dir(&work_dir)?;
 
     let mini = format!("{mod_name}.mini.Cache");
-    let mut spec = serde_json::json!({
+    let spec = serde_json::json!({
         "meta": { "name": mod_name, "version": "0.1.0", "author": "" },
         "scripts": [{
             "op": manifest.operation.as_str(),
@@ -3023,7 +3049,10 @@ fn stage(
         }],
     });
     if !manifest.dialog_topics.is_empty() {
-        spec["dialog_topics"] = serde_json::to_value(&manifest.dialog_topics)?;
+        bail!(
+            "dialog_topics is retired. Same-module dialog edits deploy as a script mini-cache \
+             and do not insert a UE4SS Lua adapter."
+        );
     }
     // Replacing a fresh temporary file atomically never truncates an existing symlink or hard-link
     // target. The earlier check still gives a useful error before workspace parsing.
@@ -5000,6 +5029,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn retired_dialog_topics_are_reported_in_check_json() {
+        let manifest = EditManifest {
+            operation: DialogModuleOperation::Edit,
+            module: "Dialog.Module".into(),
+            relative_path: String::new(),
+            source_file: String::new(),
+            pristine_file: String::new(),
+            participant: "Diego".into(),
+            cache_sha256: String::new(),
+            requires_topic_scaffold: false,
+            dialog_topics: vec![DialogTopicRegistration {
+                id: "old".into(),
+                participant_name: "Diego".into(),
+                topic_class: "UOldTopic".into(),
+                sentinel_class: "UOldSentinel".into(),
+                allow_hidden: false,
+            }],
+        };
+        let report = dialog::EditReport {
+            violations: Vec::new(),
+            changed: Vec::new(),
+            changed_defaults: Vec::new(),
+            added_classes: Vec::new(),
+            added_functions: Vec::new(),
+            new_strings: Vec::new(),
+            new_static_names: Vec::new(),
+            unchanged: true,
+        };
+        let (document, problems) = check_json_document(&manifest, &report);
+        assert_eq!(problems, 1);
+        assert_eq!(document["safe"], false);
+        assert_eq!(document["module"], "Dialog.Module");
+        assert!(document["violations"][0]
+            .as_str()
+            .unwrap()
+            .contains("dialog_topics is retired"));
+    }
+
+    #[test]
     fn a_language_family_expands_to_its_columns_newest_first() {
         assert_eq!(columns_for("german"), vec!["german_new", "german"]);
         assert_eq!(
@@ -6793,6 +6861,7 @@ class UFirst : UTopic_Hero__NEW_NPC { }
                 methods: Vec::new(),
                 ctors: Vec::new(),
                 flags: 0,
+                is_abstract: false,
             })
             .collect(),
             enums: Vec::new(),
@@ -7593,7 +7662,11 @@ class UFirst : UTopic_Hero__NEW_NPC { }
             format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
         )
         .unwrap();
-        check(&out, true, Some(cache), Some(fake_game)).unwrap();
+        let retired = check(&out, true, Some(cache), Some(fake_game)).unwrap_err();
+        assert!(
+            retired.to_string().contains("dialog_topics is retired"),
+            "{retired}"
+        );
     }
 
     #[test]

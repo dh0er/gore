@@ -34,16 +34,17 @@ const MAX_MODULE_NAME_BYTES: usize = 4_096;
 /// only restores the existing Unreal function metadata.
 #[derive(Clone, Debug)]
 pub(crate) struct SelectiveFullGraphEditPreservation {
-    metadata: ExistingFunctionMetadataPlan,
-    structure: ExistingModuleStructurePlan,
+    /// `None` only when `--force` skipped a plan that could not be prepared.
+    metadata: Option<ExistingFunctionMetadataPlan>,
+    structure: Option<ExistingModuleStructurePlan>,
     generated_defaults: Option<GeneratedDefaultsPlan>,
     default_targets: Option<ExistingDefaultTargetPlan>,
 }
 
 impl SelectiveFullGraphEditPreservation {
     pub(crate) fn new(
-        metadata: ExistingFunctionMetadataPlan,
-        structure: ExistingModuleStructurePlan,
+        metadata: Option<ExistingFunctionMetadataPlan>,
+        structure: Option<ExistingModuleStructurePlan>,
         generated_defaults: Option<GeneratedDefaultsPlan>,
         default_targets: Option<ExistingDefaultTargetPlan>,
     ) -> Self {
@@ -207,6 +208,28 @@ enum AttemptFailure<Deferred, Fatal> {
         retry_after: Option<String>,
     },
     Fatal(Fatal),
+}
+
+/// `Ok(None)` means `--force` skipped the failed stage and the caller keeps its input unchanged.
+fn preservation_gate<T, Deferred>(
+    module_name: &str,
+    stage: &'static str,
+    result: Result<T, String>,
+) -> Result<Option<T>, AttemptFailure<Deferred, SelectiveFullGraphError>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(reason) if crate::force::enabled() => {
+            crate::force::warn(format!(
+                "{stage} preservation failed for FullGraph edit module {module_name:?}: {reason}"
+            ));
+            Ok(None)
+        }
+        Err(reason) => Err(AttemptFailure::Fatal(SelectiveFullGraphError::Preservation {
+            module_name: module_name.to_owned(),
+            stage,
+            reason: crate::force::refusal(reason),
+        })),
+    }
 }
 
 #[derive(Debug)]
@@ -530,38 +553,22 @@ fn attempt_change(
 
     if let SelectiveFullGraphChange::Edit { preservation, .. } = change {
         if let Some(carry) = &preservation.generated_defaults {
-            mini = preservation
-                .metadata
-                .apply_present(&mini)
-                .map_err(|reason| {
-                    AttemptFailure::Fatal(SelectiveFullGraphError::Preservation {
-                        module_name: module_name.to_owned(),
-                        stage: "pre-carry function metadata",
-                        reason,
-                    })
-                })?;
-            mini = carry.apply(&mini).map_err(|reason| {
-                AttemptFailure::Fatal(SelectiveFullGraphError::Preservation {
-                    module_name: module_name.to_owned(),
-                    stage: "generated defaults",
-                    reason,
-                })
-            })?;
+            if let Some(metadata) = &preservation.metadata {
+                let normalized = metadata.apply_present(&mini);
+                mini = preservation_gate(module_name, "pre-carry function metadata", normalized)?
+                    .unwrap_or(mini);
+            }
+            let carried = carry.apply(&mini);
+            mini = preservation_gate(module_name, "generated defaults", carried)?.unwrap_or(mini);
         }
-        mini = preservation.metadata.apply(&mini).map_err(|reason| {
-            AttemptFailure::Fatal(SelectiveFullGraphError::Preservation {
-                module_name: module_name.to_owned(),
-                stage: "existing function metadata",
-                reason,
-            })
-        })?;
-        preservation.structure.verify(&mini).map_err(|reason| {
-            AttemptFailure::Fatal(SelectiveFullGraphError::Preservation {
-                module_name: module_name.to_owned(),
-                stage: "existing module structure",
-                reason,
-            })
-        })?;
+        if let Some(metadata) = &preservation.metadata {
+            let restored = metadata.apply(&mini);
+            mini = preservation_gate(module_name, "existing function metadata", restored)?
+                .unwrap_or(mini);
+        }
+        if let Some(structure) = &preservation.structure {
+            preservation_gate(module_name, "existing module structure", structure.verify(&mini))?;
+        }
     }
 
     // A persistent guard rooted at `pristine` intentionally does not grant authority to a prior
@@ -588,13 +595,11 @@ fn attempt_change(
     })?;
     if let SelectiveFullGraphChange::Edit { preservation, .. } = change {
         if let Some(default_targets) = &preservation.default_targets {
-            default_targets.verify(&updated).map_err(|reason| {
-                AttemptFailure::Fatal(SelectiveFullGraphError::Preservation {
-                    module_name: module_name.to_owned(),
-                    stage: "existing default targets in composed cache",
-                    reason,
-                })
-            })?;
+            preservation_gate(
+                module_name,
+                "existing default targets in composed cache",
+                default_targets.verify(&updated),
+            )?;
         }
     }
     if matches!(change, SelectiveFullGraphChange::Edit { .. }) {

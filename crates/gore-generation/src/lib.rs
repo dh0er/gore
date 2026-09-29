@@ -495,19 +495,90 @@ pub const ROW_G1R_25168047: GenerationRow = GenerationRow {
     audited_item_generation: "g1r-steam-25168047",
 };
 
+/// Steam BuildID 25414091, updated 2026-09-25. The Binds file, USMAP class graph, native ancestry
+/// inputs and Item field surface stay on the 24878692/25168047 profile. The Shipping cache and
+/// executable move. The curated V6 catalog rebinds the V5 source seals, which this cache still
+/// emits. See `qualifications/g1r-steam-25414091.json`.
+pub const ROW_G1R_25414091: GenerationRow = GenerationRow {
+    id: "g1r-steam-25414091",
+    label: "Steam build 25414091 (2026-09-25 update)",
+    edition: "g1r-steam",
+
+    executable: FileSeal {
+        byte_len: 171_798_528,
+        sha256: hex("7394f840702df3ddb94d1a45a43c2a81ff36d7d65325047c698dfb65337b99b5"),
+    },
+    shipping_cache: FileSeal {
+        byte_len: 124_459_998,
+        sha256: hex("6c1e1fbb9de3bc92064bd472905d6d3708261fb1323dc21321fbe10579ab4c24"),
+    },
+    binds_cache: FileSeal {
+        byte_len: 5_908_985,
+        sha256: hex("aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2"),
+    },
+    usmap: FileSeal {
+        byte_len: 2_415_539,
+        sha256: hex("b2e5544c22c5fb4020df1de9a8be119b0dea37b9c105e3219d509a3e3df72c0e"),
+    },
+
+    script_cache_guid: hex("edb67c640f246e458d8e1f50ce3679d7"),
+    script_cache_mutation_stable_sha256: hex(
+        "aad6916e52649619742960cb7ab1c0f05d9d953817a3da0870154555f4d54658",
+    ),
+    scalar_default_operand_count: 26_389,
+    gameplay_tag_float32_operand_count: 1_432,
+
+    binds_field_map_sha256: hex(
+        "d7feb69355e5d66d02c66a9d5ca6ff3d675520bea10093cb8001bde0d47aafda",
+    ),
+    binds_class_path_map_sha256: hex(
+        "628d133fb6c6733c0d3d9e2710ae79d2758235582e9afed13201b84abaa7612b",
+    ),
+    usmap_class_graph_sha256: hex(
+        "642a8e0bc80301935a8a46498c00761b048cbac22bbd74fa914e86b6399fe321",
+    ),
+    resolved_class_profile_sha256: hex(
+        "a09e158df376b1f20b302f6eaa1e7476e660a7244c8d737b5a38f67243b52f5f",
+    ),
+    gameplay_tag_float32_map_profile_sha256: hex(
+        "5fa2e35616cb6b04a3060202e55ff575d8e8aeab5a25602aeddc10b3ad542708",
+    ),
+
+    native_ancestry_profile_id:
+        "sha256:dda4a44cc0b7ed3be94b3520530c341f3c212b1a74cf93095f15376f411c1b17",
+    gameplay_tag_float32_map_proof_id:
+        "sha256:f3e88a4e98b5f14edc081b134be491aa2cc0d8180cd0a1ed6e4f47f18cdd260c",
+
+    record_set_id: "g1r-steam-1.0.3-curated-story-v6",
+    record_set_seal: FileSeal {
+        byte_len: 5_499,
+        sha256: hex("c772bf0c32a937f65517f1ade1072b35d7565c951fdd4111337924a873f1a143"),
+    },
+    catalog_payload_seal: FileSeal {
+        byte_len: 5_611,
+        sha256: hex("6ff2b3df55b28e1d6f643d8bf70583caae224e3f8789df012c07edf01a0ce490"),
+    },
+    catalog_label: "compiled curated V6",
+    record_seal_kind: "compiled curated V6 record set",
+    catalog_seal_kind: "compiled curated V6 catalog payload",
+
+    audited_item_generation: "g1r-steam-25414091",
+};
+
 /// Every audited generation, oldest first. A fixed-length array so the length appears in the diff
 /// of any commit that adds a row — the one piece of the old array-shaped friction worth keeping.
-pub static GENERATION_ROWS: [GenerationRow; 5] = [
+pub static GENERATION_ROWS: [GenerationRow; 6] = [
     ROW_G1R_1_0_3,
     ROW_G1R_24169431,
     ROW_G1R_24340829,
     ROW_G1R_24878692,
     ROW_G1R_25168047,
+    ROW_G1R_25414091,
 ];
 
 /// The committed qualification artifact per row, keyed by [`GenerationRow::id`]. A row without one
 /// fails `every_row_has_a_committed_qualification_artifact`.
-pub const QUALIFICATION_ARTIFACTS: [(&str, &str); 5] = [
+pub const QUALIFICATION_ARTIFACTS: [(&str, &str); 6] = [
     (
         ROW_G1R_1_0_3.id,
         include_str!("../qualifications/g1r-steam-1.0.3.json"),
@@ -527,6 +598,10 @@ pub const QUALIFICATION_ARTIFACTS: [(&str, &str); 5] = [
     (
         ROW_G1R_25168047.id,
         include_str!("../qualifications/g1r-steam-25168047.json"),
+    ),
+    (
+        ROW_G1R_25414091.id,
+        include_str!("../qualifications/g1r-steam-25414091.json"),
     ),
 ];
 
