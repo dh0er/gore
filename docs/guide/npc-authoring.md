@@ -620,7 +620,7 @@ no lookup and no installation:
 $ gore npc text GORE_TEST_NPC --name "Hannes" -o work/name.json
 wrote work/name.json
   gore_test_npc -> "Hannes" in both German columns
-next: gore loc import --edits work/name.json
+next: gore loc import --lcache '<path/to/chosen-input.lcache>' --out 'work/name.lcache' --edits 'work/name.json' --add-missing
 ```
 
 ```json
@@ -635,9 +635,13 @@ next: gore loc import --edits work/name.json
 Both German columns, deliberately. Where `german_new` exists it wins over
 `german`, so a document that sets only `german` is a silent no-op — a mistake
 that has cost this project time before. `--english <NAME>` fills the three
-English columns the same way. The file goes into the game through
-`gore loc import --edits`, like any other text edit; see
-[Text & dialogs](text-and-dialogs.md).
+English columns the same way. Replace the input placeholder with the chosen
+`.lcache`; the explicit output writes a separate artifact and preserves that
+input. `--add-missing` adds the new character id and any missing pairs for
+languages already present in the cache header. To deploy these names with the
+NPC, include the translations in the [bundle](bundles.md) localization
+component, which backs up the original on deploy. See
+[Text & dialogs](text-and-dialogs.md) for language selection and import flags.
 
 ### Two NPC mods for the same world section do not run together
 
