@@ -24,6 +24,7 @@ fn init_defaults(bytecode: Vec<i32>) -> Func {
         ret: void_type(),
         params: Vec::new(),
         bytecode,
+        variable_space: 0,
         obj_locals: Vec::new(),
         is_ufunction: false,
         traits: 0,
@@ -39,6 +40,7 @@ fn class_with(name: &str, methods: Vec<Func>) -> Class {
         methods,
         ctors: Vec::new(),
         flags: 0,
+        is_abstract: false,
     }
 }
 

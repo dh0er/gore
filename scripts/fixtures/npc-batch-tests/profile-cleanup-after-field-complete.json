@@ -1,0 +1,79 @@
+{
+  "schema": "gore.npc-batch.profile-cleanup-after-field-complete.v1",
+  "date": "2026-09-13",
+  "displayed_profile": 4,
+  "internal_profile_id": 2,
+  "stored_profile_name": "3",
+  "passed": true,
+  "operation": "live",
+  "archive": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-field-complete-20260913T174524Z",
+  "manifest_sha256": "34c461875c78f52e1cfd4914f0564d1bab49b60894091f8ae7460e3cc1c8b06c",
+  "deleted_count": 3,
+  "retained_count": 1,
+  "retained": [
+    "G1R-071"
+  ],
+  "removed": [
+    "G1R-003",
+    "G1R-070",
+    "G1R-072"
+  ],
+  "profile_before": {
+    "bytes": 31680,
+    "sha256": "d06aaa8bad9e40ec54444a8d7477919a2f01e4a22f66f20e7aa9e1d1131375c3"
+  },
+  "profile_after": {
+    "bytes": 28796,
+    "sha256": "a1713882e02c67d89801eab1aa4031cf9efb6546e0357df64fdda1b6cf3cf513"
+  },
+  "dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "titles": {
+    "G1R-070": "NPC 04 Rollen - START",
+    "G1R-071": "NPC 05 Quest - START",
+    "G1R-072": "NPC 04 Rollen - Kampf bereit",
+    "G1R-003": "rolle-flucht-v4"
+  },
+  "result_readback": {
+    "path": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-field-complete-20260913T174524Z\\G1R-003.readback.json",
+    "bytes": 1460575,
+    "sha256": "0e6fc356dae0276525e6fff65cd6cf79a4490c890af21b5f2bb8933d951262da"
+  },
+  "result_fingerprints": {
+    "path": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-field-complete-20260913T174524Z\\result-fingerprints.json",
+    "bytes": 276,
+    "sha256": "a27f1bd1301dee4b672612c980056dc37406bae727594273c6bdb1fc99f2a27f"
+  },
+  "current_profile_snapshot_used": true,
+  "retained_save_hashes": {
+    "G1R-071": {
+      "bytes": 1018879,
+      "sha256": "aee18515288dc09ebc1f4687fc3da21cccdec946596b2744f2028ccdfaf68db5"
+    }
+  },
+  "removed_original_hashes": {
+    "G1R-003": {
+      "bytes": 1060824,
+      "sha256": "09c053f1b71aece712e5a912549a576f14a5f1f0e19eadde909431bb3ceb74e7"
+    },
+    "G1R-070": {
+      "bytes": 1035034,
+      "sha256": "60dd5ac6cebab1cd62f1005ae0fa47618161b6db6d83cda1ca88868f445922b4"
+    },
+    "G1R-072": {
+      "bytes": 1035056,
+      "sha256": "5feb135c3a3e689e38976823c1ee70d1c5ae57c4292a79e2aa9c8bbd605e6451"
+    }
+  },
+  "exact_current_titles_and_source_hashes_verified": true,
+  "paired_backups_verified": true,
+  "other_profiles_byte_identical": true,
+  "retained_saves_byte_identical": true,
+  "other_live_files_unchanged": true,
+  "live_unchanged_during_preview": true,
+  "global_registry_exact_filtered_order": true,
+  "no_removed_slot_reference": true,
+  "archive_hashes_reverified": true
+}

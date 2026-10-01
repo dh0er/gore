@@ -1,0 +1,25 @@
+{
+  "schema": "gore.npc-batch.beard-runtime.v1",
+  "date": "2026-09-11",
+  "version": "0.1.2",
+  "passed": false,
+  "source": "User report and supplied screenshots; no gameplay controlled by agent.",
+  "report": "Hero beard off renders black; Flex beard on renders black. Flex returns to normal with beard off. Hero stays black, including H9.",
+  "screenshots": [
+    {
+      "path": "C:\\Users\\Daniel\\AppData\\Local\\Temp\\codex-clipboard-ee1f98a2-13d9-4e2c-bc5f-8a5aad23c29c.png",
+      "sha256": "f75a53a787b1484c69bfd22e7223470787582ee84f8bda2a52471b254c8e0489"
+    },
+    {
+      "path": "C:\\Users\\Daniel\\AppData\\Local\\Temp\\codex-clipboard-279fbc29-6aeb-49bc-8781-3726620ef43a.png",
+      "sha256": "24793cef2eb4804cba196c77c3b8d337ba0a9cf4e27827867e844d466b34cd6c"
+    }
+  ],
+  "save_files_inspected": false,
+  "confirmed_technical_findings": [
+    "Both original face albedos use streaming VirtualTextures; runtime PNG import creates ordinary Texture2D resources.",
+    "The component MID factory can return the already dynamic Hero material, aliasing the saved original."
+  ],
+  "inference": "VT sampling mismatch is the probable black-face cause; exact GPU fallback was not decoded.",
+  "follow_up": "0.1.3 separate cooked VT assets and genuinely fresh MID plus copied original overrides; user rendering test pending."
+}

@@ -1,8 +1,13 @@
 [package]
 name = "gore"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
+
+[features]
+# Explicit opt-in for compiler-free debug CLI/integration tests. Release builds still require
+# the catalog prepared by build.py, even if this feature is enabled.
+development-cli = []
 
 [[bin]]
 name = "gore"
@@ -74,22 +79,6 @@ name = "catalog_test"
 path = "tests/integration/catalog_test.rs"
 
 [[test]]
-name = "scaffold_test"
-path = "tests/integration/scaffold_test.rs"
-
-[[test]]
-name = "gen_test"
-path = "tests/integration/gen_test.rs"
-
-[[test]]
-name = "package_test"
-path = "tests/integration/package_test.rs"
-
-[[test]]
-name = "deploy_shared_test"
-path = "tests/integration/deploy_shared_test.rs"
-
-[[test]]
 name = "as_cache_test"
 path = "tests/integration/as_cache_test.rs"
 
@@ -124,3 +113,7 @@ path = "tests/integration/audio_test.rs"
 [[test]]
 name = "modcmd_test"
 path = "tests/integration/modcmd_test.rs"
+
+[[test]]
+name = "npc_test"
+path = "tests/integration/npc_test.rs"

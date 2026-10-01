@@ -23,11 +23,11 @@ CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_PATH = ROOT / ".github" / "workflows" / "release.yml"
 README_PATH = ROOT / "README.md"
 
-DOWNLOAD_HEADING = "## ⬇️ Downloads"
-DOWNLOAD_HEADER = "| Tool | Version | Release page |"
+DOWNLOAD_HEADING = "## 🧰 Tools"
+DOWNLOAD_HEADER = "| Tool … | What it does | Status … | Download |"
 RELEASE_TAG_URL = "https://github.com/dh0er/gore/releases/tag/"
-# The README download table is written by hand, so it is pinned to the tag it
-# names. Locally that only proves the row is self-consistent; on a release-tag
+# The README tools table is written by hand, so its download links are pinned to the tags they
+# name. Locally that only proves the row is self-consistent; on a release-tag
 # push GITHUB_REF_NAME also proves the row was bumped for the tag being built.
 DOWNLOAD_TOOLS: dict[str, str] = {
     "CLI": "gore-cli",
@@ -36,10 +36,13 @@ DOWNLOAD_TOOLS: dict[str, str] = {
 }
 UNRELEASED_PRODUCTS = {"gore-mod-studio"}
 
-_DOWNLOAD_ROW = re.compile(
-    r"^\| \*\*(?P<tool>[^*]+)\*\* \| (?P<version>[0-9]+\.[0-9]+\.[0-9]+) \| "
-    r"\[(?P<label>[^\]]+)\]\((?P<url>[^)]+)\) \|$"
+_DOWNLOAD_HEADER = re.compile(
+    r"^\| Tool[^|]* \| What it does \| Status[^|]* \| Download \|$"
 )
+_TOOL_ROW = re.compile(
+    r"^\| \*\*\[(?P<tool>[^\]]+)\]\([^)]+\)\*\* \| [^|]* \| [^|]* \| (?P<download>[^|]*) \|$"
+)
+_DOWNLOAD_LINK = re.compile(r"^\[(?P<label>[^\]]+)\]\((?P<url>[^)]+)\)$")
 
 REUSABLE_CI = "./.github/workflows/ci.yml"
 QUALITY_JOB = "quality-gates"
@@ -1324,7 +1327,7 @@ def validate_appcast_key_resources(
 
 
 def validate_download_table(readme_text: str, ref_name: str | None = None) -> list[str]:
-    """Keep README's download table pinned to real, current release tags."""
+    """Keep README's tools table downloads pinned to matching release tags."""
     problems: list[str] = []
 
     uncovered = set(PRODUCTS) - set(DOWNLOAD_TOOLS.values()) - UNRELEASED_PRODUCTS
@@ -1347,33 +1350,37 @@ def validate_download_table(readme_text: str, ref_name: str | None = None) -> li
         section.append(line)
 
     table = [line for line in section if line.startswith("|")]
-    if not table or table[0] != DOWNLOAD_HEADER:
+    if not table or _DOWNLOAD_HEADER.fullmatch(table[0]) is None:
         return problems + [
             f"README.md: download table must start with {DOWNLOAD_HEADER!r}"
         ]
 
     versions: dict[str, str] = {}
     for line in table[2:]:
-        match = _DOWNLOAD_ROW.match(line)
+        match = _TOOL_ROW.fullmatch(line)
         if match is None:
             problems.append(f"README.md: unreadable download row {line!r}")
             continue
         tool = match.group("tool")
         product = DOWNLOAD_TOOLS.get(tool)
         if product is None:
-            problems.append(f"README.md: unknown download tool {tool!r}")
+            if match.group("download").startswith("["):
+                problems.append(f"README.md: unknown download tool {tool!r}")
             continue
         if tool in versions:
             problems.append(f"README.md: duplicate download row for {tool!r}")
             continue
-        version = match.group("version")
+        download = _DOWNLOAD_LINK.fullmatch(match.group("download"))
+        if download is None:
+            problems.append(f"README.md: unreadable download row {line!r}")
+            continue
+        version = download.group("label")
+        if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
+            problems.append(f"README.md: {tool} link text must be a plain version")
+            continue
         versions[tool] = version
         tag = f"{PRODUCTS[product].tag_prefix}{version}"
-        if match.group("label") != tag:
-            problems.append(
-                f"README.md: {tool} link text must be the release tag {tag}"
-            )
-        if match.group("url") != f"{RELEASE_TAG_URL}{tag}":
+        if download.group("url") != f"{RELEASE_TAG_URL}{tag}":
             problems.append(f"README.md: {tool} must link to {RELEASE_TAG_URL}{tag}")
 
     for tool in DOWNLOAD_TOOLS:

@@ -399,7 +399,7 @@ Revision3ContentIndex _v4Index({
       'origin': <String, Object?>{
         'type': 'generated',
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 4,
+        'generator_version': 6,
         'owner': <String, Object?>{
           'project_id': revision3QuestOutlineProjectId,
           'entity_id': revision3QuestOutlineQuestId,
@@ -410,7 +410,7 @@ Revision3ContentIndex _v4Index({
         'kind': 'script_module',
         'data': <String, Object?>{
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': 4,
+          'generator_version': 6,
           'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
           'module_relative_path': 'PROJECT/QUESTS/FINDHOMER.as',
           'status': <String, Object?>{

@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use gore_modgen::gen::{gen_lua, MetaConfig, OverridesConfig, SingleOverride};
+use gore_modgen::gen::SingleOverride;
 
 pub mod dialog;
 pub mod mgr;
@@ -113,6 +113,40 @@ pub struct LooseFileReplacement {
     pub game_path: String,
     /// Replacement file on disk. Resolved relative to the build spec's own directory.
     pub source_path: String,
+}
+
+/// One authored class-default edit compiled into a script mini-cache.
+///
+/// `value` is a single-key object: `{"int": n}`, `{"float": n}`, `{"bool": true}`, or
+/// `{"str": "..."}`. A `tag` selects one entry of a `GameplayTag` map such as `m_DamageBase`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ValueEdit {
+    pub class: String,
+    pub field: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    pub value: ValueLiteral,
+}
+
+/// A scalar the native default builder can write and read back from AngelScript source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ValueLiteral {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+}
+
+impl ValueLiteral {
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Self::Int(_) => "int",
+            Self::Float(_) => "float",
+            Self::Bool(_) => "bool",
+            Self::Str(_) => "str",
+        }
+    }
 }
 
 /// One AngelScript module mod: splice (`op = "add"`) or replace (`op = "edit"`) the compiled
@@ -321,6 +355,10 @@ pub struct BuildSpec {
     /// This delivery mechanism does not certify selection-side save or knowledge behavior.
     #[serde(default)]
     pub dialog_topics: Vec<DialogTopicSpec>,
+    /// Class-default edits. `gore mod build` compiles these into `scripts` before packaging.
+    /// The packager itself refuses a spec that still carries them.
+    #[serde(default)]
+    pub values: Vec<ValueEdit>,
     #[serde(default)]
     pub voice: Vec<VoiceArchiveEdit>,
 }
@@ -646,60 +684,28 @@ pub fn build_bundle_relative_to(spec: &BuildSpec, base: &Path) -> Result<Bundle>
         )));
     }
 
-    // overrides → UE4SS Lua mod
-    // Runtime UE4SS content is emitted as exactly ONE component. Dialog topic registration shares
-    // that component with generated CDO overrides; emitting two roots would otherwise reintroduce
-    // ambiguous last-wins deployment behavior.
-    let ue4ss_opaque = !spec.dialog_topics.is_empty();
-    let dialog_runtime = if spec.dialog_topics.is_empty() {
-        None
-    } else {
-        Some(
-            dialog::render_dialog_runtime(name, &spec.dialog_topics)
-                .map_err(|error| ModError::Other(format!("invalid dialog topics: {error}")))?,
-        )
-    };
-    let mut ue4ss_lua = None;
-    let mut ue4ss_targets = Vec::new();
-
+    // First-party item values and dialog registration no longer emit a UE4SS Lua component.
+    // Third-party UE4SS folders can still be imported by the mod manager.
     if !spec.overrides.is_empty() {
-        let cfg = OverridesConfig {
-            meta: MetaConfig {
-                name: name.clone(),
-                delay_ms: spec.delay_ms,
-            },
-            overrides: spec.overrides.clone(),
-        };
-        ue4ss_lua = Some(gen_lua(&cfg));
-        // The `Class.Field` CDO targets this mod sets, for the manager's conflict detection.
-        ue4ss_targets = spec
-            .overrides
-            .iter()
-            .map(|o| format!("{}.{}", o.class, o.field))
-            .collect();
-        ue4ss_targets.sort();
-        ue4ss_targets.dedup();
+        return Err(ModError::Other(
+            "bundle overrides are retired. Put item and stat edits in `values` and build with \
+             `gore mod build`, which compiles them into a script mini-cache. UE4SS is not used."
+                .into(),
+        ));
     }
-
-    if let Some(runtime) = dialog_runtime {
-        let lua = ue4ss_lua.get_or_insert_with(String::new);
-        if !lua.is_empty() && !lua.ends_with('\n') {
-            lua.push('\n');
-        }
-        lua.push_str(&runtime);
-        // Dialog registration also mutates transient topic sets. The component is marked opaque
-        // below, while its exact generated CDO-override targets remain useful partial metadata.
+    if !spec.dialog_topics.is_empty() {
+        return Err(ModError::Other(
+            "dialog_topics is retired. Dialog edits deploy as an AngelScript mini-cache. The \
+             UE4SS topic-registration adapter is no longer generated."
+                .into(),
+        ));
     }
-
-    if let Some(lua) = ue4ss_lua {
-        files.insert(format!("ue4ss/{name}/enabled.txt"), Vec::new());
-        files.insert(format!("ue4ss/{name}/Scripts/main.lua"), lua.into_bytes());
-        components.push(Component::Ue4ssLua {
-            name: name.clone(),
-            path: format!("ue4ss/{name}"),
-            targets: ue4ss_targets,
-            opaque: ue4ss_opaque,
-        });
+    if !spec.values.is_empty() {
+        return Err(ModError::Other(
+            "values must be compiled by `gore mod build` before packaging. The packager does \
+             not invoke the AngelScript compiler."
+                .into(),
+        ));
     }
 
     // loc edits → declarative patch
@@ -2139,6 +2145,12 @@ fn sanitize(s: &str) -> String {
 /// syntax, trailing dots/spaces, and names too long for GORE's decorated output filenames, so a
 /// name accepted while scaffolding cannot fail later when the bundle is built or published.
 pub fn validate_mod_name(name: &str) -> std::result::Result<(), ModError> {
+    if is_value_intermediate_dirname(name) {
+        return Err(ModError::Other(format!(
+            "invalid mod name {name:?}: `.value-minis` is reserved for value-build intermediates \
+             under the output directory"
+        )));
+    }
     if is_safe_mod_name(name) {
         Ok(())
     } else {
@@ -2150,10 +2162,18 @@ pub fn validate_mod_name(name: &str) -> std::result::Result<(), ModError> {
     }
 }
 
+/// `out/.value-minis` holds per-invocation compiler files. The same string as a bundle name
+/// makes that directory the published bundle, so a failed rebuild writes into the previous one.
+fn is_value_intermediate_dirname(name: &str) -> bool {
+    name.eq_ignore_ascii_case(".value-minis")
+}
+
 /// A safe mod name is a single normal path component: non-empty, no path separators, no `..`,
 /// no control characters — so it can't escape the bundle/UE4SS Mods directory.
 fn is_safe_mod_name(name: &str) -> bool {
-    name.len() <= MAX_PORTABLE_MOD_NAME_BYTES && is_safe_filename(name)
+    name.len() <= MAX_PORTABLE_MOD_NAME_BYTES
+        && !is_value_intermediate_dirname(name)
+        && is_safe_filename(name)
 }
 
 /// A safe single filename: non-empty, no separators, no `..`, no control chars.
@@ -3063,6 +3083,15 @@ fn read_regular_file_limited(path: &Path, label: &str, max_bytes: u64) -> Result
         )));
     }
     Ok(bytes)
+}
+
+/// Native script rows require the installed Binds.Cache for this exact pristine cache.
+/// Missing or mismatched evidence leaves normal script composition available, but cannot
+/// authorize native properties.
+pub(crate) fn qualified_native_binds_for_base(cache_path: &Path, base: &[u8]) -> Option<Vec<u8>> {
+    let path = cache_path.parent()?.join("Binds.Cache");
+    let binds = read_regular_file_limited(&path, "native Binds.Cache", 128 * 1024 * 1024).ok()?;
+    gore_as::cache::remap::qualified_native_api_binds_match(base, &binds).then_some(binds)
 }
 
 fn metadata_is_link(metadata: &std::fs::Metadata) -> bool {
@@ -8267,13 +8296,22 @@ fn prepare(
                 let (pristine, source) =
                     read_pristine_bounded_with_source(&cache_path, prev, MAX_PRISTINE_PATCH_BYTES)?;
                 plan.bind_backup_identity(&cache_path, source.basis)?;
+                // Share one authenticated native authority across inspection, canonicalization,
+                // and composition; rereading Binds.Cache between passes could change that proof.
+                let binds = qualified_native_binds_for_base(&cache_path, &pristine);
                 // Pass 1 inventories portable novel identities without retaining any mini bytes.
                 // The immutable union, rather than package/loadout order, determines every finite-
                 // domain pointer and engine-ID assignment.
                 let mut inspect_bytes = 0u64;
-                let mut loadout_builder =
-                    gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new(&pristine)
-                        .map_err(|err| ModError::Other(format!("prepare script ID plan: {err}")))?;
+                let mut loadout_builder = match binds.as_deref() {
+                    Some(binds) => {
+                        gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new_with_binds(
+                            &pristine, binds,
+                        )
+                    }
+                    None => gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new(&pristine),
+                }
+                .map_err(|err| ModError::Other(format!("prepare script ID plan: {err}")))?;
                 for e in &entries {
                     let mini = read_bundle_script_mini_phase(
                         bundle_dir,
@@ -8329,7 +8367,11 @@ fn prepare(
                 // Pass 3 verifies each generated tempfile's length and SHA-256, then composes that
                 // exact Vec. Consuming the candidates releases their disk footprint incrementally.
                 let mut script_merge_guard =
-                    gore_as::cache::splice::SequentialMiniGuard::new(&pristine).map_err(|err| {
+                    gore_as::cache::splice::SequentialMiniGuard::new_with_binds(
+                        &pristine,
+                        binds.as_deref().unwrap_or(&[]),
+                    )
+                    .map_err(|err| {
                         ModError::Other(format!("prepare script composition: {err}"))
                     })?;
                 let mut running = pristine;
@@ -14689,6 +14731,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "German.zip".into(),
                 op: VoicePatchOp::Replace,
@@ -14859,12 +14902,7 @@ mod tests {
                 author: "me".into(),
             },
             delay_ms: 0,
-            overrides: vec![SingleOverride {
-                class: "ItFo_Apple".into(),
-                field: "m_Value".into(),
-                module: "Angelscript".into(),
-                value: OverrideValue::Int(500),
-            }],
+            overrides: vec![],
             loc_edits: loc,
             audio: vec![AudioReplacement {
                 bank: "SFX.bank".into(),
@@ -14876,17 +14914,17 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
 
         let bundle = build_bundle(&spec).unwrap();
-        assert!(bundle.files.contains_key("ue4ss/MyMod/Scripts/main.lua"));
-        assert!(bundle.files.contains_key("ue4ss/MyMod/enabled.txt"));
+        assert!(!bundle.files.keys().any(|path| path.contains("ue4ss/")));
         assert!(bundle.files.contains_key("loc/edits.json"));
         assert!(bundle.files.contains_key("audio/manifest.json"));
         assert!(bundle.files.contains_key("audio/0_SFX_bank__SFX_UI_X.wav"));
         assert!(bundle.files.contains_key("gore-mod.json"));
-        assert_eq!(bundle.manifest.components.len(), 3);
+        assert_eq!(bundle.manifest.components.len(), 2);
 
         // round-trip manifest
         let mj = &bundle.files["gore-mod.json"];
@@ -15131,6 +15169,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         assert!(build_bundle(&spec).is_err());
@@ -15161,6 +15200,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();
@@ -15199,6 +15239,7 @@ mod tests {
                 mini_cache: mini.display().to_string(),
             }],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();
@@ -15250,6 +15291,7 @@ mod tests {
                 mini_cache: "mod.cache".into(),
             }],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "German.zip".into(),
                 op: VoicePatchOp::Replace,
@@ -15469,6 +15511,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         }
     }
@@ -15489,6 +15532,7 @@ mod tests {
             pak_files,
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         }
     }
@@ -15935,6 +15979,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![
                 VoiceArchiveEdit {
                     archive: "German.zip".into(),
@@ -16063,6 +16108,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![
                 VoiceArchiveEdit {
                     archive: "German.zip".into(),
@@ -17060,6 +17106,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "German.zip".into(),
                 op: VoicePatchOp::Add,
@@ -17356,6 +17403,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "German.zip".into(),
                 op: VoicePatchOp::Add,
@@ -17416,6 +17464,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice,
         };
         let first_spec = voice_spec(
@@ -17544,6 +17593,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "german_new.zip".into(),
                 op: VoicePatchOp::Replace,
@@ -17783,6 +17833,47 @@ mod tests {
             run(true),
             "direct bundle order must not change portable-identity assignments"
         );
+    }
+
+    #[test]
+    #[ignore = "requires GORE_NATIVE_HEAD_GAME and GORE_NATIVE_HEAD_MINI; offline preparation only"]
+    fn real_head_native_minis_survive_direct_preparation_and_reject_changed_binds() {
+        let input = std::path::PathBuf::from(std::env::var_os("GORE_NATIVE_HEAD_GAME").unwrap());
+        let mini = std::path::PathBuf::from(std::env::var_os("GORE_NATIVE_HEAD_MINI").unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let scripts = game.join("G1R/Script");
+        std::fs::create_dir_all(&scripts).unwrap();
+        let cache = scripts.join("PrecompiledScript_Shipping.Cache");
+        let binds = scripts.join("Binds.Cache");
+        std::fs::copy(input.join("G1R/Script/PrecompiledScript_Shipping.Cache"), &cache).unwrap();
+        std::fs::copy(input.join("G1R/Script/Binds.Cache"), &binds).unwrap();
+        let before = std::fs::read(&cache).unwrap();
+        let bundle = dir.path().join("bundle");
+        std::fs::create_dir_all(bundle.join("scripts")).unwrap();
+        std::fs::copy(mini, bundle.join("scripts/head.Cache")).unwrap();
+        std::fs::write(bundle.join("scripts/manifest.json"), serde_json::to_vec(&vec![ScriptEntry {
+            op: "add".into(), module: "GoreHeadApi.Provider".into(), mini: "scripts/head.Cache".into(),
+        }]).unwrap()).unwrap();
+        let manifest = ModManifest {
+            format: 1,
+            mod_meta: ModMeta { name: "HeadApiPreparation".into(), version: "1".into(), author: "offline-test".into() },
+            components: vec![Component::AngelScriptPatch { path: "scripts".into() }],
+        };
+        let plan = prepare(&bundle, &manifest, &resolve_game_paths(&game), None).unwrap();
+        let (_, output) = plan.writes.iter().find(|(path, _)| path == &cache).unwrap();
+        let names = gore_as::cache::walk_modules::module_names(output).unwrap();
+        assert!(names.iter().any(|name| name == "GoreHeadApi.Provider"));
+        assert_eq!(names.len(), gore_as::cache::walk_modules::module_count(&before) as usize + 1);
+        drop(plan);
+        let mut changed = std::fs::read(&binds).unwrap();
+        changed[0] ^= 1;
+        std::fs::write(&binds, changed).unwrap();
+        let error = prepare(&bundle, &manifest, &resolve_game_paths(&game), None).unwrap_err().to_string();
+        assert!(error.contains("UPoseableMeshComponent") && error.contains("declaration membership"), "{error}");
+        assert_eq!(std::fs::read(cache).unwrap(), before);
+        assert!(!bak_path(&scripts.join("PrecompiledScript_Shipping.Cache")).exists());
+        assert!(!record_path(&game).exists());
     }
 
     #[test]
@@ -18058,6 +18149,7 @@ mod tests {
                 mini_cache: mini,
             }],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();
@@ -18612,6 +18704,10 @@ mod tests {
         }
         assert!(!is_safe_rel_path("payload\\file.bin"));
         assert!(is_safe_mod_name("Normal-Mod_1"));
+        assert!(!is_safe_mod_name(".value-minis"));
+        assert!(!is_safe_mod_name(".VALUE-MINIS"));
+        let reserved = validate_mod_name(".value-minis").unwrap_err().to_string();
+        assert!(reserved.contains("reserved"), "{reserved}");
         assert!(is_safe_rel_path("payload/sub/file.bin"));
         assert!(is_safe_mod_name(&"a".repeat(MAX_PORTABLE_MOD_NAME_BYTES)));
         assert!(!is_safe_mod_name(
@@ -18872,27 +18968,14 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
-        let bundle = build_bundle(&spec).unwrap();
-        let expected = vec!["ClassA.FieldX".to_string(), "ClassB.FieldY".to_string()];
-        let Some(Component::Ue4ssLua {
-            targets, opaque, ..
-        }) = bundle.manifest.components.first()
-        else {
-            panic!("expected a Ue4ssLua component");
-        };
-        assert_eq!(targets, &expected);
-        assert!(!*opaque);
-        assert!(std::str::from_utf8(&bundle.files["gore-mod.json"])
-            .unwrap()
-            .contains("\"opaque\": false"));
-        // And the serialized manifest round-trips them.
-        let m: ModManifest = serde_json::from_slice(&bundle.files["gore-mod.json"]).unwrap();
-        assert!(matches!(
-            m.components.first(),
-            Some(Component::Ue4ssLua { targets, .. }) if targets == &expected
-        ));
+        let error = build_bundle(&spec).unwrap_err();
+        assert!(
+            error.to_string().contains("overrides are retired"),
+            "{error}"
+        );
     }
 
     /// A format-1 manifest written before `targets` existed must still parse, with the
@@ -19299,7 +19382,11 @@ mod tests {
         };
         std::fs::write(record_path(&game), serde_json::to_vec(&rec).unwrap()).unwrap();
 
-        // A minimal valid bundle (one override → one Ue4ssLua component).
+        let mut loc = BTreeMap::new();
+        loc.insert(
+            "itfo_cheese".to_string(),
+            BTreeMap::from([("german".to_string(), "X".to_string())]),
+        );
         let spec = BuildSpec {
             meta: ModMeta {
                 name: "Solo".into(),
@@ -19307,19 +19394,15 @@ mod tests {
                 author: String::new(),
             },
             delay_ms: 0,
-            overrides: vec![SingleOverride {
-                class: "ClassA".into(),
-                field: "FieldX".into(),
-                module: "Angelscript".into(),
-                value: OverrideValue::Int(1),
-            }],
-            loc_edits: BTreeMap::new(),
+            overrides: vec![],
+            loc_edits: loc,
             audio: vec![],
             texture: vec![],
             files: vec![],
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bundle_dir = dir.path().join("bundle");

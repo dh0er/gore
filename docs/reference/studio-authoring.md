@@ -1,20 +1,22 @@
 # Mod Studio NPC and quest authoring internals
 
 This page records implementation contracts, invariants, retained proof, and
-native transaction behavior for Mod Studio's NPC and quest authoring. It is
-not instructions: the user-facing workflows live in
-[Mod Studio](../guide/mod-studio.md).
+native transaction behavior for the current implementation of the planned
+Mod Studio GUI. These contracts describe Studio's managed Draft routes, not
+the capabilities of GORE's CLI or MCP tools. GUI workflows live in
+[Mod Studio](../guide/mod-studio.md); use [NPC authoring](../guide/npc-authoring.md)
+and [Dialog authoring](../guide/dialog-authoring.md) for current mod workflows.
 
 ## NPC authoring
 
-A candidate logical NPC identity can be expressed as a linked AngelScript class
-chain that leaves archetype and visual/actor defaults inherited from an existing
-human parent. Compilation and cache composition of that chain are now proven
-offline. Runtime class residence, effective visuals, spawning, independent
-dialog/quest state, persistence, and save behavior remain separate
-qualification steps.
+The historical logical-clone probe below established offline compilation and
+cache composition for an NPC class chain inheriting an existing human parent.
+Later CLI/MCP work added the complete authoring and spawn path, with in-game
+observations of bodies, independent identity, dialog/quest state, and persistence
+recorded in [NPC authoring](../guide/npc-authoring.md#what-is-proven-and-what-is-not).
+Studio's remaining Draft limitations do not supersede those capabilities.
 
-### Offline-proven logical clone
+### Historical offline logical-clone probe
 
 The bounded `NpcLogicalCloneV1` probe adds exactly one module with three new
 Asghan-derived classes:
@@ -83,13 +85,13 @@ record, compiler lock/journal/backup, loose script, development cache, probe
 UE4SS component, game/compiler process, or spawn edit remained. The probe did
 not start a playable session or perform a save operation.
 
-### What this changes
+### What the probe established
 
 Cooked DataAsset creation is not proven to be a universal prerequisite for a
-new **logical** NPC identity. At the class/default level, the current chain
+new **logical** NPC identity. At the class/default level, the probe's chain
 inherits an existing archetype, actor Blueprint, visuals, AI, routine defaults,
 and other cooked content while changing the identity and class links in
-AngelScript. Effective runtime resolution remains unproven.
+AngelScript. This particular probe did not test runtime resolution.
 
 Cooked asset/package tooling is still required when a mod needs genuinely new
 meshes, materials, animations, character Blueprints, modular visual tokens,
@@ -97,38 +99,34 @@ placed world actors, or another registry/package shape that the chosen content
 path actually uses. The offline class proof does not show that the game accepts
 or spawns the logical clone.
 
-### Remaining runtime gates
+### Scope of the historical probe
 
-The proof does not yet establish:
+The three-class probe checked source and composed cache output only. It did
+not exercise spawning, distinct saved identity, visuals, independent gameplay
+state, save/reload, or removal. Those limits describe the retained experiment,
+not missing capabilities in today's CLI or MCP tools.
 
-- that all three new classes are resident and accepted by native spawn code;
-- a safe placement or spawn hook for a new body;
-- a distinct GlobalId and save record with no vanilla identity collision;
-- independent dialog, quest, knowledge, inventory, or routine state;
-- visuals, AI, streaming-boundary behavior, save/reload, or uninstall behavior;
-- compatibility with another executable or future hotfix.
+For current creation, placement, routines, dialogs, and the linked runtime
+results, follow [NPC authoring](../guide/npc-authoring.md). The tested examples
+are evidence for working techniques, not a prerequisite to prove every new
+combination before authoring. Use the current tools to build and check a mod;
+keep its actual test results distinct from the historical examples.
 
-The next qualification order is:
-
-1. Rebuild and verify the three-class mini-cache offline.
-2. Deploy only the class module and read back the exact class/CDO identities
-   without spawning or mutating gameplay.
-3. Separately compose one conservative, reviewed spawn-site edit.
-4. Spawn only on a disposable save/profile and verify unique identity, visuals,
-   AI, interaction, dialog/quest separation, streaming, and save/reload.
-5. Compare the disposable save semantically, undeploy, and verify the pristine
-   installation before widening the capability claim.
-
-A second call to a vanilla spawn definition only creates another body sharing
-the vanilla identity; it is not a substitute for this new linked class chain.
+An authored character needs its own linked class chain. Calling a vanilla spawn
+definition again alone shares that vanilla identity.
 
 ### Mod Studio boundary
 
-The central closed generation registry currently contains exactly five reviewed
+The following generation admission and Draft status contracts belong to the
+current Studio GUI implementation. They do not impose Studio's missing GUI
+features or Draft blockers on the separate CLI/MCP authoring workflow.
+
+The central closed generation registry currently contains exactly six reviewed
 Steam generation triples: the retained Steam 1.0.3 Hotfix 1 seal set, Steam
-build `24169431`, Steam build `24340829` from the 2026-07-31 update, and Steam
-build `24878692` from the 2026-08-27/28 update, and Steam build `25168047`
-from the 2026-09-21 1.0.5 hotfix.
+build `24169431`, Steam build `24340829` from the 2026-07-31 update, Steam
+build `24878692` from the 2026-08-27/28 update, Steam build `25168047`
+from the 2026-09-21 1.0.5 hotfix, and Steam build `25414091` from the
+2026-09-25 update.
 For Story/NPC/Quest, executable, deployment-aware pristine Shipping cache, and
 `Binds.Cache` must all match the same registered row; nearby hashes and cross-
 generation mixtures fail closed. Item authoring has a separate narrower gate:
@@ -158,9 +156,20 @@ seal, with its `ParentQuestClass` default verified separately. The full offline
 source-tree comparison has 164,724 aligned functions and no semantic differences.
 It does not add a live-game or dialog-runtime qualification.
 
-Those rows therefore admit the existing bounded project-only Story/NPC/Quest
-routes for their exact triples and the Item route for each exact executable
-seal. They grant no dialog-runtime, production-build, deployment, live-game, or
+The `25414091` row uses a fresh 174209 USMAP. `Binds.Cache` and the class
+graph stay those of `25168047`, so it keeps that standalone API profile. The
+six curated modules reproduce their V5 source seals and V6 rebinds them. The
+previous Shipping cache was not on disk, so this row records no function-level
+diff. It does not add a live-game or dialog-runtime qualification. It also has
+no qualified native API snapshot. Mod Studio therefore does not accept this
+triple for revision-3 project creation or NPC drafts: NPC and head scripts
+that reference the sealed native declarations would fail closed, and Studio
+has no `--force` hatch.
+
+The five earlier rows admit the existing bounded project-only Story/NPC/Quest
+routes for their exact triples. Build `25414091` remains a registry row for
+its curated catalog and for the Item route selected by its executable seal.
+The Item route stays available for each exact executable seal. They grant no dialog-runtime, production-build, deployment, live-game, or
 DataAsset authority, and do not promise that future or non-Steam builds are
 compatible without their own reviewed row. Standalone compiler-core parity is
 a separate frozen-corpus/full-tree qualification and is not implied by Studio's
@@ -325,7 +334,9 @@ This metadata deliberately does **not** create an AngelScript topic, greeting
 condition, player choice, selection effect, Quest relationship, NPC runtime
 registration, build output, deployment, or playable conversation. It writes
 only the managed project and does not touch the game installation or a save.
-Those runtime and lowering mechanisms remain separate research gates.
+Studio does not yet lower this greeting metadata into a playable conversation.
+The separate CLI/MCP path is documented in
+[Dialog authoring](../guide/dialog-authoring.md).
 
 ### Managed revision-3 NPC Draft removal V1
 
@@ -416,12 +427,17 @@ internal implementation detail and is never caller-selected or returned.
 This closes only the selected generated-source compiler check. It still grants
 no production build, cache adoption, deployment, class residence, spawn,
 runtime, publication, or save authority. The remaining production, residence,
-and spawn blockers stay visible after compiler acceptance.
+and spawn blockers for this Studio Draft stay visible after compiler acceptance.
 
 ## Quest authoring
 
 Quest authoring is a greenfield Revision-3 workflow. The only persisted
-generator contract is version 4.
+generator contract is version 6. It emits native `UFUNCTION(BlueprintOverride)`
+event names and const `Should*` predicates; ordinary callable methods named
+`*_Implementation` do not establish those native event bindings.
+Older artifacts, including versions 4 and 5, fail the exact generator-contract
+checks; this change does not migrate existing projects or rewrite their
+generated sources in place.
 
 ### Current model
 
@@ -429,7 +445,7 @@ A Quest consists of one `quest_draft` entity and one generated
 `script_module` entity. Both entities use:
 
 - generator ID `gore-authoring.draft-quest-skeleton`
-- generator version `4`
+- generator version `6`
 - an exact owner/reference pair
 - revisions that advance together for Quest edits
 
@@ -457,7 +473,7 @@ session as requiring reopen. Correctable semantic conflicts remain retryable.
 
 ### Runtime boundary
 
-Mod Studio can author, persist, inspect, and prepare generator-version-4 Quest
+Mod Studio can author, persist, inspect, and prepare generator-version-6 Quest
 content. Runtime qualification and game installation remain explicit status
 claims; the editor never presents an offline draft as proven playable. The
 managed compiler and runtime validation work must succeed before publication to
@@ -465,7 +481,7 @@ the game can be claimed.
 
 ### Invariants for new work
 
-- Add functionality to the single Revision-3/version-4 path.
+- Add functionality to the single Revision-3/version-6 path.
 - Keep the transition plan required in every persisted Quest.
 - Preserve stable objective slots across outline, behavior, and transcript
   edits.

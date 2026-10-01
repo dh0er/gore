@@ -347,6 +347,27 @@ fn read_cache(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<(PathBuf,
     Ok((path, bytes))
 }
 
+/// Authoring and its checks use the same pristine base as NPC authoring and compilation.
+fn authoring_cache_path(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(cache) = cache {
+        return Ok(cache);
+    }
+    let root = gore_loc::config::game_root(game).context("resolving the game path")?;
+    cache_path(None, Some(root.clone()))?;
+    Ok(gore_mod::pristine_script_cache_source(&root)
+        .context("selecting the pristine dialog base cache")?
+        .path)
+}
+
+fn read_authoring_cache(
+    cache: Option<PathBuf>,
+    game: Option<PathBuf>,
+) -> Result<(PathBuf, Vec<u8>)> {
+    let path = authoring_cache_path(cache, game)?;
+    let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    Ok((path, bytes))
+}
+
 fn read_graph(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<DialogGraph> {
     let (path, bytes) = read_cache(cache, game)?;
     dialog::build(&bytes).with_context(|| format!("reading dialog from {}", path.display()))
@@ -396,21 +417,37 @@ fn prefer_rooted_conversations<'a>(selected: Vec<&'a Conversation>) -> Vec<&'a C
         .collect()
 }
 
-/// Prefer exact participant/module matches when resolving one conversation, then fall back to
-/// the broad substring lookup used by read commands.
+/// Exact modules remain directly addressable. An exact NPC alias prefers its own rooted
+/// conversation over group appearances, then falls back to participant and substring matches.
 fn matching<'a>(graph: &'a DialogGraph, needle: &str) -> Vec<&'a Conversation> {
-    let folded = needle.to_lowercase();
+    let modules = graph
+        .conversations
+        .iter()
+        .filter(|conversation| conversation.module.eq_ignore_ascii_case(needle))
+        .collect::<Vec<_>>();
+    if !modules.is_empty() {
+        return modules;
+    }
     let exact: Vec<&Conversation> = graph
         .conversations
         .iter()
         .filter(|conversation| {
             conversation
                 .npc_participants()
-                .any(|participant| participant.to_lowercase() == folded)
-                || conversation.module.to_lowercase() == folded
+                .any(|participant| participant.eq_ignore_ascii_case(needle))
         })
         .collect();
     if !exact.is_empty() {
+        let own = exact
+            .iter()
+            .copied()
+            .filter(|conversation| {
+                conversation.root_class.is_some() && conversation.npc_participants().count() == 1
+            })
+            .collect::<Vec<_>>();
+        if !own.is_empty() {
+            return own;
+        }
         return prefer_rooted_conversations(exact);
     }
     prefer_rooted_conversations(containing(graph, needle))
@@ -614,7 +651,13 @@ fn resolve_one<'a>(graph: &'a DialogGraph, npc: &str) -> Result<&'a Conversation
         _ => {
             let names: Vec<String> = selected
                 .iter()
-                .map(|conversation| participant_label(conversation))
+                .map(|conversation| {
+                    format!(
+                        "{} ({})",
+                        participant_label(conversation),
+                        conversation.module
+                    )
+                })
                 .collect();
             bail!(
                 "{npc:?} matched {} conversations: {}. Name one exactly",
@@ -2557,7 +2600,7 @@ fn native_api(cache_path: &std::path::Path) -> Option<gore_as::cache::binds::Nat
 
 fn checkout(npc: &str, out: &PathBuf, cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
     ensure_empty_dialog_workspace(out)?;
-    let (path, bytes) = read_cache(cache, game)?;
+    let (path, bytes) = read_authoring_cache(cache, game)?;
     let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
     let conversation = resolve_one(&graph, npc)?;
 
@@ -2639,9 +2682,8 @@ fn dialog_workspace_source(dir: &Path, value: &str) -> Result<PathBuf> {
     let mut candidate = dir.to_path_buf();
     for (index, component) in components.iter().enumerate() {
         candidate.push(component.as_os_str());
-        let metadata = fs::symlink_metadata(&candidate).with_context(|| {
-            format!("reading dialog source metadata {}", candidate.display())
-        })?;
+        let metadata = fs::symlink_metadata(&candidate)
+            .with_context(|| format!("reading dialog source metadata {}", candidate.display()))?;
         if dialog_metadata_is_link(&metadata) {
             bail!(
                 "dialog manifest source_file crosses a symbolic link or reparse point: {}",
@@ -2818,7 +2860,7 @@ fn open_edit(
         .with_context(|| format!("validating {}", manifest_path.display()))?;
     let source_path = dialog_workspace_source(dir, &manifest.source_file)?;
 
-    let (path, bytes) = read_cache(cache, game)?;
+    let (path, bytes) = read_authoring_cache(cache, game)?;
     let digest = digest_of(&bytes);
     if digest != manifest.cache_sha256 {
         bail!(
@@ -2913,33 +2955,20 @@ fn check(dir: &PathBuf, json: bool, cache: Option<PathBuf>, game: Option<PathBuf
         }
         Err(error) => return Err(error),
     };
+    if !manifest.dialog_topics.is_empty() && !json {
+        bail!(
+            "dialog_topics is retired. Same-module dialog edits deploy as a script mini-cache \
+             and do not insert a UE4SS Lua adapter."
+        );
+    }
 
     if json {
-        let document = serde_json::json!({
-            "operation": manifest.operation.as_str(),
-            "module": manifest.module,
-            "participant": manifest.participant,
-            "unchanged": report.unchanged,
-            "safe": report.is_carryable(),
-            "requires_new_symbols": report.requires_new_symbols(),
-            "changed": report.changed.iter().map(|body| {
-                serde_json::json!({ "class": body.class, "member": body.member })
-            }).collect::<Vec<_>>(),
-            "changed_defaults": report.changed_defaults.iter().map(|change| {
-                serde_json::json!({ "class": change.class, "target": change.target })
-            }).collect::<Vec<_>>(),
-            "added_classes": report.added_classes,
-            "added_functions": report.added_functions,
-            "new_strings": report.new_strings,
-            "new_static_names": report.new_static_names,
-            "violations": report.violations.iter().map(|violation| violation.explain())
-                .collect::<Vec<_>>(),
-        });
+        let (document, problems) = check_json_document(&manifest, &report);
         println!("{}", serde_json::to_string_pretty(&document)?);
-        return if report.is_carryable() {
+        return if problems == 0 {
             Ok(())
         } else {
-            bail!("{} problem(s)", report.violations.len())
+            bail!("{problems} problem(s)")
         };
     }
 
@@ -2986,6 +3015,45 @@ fn check(dir: &PathBuf, json: bool, cache: Option<PathBuf>, game: Option<PathBuf
     Ok(())
 }
 
+fn check_json_document(
+    manifest: &EditManifest,
+    report: &dialog::EditReport,
+) -> (serde_json::Value, usize) {
+    let mut violations: Vec<String> = report
+        .violations
+        .iter()
+        .map(|violation| violation.explain())
+        .collect();
+    if !manifest.dialog_topics.is_empty() {
+        violations.push(
+            "dialog_topics is retired. Same-module dialog edits deploy as a script mini-cache \
+             and do not insert a UE4SS Lua adapter."
+                .to_string(),
+        );
+    }
+    let problems = violations.len();
+    let document = serde_json::json!({
+        "operation": manifest.operation.as_str(),
+        "module": manifest.module,
+        "participant": manifest.participant,
+        "unchanged": report.unchanged,
+        "safe": problems == 0,
+        "requires_new_symbols": report.requires_new_symbols(),
+        "changed": report.changed.iter().map(|body| {
+            serde_json::json!({ "class": body.class, "member": body.member })
+        }).collect::<Vec<_>>(),
+        "changed_defaults": report.changed_defaults.iter().map(|change| {
+            serde_json::json!({ "class": change.class, "target": change.target })
+        }).collect::<Vec<_>>(),
+        "added_classes": report.added_classes,
+        "added_functions": report.added_functions,
+        "new_strings": report.new_strings,
+        "new_static_names": report.new_static_names,
+        "violations": violations,
+    });
+    (document, problems)
+}
+
 fn stage(
     dir: &PathBuf,
     mod_name: &str,
@@ -3015,7 +3083,7 @@ fn stage(
     prepare_stage_work_dir(&work_dir)?;
 
     let mini = format!("{mod_name}.mini.Cache");
-    let mut spec = serde_json::json!({
+    let spec = serde_json::json!({
         "meta": { "name": mod_name, "version": "0.1.0", "author": "" },
         "scripts": [{
             "op": manifest.operation.as_str(),
@@ -3024,7 +3092,10 @@ fn stage(
         }],
     });
     if !manifest.dialog_topics.is_empty() {
-        spec["dialog_topics"] = serde_json::to_value(&manifest.dialog_topics)?;
+        bail!(
+            "dialog_topics is retired. Same-module dialog edits deploy as a script mini-cache \
+             and do not insert a UE4SS Lua adapter."
+        );
     }
     // Replacing a fresh temporary file atomically never truncates an existing symlink or hard-link
     // target. The earlier check still gives a useful error before workspace parsing.
@@ -3084,10 +3155,12 @@ fn stage(
 }
 
 /// `compile-module` targets a resolved game installation, not an arbitrary cache file. Bind the
-/// printed command to an installation whose current script cache is exactly the checkout base.
+/// printed command to an installation whose pristine script cache is exactly the checkout base.
 fn compiler_game_for(manifest: &EditManifest, game: Option<PathBuf>) -> Result<PathBuf> {
     let root = gore_loc::config::game_root(game).context("resolving compiler game path")?;
-    let script_cache = gore_mod::resolve_game_paths(&root).script_cache;
+    let script_cache = gore_mod::pristine_script_cache_source(&root)
+        .context("selecting the pristine compiler base cache")?
+        .path;
     let bytes = fs::read(&script_cache).with_context(|| {
         format!(
             "reading compiler base cache {}. `compile-module` cannot target an arbitrary --cache file",
@@ -3167,17 +3240,46 @@ pub struct NewConversationRequest {
     pub game: Option<PathBuf>,
 }
 
+/// Quote an FString without the FName preprocessor's comparison-key restrictions. AngelScript
+/// accepts JSON's escapes except `\b` and `\f`; spell those as Unicode escapes instead.
+fn dialog_string_literal(text: &str) -> Result<String> {
+    if text.contains('\0') {
+        bail!(
+            "dialog strings cannot contain NUL characters: the script cache cannot preserve them"
+        );
+    }
+    let quoted = serde_json::to_string(text)?;
+    let mut literal = String::with_capacity(quoted.len());
+    let mut characters = quoted.chars();
+    while let Some(character) = characters.next() {
+        literal.push(character);
+        if character == '\\' {
+            match characters.next() {
+                Some('b') => literal.push_str("u0008"),
+                Some('f') => literal.push_str("u000c"),
+                Some(escape) => literal.push(escape),
+                None => bail!("unterminated dialog string escape"),
+            }
+        }
+    }
+    if serde_json::from_str::<String>(&literal)? != text {
+        bail!("dialog string literal does not preserve its input text");
+    }
+    Ok(literal)
+}
+
 fn caption_default_line(caption: Option<&str>, caption_key: Option<&str>) -> Result<String> {
     match (caption, caption_key) {
-        (Some(text), _) => Ok(format!(
-            "    default Caption = FText::FromString(n{}.ToString());",
-            serde_json::to_string(text)?
+        (Some(_), Some(_)) => bail!("--caption and --caption-key cannot be used together"),
+        (Some(text), None) => Ok(format!(
+            "    default Caption = FText::FromString({});",
+            dialog_string_literal(text)?
         )),
-        (_, Some(key)) => Ok(format!(
+        (None, Some(key)) => Ok(format!(
             "    default Caption = LocText({});",
-            serde_json::to_string(key)?
+            dialog_string_literal(key)?
         )),
-        _ => bail!("pass --caption or --caption-key"),
+        (None, None) => bail!("pass --caption or --caption-key"),
     }
 }
 
@@ -3211,10 +3313,10 @@ struct ConversationSettingsAnchor {
     participant: String,
 }
 
-/// Recognize only the per-NPC AI settings module shape observed to be loaded by the runtime.
+/// Recognize the per-NPC settings module shape and the combined module emitted by `npc new`.
 /// Merely finding some `UConversationCharacterSettings` subclass is not enough: those classes
 /// occur in unrelated modules too, and a fuzzy participant match could bind a new conversation to
-/// the wrong NPC.
+/// the wrong NPC. Combined modules additionally require their generated NPC declarations below.
 fn conversation_settings_anchor_identity(module: &str) -> Option<ConversationSettingsAnchor> {
     let parts = module.split('.').collect::<Vec<_>>();
     let [ai, agent, human, config, participant, leaf] = parts.as_slice() else {
@@ -3227,14 +3329,54 @@ fn conversation_settings_anchor_identity(module: &str) -> Option<ConversationSet
     {
         return None;
     }
-    let suffix = leaf.strip_prefix("ConversationCharacterSettings_")?;
-    if !suffix.eq_ignore_ascii_case(participant) {
+    let dedicated_settings = leaf
+        .strip_prefix("ConversationCharacterSettings_")
+        .is_some_and(|suffix| suffix.eq_ignore_ascii_case(participant));
+    if !dedicated_settings && !leaf.eq_ignore_ascii_case(participant) {
         return None;
     }
     Some(ConversationSettingsAnchor {
         module: module.to_owned(),
         participant: (*participant).to_owned(),
     })
+}
+
+fn conversation_settings_anchor_for_module(
+    module: &gore_as::cache::model::Module,
+) -> Option<ConversationSettingsAnchor> {
+    let anchor = conversation_settings_anchor_identity(&module.name)?;
+    if module
+        .name
+        .rsplit('.')
+        .next()?
+        .eq_ignore_ascii_case(&anchor.participant)
+    {
+        // `npc new` keeps the character, config, spawn and ambient settings in one module.
+        // Require that exact global declaration set before admitting this second module shape;
+        // a same-named module containing only an arbitrary settings subclass is not an anchor.
+        for prefix in [
+            "UCharacterDefinition_Human_",
+            "UAIAgentConfig_Human_",
+            "USpawnAIAgentDefinition_",
+            "UConversationCharacterSettings_Ambient_",
+        ] {
+            let name = format!("{prefix}{}", anchor.participant);
+            let matches = module
+                .classes
+                .iter()
+                .filter(|class| class.name == name && class.namespace.is_empty())
+                .collect::<Vec<_>>();
+            let [class] = matches.as_slice() else {
+                return None;
+            };
+            if prefix == "UConversationCharacterSettings_Ambient_"
+                && class.super_class.as_deref() != Some("UConversationCharacterSettings")
+            {
+                return None;
+            }
+        }
+    }
+    Some(anchor)
 }
 
 fn requires_topic_scaffold_for_module(module: &str) -> bool {
@@ -3281,9 +3423,16 @@ fn resolve_conversation_settings_anchor(
     new_conversation_module_names(requested_participant)?;
     let modules = gore_as::cache::model::parse_modules(cache)
         .map_err(|error| anyhow::anyhow!("parsing the script cache: {error}"))?;
+    resolve_conversation_settings_anchor_in_modules(&modules, requested_participant)
+}
+
+fn resolve_conversation_settings_anchor_in_modules(
+    modules: &[gore_as::cache::model::Module],
+    requested_participant: &str,
+) -> Result<ConversationSettingsAnchor> {
     let candidates = modules
         .iter()
-        .filter_map(|module| conversation_settings_anchor_identity(&module.name))
+        .filter_map(conversation_settings_anchor_for_module)
         .collect::<Vec<_>>();
     let anchor = select_exact_settings_anchor(requested_participant, &candidates)?.clone();
     let module = modules
@@ -4434,7 +4583,7 @@ fn new_conversation(request: NewConversationRequest) -> Result<()> {
     gore_mod::validate_mod_name(&request.mod_name).context("invalid --mod-name")?;
     let participant_input = request.npc.trim();
     let (_new_module, _new_relative_path) = new_conversation_module_names(participant_input)?;
-    let (cache_path, bytes) = read_cache(request.cache, request.game)?;
+    let (cache_path, bytes) = read_authoring_cache(request.cache, request.game)?;
     let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
     let selected = exact_npc_matches(&graph, participant_input);
     match selected.as_slice() {
@@ -4656,7 +4805,7 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
             );
         }
     }
-    let (cache_path, bytes) = read_cache(request.cache, request.game)?;
+    let (cache_path, bytes) = read_authoring_cache(request.cache, request.game)?;
     let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
     let conversation = resolve_one(&graph, &request.npc)?;
 
@@ -4954,6 +5103,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn retired_dialog_topics_are_reported_in_check_json() {
+        let manifest = EditManifest {
+            operation: DialogModuleOperation::Edit,
+            module: "Dialog.Module".into(),
+            relative_path: String::new(),
+            source_file: String::new(),
+            pristine_file: String::new(),
+            participant: "Diego".into(),
+            cache_sha256: String::new(),
+            requires_topic_scaffold: false,
+            dialog_topics: vec![DialogTopicRegistration {
+                id: "old".into(),
+                participant_name: "Diego".into(),
+                topic_class: "UOldTopic".into(),
+                sentinel_class: "UOldSentinel".into(),
+                allow_hidden: false,
+            }],
+        };
+        let report = dialog::EditReport {
+            violations: Vec::new(),
+            changed: Vec::new(),
+            changed_defaults: Vec::new(),
+            added_classes: Vec::new(),
+            added_functions: Vec::new(),
+            new_strings: Vec::new(),
+            new_static_names: Vec::new(),
+            unchanged: true,
+        };
+        let (document, problems) = check_json_document(&manifest, &report);
+        assert_eq!(problems, 1);
+        assert_eq!(document["safe"], false);
+        assert_eq!(document["module"], "Dialog.Module");
+        assert!(document["violations"][0]
+            .as_str()
+            .unwrap()
+            .contains("dialog_topics is retired"));
+    }
+
+    #[test]
     fn a_language_family_expands_to_its_columns_newest_first() {
         assert_eq!(columns_for("german"), vec!["german_new", "german"]);
         assert_eq!(
@@ -5025,6 +5213,54 @@ mod tests {
         assert_eq!(containing(&graph, "DiEgO").len(), 3);
         assert_eq!(matching(&graph, "DiEgO").len(), 1);
         assert_eq!(matching(&graph, "DiEgO")[0].module, "Story.Exact");
+    }
+
+    #[test]
+    fn npc_alias_resolves_its_own_dialog_before_group_appearances_case_insensitively() {
+        let mut own = empty_conversation(
+            "Story.G1R.Conversation.Conversation_OC_STT_DIEGO",
+            "OC_STT_DIEGO",
+        );
+        own.root_class = Some("UTopic_Hero__OC_STT_DIEGO".to_owned());
+        let mut drax = own.clone();
+        drax.module = "Story.G1R.Conversation.Conversation_DIEGO_DRAX".to_owned();
+        drax.participants.push("NC_ORG_DRAX_819".to_owned());
+        let mut orry = own.clone();
+        orry.module = "Story.G1R.Conversation.Conversation_DIEGO_ORRY".to_owned();
+        orry.participants.push("OC_GRD_ORRY_254".to_owned());
+        let graph = DialogGraph {
+            conversations: vec![drax.clone(), orry, own.clone()],
+        };
+
+        for alias in ["OC_STT_Diego", "OC_STT_DIEGO", "oc_stt_diego"] {
+            assert_eq!(resolve_one(&graph, alias).unwrap(), &own);
+            assert_eq!(containing(&graph, alias).len(), 3);
+        }
+        assert_eq!(
+            resolve_one(&graph, &drax.module.to_ascii_lowercase()).unwrap(),
+            &drax,
+            "an exact group module remains addressable"
+        );
+        assert!(resolve_one(&graph, "DIEGO").is_err());
+
+        let groups_only = DialogGraph {
+            conversations: graph.conversations[..2].to_vec(),
+        };
+        let error = resolve_one(&groups_only, "OC_STT_Diego").unwrap_err();
+        assert!(error.to_string().contains(&drax.module), "{error}");
+        assert_eq!(matching(&groups_only, "OC_STT_Diego").len(), 2);
+        let one_group = DialogGraph {
+            conversations: vec![drax.clone()],
+        };
+        assert_eq!(resolve_one(&one_group, "OC_STT_Diego").unwrap(), &drax);
+
+        let mut duplicate = own.clone();
+        duplicate.module = "Story.OtherDiegoConversation".to_owned();
+        let ambiguous = DialogGraph {
+            conversations: vec![own, duplicate],
+        };
+        assert!(resolve_one(&ambiguous, "OC_STT_Diego").is_err());
+        assert!(resolve_one(&ambiguous, "NO_SUCH_NPC").is_err());
     }
 
     #[test]
@@ -5456,7 +5692,7 @@ mod tests {
         assert_eq!(
             new_topic_caption_line(request.caption.as_deref(), request.caption_key.as_deref())
                 .unwrap(),
-            r#"    default Caption = FText::FromString(n"Sag \"Los\\geht's\"\nJetzt".ToString());"#
+            r#"    default Caption = FText::FromString("Sag \"Los\\geht's\"\nJetzt");"#
         );
     }
 
@@ -5480,8 +5716,74 @@ mod tests {
                 request.caption_key.as_deref(),
             )
             .unwrap(),
-            r#"    default Caption = FText::FromString(n"Neue Unterhaltung".ToString());"#
+            r#"    default Caption = FText::FromString("Neue Unterhaltung");"#
         );
+    }
+
+    #[test]
+    fn plain_captions_preserve_unicode_and_compiler_supported_string_escapes() {
+        let taken = dialog::Checkout {
+            module: "Dialog.CaptionTest".to_owned(),
+            relative_path: "Dialog/CaptionTest.as".to_owned(),
+            source: "class UCaptionTest : UTopic { default Caption = LocText(\"OLD\"); }\n"
+                .to_owned(),
+            default_classes: BTreeSet::from(["UCaptionTest".to_owned()]),
+            unsupported_generated_methods: Vec::new(),
+        };
+        let known = dialog::KnownNames {
+            types: BTreeSet::from(["UCaptionTest".to_owned(), "UTopic".to_owned()]),
+            native_conversation_bases: BTreeSet::new(),
+            strings: BTreeSet::from(["OLD".to_owned()]),
+            static_names: BTreeSet::new(),
+        };
+        for text in [
+            "Wer ist der Typ da drüben?",
+            "Straße: ÄÖÜ äöü ß — 東京 🙂",
+            "\"quoted\" \\path\\b\\f\n\r\t\u{0008}\u{000c}\u{001f}",
+            "\"); } class UInjected : UObject { /*",
+        ] {
+            let literal = dialog_string_literal(text).unwrap();
+            assert_eq!(serde_json::from_str::<String>(&literal).unwrap(), text);
+            for line in [
+                new_topic_caption_line(Some(text), None).unwrap(),
+                new_conversation_caption_line(Some(text), None).unwrap(),
+            ] {
+                assert_eq!(
+                    line,
+                    format!("    default Caption = FText::FromString({literal});")
+                );
+                let source = format!("class UCaptionTest : UTopic {{\n{line}\n}}\n");
+                let outline = dialog::read_outline(&source).unwrap();
+                assert_eq!(outline.classes.len(), 1);
+                assert_eq!(outline.classes[0].defaults.len(), 1);
+                let report = dialog::verify(&taken, &source, &known);
+                assert!(report.is_carryable(), "{:?}", report.violations);
+                assert!(report.new_static_names.is_empty());
+                assert_eq!(report.new_strings, [text]);
+            }
+        }
+        assert_eq!(
+            dialog_string_literal("\u{0008}\u{000c}\\b\\f").unwrap(),
+            r#""\u0008\u000c\\b\\f""#
+        );
+    }
+
+    #[test]
+    fn explicit_caption_keys_remain_localized_and_caption_arguments_are_exclusive() {
+        for line in [
+            new_topic_caption_line(None, Some("GORE_DIALOG_CAPTION_KEY")).unwrap(),
+            new_conversation_caption_line(None, Some("GORE_DIALOG_CAPTION_KEY")).unwrap(),
+        ] {
+            assert_eq!(
+                line,
+                r#"    default Caption = LocText("GORE_DIALOG_CAPTION_KEY");"#
+            );
+        }
+        assert!(caption_default_line(None, None).is_err());
+        assert!(caption_default_line(Some("literal"), Some("KEY")).is_err());
+        assert!(new_topic_caption_line(Some("caption\0tail"), None).is_err());
+        assert!(new_conversation_caption_line(Some("caption\0tail"), None).is_err());
+        assert!(caption_default_line(None, Some("KEY\0TAIL")).is_err());
     }
 
     #[test]
@@ -5531,7 +5833,10 @@ mod tests {
 
         assert!(topic_name_matches("UUFoo", "UFoo", true));
         assert!(!topic_name_matches("UUFoo", "UFoo", false));
-        assert_eq!(resolve_topic_in(&conversation, "UFoo").unwrap().class, "UUFoo");
+        assert_eq!(
+            resolve_topic_in(&conversation, "UFoo").unwrap().class,
+            "UUFoo"
+        );
 
         conversation
             .topics
@@ -6717,6 +7022,142 @@ class UFirst : UTopic_Hero__NEW_NPC { }
         );
     }
 
+    fn combined_npc_anchor_module() -> gore_as::cache::model::Module {
+        use gore_as::cache::model::{Class, Module};
+        Module {
+            name: "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A".to_owned(),
+            file: "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as".to_owned(),
+            functions: Vec::new(),
+            classes: [
+                (
+                    "UCharacterDefinition_Human_",
+                    "UCharacterDefinition_Human_OldCamp_Shadow",
+                ),
+                ("UAIAgentConfig_Human_", "UAIAgentConfig_Human"),
+                ("USpawnAIAgentDefinition_", "USpawnAIAgentDefinition"),
+                (
+                    "UConversationCharacterSettings_Ambient_",
+                    "UConversationCharacterSettings",
+                ),
+            ]
+            .into_iter()
+            .map(|(prefix, parent)| Class {
+                name: format!("{prefix}GORE_TEST_A"),
+                namespace: String::new(),
+                super_class: Some(parent.to_owned()),
+                fields: Vec::new(),
+                methods: Vec::new(),
+                ctors: Vec::new(),
+                flags: 0,
+                is_abstract: false,
+            })
+            .collect(),
+            enums: Vec::new(),
+            globals: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn settings_anchor_accepts_the_generated_combined_npc_module() {
+        let module = combined_npc_anchor_module();
+        let anchor = resolve_conversation_settings_anchor_in_modules(
+            std::slice::from_ref(&module),
+            "gore_test_a",
+        )
+        .unwrap();
+        assert_eq!(anchor.module, module.name);
+        assert_eq!(anchor.participant, "GORE_TEST_A");
+        assert!(requires_topic_scaffold_for_module(&module.name));
+
+        let source = module
+            .classes
+            .iter()
+            .map(|class| {
+                let binding = if class.name == "UConversationCharacterSettings_Ambient_GORE_TEST_A"
+                {
+                    "default ForCharacter = n\"GORE_TEST_A\";"
+                } else {
+                    ""
+                };
+                format!(
+                    "class {} : {} {{ {binding} }}\n",
+                    class.name,
+                    class.super_class.as_deref().unwrap()
+                )
+            })
+            .collect::<String>();
+        let outline = dialog::read_outline(&source).unwrap();
+        validate_settings_anchor_source(&outline, &anchor.participant).unwrap();
+        let rebound =
+            dialog::read_outline(&source.replace("n\"GORE_TEST_A\"", "n\"GORE_TEST_B\"")).unwrap();
+        assert!(validate_settings_anchor_source(&rebound, &anchor.participant).is_err());
+        assert!(resolve_conversation_settings_anchor_in_modules(&[module], "GORE_TEST").is_err());
+    }
+
+    #[test]
+    fn settings_anchor_combined_module_requires_exact_global_npc_declarations() {
+        let module = combined_npc_anchor_module();
+        for index in 0..module.classes.len() {
+            let mut missing = module.clone();
+            missing.classes.remove(index);
+            assert!(conversation_settings_anchor_for_module(&missing).is_none());
+
+            let mut duplicate = module.clone();
+            duplicate.classes.push(module.classes[index].clone());
+            assert!(conversation_settings_anchor_for_module(&duplicate).is_none());
+
+            let mut namespaced = module.clone();
+            namespaced.classes[index].namespace = "Other".to_owned();
+            assert!(conversation_settings_anchor_for_module(&namespaced).is_none());
+        }
+
+        for name in [
+            "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_B",
+            "Story.G1R.Conversation.GORE_TEST_A",
+        ] {
+            let mut unrelated = module.clone();
+            unrelated.name = name.to_owned();
+            assert!(conversation_settings_anchor_for_module(&unrelated).is_none());
+        }
+        let mut indirect = module.clone();
+        indirect.classes[3].super_class = Some("UOtherSettings".to_owned());
+        assert!(conversation_settings_anchor_for_module(&indirect).is_none());
+
+        let mut wrong_npc = module;
+        wrong_npc.classes[3].name = "UConversationCharacterSettings_Ambient_GORE_TEST_B".to_owned();
+        assert!(conversation_settings_anchor_for_module(&wrong_npc).is_none());
+    }
+
+    #[test]
+    fn settings_anchor_combined_module_retains_ambiguity_and_direct_settings_guards() {
+        let module = combined_npc_anchor_module();
+        let mut shipped = module.clone();
+        shipped.name =
+            "AI.AIAgent.Human.Config.GORE_TEST_A.ConversationCharacterSettings_GORE_TEST_A"
+                .to_owned();
+        let error = resolve_conversation_settings_anchor_in_modules(
+            &[module.clone(), shipped],
+            "GORE_TEST_A",
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("ambiguous NPC binding"),
+            "{error}"
+        );
+
+        let mut duplicate_settings = module;
+        let mut extra = duplicate_settings.classes[3].clone();
+        extra.name = "UExtraSettings".to_owned();
+        duplicate_settings.classes.push(extra);
+        let error =
+            resolve_conversation_settings_anchor_in_modules(&[duplicate_settings], "GORE_TEST_A")
+                .unwrap_err();
+        assert!(
+            error.to_string().contains("exactly one is required"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn generated_topic_debug_ids_are_stable_and_avoid_the_module() {
         let first = generated_topic_debug_id("Story.Dialog", "UChoiceNew", "");
@@ -6914,17 +7355,21 @@ class UFirst : UTopic_Hero__NEW_NPC { }
     #[test]
     fn a_settings_anchor_manifest_cannot_disable_its_scaffold_checks() {
         let mut manifest = command_manifest();
-        manifest.module =
-            "AI.AIAgent.Human.Config.NEW_NPC.ConversationCharacterSettings_NEW_NPC".to_owned();
         manifest.participant = "NEW_NPC".to_owned();
         manifest.requires_topic_scaffold = false;
-        let error = validate_manifest_settings_anchor(&[], &manifest).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("must retain `requires_topic_scaffold = true`"),
-            "{error}"
-        );
+        for module in [
+            "AI.AIAgent.Human.Config.NEW_NPC.ConversationCharacterSettings_NEW_NPC",
+            "AI.AIAgent.Human.Config.NEW_NPC.NEW_NPC",
+        ] {
+            manifest.module = module.to_owned();
+            let error = validate_manifest_settings_anchor(&[], &manifest).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("must retain `requires_topic_scaffold = true`"),
+                "{error}"
+            );
+        }
     }
 
     #[test]
@@ -7213,6 +7658,66 @@ class UFirst : UTopic_Hero__NEW_NPC { }
         assert!(error.to_string().contains("not the cache"), "{error}");
     }
 
+    #[test]
+    fn dialog_authoring_and_staging_select_the_owned_pristine_cache_without_writing() {
+        let temp = tempfile::tempdir().unwrap();
+        let game = fs::canonicalize(temp.path()).unwrap();
+        let live = gore_mod::resolve_game_paths(&game).script_cache;
+        let backup = live.with_extension("Cache.gore-bak");
+        fs::create_dir_all(live.parent().unwrap()).unwrap();
+        let pristine = b"original dialog cache";
+        let deployed = b"installed dialog mod";
+        fs::write(&live, deployed).unwrap();
+        fs::write(&backup, pristine).unwrap();
+        let identity = |bytes: &[u8]| format!("sha256:{}", digest_of(bytes));
+        let mut record = gore_mod::DeployRecord {
+            mod_name: "DialogStageFixture".into(),
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: [(live.display().to_string(), identity(deployed))].into(),
+            backup_hashes: [(backup.display().to_string(), identity(pristine))].into(),
+            ..Default::default()
+        };
+        let record_path = gore_mod::deploy_record_path(&game);
+        let record_bytes = serde_json::to_vec(&record).unwrap();
+        fs::write(&record_path, &record_bytes).unwrap();
+
+        assert_eq!(cache_path(None, Some(game.clone())).unwrap(), live);
+        assert_eq!(
+            read_authoring_cache(None, Some(game.clone())).unwrap(),
+            (backup.clone(), pristine.to_vec())
+        );
+        assert_eq!(
+            read_authoring_cache(Some(live.clone()), Some(game.clone())).unwrap(),
+            (live.clone(), deployed.to_vec()),
+            "an explicit --cache remains authoritative"
+        );
+        let mut manifest = command_manifest();
+        manifest.cache_sha256 = digest_of(pristine);
+        assert_eq!(
+            compiler_game_for(&manifest, Some(game.clone())).unwrap(),
+            game
+        );
+        manifest.cache_sha256 = digest_of(deployed);
+        assert!(compiler_game_for(&manifest, Some(game.clone())).is_err());
+        assert_eq!(fs::read(&live).unwrap(), deployed);
+        assert_eq!(fs::read(&backup).unwrap(), pristine);
+        assert_eq!(fs::read(&record_path).unwrap(), record_bytes);
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+
+        record.phase = gore_mod::DeployPhase::RecoveryRequired;
+        fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+        assert!(authoring_cache_path(None, Some(game.clone())).is_err());
+        assert!(compiler_game_for(&manifest, Some(game.clone())).is_err());
+        assert_eq!(
+            authoring_cache_path(Some(live.clone()), Some(game)).unwrap(),
+            live
+        );
+    }
+
     /// End-to-end command oracle for the native same-module root shape. A synthetic cache cannot
     /// exercise dialog checkout faithfully, so opt in with the same real-cache fixture used by
     /// `gore-as`'s dialog agreement tests. The temporary game tree contains only a hard link (or
@@ -7235,10 +7740,12 @@ class UFirst : UTopic_Hero__NEW_NPC { }
 
         let out = temp.path().join("native-root");
         let class = "UChoiceGoreNativeRootOracle";
-        let npc = "Story.G1R.Conversation.Conversation_OC_STT_DIEGO";
+        let npc = "OC_STT_Diego";
+        let expected_module = "Story.G1R.Conversation.Conversation_OC_STT_DIEGO";
         let bytes = fs::read(&cache).unwrap();
         let graph = dialog::build(&bytes).unwrap();
         let conversation = resolve_one(&graph, npc).unwrap();
+        assert_eq!(conversation.module, expected_module);
         let expected_root_priority = automatic_root_priority_rank(conversation).unwrap();
         assert_ne!(expected_root_priority, -1);
         new_topic(NewTopicRequest {
@@ -7259,6 +7766,7 @@ class UFirst : UTopic_Hero__NEW_NPC { }
         let manifest_path = out.join(MANIFEST_NAME);
         let manifest_text = fs::read_to_string(&manifest_path).unwrap();
         let mut manifest: EditManifest = serde_json::from_str(&manifest_text).unwrap();
+        assert_eq!(manifest.module, expected_module);
         assert!(manifest.dialog_topics.is_empty());
         assert!(
             !manifest_text.contains("dialog_topics"),
@@ -7405,7 +7913,11 @@ class UFirst : UTopic_Hero__NEW_NPC { }
             format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
         )
         .unwrap();
-        check(&out, true, Some(cache), Some(fake_game)).unwrap();
+        let retired = check(&out, true, Some(cache), Some(fake_game)).unwrap_err();
+        assert!(
+            retired.to_string().contains("dialog_topics is retired"),
+            "{retired}"
+        );
     }
 
     #[test]

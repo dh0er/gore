@@ -1,0 +1,30 @@
+{
+  "schema": "gore.npc-batch.quest-runtime.v1",
+  "date": "2026-09-13",
+  "bundle": "NpcQuestCallbacksTest",
+  "version": "0.1.0",
+  "user_results": {
+    "dialog_menu": false,
+    "report": "A does not talk to the Hero; no dialogue menu."
+  },
+  "start": {
+    "slot": "G1R-071",
+    "title": "NPC 05 Quest - START",
+    "sha256": "aee18515288dc09ebc1f4687fc3da21cccdec946596b2744f2028ccdfaf68db5",
+    "unchanged": true
+  },
+  "new_result_save": false,
+  "diagnosis": {
+    "source": "All29 new events use plain UFUNCTION with _Implementation names; seven Should predicates also omit native const.",
+    "raw_cache_evidence": "Live and quest-v6 full class records contain BlueprintCallable=1, BlueprintOverride=0, BlueprintEvent=0 and Unreal function names retaining _Implementation. Working voice dialog events use native names with BlueprintOverride=1 and BlueprintEvent=1.",
+    "affected": "14 dialog events,11 quest callbacks and4 journal-segment callbacks across15 new classes.",
+    "failure_report_sha256": "9e59177487209269d6bbcf77cc6d5bec96403df32b120895949c17f4218723c7",
+    "correction": "Author all29 as UFUNCTION(BlueprintOverride) with native names, preserve required const signatures, and share script predicates between visibility/action guards.",
+    "build_limit": "Direct UConversationTopic::IsVisible event-wrapper calls lack an exact pristine native reference. Shared script predicates avoid adding that unsupported call while keeping the original transaction conditions.",
+    "generator": "The same authored Should/Handle event pattern was emitted by the product generator; Draft generator6 and Revision3 generator5 correct names, attributes and const signatures.",
+    "qualification": "Raw metadata proves the bindings are wrong. The corrected package still needs the user menu/progression/reward/journal campaign; no automatic success is assumed."
+  },
+  "previous_deployment": "deployment.json",
+  "correction": "fix-0.1.1.json",
+  "checklist": "FIELD-TEST.md"
+}

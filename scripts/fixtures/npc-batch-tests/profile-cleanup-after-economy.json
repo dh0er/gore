@@ -1,0 +1,122 @@
+{
+  "schema": "gore.npc-batch.profile-cleanup-after-economy.v1",
+  "date": "2026-09-12",
+  "displayed_profile": 4,
+  "internal_profile_id": 2,
+  "stored_profile_name": "3",
+  "passed": true,
+  "operation": "live",
+  "archive": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-economy-20260912T213454Z",
+  "manifest_sha256": "8cb0574f6a5ca50bfa757a767e3a435b1d0c33141c1473aeb7a68096a0d28065",
+  "deleted_count": 9,
+  "retained_count": 4,
+  "retained": [
+    "G1R-067",
+    "G1R-070",
+    "G1R-071",
+    "G1R-072"
+  ],
+  "removed": [
+    "G1R-003",
+    "G1R-022",
+    "G1R-023",
+    "G1R-024",
+    "G1R-025",
+    "G1R-026",
+    "G1R-027",
+    "G1R-068",
+    "G1R-069"
+  ],
+  "profile_before": {
+    "bytes": 40305,
+    "sha256": "fccc98727a91bde6cf1dfc2451651bbb444ae1aff120626e8902e8a28b68174b"
+  },
+  "profile_after": {
+    "bytes": 31689,
+    "sha256": "77bb22e22cf108f075b65126e3b12e041b73a4c4d5fe24fa89173be16dede671"
+  },
+  "dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "titles": {
+    "G1R-067": "NPC 03 Handel - LP fehlt",
+    "G1R-068": "NPC 03 Lehrer - Erz fehlt",
+    "G1R-069": "NPC 03 Lehrer - bereit",
+    "G1R-070": "NPC 04 Rollen - START",
+    "G1R-071": "NPC 05 Quest - START",
+    "G1R-072": "NPC 04 Rollen - Kampf bereit",
+    "G1R-003": "lehrer-lp-fehlt",
+    "G1R-022": "lehrer-erz-fehlt",
+    "G1R-023": "lehrer-gelernt",
+    "G1R-024": "rolle-handel",
+    "G1R-025": "lehrer-neustart",
+    "G1R-026": "handel-bestand",
+    "G1R-027": "handel-bestand-neustart"
+  },
+  "retained_save_hashes": {
+    "G1R-067": {
+      "bytes": 1034015,
+      "sha256": "528cad0ac5889bf377e8527f7d4bd2704fa86875d84f73288e87b841e0bb05a7"
+    },
+    "G1R-070": {
+      "bytes": 1034804,
+      "sha256": "20f4a849358475a9671961cab18fea35cbb303e5d3dda85b34d52d3e22ded7c2"
+    },
+    "G1R-071": {
+      "bytes": 1018879,
+      "sha256": "aee18515288dc09ebc1f4687fc3da21cccdec946596b2744f2028ccdfaf68db5"
+    },
+    "G1R-072": {
+      "bytes": 1034835,
+      "sha256": "3168d88ef5af260e6e6c58311a71c99b5ffebd8f6e5a680c4c015cda4403fffe"
+    }
+  },
+  "removed_original_hashes": {
+    "G1R-003": {
+      "bytes": 1028637,
+      "sha256": "86ae80ce1ede47911f7cf7cbc7d74ef878b56e5224c619e3918767505bf452c4"
+    },
+    "G1R-022": {
+      "bytes": 1027670,
+      "sha256": "ba1f0c9ad950765c4583a4efbb94e360a3827f69bde66839c0233a148c7872ed"
+    },
+    "G1R-023": {
+      "bytes": 1026172,
+      "sha256": "0ba00f27be245622e541a6ebf5f58b02b81de821529bc354333ecb31fda1b479"
+    },
+    "G1R-024": {
+      "bytes": 1027128,
+      "sha256": "f882a8840b6fba9ef93c7836fa2ee556b31764c9afbfc52c71f34b5c6134c07c"
+    },
+    "G1R-025": {
+      "bytes": 1023322,
+      "sha256": "05dc8e46d1b71d1eeb4436c202ac64f9a2921cd14a5c54abb4ca7e76a792a09e"
+    },
+    "G1R-026": {
+      "bytes": 1033986,
+      "sha256": "53018e4245c08d88592bc8b15d1a04e374f802e842d3b10ae802806fe7124319"
+    },
+    "G1R-027": {
+      "bytes": 1032017,
+      "sha256": "cba90cfd8a6810c53173ee42697eb2081c6193e6de0ef71bb73d185b4a415cf1"
+    },
+    "G1R-068": {
+      "bytes": 1033994,
+      "sha256": "eb36d5b4edf89a0910bb58ec6981a37f258ec372b9cff3bfca0ac754e46c5d88"
+    },
+    "G1R-069": {
+      "bytes": 1034013,
+      "sha256": "89f1505cca0f01818aee0ae16e6e09bb468c443416688b3bda3ac509edca04b7"
+    }
+  },
+  "exact_current_titles_and_source_hashes_verified": true,
+  "paired_backups_verified": true,
+  "other_profiles_byte_identical": true,
+  "retained_saves_byte_identical": true,
+  "other_live_files_unchanged": true,
+  "live_unchanged_during_preview": false,
+  "global_registry_exact_filtered_order": true,
+  "no_removed_slot_reference": true,
+  "archive_hashes_reverified": true
+}

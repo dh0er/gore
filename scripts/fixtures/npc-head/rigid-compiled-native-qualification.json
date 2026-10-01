@@ -1,0 +1,213 @@
+{
+  "format": "gore-rigid-head-compiled-t3-check-v1",
+  "qualified": true,
+  "cache": {
+    "path": "work\\npc-head-rigid-fix\\artifacts\\GoreHeadRigidB.mini.Cache",
+    "sha256": "d1aa350860d84981f5c4cf893cf7b5bc7dde99822b0891a7fbba3353b40b8d8b",
+    "tail_offset": 45297,
+    "t4_end": 61378
+  },
+  "base_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "cli_sha256": "32526ec06d6abe1215a8f79dd72ca815eef7baf9db5efb35416c2085e6bfd4c0",
+  "checker_sha256": "96d35c4b297f45a8051d71d8b13d3350f686add84a1a171648c11edb76d556ec",
+  "expected_audits": [
+    {
+      "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-probe\\native-rigid-head-audit.json",
+      "sha256": "f676926ba4f7844dc4b2b75f229fd8fe15e104ac3513ffd5e81b8143f1dd3718"
+    },
+    {
+      "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-probe\\native-rigid-head-v2-audit.json",
+      "sha256": "8a1fc8f30074f2dad93d5f475a46a250603b1e1321ba607c0a63c42b91c1ef6a"
+    }
+  ],
+  "functions": [
+    {
+      "name": "SetRenderStatic",
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:15:SetRenderStatic1:028:9:primitive2:651:01:01:01:0,27:9:primitive2:821:01:01:01:0",
+      "t3_key": "0x6db9a3f1853bcd90",
+      "t3_offset": 57665,
+      "actual_parameter_and_return_datatypes": [
+        {
+          "full_identity": null,
+          "token": 65,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:651:01:01:01:0"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "actual_t4_ids_linked_to_t3_key": [
+        1422955300
+      ],
+      "registrar_engine_function_id": 56342,
+      "id_note": "T4 IDs are cache OldReference IDs; remapping can change them. Exact identity and all six datatype flags are checked.",
+      "qualified": true
+    },
+    {
+      "name": "GetRefPoseTransform",
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:19:GetRefPoseTransform1:128:9:primitive2:681:01:01:01:0,48:6:object1:51:01:01:01:022:0:0:10:FTransform1:00:",
+      "t3_key": "0x6329b00d505753f8",
+      "t3_offset": 57926,
+      "actual_parameter_and_return_datatypes": [
+        {
+          "full_identity": null,
+          "token": 68,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:681:01:01:01:0"
+        },
+        {
+          "full_identity": "0:0:10:FTransform1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:022:0:0:10:FTransform1:00:"
+        }
+      ],
+      "actual_t4_ids_linked_to_t3_key": [
+        1551837816
+      ],
+      "registrar_engine_function_id": 56321,
+      "id_note": "T4 IDs are cache OldReference IDs; remapping can change them. Exact identity and all six datatype flags are checked.",
+      "qualified": true
+    },
+    {
+      "name": "GetParentBone",
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:13:GetParentBone1:143:6:object1:51:01:01:01:016:0:0:5:FName1:00:,42:6:object1:51:01:01:01:016:0:0:5:FName1:00:",
+      "t3_key": "0x685111938a614378",
+      "t3_offset": 58184,
+      "actual_parameter_and_return_datatypes": [
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        }
+      ],
+      "actual_t4_ids_linked_to_t3_key": [
+        282981430
+      ],
+      "registrar_engine_function_id": 56318,
+      "id_note": "T4 IDs are cache OldReference IDs; remapping can change them. Exact identity and all six datatype flags are checked.",
+      "qualified": true
+    },
+    {
+      "name": "opMul",
+      "full_identity": "6:method0:0:22:0:0:10:FTransform1:00:5:opMul1:149:6:object1:51:11:11:01:022:0:0:10:FTransform1:00:,48:6:object1:51:01:01:01:022:0:0:10:FTransform1:00:",
+      "t3_key": "0x66dc7e304a07a798",
+      "t3_offset": 58062,
+      "actual_parameter_and_return_datatypes": [
+        {
+          "full_identity": "0:0:10:FTransform1:00:",
+          "token": 5,
+          "flags": [
+            1,
+            1,
+            0,
+            1,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:11:11:01:022:0:0:10:FTransform1:00:"
+        },
+        {
+          "full_identity": "0:0:10:FTransform1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:022:0:0:10:FTransform1:00:"
+        }
+      ],
+      "actual_t4_ids_linked_to_t3_key": [
+        1944484553
+      ],
+      "registrar_engine_function_id": 3844,
+      "id_note": "T4 IDs are cache OldReference IDs; remapping can change them. Exact identity and all six datatype flags are checked.",
+      "qualified": true
+    },
+    {
+      "name": "Inverse",
+      "full_identity": "6:method0:0:22:0:0:10:FTransform1:00:7:Inverse1:10:48:6:object1:51:01:01:01:022:0:0:10:FTransform1:00:",
+      "t3_key": "0x60c02b41bfbdb8b0",
+      "t3_offset": 58612,
+      "actual_parameter_and_return_datatypes": [
+        {
+          "full_identity": "0:0:10:FTransform1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:022:0:0:10:FTransform1:00:"
+        }
+      ],
+      "actual_t4_ids_linked_to_t3_key": [
+        1122607878
+      ],
+      "registrar_engine_function_id": 3841,
+      "id_note": "T4 IDs are cache OldReference IDs; remapping can change them. Exact identity and all six datatype flags are checked.",
+      "qualified": true
+    }
+  ],
+  "scope": "Five T3 signatures and raw T4 links; no runtime or visual correctness claim."
+}

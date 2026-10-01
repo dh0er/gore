@@ -1,0 +1,161 @@
+{
+  "schema": "gore.npc-head.build-result.v1",
+  "package": "NpcHeadVisibilityFix",
+  "version": "0.1.6",
+  "game_build_id": 24878692,
+  "backend": "standalone",
+  "change": "Resolve head material IDs directly with SectionIndex=-1 for hide and restore; count expected visibility pairs. Pose sharing unchanged.",
+  "artifacts": {
+    "NpcHeadVisibilityFix.selected.full.Cache": {
+      "bytes": 124607351,
+      "sha256": "f1ea40a8c03aecefef47d43040b036a90a73218135d59983ac8232b5ac6f0254"
+    },
+    "NpcHeadVisibilityFix.selected.mini.Cache": {
+      "bytes": 158681,
+      "sha256": "61e6bda8f631366f5c4bb4b69f915560a3913e90b1b4aa61ff501332021d8275"
+    },
+    "generation-receipt.json": {
+      "bytes": 1796561,
+      "sha256": "849d38ce6f3220ac881413f172344e6774431c7a8cf4ba5571362126ab194726"
+    },
+    "spec.json": {
+      "bytes": 4106,
+      "sha256": "056e2e741f1814da873dd234f1f1660d2136b5d55701a1fba10f6f43dd4754a7"
+    }
+  },
+  "generation_receipt_scope": "Historical five-module intermediate; selected final artifacts are qualified by selected_composition, not directly by this receipt.",
+  "selected_composition": {
+    "checks": {
+      "all_unselected_base_modules_byte_identical": true,
+      "input_full_sha256_exact": true,
+      "mini_module_names_exact": true,
+      "outputs_outside_game": true,
+      "pristine_sha256_exact": true,
+      "publication_create_new": true,
+      "selection_matches_prior_four_non_base_modules": true,
+      "sequential_guard_compose_upsert_passed": true,
+      "test_hero_levelup": {
+        "byte_identical_to_pristine": true,
+        "module": "Tests.TestHeroLevelup",
+        "pristine_module_sha256": "eacdc9509875d3ae34afe78367d2d4c79e0d1b22c0c21e7c1209cc57d886f522",
+        "selected_module_sha256": "eacdc9509875d3ae34afe78367d2d4c79e0d1b22c0c21e7c1209cc57d886f522"
+      },
+      "unselected_base_module_count": 7315
+    },
+    "full": {
+      "byte_len": 124607351,
+      "module_count": 7319,
+      "path": "\\\\?\\C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-visibility-fix\\artifacts\\NpcHeadVisibilityFix.selected.full.Cache",
+      "sha256": "f1ea40a8c03aecefef47d43040b036a90a73218135d59983ac8232b5ac6f0254"
+    },
+    "input_full": {
+      "byte_len": 124607339,
+      "path": "C:/Users/Daniel/.codex/worktrees/0157/goresave/work/npc-head-visibility-fix/artifacts/NpcHeadVisibilityFix.full.Cache",
+      "sha256": "660b13aba3e899f59c288c9e73e5bb4fd55c98e872e2217078ad6131a73f9e54"
+    },
+    "mini": {
+      "byte_len": 158681,
+      "module_count": 4,
+      "path": "\\\\?\\C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-head-visibility-fix\\artifacts\\NpcHeadVisibilityFix.selected.mini.Cache",
+      "sha256": "61e6bda8f631366f5c4bb4b69f915560a3913e90b1b4aa61ff501332021d8275"
+    },
+    "operation": "extract_modules -> remap_module_to_base_with_options(allow_new_symbols=true) -> SequentialMiniGuard::compose_upsert",
+    "pristine_base": {
+      "byte_len": 124459412,
+      "path": "C:/Program Files (x86)/Steam/steamapps/common/Gothic 1 Remake/G1R/Script/PrecompiledScript_Shipping.Cache.gore-bak",
+      "sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511"
+    },
+    "schema": "gore.selected-composition-provenance-v1",
+    "selected_module_names": [
+      "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+      "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+      "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+      "LevelScripts.XardasTower_AI"
+    ],
+    "selection_receipt": {
+      "path": "C:/Users/Daniel/.codex/worktrees/0157/goresave/work/npc-head-probe/artifacts/generation-receipt.json",
+      "sha256": "8076f6e4284268cc226acbca21dc76b56387e038d6c130f40cfefe48041e1c04"
+    }
+  },
+  "source_preservation": {
+    "source_module_count": 7319,
+    "changed_authored_modules_from_0_1_5": [
+      "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as"
+    ],
+    "refreshed_original_exports": 21,
+    "published_module_operations": {
+      "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as": "added",
+      "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as": "added",
+      "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as": "edited",
+      "LevelScripts/XardasTower_AI.as": "edited"
+    },
+    "intermediate_module_operations": {
+      "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as": "added",
+      "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as": "added",
+      "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as": "edited",
+      "LevelScripts/XardasTower_AI.as": "edited",
+      "Tests/TestHeroLevelup.as": "edited"
+    },
+    "selection_provenance": "artifacts/selected-composition.json",
+    "b_before_head_controller_unchanged": true,
+    "voice_and_localization_inputs_unchanged": true,
+    "source_sha256": {
+      "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as": "60cb9734c398549337d0028a4e380c288230feaf5f7d64b1eb53d6947a87dbdb",
+      "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as": "a607b965bf6580ab475359a7d641474b9207b40134f52e680e340cb81e437db4",
+      "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+      "LevelScripts/XardasTower_AI.as": "ee74734e29cafb76445abe5000bc662d2c9e79d3cd6b88a989a17f81d42056eb"
+    }
+  },
+  "deployment": {
+    "manager_status": "in_sync",
+    "loadout": [
+      {
+        "enabled": true,
+        "id": "npcheadvisibilityfix-c9c6b077"
+      }
+    ],
+    "files": {
+      "shipping": {
+        "bytes": 124607351,
+        "sha256": "725591f965b8bca80a0a7969a8b227181d349fbc72aee1c390c94574bb0e8cef",
+        "backup_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511"
+      },
+      "localization": {
+        "bytes": 37095936,
+        "sha256": "f3c6948bac217b69c457afeed4346bd99540ed47935d52d47db70efc268057d1",
+        "backup_sha256": "e9bc9a0e87b722f62fb352adfeec26dacdaa42630d16aef2cb2abc6975c8dd03"
+      },
+      "voice": {
+        "bytes": 915865276,
+        "sha256": "da44012393ca5dfaeb37ae37625c054a1e9b07d86aacf6e68344e3ff066339c9",
+        "backup_sha256": "ff7aa5b219c2e0ec9840570e42597d3ea3053a7ad592cf7cfa5b61dd895ecd29"
+      }
+    },
+    "compiled_installed_A_B_exact": true,
+    "native_event_metadata_exact": true,
+    "original_voice_crc_size_preserved": 33323,
+    "voice_payloads_exact": 5,
+    "localization_matches_passed_voice_campaign": true,
+    "loc_rows": 43904,
+    "baseline_saves_unchanged": [
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43
+    ],
+    "game_launched_by_agent": false,
+    "runtime_proven": false
+  },
+  "user_runtime_test": "failed: head remains distorted; all186 requested visibility pairs hidden; option15 restore passed; see visibility-runtime-result.json",
+  "baseline_runtime_result": "runtime-result.json describes failed0.1.5 and passed restore"
+}

@@ -277,20 +277,25 @@ requirement of this workflow. `check` instead binds direct roots and sub-topics
 to their source shape: a root must not set `bIsSubTopic`, while a direct child
 must be referenced once from a shipped `Subdialog` body and set it true.
 
-`BuildSpec.dialog_topics` is retained as a separate historical low-level
-adapter surface for hand-authored bundles. It packages UE4SS insertion and its
-telemetry; it is not emitted as the normal `dialog new-topic` root recipe.
+`BuildSpec.dialog_topics` is retired. `gore mod build` refuses it, and it is
+not emitted as the `dialog new-topic` root recipe.
 
 Full-graph V2 gives one standalone compiler request the complete sealed base
 graph plus all coordinated Add/Edit sources, so visible symbols in different
-modules can resolve together. Its raw whole-tree regeneration is intermediate
-dependency evidence, not a deployable output. GORE publishes a complete cache
-by retaining the exact pristine base and selectively composing only the
-source-classified Add/Edit modules in dependency order; untouched modules and
-all pre-existing global-tail records remain pristine, while records required by
-new symbols may be appended. A missing base source requests unsupported Delete
-and is rejected until safe tail pruning and retained-reference proof exist.
-Cyclic dependencies among new modules also fail closed.
+modules can resolve together. Use `gore as compile <authored-dir> --overlays
+--backend standalone` with only the complete new or changed modules at their
+canonical Script-relative paths. No full-tree export or baseline emission is
+needed; omitted original modules remain in the base. This does not bypass a
+conversation's module-private root.
+
+GORE publishes a complete cache by retaining the exact pristine base and
+selectively composing only the Add/Edit modules in dependency order. Untouched
+modules and pre-existing global-tail records remain pristine; only records
+required by new symbols may be appended. Without `--overlays`, complete-tree
+compilation remains available and missing base sources request unsupported
+Delete. Overlay mode never interprets absence as deletion. Cyclic dependencies
+among new modules fail closed in both modes. See
+[compiling only authored modules](scripts.md#compile-only-authored-modules).
 
 That design follows two live observations. An earlier raw regeneration with
 10,782 semantic deviations, including 81 in Diego, installed successfully but
@@ -302,14 +307,15 @@ loaded gameplay, showed and selected the new same-module root, and let an edited
 shipped automatic topic call a new provider in another module. The provider's
 line played and the conversation returned control.
 
-The normal dialog bundle path instead consumes independently base-bound module
-minis. One add mini cannot provide symbols to a separate edit mini, and the
-bundle composer does not turn the selective complete cache into a dialog-mini
-deployment.
-Keeping the new class and the rewired `Subdialog` in the same existing module is
-the supported mini-cache shape. Its compile/remap and offline packaging path is
-proven on Payfine and Brannok; Diego additionally proves native in-game
-appearance, selection and new override dispatch.
+For coordinated modules, add `--mini <path>` to publish one deployable
+multi-module mini-cache and reference that file in the bundle spec. Its modules
+compose together; one independent add mini still cannot supply symbols to a
+separate edit mini. See [multi-module packaging](scripts.md#multi-module-mini-caches).
+
+Keeping a new class and its rewired `Subdialog` in the same existing module
+remains the single-module route printed by `dialog stage`. Its compile/remap
+and offline packaging path is proven on Payfine and Brannok; Diego additionally
+proves native in-game appearance, selection and new override dispatch.
 
 ## Starting a complete conversation
 

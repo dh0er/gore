@@ -1,0 +1,2288 @@
+{
+  "base_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "cache_byte_length": 124664718,
+  "changed_byte_count": 1478,
+  "changed_function_id_count": 370,
+  "changed_function_ids": [
+    {
+      "compiled_id": 247857,
+      "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego::UCharacterDefinition_Human_OC_STT_Diego",
+      "installed_id": -1099045996,
+      "offset": 12444935
+    },
+    {
+      "compiled_id": 247859,
+      "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego::StaticClass",
+      "installed_id": 1543479649,
+      "offset": 12445159
+    },
+    {
+      "compiled_id": 247858,
+      "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego.UCharacterDefinition_Human_OC_STT_Diego::__InitDefaults",
+      "installed_id": 943887743,
+      "offset": 12448890
+    },
+    {
+      "compiled_id": 247856,
+      "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego.UCharacterDefinition_Human_OC_STT_Diego::UCharacterDefinition_Human_OC_STT_Diego",
+      "installed_id": 488526718,
+      "offset": 12449110
+    },
+    {
+      "compiled_id": 248419,
+      "function": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego.UCharacterDefinition_Human_OC_STT_Diego::~UCharacterDefinition_Human_OC_STT_Diego",
+      "installed_id": 114036741,
+      "offset": 12449363
+    },
+    {
+      "compiled_id": 247861,
+      "function": "LevelScripts.XardasTower_AI::UOW_XT_DEMON_LESSER_SPAWN_WP",
+      "installed_id": 963518928,
+      "offset": 49579025
+    },
+    {
+      "compiled_id": 247864,
+      "function": "LevelScripts.XardasTower_AI::UWP_WarningFlock_XT_01",
+      "installed_id": -2111394801,
+      "offset": 49579208
+    },
+    {
+      "compiled_id": 247867,
+      "function": "LevelScripts.XardasTower_AI::UWP_WarningFlock_XT_02",
+      "installed_id": -1574133556,
+      "offset": 49579391
+    },
+    {
+      "compiled_id": 247870,
+      "function": "LevelScripts.XardasTower_AI::UXT_Skeleton_SPAWN_WP",
+      "installed_id": -766689694,
+      "offset": 49579573
+    },
+    {
+      "compiled_id": 247872,
+      "function": "LevelScripts.XardasTower_AI::StaticClass",
+      "installed_id": -696309912,
+      "offset": 49579786
+    },
+    {
+      "compiled_id": 247873,
+      "function": "LevelScripts.XardasTower_AI::StaticClass",
+      "installed_id": -1879981067,
+      "offset": 49579993
+    },
+    {
+      "compiled_id": 247874,
+      "function": "LevelScripts.XardasTower_AI::StaticClass",
+      "installed_id": 104019019,
+      "offset": 49580200
+    },
+    {
+      "compiled_id": 247875,
+      "function": "LevelScripts.XardasTower_AI::StaticClass",
+      "installed_id": 2128106099,
+      "offset": 49580406
+    },
+    {
+      "compiled_id": 247862,
+      "function": "LevelScripts.XardasTower_AI.UOW_XT_DEMON_LESSER_SPAWN_WP::OnWorldStart",
+      "installed_id": -721622450,
+      "offset": 49580740
+    },
+    {
+      "compiled_id": 247860,
+      "function": "LevelScripts.XardasTower_AI.UOW_XT_DEMON_LESSER_SPAWN_WP::UOW_XT_DEMON_LESSER_SPAWN_WP",
+      "installed_id": 1500193295,
+      "offset": 49581034
+    },
+    {
+      "compiled_id": 247865,
+      "function": "LevelScripts.XardasTower_AI.UWP_WarningFlock_XT_01::OnWorldStart",
+      "installed_id": -322463620,
+      "offset": 49581755
+    },
+    {
+      "compiled_id": 247863,
+      "function": "LevelScripts.XardasTower_AI.UWP_WarningFlock_XT_01::UWP_WarningFlock_XT_01",
+      "installed_id": -1823518055,
+      "offset": 49582043
+    },
+    {
+      "compiled_id": 247868,
+      "function": "LevelScripts.XardasTower_AI.UWP_WarningFlock_XT_02::OnWorldStart",
+      "installed_id": 1448142002,
+      "offset": 49582758
+    },
+    {
+      "compiled_id": 247866,
+      "function": "LevelScripts.XardasTower_AI.UWP_WarningFlock_XT_02::UWP_WarningFlock_XT_02",
+      "installed_id": -1052882124,
+      "offset": 49583046
+    },
+    {
+      "compiled_id": 247871,
+      "function": "LevelScripts.XardasTower_AI.UXT_Skeleton_SPAWN_WP::OnWorldStart",
+      "installed_id": 543084091,
+      "offset": 49583620
+    },
+    {
+      "compiled_id": 247869,
+      "function": "LevelScripts.XardasTower_AI.UXT_Skeleton_SPAWN_WP::UXT_Skeleton_SPAWN_WP",
+      "installed_id": -1781628111,
+      "offset": 49583907
+    },
+    {
+      "compiled_id": 248092,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UCharacterDefinition_Human_GORE_TEST_B",
+      "installed_id": 873994967,
+      "offset": 88127786
+    },
+    {
+      "compiled_id": 248095,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UCharacterVisualsDefinition_Human_GORE_TEST_B",
+      "installed_id": 166616583,
+      "offset": 88127992
+    },
+    {
+      "compiled_id": 248098,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UAIAgentConfig_Human_GORE_TEST_B",
+      "installed_id": 1913567196,
+      "offset": 88128185
+    },
+    {
+      "compiled_id": 248101,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::USpawnAIAgentDefinition_GORE_TEST_B",
+      "installed_id": 95697179,
+      "offset": 88128381
+    },
+    {
+      "compiled_id": 248104,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UConversationCharacterSettings_Ambient_GORE_TEST_B",
+      "installed_id": 784882358,
+      "offset": 88128592
+    },
+    {
+      "compiled_id": 248109,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UAIState_GoreScheduledActivity",
+      "installed_id": 149584372,
+      "offset": 88128783
+    },
+    {
+      "compiled_id": 248112,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UAIState_GoreScheduledRead",
+      "installed_id": 1113420589,
+      "offset": 88128970
+    },
+    {
+      "compiled_id": 248115,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UAIState_GoreScheduledDrink",
+      "installed_id": 1542875289,
+      "offset": 88129158
+    },
+    {
+      "compiled_id": 248118,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UDailyRoutine_GORE_TEST_B_Start",
+      "installed_id": 977792272,
+      "offset": 88129350
+    },
+    {
+      "compiled_id": 248121,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UCharacterDefinition_Human_GORE_TEST_C",
+      "installed_id": 1266760171,
+      "offset": 88129549
+    },
+    {
+      "compiled_id": 248124,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UCharacterVisualsDefinition_Human_GORE_TEST_C",
+      "installed_id": 1191994039,
+      "offset": 88129755
+    },
+    {
+      "compiled_id": 248127,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UAIAgentConfig_Human_GORE_TEST_C",
+      "installed_id": 1997664412,
+      "offset": 88129948
+    },
+    {
+      "compiled_id": 248130,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::USpawnAIAgentDefinition_GORE_TEST_C",
+      "installed_id": 2092010445,
+      "offset": 88130144
+    },
+    {
+      "compiled_id": 248133,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UConversationCharacterSettings_Ambient_GORE_TEST_C",
+      "installed_id": 1892516008,
+      "offset": 88130355
+    },
+    {
+      "compiled_id": 248136,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UDailyRoutine_GoreAppearanceControl",
+      "installed_id": 63270929,
+      "offset": 88130551
+    },
+    {
+      "compiled_id": 248139,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UDailyRoutine_GORE_TEST_C_Start",
+      "installed_id": 87292926,
+      "offset": 88130743
+    },
+    {
+      "compiled_id": 248153,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UGoreFlexHeadProbeController",
+      "installed_id": 1708471793,
+      "offset": 88130932
+    },
+    {
+      "compiled_id": 248157,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UAIState_GoreFlexHeadProbe",
+      "installed_id": 1364597893,
+      "offset": 88131119
+    },
+    {
+      "compiled_id": 248160,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UDailyRoutine_GoreObjectActivities",
+      "installed_id": 1573016751,
+      "offset": 88131314
+    },
+    {
+      "compiled_id": 248163,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UDailyRoutine_GoreObjectObserver",
+      "installed_id": 137361772,
+      "offset": 88131507
+    },
+    {
+      "compiled_id": 248166,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UDailyRoutine_GoreSeatGuardActivities",
+      "installed_id": 247973929,
+      "offset": 88131705
+    },
+    {
+      "compiled_id": 248169,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UDailyRoutine_GoreSeatGuardObserver",
+      "installed_id": 285541803,
+      "offset": 88131901
+    },
+    {
+      "compiled_id": 248174,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UAIState_GoreBWarningRecovery",
+      "installed_id": 1604489001,
+      "offset": 88132091
+    },
+    {
+      "compiled_id": 248176,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::UGameplayAbility_CharacterAI_GoreBWarningRecovery",
+      "installed_id": 1079650763,
+      "offset": 88132301
+    },
+    {
+      "compiled_id": 248178,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 652126860,
+      "offset": 88132524
+    },
+    {
+      "compiled_id": 248179,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1676680229,
+      "offset": 88132754
+    },
+    {
+      "compiled_id": 248180,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1300578659,
+      "offset": 88132971
+    },
+    {
+      "compiled_id": 248181,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1665772480,
+      "offset": 88133191
+    },
+    {
+      "compiled_id": 248182,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 848178390,
+      "offset": 88133426
+    },
+    {
+      "compiled_id": 248183,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1449183483,
+      "offset": 88133641
+    },
+    {
+      "compiled_id": 248184,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1591094835,
+      "offset": 88133852
+    },
+    {
+      "compiled_id": 248185,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 2028321706,
+      "offset": 88134064
+    },
+    {
+      "compiled_id": 248186,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1368341697,
+      "offset": 88134280
+    },
+    {
+      "compiled_id": 248187,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1715951197,
+      "offset": 88134503
+    },
+    {
+      "compiled_id": 248188,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 515685396,
+      "offset": 88134733
+    },
+    {
+      "compiled_id": 248189,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1097861050,
+      "offset": 88134950
+    },
+    {
+      "compiled_id": 248190,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 766327297,
+      "offset": 88135170
+    },
+    {
+      "compiled_id": 248191,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1374923647,
+      "offset": 88135405
+    },
+    {
+      "compiled_id": 248192,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1957070873,
+      "offset": 88135625
+    },
+    {
+      "compiled_id": 248193,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 871356276,
+      "offset": 88135841
+    },
+    {
+      "compiled_id": 248194,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 980735651,
+      "offset": 88136054
+    },
+    {
+      "compiled_id": 248195,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1410899337,
+      "offset": 88136265
+    },
+    {
+      "compiled_id": 248196,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1315998625,
+      "offset": 88136484
+    },
+    {
+      "compiled_id": 248197,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1549213006,
+      "offset": 88136701
+    },
+    {
+      "compiled_id": 248198,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 176813119,
+      "offset": 88136923
+    },
+    {
+      "compiled_id": 248199,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 868093240,
+      "offset": 88137143
+    },
+    {
+      "compiled_id": 248200,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1270277530,
+      "offset": 88137357
+    },
+    {
+      "compiled_id": 248201,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::StaticClass",
+      "installed_id": 1850645059,
+      "offset": 88137591
+    },
+    {
+      "compiled_id": 248202,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::Get",
+      "installed_id": 934403452,
+      "offset": 88137933
+    },
+    {
+      "compiled_id": 248203,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::GetOrCreate",
+      "installed_id": 1163374047,
+      "offset": 88138283
+    },
+    {
+      "compiled_id": 248204,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B::Create",
+      "installed_id": 702228664,
+      "offset": 88138628
+    },
+    {
+      "compiled_id": 248093,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UCharacterDefinition_Human_GORE_TEST_B::__InitDefaults",
+      "installed_id": 876306681,
+      "offset": 88142358
+    },
+    {
+      "compiled_id": 248091,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UCharacterDefinition_Human_GORE_TEST_B::UCharacterDefinition_Human_GORE_TEST_B",
+      "installed_id": 1439025252,
+      "offset": 88142577
+    },
+    {
+      "compiled_id": 248423,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UCharacterDefinition_Human_GORE_TEST_B::~UCharacterDefinition_Human_GORE_TEST_B",
+      "installed_id": 1238932673,
+      "offset": 88142829
+    },
+    {
+      "compiled_id": 248096,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UCharacterVisualsDefinition_Human_GORE_TEST_B::__InitDefaults",
+      "installed_id": 670813661,
+      "offset": 88145189
+    },
+    {
+      "compiled_id": 248094,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UCharacterVisualsDefinition_Human_GORE_TEST_B::UCharacterVisualsDefinition_Human_GORE_TEST_B",
+      "installed_id": 531985469,
+      "offset": 88145907
+    },
+    {
+      "compiled_id": 248424,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UCharacterVisualsDefinition_Human_GORE_TEST_B::~UCharacterVisualsDefinition_Human_GORE_TEST_B",
+      "installed_id": 1597913588,
+      "offset": 88146490
+    },
+    {
+      "compiled_id": 248099,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIAgentConfig_Human_GORE_TEST_B::__InitDefaults",
+      "installed_id": 1160151304,
+      "offset": 88146924
+    },
+    {
+      "compiled_id": 248097,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIAgentConfig_Human_GORE_TEST_B::UAIAgentConfig_Human_GORE_TEST_B",
+      "installed_id": 301502162,
+      "offset": 88147137
+    },
+    {
+      "compiled_id": 248102,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.USpawnAIAgentDefinition_GORE_TEST_B::__InitDefaults",
+      "installed_id": 1321298112,
+      "offset": 88147669
+    },
+    {
+      "compiled_id": 248100,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.USpawnAIAgentDefinition_GORE_TEST_B::USpawnAIAgentDefinition_GORE_TEST_B",
+      "installed_id": 1903882539,
+      "offset": 88147873
+    },
+    {
+      "compiled_id": 248105,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UConversationCharacterSettings_Ambient_GORE_TEST_B::__InitDefaults",
+      "installed_id": 653003804,
+      "offset": 88148491
+    },
+    {
+      "compiled_id": 248103,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UConversationCharacterSettings_Ambient_GORE_TEST_B::UConversationCharacterSettings_Ambient_GORE_TEST_B",
+      "installed_id": 1529695167,
+      "offset": 88148710
+    },
+    {
+      "compiled_id": 248110,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreScheduledActivity::__InitDefaults",
+      "installed_id": 918219174,
+      "offset": 88149335
+    },
+    {
+      "compiled_id": 248106,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreScheduledActivity::OnGracefulExitRequested_Implementation",
+      "installed_id": 546867789,
+      "offset": 88149534
+    },
+    {
+      "compiled_id": 248107,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreScheduledActivity::DoTask_Implementation",
+      "installed_id": 1499490537,
+      "offset": 88150160
+    },
+    {
+      "compiled_id": 248108,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreScheduledActivity::UAIState_GoreScheduledActivity",
+      "installed_id": 1714057112,
+      "offset": 88150606
+    },
+    {
+      "compiled_id": 248425,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreScheduledActivity::~UAIState_GoreScheduledActivity",
+      "installed_id": 1866322935,
+      "offset": 88150862
+    },
+    {
+      "compiled_id": 248113,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreScheduledRead::__InitDefaults",
+      "installed_id": 1407799555,
+      "offset": 88151265
+    },
+    {
+      "compiled_id": 248111,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreScheduledRead::UAIState_GoreScheduledRead",
+      "installed_id": 159950149,
+      "offset": 88151592
+    },
+    {
+      "compiled_id": 248426,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreScheduledRead::~UAIState_GoreScheduledRead",
+      "installed_id": 711418926,
+      "offset": 88151832
+    },
+    {
+      "compiled_id": 248116,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreScheduledDrink::__InitDefaults",
+      "installed_id": 1881221389,
+      "offset": 88152227
+    },
+    {
+      "compiled_id": 248114,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreScheduledDrink::UAIState_GoreScheduledDrink",
+      "installed_id": 590950190,
+      "offset": 88152555
+    },
+    {
+      "compiled_id": 248427,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreScheduledDrink::~UAIState_GoreScheduledDrink",
+      "installed_id": 1434829227,
+      "offset": 88152796
+    },
+    {
+      "compiled_id": 248119,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GORE_TEST_B_Start::__InitDefaults",
+      "installed_id": 772548613,
+      "offset": 88153652
+    },
+    {
+      "compiled_id": 248117,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GORE_TEST_B_Start::UDailyRoutine_GORE_TEST_B_Start",
+      "installed_id": 90497985,
+      "offset": 88153892
+    },
+    {
+      "compiled_id": 248428,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GORE_TEST_B_Start::~UDailyRoutine_GORE_TEST_B_Start",
+      "installed_id": 62432610,
+      "offset": 88154137
+    },
+    {
+      "compiled_id": 248122,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UCharacterDefinition_Human_GORE_TEST_C::__InitDefaults",
+      "installed_id": 289641740,
+      "offset": 88154653
+    },
+    {
+      "compiled_id": 248120,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UCharacterDefinition_Human_GORE_TEST_C::UCharacterDefinition_Human_GORE_TEST_C",
+      "installed_id": 633893884,
+      "offset": 88154872
+    },
+    {
+      "compiled_id": 248429,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UCharacterDefinition_Human_GORE_TEST_C::~UCharacterDefinition_Human_GORE_TEST_C",
+      "installed_id": 2071740119,
+      "offset": 88155124
+    },
+    {
+      "compiled_id": 248125,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UCharacterVisualsDefinition_Human_GORE_TEST_C::__InitDefaults",
+      "installed_id": 1075839408,
+      "offset": 88156067
+    },
+    {
+      "compiled_id": 248123,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UCharacterVisualsDefinition_Human_GORE_TEST_C::UCharacterVisualsDefinition_Human_GORE_TEST_C",
+      "installed_id": 145230119,
+      "offset": 88156401
+    },
+    {
+      "compiled_id": 248430,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UCharacterVisualsDefinition_Human_GORE_TEST_C::~UCharacterVisualsDefinition_Human_GORE_TEST_C",
+      "installed_id": 1006599140,
+      "offset": 88156732
+    },
+    {
+      "compiled_id": 248128,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIAgentConfig_Human_GORE_TEST_C::__InitDefaults",
+      "installed_id": 1762533717,
+      "offset": 88157188
+    },
+    {
+      "compiled_id": 248126,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIAgentConfig_Human_GORE_TEST_C::UAIAgentConfig_Human_GORE_TEST_C",
+      "installed_id": 84682038,
+      "offset": 88157401
+    },
+    {
+      "compiled_id": 248131,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.USpawnAIAgentDefinition_GORE_TEST_C::__InitDefaults",
+      "installed_id": 1917934445,
+      "offset": 88157933
+    },
+    {
+      "compiled_id": 248129,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.USpawnAIAgentDefinition_GORE_TEST_C::USpawnAIAgentDefinition_GORE_TEST_C",
+      "installed_id": 172216457,
+      "offset": 88158137
+    },
+    {
+      "compiled_id": 248134,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UConversationCharacterSettings_Ambient_GORE_TEST_C::__InitDefaults",
+      "installed_id": 1206014473,
+      "offset": 88158755
+    },
+    {
+      "compiled_id": 248132,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UConversationCharacterSettings_Ambient_GORE_TEST_C::UConversationCharacterSettings_Ambient_GORE_TEST_C",
+      "installed_id": 1211427771,
+      "offset": 88158974
+    },
+    {
+      "compiled_id": 248137,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreAppearanceControl::__InitDefaults",
+      "installed_id": 1492550445,
+      "offset": 88159666
+    },
+    {
+      "compiled_id": 248135,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreAppearanceControl::UDailyRoutine_GoreAppearanceControl",
+      "installed_id": 103661777,
+      "offset": 88159910
+    },
+    {
+      "compiled_id": 248431,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreAppearanceControl::~UDailyRoutine_GoreAppearanceControl",
+      "installed_id": 1202891706,
+      "offset": 88160159
+    },
+    {
+      "compiled_id": 248140,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GORE_TEST_C_Start::__InitDefaults",
+      "installed_id": 729352020,
+      "offset": 88160748
+    },
+    {
+      "compiled_id": 248138,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GORE_TEST_C_Start::UDailyRoutine_GORE_TEST_C_Start",
+      "installed_id": 1670948047,
+      "offset": 88160988
+    },
+    {
+      "compiled_id": 248432,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GORE_TEST_C_Start::~UDailyRoutine_GORE_TEST_C_Start",
+      "installed_id": 1067255446,
+      "offset": 88161233
+    },
+    {
+      "compiled_id": 248141,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGoreFlexHeadProbeController::Note",
+      "installed_id": 1639058458,
+      "offset": 88163997
+    },
+    {
+      "compiled_id": 248142,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGoreFlexHeadProbeController::IsTestMode",
+      "installed_id": 58364065,
+      "offset": 88164288
+    },
+    {
+      "compiled_id": 248143,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGoreFlexHeadProbeController::Initialize",
+      "installed_id": 466642515,
+      "offset": 88164772
+    },
+    {
+      "compiled_id": 248144,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGoreFlexHeadProbeController::Apply",
+      "installed_id": 2025974495,
+      "offset": 88165042
+    },
+    {
+      "compiled_id": 248145,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGoreFlexHeadProbeController::Restore",
+      "installed_id": 964710039,
+      "offset": 88165314
+    },
+    {
+      "compiled_id": 248146,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGoreFlexHeadProbeController::OnCharacterSpawned",
+      "installed_id": 284252510,
+      "offset": 88165656
+    },
+    {
+      "compiled_id": 248147,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGoreFlexHeadProbeController::IsStockHeadName",
+      "installed_id": 1756835134,
+      "offset": 88166720
+    },
+    {
+      "compiled_id": 248148,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGoreFlexHeadProbeController::Tick_Implementation",
+      "installed_id": 1823270576,
+      "offset": 88168301
+    },
+    {
+      "compiled_id": 248149,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGoreFlexHeadProbeController::IsStockHeadMaterial",
+      "installed_id": 1716964678,
+      "offset": 88168995
+    },
+    {
+      "compiled_id": 248150,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGoreFlexHeadProbeController::RestoreBody",
+      "installed_id": 1482118995,
+      "offset": 88169972
+    },
+    {
+      "compiled_id": 248151,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGoreFlexHeadProbeController::Refresh",
+      "installed_id": 1900376978,
+      "offset": 88175834
+    },
+    {
+      "compiled_id": 248152,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGoreFlexHeadProbeController::UGoreFlexHeadProbeController",
+      "installed_id": 1622219651,
+      "offset": 88176267
+    },
+    {
+      "compiled_id": 248433,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGoreFlexHeadProbeController::~UGoreFlexHeadProbeController",
+      "installed_id": 1701655152,
+      "offset": 88176545
+    },
+    {
+      "compiled_id": 248158,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreFlexHeadProbe::__InitDefaults",
+      "installed_id": 1263796109,
+      "offset": 88176911
+    },
+    {
+      "compiled_id": 248154,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreFlexHeadProbe::OnGracefulExitRequested_Implementation",
+      "installed_id": 210176934,
+      "offset": 88177110
+    },
+    {
+      "compiled_id": 248155,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreFlexHeadProbe::DoTask_Implementation",
+      "installed_id": 869129076,
+      "offset": 88177892
+    },
+    {
+      "compiled_id": 248156,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreFlexHeadProbe::UAIState_GoreFlexHeadProbe",
+      "installed_id": 89134401,
+      "offset": 88178310
+    },
+    {
+      "compiled_id": 248161,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreObjectActivities::__InitDefaults",
+      "installed_id": 925108736,
+      "offset": 88179245
+    },
+    {
+      "compiled_id": 248159,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreObjectActivities::UDailyRoutine_GoreObjectActivities",
+      "installed_id": 1138483712,
+      "offset": 88179488
+    },
+    {
+      "compiled_id": 248434,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreObjectActivities::~UDailyRoutine_GoreObjectActivities",
+      "installed_id": 2087752615,
+      "offset": 88179736
+    },
+    {
+      "compiled_id": 248164,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreObjectObserver::__InitDefaults",
+      "installed_id": 2084732993,
+      "offset": 88180325
+    },
+    {
+      "compiled_id": 248162,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreObjectObserver::UDailyRoutine_GoreObjectObserver",
+      "installed_id": 1321260054,
+      "offset": 88180566
+    },
+    {
+      "compiled_id": 248435,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreObjectObserver::~UDailyRoutine_GoreObjectObserver",
+      "installed_id": 414709659,
+      "offset": 88180812
+    },
+    {
+      "compiled_id": 248167,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreSeatGuardActivities::__InitDefaults",
+      "installed_id": 1908306573,
+      "offset": 88181680
+    },
+    {
+      "compiled_id": 248165,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreSeatGuardActivities::UDailyRoutine_GoreSeatGuardActivities",
+      "installed_id": 1160541559,
+      "offset": 88181926
+    },
+    {
+      "compiled_id": 248436,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreSeatGuardActivities::~UDailyRoutine_GoreSeatGuardActivities",
+      "installed_id": 921201120,
+      "offset": 88182177
+    },
+    {
+      "compiled_id": 248170,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreSeatGuardObserver::__InitDefaults",
+      "installed_id": 262793212,
+      "offset": 88182772
+    },
+    {
+      "compiled_id": 248168,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreSeatGuardObserver::UDailyRoutine_GoreSeatGuardObserver",
+      "installed_id": 985249427,
+      "offset": 88183016
+    },
+    {
+      "compiled_id": 248437,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UDailyRoutine_GoreSeatGuardObserver::~UDailyRoutine_GoreSeatGuardObserver",
+      "installed_id": 678748874,
+      "offset": 88183265
+    },
+    {
+      "compiled_id": 248171,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreBWarningRecovery::BeginWarning",
+      "installed_id": 1789415210,
+      "offset": 88183899
+    },
+    {
+      "compiled_id": 248172,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreBWarningRecovery::DoInLoopIfCharacterNotStillWarning",
+      "installed_id": 361517332,
+      "offset": 88184702
+    },
+    {
+      "compiled_id": 248173,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreBWarningRecovery::UAIState_GoreBWarningRecovery",
+      "installed_id": 1673044480,
+      "offset": 88185244
+    },
+    {
+      "compiled_id": 248438,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UAIState_GoreBWarningRecovery::~UAIState_GoreBWarningRecovery",
+      "installed_id": 39959014,
+      "offset": 88185487
+    },
+    {
+      "compiled_id": 248177,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGameplayAbility_CharacterAI_GoreBWarningRecovery::__InitDefaults",
+      "installed_id": 1155672459,
+      "offset": 88185973
+    },
+    {
+      "compiled_id": 248175,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGameplayAbility_CharacterAI_GoreBWarningRecovery::UGameplayAbility_CharacterAI_GoreBWarningRecovery",
+      "installed_id": 737309337,
+      "offset": 88186491
+    },
+    {
+      "compiled_id": 248439,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B.UGameplayAbility_CharacterAI_GoreBWarningRecovery::~UGameplayAbility_CharacterAI_GoreBWarningRecovery",
+      "installed_id": 919174439,
+      "offset": 88186754
+    },
+    {
+      "compiled_id": 247877,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UCharacterDefinition_Human_GORE_TEST_A",
+      "installed_id": 1857479011,
+      "offset": 88189704
+    },
+    {
+      "compiled_id": 247880,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UCharacterVisualsDefinition_Human_GORE_TEST_A",
+      "installed_id": 866021995,
+      "offset": 88189910
+    },
+    {
+      "compiled_id": 247883,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UAIAgentConfig_Human_GORE_TEST_A",
+      "installed_id": 2017668236,
+      "offset": 88190103
+    },
+    {
+      "compiled_id": 247886,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::USpawnAIAgentDefinition_GORE_TEST_A",
+      "installed_id": 1738805977,
+      "offset": 88190299
+    },
+    {
+      "compiled_id": 247889,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UConversationCharacterSettings_Ambient_GORE_TEST_A",
+      "installed_id": 1353150040,
+      "offset": 88190510
+    },
+    {
+      "compiled_id": 247892,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UDailyRoutine_GORE_TEST_A_Start",
+      "installed_id": 371713002,
+      "offset": 88190702
+    },
+    {
+      "compiled_id": 247895,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UTopic_Hero__GORE_TEST_A",
+      "installed_id": 702252703,
+      "offset": 88190887
+    },
+    {
+      "compiled_id": 247900,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UQuest_GORE_NPC_SESSION",
+      "installed_id": 245988990,
+      "offset": 88191071
+    },
+    {
+      "compiled_id": 247903,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreNpcSessionBegin",
+      "installed_id": 1850708620,
+      "offset": 88191258
+    },
+    {
+      "compiled_id": 247908,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreNpcSessionComplete",
+      "installed_id": 760043072,
+      "offset": 88191448
+    },
+    {
+      "compiled_id": 247913,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreNpcSessionRemembered",
+      "installed_id": 858235032,
+      "offset": 88191640
+    },
+    {
+      "compiled_id": 247920,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreNpcVoiceOriginal",
+      "installed_id": 598573280,
+      "offset": 88191828
+    },
+    {
+      "compiled_id": 247925,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreNpcVoiceGreeting",
+      "installed_id": 983113524,
+      "offset": 88192016
+    },
+    {
+      "compiled_id": 247930,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreNpcVoiceMono48",
+      "installed_id": 1213786580,
+      "offset": 88192202
+    },
+    {
+      "compiled_id": 247935,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreNpcVoiceMono44",
+      "installed_id": 1009400132,
+      "offset": 88192388
+    },
+    {
+      "compiled_id": 247940,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreNpcVoiceStereo48",
+      "installed_id": 367193320,
+      "offset": 88192576
+    },
+    {
+      "compiled_id": 247945,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreNpcVoiceExchange",
+      "installed_id": 968422156,
+      "offset": 88192764
+    },
+    {
+      "compiled_id": 247950,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreNpcVoiceMissing",
+      "installed_id": 1136286046,
+      "offset": 88192951
+    },
+    {
+      "compiled_id": 247955,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreNpcVoiceMumble",
+      "installed_id": 1759968752,
+      "offset": 88193137
+    },
+    {
+      "compiled_id": 247960,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreAppearanceSetup",
+      "installed_id": 1208415518,
+      "offset": 88193324
+    },
+    {
+      "compiled_id": 247965,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreRoutineNoon",
+      "installed_id": 1375396323,
+      "offset": 88193507
+    },
+    {
+      "compiled_id": 247970,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreRoutineEvening",
+      "installed_id": 1211524392,
+      "offset": 88193693
+    },
+    {
+      "compiled_id": 247975,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreRoutineMorning",
+      "installed_id": 856143176,
+      "offset": 88193879
+    },
+    {
+      "compiled_id": 247980,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreSetupPrepared",
+      "installed_id": 348218655,
+      "offset": 88194064
+    },
+    {
+      "compiled_id": 247985,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreSetupIncomplete",
+      "installed_id": 249119758,
+      "offset": 88194251
+    },
+    {
+      "compiled_id": 247990,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreHeadApply",
+      "installed_id": 1288266450,
+      "offset": 88194432
+    },
+    {
+      "compiled_id": 247995,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreHeadRestore",
+      "installed_id": 838580527,
+      "offset": 88194615
+    },
+    {
+      "compiled_id": 248000,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreObjectsSetup",
+      "installed_id": 2135111893,
+      "offset": 88194799
+    },
+    {
+      "compiled_id": 248005,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreObjectsNoon",
+      "installed_id": 1804784711,
+      "offset": 88194982
+    },
+    {
+      "compiled_id": 248010,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreObjectsEvening",
+      "installed_id": 1500849820,
+      "offset": 88195168
+    },
+    {
+      "compiled_id": 248015,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreObjectsMorning",
+      "installed_id": 1227359660,
+      "offset": 88195354
+    },
+    {
+      "compiled_id": 248020,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreObjectsIncomplete",
+      "installed_id": 1817016428,
+      "offset": 88195543
+    },
+    {
+      "compiled_id": 248025,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreSeatGuardSetup",
+      "installed_id": 1514445020,
+      "offset": 88195729
+    },
+    {
+      "compiled_id": 248030,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreSeatGuardNoon",
+      "installed_id": 206982659,
+      "offset": 88195914
+    },
+    {
+      "compiled_id": 248035,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreSeatGuardEvening",
+      "installed_id": 69369624,
+      "offset": 88196102
+    },
+    {
+      "compiled_id": 248040,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreSeatGuardMorning",
+      "installed_id": 1273957376,
+      "offset": 88196290
+    },
+    {
+      "compiled_id": 248045,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::UChoiceGoreSeatGuardIncomplete",
+      "installed_id": 1418014286,
+      "offset": 88196481
+    },
+    {
+      "compiled_id": 248047,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::GoreNpcSessionText",
+      "installed_id": 1695578969,
+      "offset": 88196852
+    },
+    {
+      "compiled_id": 248048,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::GetGoreNpcSession",
+      "installed_id": 1933470779,
+      "offset": 88197153
+    },
+    {
+      "compiled_id": 248049,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::GoreAppearanceSetupStatus",
+      "installed_id": 1382532537,
+      "offset": 88197472
+    },
+    {
+      "compiled_id": 248050,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::GoreSetAppearanceSetupStatus",
+      "installed_id": 1783916811,
+      "offset": 88197837
+    },
+    {
+      "compiled_id": 248051,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::GoreSetHeadProbeMode",
+      "installed_id": 1539588665,
+      "offset": 88198441
+    },
+    {
+      "compiled_id": 248052,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::GoreObjectSetupStatus",
+      "installed_id": 1363629438,
+      "offset": 88198756
+    },
+    {
+      "compiled_id": 248053,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::GoreSeatGuardSetupStatus",
+      "installed_id": 1305352694,
+      "offset": 88199074
+    },
+    {
+      "compiled_id": 248054,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1188148331,
+      "offset": 88199297
+    },
+    {
+      "compiled_id": 248055,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1852984426,
+      "offset": 88199527
+    },
+    {
+      "compiled_id": 248056,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 2054766116,
+      "offset": 88199744
+    },
+    {
+      "compiled_id": 248057,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1348633951,
+      "offset": 88199964
+    },
+    {
+      "compiled_id": 248058,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1335640593,
+      "offset": 88200199
+    },
+    {
+      "compiled_id": 248059,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 501546486,
+      "offset": 88200415
+    },
+    {
+      "compiled_id": 248060,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1729474015,
+      "offset": 88200643
+    },
+    {
+      "compiled_id": 248061,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 73028998,
+      "offset": 88200863
+    },
+    {
+      "compiled_id": 248062,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1802286793,
+      "offset": 88201093
+    },
+    {
+      "compiled_id": 248063,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 351945488,
+      "offset": 88201326
+    },
+    {
+      "compiled_id": 248064,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1587699810,
+      "offset": 88201561
+    },
+    {
+      "compiled_id": 248065,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 514360824,
+      "offset": 88201792
+    },
+    {
+      "compiled_id": 248066,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1024780980,
+      "offset": 88202023
+    },
+    {
+      "compiled_id": 248067,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 3715002,
+      "offset": 88202252
+    },
+    {
+      "compiled_id": 248068,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 300756758,
+      "offset": 88202481
+    },
+    {
+      "compiled_id": 248069,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1319113257,
+      "offset": 88202712
+    },
+    {
+      "compiled_id": 248070,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1119184194,
+      "offset": 88202943
+    },
+    {
+      "compiled_id": 248071,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 429124276,
+      "offset": 88203173
+    },
+    {
+      "compiled_id": 248072,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 2052109441,
+      "offset": 88203402
+    },
+    {
+      "compiled_id": 248073,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1357343642,
+      "offset": 88203632
+    },
+    {
+      "compiled_id": 248074,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1597934897,
+      "offset": 88203858
+    },
+    {
+      "compiled_id": 248075,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1841389914,
+      "offset": 88204087
+    },
+    {
+      "compiled_id": 248076,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 280202050,
+      "offset": 88204316
+    },
+    {
+      "compiled_id": 248077,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 734809761,
+      "offset": 88204544
+    },
+    {
+      "compiled_id": 248078,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1330428888,
+      "offset": 88204774
+    },
+    {
+      "compiled_id": 248079,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1069068640,
+      "offset": 88204998
+    },
+    {
+      "compiled_id": 248080,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 552989959,
+      "offset": 88205224
+    },
+    {
+      "compiled_id": 248081,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1536762115,
+      "offset": 88205451
+    },
+    {
+      "compiled_id": 248082,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 2078827809,
+      "offset": 88205677
+    },
+    {
+      "compiled_id": 248083,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 586364742,
+      "offset": 88205906
+    },
+    {
+      "compiled_id": 248084,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1296477430,
+      "offset": 88206135
+    },
+    {
+      "compiled_id": 248085,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 1176915969,
+      "offset": 88206367
+    },
+    {
+      "compiled_id": 248086,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 2138607847,
+      "offset": 88206596
+    },
+    {
+      "compiled_id": 248087,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 316372153,
+      "offset": 88206824
+    },
+    {
+      "compiled_id": 248088,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 890395194,
+      "offset": 88207055
+    },
+    {
+      "compiled_id": 248089,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 818039202,
+      "offset": 88207286
+    },
+    {
+      "compiled_id": 248090,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A::StaticClass",
+      "installed_id": 790643273,
+      "offset": 88207520
+    },
+    {
+      "compiled_id": 247878,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UCharacterDefinition_Human_GORE_TEST_A::__InitDefaults",
+      "installed_id": 1289515310,
+      "offset": 88211250
+    },
+    {
+      "compiled_id": 247876,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UCharacterDefinition_Human_GORE_TEST_A::UCharacterDefinition_Human_GORE_TEST_A",
+      "installed_id": 1287402664,
+      "offset": 88211469
+    },
+    {
+      "compiled_id": 248420,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UCharacterDefinition_Human_GORE_TEST_A::~UCharacterDefinition_Human_GORE_TEST_A",
+      "installed_id": 1802624759,
+      "offset": 88211721
+    },
+    {
+      "compiled_id": 247881,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UCharacterVisualsDefinition_Human_GORE_TEST_A::__InitDefaults",
+      "installed_id": 989525954,
+      "offset": 88212216
+    },
+    {
+      "compiled_id": 247879,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UCharacterVisualsDefinition_Human_GORE_TEST_A::UCharacterVisualsDefinition_Human_GORE_TEST_A",
+      "installed_id": 1624359403,
+      "offset": 88212442
+    },
+    {
+      "compiled_id": 248421,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UCharacterVisualsDefinition_Human_GORE_TEST_A::~UCharacterVisualsDefinition_Human_GORE_TEST_A",
+      "installed_id": 1049254016,
+      "offset": 88212701
+    },
+    {
+      "compiled_id": 247884,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UAIAgentConfig_Human_GORE_TEST_A::__InitDefaults",
+      "installed_id": 302985511,
+      "offset": 88213158
+    },
+    {
+      "compiled_id": 247882,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UAIAgentConfig_Human_GORE_TEST_A::UAIAgentConfig_Human_GORE_TEST_A",
+      "installed_id": 689350182,
+      "offset": 88213371
+    },
+    {
+      "compiled_id": 247887,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.USpawnAIAgentDefinition_GORE_TEST_A::__InitDefaults",
+      "installed_id": 814073735,
+      "offset": 88213903
+    },
+    {
+      "compiled_id": 247885,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.USpawnAIAgentDefinition_GORE_TEST_A::USpawnAIAgentDefinition_GORE_TEST_A",
+      "installed_id": 199409933,
+      "offset": 88214107
+    },
+    {
+      "compiled_id": 247890,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UConversationCharacterSettings_Ambient_GORE_TEST_A::__InitDefaults",
+      "installed_id": 258293627,
+      "offset": 88214725
+    },
+    {
+      "compiled_id": 247888,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UConversationCharacterSettings_Ambient_GORE_TEST_A::UConversationCharacterSettings_Ambient_GORE_TEST_A",
+      "installed_id": 268930635,
+      "offset": 88214944
+    },
+    {
+      "compiled_id": 247893,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UDailyRoutine_GORE_TEST_A_Start::__InitDefaults",
+      "installed_id": 1100719602,
+      "offset": 88215592
+    },
+    {
+      "compiled_id": 247891,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UDailyRoutine_GORE_TEST_A_Start::UDailyRoutine_GORE_TEST_A_Start",
+      "installed_id": 916685443,
+      "offset": 88215832
+    },
+    {
+      "compiled_id": 248422,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UDailyRoutine_GORE_TEST_A_Start::~UDailyRoutine_GORE_TEST_A_Start",
+      "installed_id": 1164580838,
+      "offset": 88216077
+    },
+    {
+      "compiled_id": 247896,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UTopic_Hero__GORE_TEST_A::GetHero",
+      "installed_id": 1754462284,
+      "offset": 88216528
+    },
+    {
+      "compiled_id": 247897,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UTopic_Hero__GORE_TEST_A::GetGORETESTA",
+      "installed_id": 1653603058,
+      "offset": 88216719
+    },
+    {
+      "compiled_id": 247898,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UTopic_Hero__GORE_TEST_A::__InitDefaults",
+      "installed_id": 322601571,
+      "offset": 88216972
+    },
+    {
+      "compiled_id": 247894,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UTopic_Hero__GORE_TEST_A::UTopic_Hero__GORE_TEST_A",
+      "installed_id": 743257855,
+      "offset": 88217211
+    },
+    {
+      "compiled_id": 247901,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UQuest_GORE_NPC_SESSION::__InitDefaults",
+      "installed_id": 298443963,
+      "offset": 88218176
+    },
+    {
+      "compiled_id": 247899,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UQuest_GORE_NPC_SESSION::UQuest_GORE_NPC_SESSION",
+      "installed_id": 925059745,
+      "offset": 88218399
+    },
+    {
+      "compiled_id": 247906,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcSessionBegin::__InitDefaults",
+      "installed_id": 684330707,
+      "offset": 88219066
+    },
+    {
+      "compiled_id": 247904,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcSessionBegin::IsVisible_Implementation",
+      "installed_id": 415672485,
+      "offset": 88219317
+    },
+    {
+      "compiled_id": 247905,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcSessionBegin::Act_Implementation",
+      "installed_id": 141157708,
+      "offset": 88220091
+    },
+    {
+      "compiled_id": 247902,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcSessionBegin::UChoiceGoreNpcSessionBegin",
+      "installed_id": 569280485,
+      "offset": 88220443
+    },
+    {
+      "compiled_id": 247911,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcSessionComplete::__InitDefaults",
+      "installed_id": 1692248603,
+      "offset": 88221143
+    },
+    {
+      "compiled_id": 247909,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcSessionComplete::IsVisible_Implementation",
+      "installed_id": 434229581,
+      "offset": 88221486
+    },
+    {
+      "compiled_id": 247910,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcSessionComplete::Act_Implementation",
+      "installed_id": 1041642100,
+      "offset": 88222160
+    },
+    {
+      "compiled_id": 247907,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcSessionComplete::UChoiceGoreNpcSessionComplete",
+      "installed_id": 1896181284,
+      "offset": 88222515
+    },
+    {
+      "compiled_id": 247916,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcSessionRemembered::__InitDefaults",
+      "installed_id": 1890187337,
+      "offset": 88223220
+    },
+    {
+      "compiled_id": 247914,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcSessionRemembered::IsVisible_Implementation",
+      "installed_id": 390202011,
+      "offset": 88223467
+    },
+    {
+      "compiled_id": 247915,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcSessionRemembered::Act_Implementation",
+      "installed_id": 894429162,
+      "offset": 88223753
+    },
+    {
+      "compiled_id": 247912,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcSessionRemembered::UChoiceGoreNpcSessionRemembered",
+      "installed_id": 1899612046,
+      "offset": 88224110
+    },
+    {
+      "compiled_id": 247921,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceOriginal::__InitDefaults",
+      "installed_id": 1817051897,
+      "offset": 88224813
+    },
+    {
+      "compiled_id": 247917,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceOriginal::IsVisible_Implementation",
+      "installed_id": 269555755,
+      "offset": 88224992
+    },
+    {
+      "compiled_id": 247918,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceOriginal::Act_Implementation",
+      "installed_id": 444616378,
+      "offset": 88225763
+    },
+    {
+      "compiled_id": 247919,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceOriginal::UChoiceGoreNpcVoiceOriginal",
+      "installed_id": 1880978882,
+      "offset": 88226101
+    },
+    {
+      "compiled_id": 247926,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceGreeting::__InitDefaults",
+      "installed_id": 1848828321,
+      "offset": 88226800
+    },
+    {
+      "compiled_id": 247922,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceGreeting::IsVisible_Implementation",
+      "installed_id": 964827955,
+      "offset": 88226979
+    },
+    {
+      "compiled_id": 247923,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceGreeting::Act_Implementation",
+      "installed_id": 1184839010,
+      "offset": 88227434
+    },
+    {
+      "compiled_id": 247924,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceGreeting::UChoiceGoreNpcVoiceGreeting",
+      "installed_id": 1805810446,
+      "offset": 88227772
+    },
+    {
+      "compiled_id": 247931,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMono48::__InitDefaults",
+      "installed_id": 166304833,
+      "offset": 88228469
+    },
+    {
+      "compiled_id": 247927,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMono48::IsVisible_Implementation",
+      "installed_id": 1592658899,
+      "offset": 88228648
+    },
+    {
+      "compiled_id": 247928,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMono48::Act_Implementation",
+      "installed_id": 1669963714,
+      "offset": 88229195
+    },
+    {
+      "compiled_id": 247929,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMono48::UChoiceGoreNpcVoiceMono48",
+      "installed_id": 1612467488,
+      "offset": 88229531
+    },
+    {
+      "compiled_id": 247936,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMono44::__InitDefaults",
+      "installed_id": 2059217805,
+      "offset": 88230226
+    },
+    {
+      "compiled_id": 247932,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMono44::IsVisible_Implementation",
+      "installed_id": 1856282639,
+      "offset": 88230405
+    },
+    {
+      "compiled_id": 247933,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMono44::Act_Implementation",
+      "installed_id": 1259353350,
+      "offset": 88230952
+    },
+    {
+      "compiled_id": 247934,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMono44::UChoiceGoreNpcVoiceMono44",
+      "installed_id": 285376544,
+      "offset": 88231288
+    },
+    {
+      "compiled_id": 247941,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceStereo48::__InitDefaults",
+      "installed_id": 382423940,
+      "offset": 88231985
+    },
+    {
+      "compiled_id": 247937,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceStereo48::IsVisible_Implementation",
+      "installed_id": 1254911046,
+      "offset": 88232164
+    },
+    {
+      "compiled_id": 247938,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceStereo48::Act_Implementation",
+      "installed_id": 570410575,
+      "offset": 88232711
+    },
+    {
+      "compiled_id": 247939,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceStereo48::UChoiceGoreNpcVoiceStereo48",
+      "installed_id": 1053658288,
+      "offset": 88233049
+    },
+    {
+      "compiled_id": 247946,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceExchange::__InitDefaults",
+      "installed_id": 1484944107,
+      "offset": 88233748
+    },
+    {
+      "compiled_id": 247942,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceExchange::IsVisible_Implementation",
+      "installed_id": 369393789,
+      "offset": 88233927
+    },
+    {
+      "compiled_id": 247943,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceExchange::Act_Implementation",
+      "installed_id": 869590372,
+      "offset": 88234926
+    },
+    {
+      "compiled_id": 247944,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceExchange::UChoiceGoreNpcVoiceExchange",
+      "installed_id": 182356714,
+      "offset": 88235264
+    },
+    {
+      "compiled_id": 247951,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMissing::__InitDefaults",
+      "installed_id": 417990962,
+      "offset": 88235962
+    },
+    {
+      "compiled_id": 247947,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMissing::IsVisible_Implementation",
+      "installed_id": 1968074692,
+      "offset": 88236141
+    },
+    {
+      "compiled_id": 247948,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMissing::Act_Implementation",
+      "installed_id": 1760423365,
+      "offset": 88236916
+    },
+    {
+      "compiled_id": 247949,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMissing::UChoiceGoreNpcVoiceMissing",
+      "installed_id": 622117485,
+      "offset": 88237253
+    },
+    {
+      "compiled_id": 247956,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMumble::__InitDefaults",
+      "installed_id": 380277866,
+      "offset": 88237949
+    },
+    {
+      "compiled_id": 247952,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMumble::IsVisible_Implementation",
+      "installed_id": 800218876,
+      "offset": 88238128
+    },
+    {
+      "compiled_id": 247953,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMumble::Act_Implementation",
+      "installed_id": 585834013,
+      "offset": 88238731
+    },
+    {
+      "compiled_id": 247954,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreNpcVoiceMumble::UChoiceGoreNpcVoiceMumble",
+      "installed_id": 213173038,
+      "offset": 88239067
+    },
+    {
+      "compiled_id": 247961,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreAppearanceSetup::__InitDefaults",
+      "installed_id": 1438285136,
+      "offset": 88239763
+    },
+    {
+      "compiled_id": 247957,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreAppearanceSetup::IsVisible_Implementation",
+      "installed_id": 1061969314,
+      "offset": 88239942
+    },
+    {
+      "compiled_id": 247958,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreAppearanceSetup::Act_Implementation",
+      "installed_id": 1529167475,
+      "offset": 88242233
+    },
+    {
+      "compiled_id": 247959,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreAppearanceSetup::UChoiceGoreAppearanceSetup",
+      "installed_id": 1805405401,
+      "offset": 88242570
+    },
+    {
+      "compiled_id": 247966,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreRoutineNoon::__InitDefaults",
+      "installed_id": 472952223,
+      "offset": 88243263
+    },
+    {
+      "compiled_id": 247962,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreRoutineNoon::IsVisible_Implementation",
+      "installed_id": 1164493953,
+      "offset": 88243498
+    },
+    {
+      "compiled_id": 247963,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreRoutineNoon::Act_Implementation",
+      "installed_id": 1117122656,
+      "offset": 88243909
+    },
+    {
+      "compiled_id": 247964,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreRoutineNoon::UChoiceGoreRoutineNoon",
+      "installed_id": 1803308281,
+      "offset": 88244242
+    },
+    {
+      "compiled_id": 247971,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreRoutineEvening::__InitDefaults",
+      "installed_id": 872078177,
+      "offset": 88244934
+    },
+    {
+      "compiled_id": 247967,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreRoutineEvening::IsVisible_Implementation",
+      "installed_id": 2087105523,
+      "offset": 88245169
+    },
+    {
+      "compiled_id": 247968,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreRoutineEvening::Act_Implementation",
+      "installed_id": 1774800674,
+      "offset": 88245580
+    },
+    {
+      "compiled_id": 247969,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreRoutineEvening::UChoiceGoreRoutineEvening",
+      "installed_id": 1146287340,
+      "offset": 88245916
+    },
+    {
+      "compiled_id": 247976,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreRoutineMorning::__InitDefaults",
+      "installed_id": 646953005,
+      "offset": 88246611
+    },
+    {
+      "compiled_id": 247972,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreRoutineMorning::IsVisible_Implementation",
+      "installed_id": 1088382767,
+      "offset": 88246846
+    },
+    {
+      "compiled_id": 247973,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreRoutineMorning::Act_Implementation",
+      "installed_id": 1635652710,
+      "offset": 88247257
+    },
+    {
+      "compiled_id": 247974,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreRoutineMorning::UChoiceGoreRoutineMorning",
+      "installed_id": 439781076,
+      "offset": 88247593
+    },
+    {
+      "compiled_id": 247981,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSetupPrepared::__InitDefaults",
+      "installed_id": 1021945189,
+      "offset": 88248287
+    },
+    {
+      "compiled_id": 247977,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSetupPrepared::IsVisible_Implementation",
+      "installed_id": 753608007,
+      "offset": 88248522
+    },
+    {
+      "compiled_id": 247978,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSetupPrepared::Act_Implementation",
+      "installed_id": 486677214,
+      "offset": 88248793
+    },
+    {
+      "compiled_id": 247979,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSetupPrepared::UChoiceGoreSetupPrepared",
+      "installed_id": 34749071,
+      "offset": 88249128
+    },
+    {
+      "compiled_id": 247986,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSetupIncomplete::__InitDefaults",
+      "installed_id": 1614505758,
+      "offset": 88249823
+    },
+    {
+      "compiled_id": 247982,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSetupIncomplete::IsVisible_Implementation",
+      "installed_id": 1271722832,
+      "offset": 88250058
+    },
+    {
+      "compiled_id": 247983,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSetupIncomplete::Act_Implementation",
+      "installed_id": 1439899081,
+      "offset": 88250329
+    },
+    {
+      "compiled_id": 247984,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSetupIncomplete::UChoiceGoreSetupIncomplete",
+      "installed_id": 1398829737,
+      "offset": 88250666
+    },
+    {
+      "compiled_id": 247991,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreHeadApply::__InitDefaults",
+      "installed_id": 2023343305,
+      "offset": 88251357
+    },
+    {
+      "compiled_id": 247987,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreHeadApply::IsVisible_Implementation",
+      "installed_id": 466375451,
+      "offset": 88251592
+    },
+    {
+      "compiled_id": 247988,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreHeadApply::Act_Implementation",
+      "installed_id": 617659498,
+      "offset": 88251915
+    },
+    {
+      "compiled_id": 247989,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreHeadApply::UChoiceGoreHeadApply",
+      "installed_id": 664757037,
+      "offset": 88252246
+    },
+    {
+      "compiled_id": 247996,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreHeadRestore::__InitDefaults",
+      "installed_id": 127482133,
+      "offset": 88252933
+    },
+    {
+      "compiled_id": 247992,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreHeadRestore::IsVisible_Implementation",
+      "installed_id": 1869195799,
+      "offset": 88253168
+    },
+    {
+      "compiled_id": 247993,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreHeadRestore::Act_Implementation",
+      "installed_id": 1744355886,
+      "offset": 88253491
+    },
+    {
+      "compiled_id": 247994,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreHeadRestore::UChoiceGoreHeadRestore",
+      "installed_id": 1105345313,
+      "offset": 88253824
+    },
+    {
+      "compiled_id": 248001,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsSetup::__InitDefaults",
+      "installed_id": 839892778,
+      "offset": 88254514
+    },
+    {
+      "compiled_id": 247997,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsSetup::IsVisible_Implementation",
+      "installed_id": 1692161980,
+      "offset": 88254693
+    },
+    {
+      "compiled_id": 247998,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsSetup::Act_Implementation",
+      "installed_id": 1164262109,
+      "offset": 88256740
+    },
+    {
+      "compiled_id": 247999,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsSetup::UChoiceGoreObjectsSetup",
+      "installed_id": 136131104,
+      "offset": 88257074
+    },
+    {
+      "compiled_id": 248006,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsNoon::__InitDefaults",
+      "installed_id": 67584015,
+      "offset": 88257764
+    },
+    {
+      "compiled_id": 248002,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsNoon::IsVisible_Implementation",
+      "installed_id": 149375697,
+      "offset": 88257999
+    },
+    {
+      "compiled_id": 248003,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsNoon::Act_Implementation",
+      "installed_id": 114032048,
+      "offset": 88258410
+    },
+    {
+      "compiled_id": 248004,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsNoon::UChoiceGoreObjectsNoon",
+      "installed_id": 1623808473,
+      "offset": 88258743
+    },
+    {
+      "compiled_id": 248011,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsEvening::__InitDefaults",
+      "installed_id": 1541575737,
+      "offset": 88259435
+    },
+    {
+      "compiled_id": 248007,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsEvening::IsVisible_Implementation",
+      "installed_id": 73144683,
+      "offset": 88259670
+    },
+    {
+      "compiled_id": 248008,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsEvening::Act_Implementation",
+      "installed_id": 1158749946,
+      "offset": 88260081
+    },
+    {
+      "compiled_id": 248009,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsEvening::UChoiceGoreObjectsEvening",
+      "installed_id": 868851368,
+      "offset": 88260417
+    },
+    {
+      "compiled_id": 248016,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsMorning::__InitDefaults",
+      "installed_id": 1823177925,
+      "offset": 88261112
+    },
+    {
+      "compiled_id": 248012,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsMorning::IsVisible_Implementation",
+      "installed_id": 1720928551,
+      "offset": 88261347
+    },
+    {
+      "compiled_id": 248013,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsMorning::Act_Implementation",
+      "installed_id": 1702142846,
+      "offset": 88261758
+    },
+    {
+      "compiled_id": 248014,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsMorning::UChoiceGoreObjectsMorning",
+      "installed_id": 555248392,
+      "offset": 88262094
+    },
+    {
+      "compiled_id": 248021,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsIncomplete::__InitDefaults",
+      "installed_id": 489030293,
+      "offset": 88262792
+    },
+    {
+      "compiled_id": 248017,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsIncomplete::IsVisible_Implementation",
+      "installed_id": 1062346647,
+      "offset": 88263027
+    },
+    {
+      "compiled_id": 248018,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsIncomplete::Act_Implementation",
+      "installed_id": 942728110,
+      "offset": 88263298
+    },
+    {
+      "compiled_id": 248019,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreObjectsIncomplete::UChoiceGoreObjectsIncomplete",
+      "installed_id": 1396720403,
+      "offset": 88263637
+    },
+    {
+      "compiled_id": 248026,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardSetup::__InitDefaults",
+      "installed_id": 1935553084,
+      "offset": 88264335
+    },
+    {
+      "compiled_id": 248022,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardSetup::IsVisible_Implementation",
+      "installed_id": 342572926,
+      "offset": 88264514
+    },
+    {
+      "compiled_id": 248023,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardSetup::Act_Implementation",
+      "installed_id": 100037415,
+      "offset": 88266409
+    },
+    {
+      "compiled_id": 248024,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardSetup::UChoiceGoreSeatGuardSetup",
+      "installed_id": 606449438,
+      "offset": 88266745
+    },
+    {
+      "compiled_id": 248031,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardNoon::__InitDefaults",
+      "installed_id": 193199565,
+      "offset": 88267439
+    },
+    {
+      "compiled_id": 248027,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardNoon::IsVisible_Implementation",
+      "installed_id": 804937039,
+      "offset": 88267674
+    },
+    {
+      "compiled_id": 248028,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardNoon::Act_Implementation",
+      "installed_id": 557069638,
+      "offset": 88268085
+    },
+    {
+      "compiled_id": 248029,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardNoon::UChoiceGoreSeatGuardNoon",
+      "installed_id": 793360935,
+      "offset": 88268420
+    },
+    {
+      "compiled_id": 248036,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardEvening::__InitDefaults",
+      "installed_id": 493402127,
+      "offset": 88269116
+    },
+    {
+      "compiled_id": 248032,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardEvening::IsVisible_Implementation",
+      "installed_id": 933397201,
+      "offset": 88269351
+    },
+    {
+      "compiled_id": 248033,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardEvening::Act_Implementation",
+      "installed_id": 1394668976,
+      "offset": 88269762
+    },
+    {
+      "compiled_id": 248034,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardEvening::UChoiceGoreSeatGuardEvening",
+      "installed_id": 301307534,
+      "offset": 88270100
+    },
+    {
+      "compiled_id": 248041,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardMorning::__InitDefaults",
+      "installed_id": 1098489647,
+      "offset": 88270799
+    },
+    {
+      "compiled_id": 248037,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardMorning::IsVisible_Implementation",
+      "installed_id": 1476999153,
+      "offset": 88271034
+    },
+    {
+      "compiled_id": 248038,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardMorning::Act_Implementation",
+      "installed_id": 419753744,
+      "offset": 88271445
+    },
+    {
+      "compiled_id": 248039,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardMorning::UChoiceGoreSeatGuardMorning",
+      "installed_id": 1112255974,
+      "offset": 88271783
+    },
+    {
+      "compiled_id": 248046,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardIncomplete::__InitDefaults",
+      "installed_id": 1223067832,
+      "offset": 88272485
+    },
+    {
+      "compiled_id": 248042,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardIncomplete::IsVisible_Implementation",
+      "installed_id": 967968170,
+      "offset": 88272720
+    },
+    {
+      "compiled_id": 248043,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardIncomplete::Act_Implementation",
+      "installed_id": 698411067,
+      "offset": 88272991
+    },
+    {
+      "compiled_id": 248044,
+      "function": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A.UChoiceGoreSeatGuardIncomplete::UChoiceGoreSeatGuardIncomplete",
+      "installed_id": 1179110833,
+      "offset": 88273332
+    }
+  ],
+  "checks": {
+    "all_differences_are_function_id_fields": true,
+    "all_non_function_id_bytes_identical": true,
+    "all_seven_tail_tables_byte_identical": true,
+    "executable_bytecode_and_reference_operands_byte_identical": true,
+    "function_traits_and_unreal_metadata_byte_identical": true,
+    "header_byte_identical": true,
+    "module_order_and_boundaries_identical": true,
+    "only_four_selected_modules_differ": true,
+    "unselected_pristine_modules_byte_identical": 7315
+  },
+  "compiled_full_sha256": "85c183da343ec3501fb4696064cc671e424a62fda75b991017f79e5140c5a0b9",
+  "installed_full_sha256": "e6429ed53b9138ad193eb125e5805e29cabcd08f6d09c804ae73823a002bfcc8",
+  "module_count": 7319,
+  "operation": "read-only exact module/tail comparison; all differing bytes classified against product-walker Function.Id fields",
+  "passed": true,
+  "schema": "gore.installed-canonicalization-checks-v1",
+  "selected_modules": [
+    "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+    "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+    "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+    "LevelScripts.XardasTower_AI"
+  ],
+  "tail_tables": [
+    {
+      "byte_identical": true,
+      "count": 37261,
+      "table": "TypeReferences"
+    },
+    {
+      "byte_identical": true,
+      "count": 37261,
+      "table": "TypeIdReferenceToPointer"
+    },
+    {
+      "byte_identical": true,
+      "count": 105983,
+      "table": "FunctionReferences"
+    },
+    {
+      "byte_identical": true,
+      "count": 105983,
+      "table": "FunctionIdReferenceToPointer"
+    },
+    {
+      "byte_identical": true,
+      "count": 134782,
+      "table": "GlobalReferences"
+    },
+    {
+      "byte_identical": true,
+      "count": 23271,
+      "table": "StaticNames"
+    },
+    {
+      "byte_identical": true,
+      "count": 13282,
+      "table": "PropertyReferences"
+    }
+  ]
+}

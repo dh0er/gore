@@ -1,0 +1,410 @@
+{
+  "schema": "gore.npc-weapon-warning.runtime-result.v1",
+  "date": "2026-09-09",
+  "package": "NpcSeatGuardActivities",
+  "version": "0.1.11",
+  "tested_by": "user",
+  "status": "partial success; warning cleanup defect open",
+  "clarified_input": "Bare fists, not an equipped melee weapon; lowered only after second spoken line finished.",
+  "first_warning": "passed: B reacts naturally with voice, then stops warning when fists are lowered",
+  "second_warning": "failed: after lowering fists B remains in warning pose and saving is blocked",
+  "distance_recovery": "user moved farther away, could save, then found B normal after returning",
+  "comparisons": "Other nearby characters react inconsistently/delayed; one comparison NPC cleaned up correctly after warning2. User recalls similar vanilla failures; that does not establish this defect as vanilla-only.",
+  "saves": [
+    {
+      "slot": 57,
+      "save": {
+        "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-057.sav",
+        "sha256": "ca095ff28eb8580d2828446b1124d5f57462c26c601fcd2166dfaf14d8f91ecd",
+        "bytes": 1126786
+      },
+      "name": "npc voice - waffenwarnung",
+      "B": {
+        "actor": {
+          "globalId": "GORE_TEST_B-WP_WarningFlock_XT_02",
+          "hasEvents": true,
+          "hasInventory": true,
+          "hasKnowledge": false,
+          "isDead": false,
+          "isTrader": false,
+          "personalRelationship": null,
+          "uniqueName": "GORE_TEST_B"
+        },
+        "position": {
+          "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+          "pose": {
+            "compact": false,
+            "location": {
+              "x": 108202.97538223336,
+              "y": -107578.47141139425,
+              "z": -4635.069863223001
+            },
+            "locationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterLocation"
+            ],
+            "rotation": {
+              "pitch": 0.0,
+              "roll": -0.0,
+              "yaw": 51.80774471476584
+            },
+            "rotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterRotation"
+            ],
+            "spawnLocation": {
+              "x": 125313.49,
+              "y": -142845.3,
+              "z": 1713.68
+            },
+            "spawnLocationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnLocation"
+            ],
+            "spawnRotation": {
+              "pitch": 0.0,
+              "roll": 0.0,
+              "yaw": 89.99999999999999
+            },
+            "spawnRotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnRotation"
+            ]
+          },
+          "routineClass": "/Script/Angelscript.DailyRoutine_GoreSeatGuardActivities",
+          "routineClassPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "DailyRoutineByGlobalId",
+            "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+            "DailyRoutineClass"
+          ],
+          "undo": null
+        }
+      },
+      "game_time_seconds": 1080666.8328250498,
+      "clock": "day 12 12:11:06",
+      "B_crime_records": [
+        {
+          "relative": {
+            "ID": "-827721385",
+            "WitnessGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "BaseSeverity": "0.8",
+            "bIsSuppressed": "false",
+            "RelationshipTowardsCriminal": "ERelationship::Neutral",
+            "RelativeRankTowardsCriminal": "ERelationshipRelativeRank::Scum",
+            "HostilityTowardsCriminal": "ERelationshipHostility::None",
+            "bInPartyWithCriminal": "false",
+            "Directness": "ECrimeDirectness::Direct",
+            "VictimGuildHandles": "0 elements",
+            "VictimCharacterHandles/[0]/VictimGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "VictimCharacterHandles/[0]/RelationshipTowardsPerson": "ERelationship::Neutral",
+            "VictimCharacterHandles/[0]/RelativeRankTowardsPerson": "ERelationshipRelativeRank::Same",
+            "VictimCharacterHandles/[0]/HostilityTowardsPerson": "ERelationshipHostility::None",
+            "OriginSource": "ERelativeCrimeOrigin::Unknown"
+          },
+          "matching_global": null
+        },
+        {
+          "relative": {
+            "ID": "-2117541181",
+            "WitnessGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "BaseSeverity": "2",
+            "bIsSuppressed": "false",
+            "RelationshipTowardsCriminal": "ERelationship::Neutral",
+            "RelativeRankTowardsCriminal": "ERelationshipRelativeRank::Scum",
+            "HostilityTowardsCriminal": "ERelationshipHostility::None",
+            "bInPartyWithCriminal": "false",
+            "Directness": "ECrimeDirectness::Direct",
+            "VictimGuildHandles": "0 elements",
+            "VictimCharacterHandles/[0]/VictimGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "VictimCharacterHandles/[0]/RelationshipTowardsPerson": "ERelationship::Neutral",
+            "VictimCharacterHandles/[0]/RelativeRankTowardsPerson": "ERelationshipRelativeRank::Same",
+            "VictimCharacterHandles/[0]/HostilityTowardsPerson": "ERelationshipHostility::None",
+            "OriginSource": "ERelativeCrimeOrigin::Witness"
+          },
+          "matching_global": {
+            "ID": "-2117541181",
+            "CrimeType/TagName": "Crime.DirectThreat.Fists",
+            "AreaTag/TagName": "Area.OldCamp.OuterRing",
+            "TimeCommitted/TotalSeconds": "1080514.152649328",
+            "bIsForgiven": "false",
+            "AffectedEntitySource": "ECrimeAffectedEntitySource::Event",
+            "ItemDefinitionClass": "",
+            "InteractiveObjectDefinitionClass": "",
+            "CriminalGlobalID": "Hero",
+            "CriminalGuild/TagName": "Guild.None",
+            "VictimGlobalIDs/[0]": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "VictimGuilds": "",
+            "TrueCriminalGlobalID": "None"
+          }
+        },
+        {
+          "relative": {
+            "ID": "-497245085",
+            "WitnessGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "BaseSeverity": "0.8",
+            "bIsSuppressed": "false",
+            "RelationshipTowardsCriminal": "ERelationship::Neutral",
+            "RelativeRankTowardsCriminal": "ERelationshipRelativeRank::Scum",
+            "HostilityTowardsCriminal": "ERelationshipHostility::None",
+            "bInPartyWithCriminal": "false",
+            "Directness": "ECrimeDirectness::Direct",
+            "VictimGuildHandles": "0 elements",
+            "VictimCharacterHandles/[0]/VictimGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "VictimCharacterHandles/[0]/RelationshipTowardsPerson": "ERelationship::Neutral",
+            "VictimCharacterHandles/[0]/RelativeRankTowardsPerson": "ERelationshipRelativeRank::Same",
+            "VictimCharacterHandles/[0]/HostilityTowardsPerson": "ERelationshipHostility::None",
+            "OriginSource": "ERelativeCrimeOrigin::Unknown"
+          },
+          "matching_global": null
+        },
+        {
+          "relative": {
+            "ID": "-1283910998",
+            "WitnessGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "BaseSeverity": "2",
+            "bIsSuppressed": "false",
+            "RelationshipTowardsCriminal": "ERelationship::Neutral",
+            "RelativeRankTowardsCriminal": "ERelationshipRelativeRank::Scum",
+            "HostilityTowardsCriminal": "ERelationshipHostility::None",
+            "bInPartyWithCriminal": "false",
+            "Directness": "ECrimeDirectness::Direct",
+            "VictimGuildHandles": "0 elements",
+            "VictimCharacterHandles/[0]/VictimGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "VictimCharacterHandles/[0]/RelationshipTowardsPerson": "ERelationship::Neutral",
+            "VictimCharacterHandles/[0]/RelativeRankTowardsPerson": "ERelationshipRelativeRank::Same",
+            "VictimCharacterHandles/[0]/HostilityTowardsPerson": "ERelationshipHostility::None",
+            "OriginSource": "ERelativeCrimeOrigin::Witness"
+          },
+          "matching_global": {
+            "ID": "-1283910998",
+            "CrimeType/TagName": "Crime.DirectThreat.Fists",
+            "AreaTag/TagName": "Area.OldCamp.OuterRing",
+            "TimeCommitted/TotalSeconds": "1080540.7640802115",
+            "bIsForgiven": "false",
+            "AffectedEntitySource": "ECrimeAffectedEntitySource::Event",
+            "ItemDefinitionClass": "",
+            "InteractiveObjectDefinitionClass": "",
+            "CriminalGlobalID": "Hero",
+            "CriminalGuild/TagName": "Guild.None",
+            "VictimGlobalIDs/[0]": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "VictimGuilds": "",
+            "TrueCriminalGlobalID": "None"
+          }
+        },
+        {
+          "relative": {
+            "ID": "1495926265",
+            "WitnessGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "BaseSeverity": "0.8",
+            "bIsSuppressed": "false",
+            "RelationshipTowardsCriminal": "ERelationship::Angry",
+            "RelativeRankTowardsCriminal": "ERelationshipRelativeRank::Scum",
+            "HostilityTowardsCriminal": "ERelationshipHostility::DemandPaymentForCrimes",
+            "bInPartyWithCriminal": "false",
+            "Directness": "ECrimeDirectness::Direct",
+            "VictimGuildHandles": "0 elements",
+            "VictimCharacterHandles/[0]/VictimGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "VictimCharacterHandles/[0]/RelationshipTowardsPerson": "ERelationship::Neutral",
+            "VictimCharacterHandles/[0]/RelativeRankTowardsPerson": "ERelationshipRelativeRank::Same",
+            "VictimCharacterHandles/[0]/HostilityTowardsPerson": "ERelationshipHostility::None",
+            "OriginSource": "ERelativeCrimeOrigin::Unknown"
+          },
+          "matching_global": null
+        }
+      ],
+      "typed_evidence": {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-weapon-warning\\evidence\\057-nodes.json",
+        "sha256": "7e6100cb8579ee6348c33e0c6f4d1647e87dba7aecd10967cfc508d56fdfc496",
+        "bytes": 2003954
+      }
+    },
+    {
+      "slot": 58,
+      "save": {
+        "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-058.sav",
+        "sha256": "0c5e2155a691de1b202fce7728defa507e67648802dc172573722a372b887af8",
+        "bytes": 1139233
+      },
+      "name": "npc voice - waffenwarnung 2tes mal",
+      "B": {
+        "actor": {
+          "globalId": "GORE_TEST_B-WP_WarningFlock_XT_02",
+          "hasEvents": true,
+          "hasInventory": true,
+          "hasKnowledge": false,
+          "isDead": false,
+          "isTrader": false,
+          "personalRelationship": null,
+          "uniqueName": "GORE_TEST_B"
+        },
+        "position": {
+          "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+          "pose": {
+            "compact": false,
+            "location": {
+              "x": 108202.97538223336,
+              "y": -107578.47141139425,
+              "z": -4635.069857184918
+            },
+            "locationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterLocation"
+            ],
+            "rotation": {
+              "pitch": 0.0,
+              "roll": 0.0,
+              "yaw": 17.350593619849153
+            },
+            "rotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterRotation"
+            ],
+            "spawnLocation": {
+              "x": 125313.49,
+              "y": -142845.3,
+              "z": 1713.68
+            },
+            "spawnLocationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnLocation"
+            ],
+            "spawnRotation": {
+              "pitch": 0.0,
+              "roll": 0.0,
+              "yaw": 89.99999999999999
+            },
+            "spawnRotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnRotation"
+            ]
+          },
+          "routineClass": "/Script/Angelscript.DailyRoutine_GoreSeatGuardActivities",
+          "routineClassPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "DailyRoutineByGlobalId",
+            "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+            "DailyRoutineClass"
+          ],
+          "undo": null
+        }
+      },
+      "game_time_seconds": 1081663.8984817266,
+      "clock": "day 12 12:27:43",
+      "B_crime_records": [
+        {
+          "relative": {
+            "ID": "1215655324",
+            "WitnessGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "BaseSeverity": "2",
+            "bIsSuppressed": "false",
+            "RelationshipTowardsCriminal": "ERelationship::Neutral",
+            "RelativeRankTowardsCriminal": "ERelationshipRelativeRank::Scum",
+            "HostilityTowardsCriminal": "ERelationshipHostility::None",
+            "bInPartyWithCriminal": "false",
+            "Directness": "ECrimeDirectness::Direct",
+            "VictimGuildHandles": "0 elements",
+            "VictimCharacterHandles/[0]/VictimGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "VictimCharacterHandles/[0]/RelationshipTowardsPerson": "ERelationship::Neutral",
+            "VictimCharacterHandles/[0]/RelativeRankTowardsPerson": "ERelationshipRelativeRank::Same",
+            "VictimCharacterHandles/[0]/HostilityTowardsPerson": "ERelationshipHostility::None",
+            "OriginSource": "ERelativeCrimeOrigin::Witness"
+          },
+          "matching_global": {
+            "ID": "1215655324",
+            "CrimeType/TagName": "Crime.DirectThreat.Fists",
+            "AreaTag/TagName": "Area.OldCamp.OuterRing",
+            "TimeCommitted/TotalSeconds": "1080780.4134523869",
+            "bIsForgiven": "false",
+            "AffectedEntitySource": "ECrimeAffectedEntitySource::Event",
+            "ItemDefinitionClass": "",
+            "InteractiveObjectDefinitionClass": "",
+            "CriminalGlobalID": "Hero",
+            "CriminalGuild/TagName": "Guild.None",
+            "VictimGlobalIDs/[0]": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "VictimGuilds": "",
+            "TrueCriminalGlobalID": "None"
+          }
+        },
+        {
+          "relative": {
+            "ID": "1761261898",
+            "WitnessGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "BaseSeverity": "2",
+            "bIsSuppressed": "false",
+            "RelationshipTowardsCriminal": "ERelationship::Neutral",
+            "RelativeRankTowardsCriminal": "ERelationshipRelativeRank::Scum",
+            "HostilityTowardsCriminal": "ERelationshipHostility::None",
+            "bInPartyWithCriminal": "false",
+            "Directness": "ECrimeDirectness::Direct",
+            "VictimGuildHandles": "0 elements",
+            "VictimCharacterHandles/[0]/VictimGlobalID": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "VictimCharacterHandles/[0]/RelationshipTowardsPerson": "ERelationship::Neutral",
+            "VictimCharacterHandles/[0]/RelativeRankTowardsPerson": "ERelationshipRelativeRank::Same",
+            "VictimCharacterHandles/[0]/HostilityTowardsPerson": "ERelationshipHostility::None",
+            "OriginSource": "ERelativeCrimeOrigin::Witness"
+          },
+          "matching_global": {
+            "ID": "1761261898",
+            "CrimeType/TagName": "Crime.DirectThreat.Fists",
+            "AreaTag/TagName": "Area.OldCamp.OuterRing",
+            "TimeCommitted/TotalSeconds": "1080844.1276550293",
+            "bIsForgiven": "false",
+            "AffectedEntitySource": "ECrimeAffectedEntitySource::Event",
+            "ItemDefinitionClass": "",
+            "InteractiveObjectDefinitionClass": "",
+            "CriminalGlobalID": "Hero",
+            "CriminalGuild/TagName": "Guild.None",
+            "VictimGlobalIDs/[0]": "GORE_TEST_B-WP_WarningFlock_XT_02",
+            "VictimGuilds": "",
+            "TrueCriminalGlobalID": "None"
+          }
+        }
+      ],
+      "typed_evidence": {
+        "path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-weapon-warning\\evidence\\058-nodes.json",
+        "sha256": "10e7c679e09369a718b24e68e7afab9fe960f2c4e72b8d6a52c03260fb04b19e",
+        "bytes": 1897654
+      }
+    }
+  ],
+  "original_saves_unchanged": true,
+  "game_launched_by_agent": false,
+  "limits": "Both saves were made after saving became possible. Neither captures the stuck live AI state, warning counter, end-assessment flag or exact save-blocking condition. Stored crime relationships are contextual records, not necessarily the current relationship. No runtime fix or new deployment was made."
+}

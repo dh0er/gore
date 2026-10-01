@@ -128,9 +128,9 @@ PROJECTS: dict[str, dict] = {
         "exe": "gore_mod.exe",  # CMake BINARY_NAME
         "core_crate": "gore-ffi",  # cargo -p selector (cargo wants the hyphenated package id)
         "core_dll": "gore_ffi",  # was gore_core; dll now gore_ffi.dll (cargo underscores it)
-        # Bundle the standalone `gore` CLI (gore.exe + its lua/shared SDK) beside
-        # the app, so GUI users get the power tools Studio does not expose (gore
-        # as disasm/decompile, catalog/dump/stubs, mgr) without a second download.
+        # Bundle the standalone `gore` CLI beside the app, so GUI users get the
+        # power tools Studio does not expose (gore as disasm/decompile,
+        # catalog/dump/stubs, mgr) without a second download.
         # Staged into the Flutter Release dir, so both the installer
         # (SourceDir=Release) and the portable zip (copied from Release) ship it.
         "companions": ["gore-cli"],
@@ -173,12 +173,14 @@ PROJECTS: dict[str, dict] = {
         "changelog": "CHANGELOG.md",
         "releasable": True,
         "standalone_compiler_bundle": True,
-        # extra dirs staged beside the exe in the release zip: (src relative to ROOT, dest name).
-        # `gore deploy-shared` resolves the SDK from `shared/` next to the binary.
-        "bundle_dirs": [("lua/shared", "shared")],
         # Markdown docs staged beside the exe. Links that point out of the guide
         # tree are rewritten to absolute GitHub URLs (see stage_docs).
         "doc_dirs": [("docs/guide", "docs")],
+        # Source examples accompany the guide so installed agents can inspect
+        # the exact authored building blocks without a source checkout/network.
+        "bundle_dirs": [
+            ("scripts/fixtures/npc-batch-tests", "examples/npc-batch-tests"),
+        ],
         # The same guide, rendered by the freshly built binary into one browsable,
         # self-contained HTML file. The Markdown copies are what `grep` wants (the
         # MCP server has its own, compiled into the exe); this is what a human
@@ -2091,8 +2093,8 @@ def stage_companions(project: str, dry: bool) -> None:
             project, rel / exe.name, dry=False
         )
         print(f"bundled companion {exe.name} -> {rel / exe.name}")
-        # Mirror the companion's own bundled data dirs (e.g. gore's lua/shared
-        # SDK), so the bundled CLI behaves identically to the standalone one.
+        # Mirror the companion's own bundled data dirs, so the bundled CLI
+        # behaves identically to the standalone one.
         for src_rel, dest_name in dcfg.get("bundle_dirs", []):
             src_dir = ROOT / src_rel
             if not src_dir.is_dir():
@@ -2334,7 +2336,7 @@ def dist_project(project: str, dry: bool) -> Path | None:
         shutil.copy2(
             ROOT / "THIRD_PARTY_LICENSES.md", staging / "THIRD_PARTY_LICENSES.md"
         )
-    # stage any bundled data dirs beside the exe (e.g. gore's lua/shared SDK)
+    # stage any bundled data dirs beside the exe
     for src_rel, dest_name in cfg.get("bundle_dirs", []):
         src_dir = ROOT / src_rel
         if not src_dir.is_dir():
@@ -2460,7 +2462,10 @@ def installer_project(project: str, dry: bool) -> Path | None:
 def test_project(project: str, dry: bool) -> None:
     cfg = PROJECTS[project]
     if cfg["kind"] in ("rust-bin", "rust-lib"):
-        run(f"cargo test {project}", [CARGO, "test", "-p", cfg["crate"]], dry=dry)
+        command = [CARGO, "test", "-p", cfg["crate"]]
+        if cfg["crate"] == "gore":
+            command += ["--features", "development-cli"]
+        run(f"cargo test {project}", command, dry=dry)
         return
     # A Flutter app is backed by a native Rust cdylib (core_dll crate); its
     # unit tests live there, so cover them too — analyze/test alone would skip

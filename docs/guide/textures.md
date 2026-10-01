@@ -1,7 +1,7 @@
 # Textures
 
-Replace any `Texture2D` packed in the game's UE5 IoStore container. The output
-is an **additive** Zen triplet (`.utoc`/`.ucas`/`.pak`) dropped into the game's
+Replace supported `Texture2D` assets packed in the game's UE5 IoStore
+container. The output is an **additive** Zen triplet (`.utoc`/`.ucas`/`.pak`) dropped into the game's
 `~mods\` folder — no original game file is ever modified.
 
 Not everything you see on screen is one of those assets, and these commands
@@ -60,13 +60,71 @@ gore texture replace --game "$GAME" /Game/UI/Textures/Common/T_HardwareCursor `
 ```
 
 - `extract` writes the texture's **top mip** as PNG.
-- `replace` accepts RGBA8 or RGB8 PNG. The dimensions do **not** need to match
-  the original.
+- `replace` accepts RGBA8 or RGB8 PNG. Regular texture dimensions may differ
+  from the original; virtual textures retain their existing tile layout and
+  dimensions. Use `--fit-original` to resample the input to the original top
+  mip with Lanczos3 before encoding. The input PNG remains unchanged.
 - `replace` writes rewritten cooked files below `<mod-dir>\G1R\Content\…`; it
   does not touch the game.
 
 Repeat `replace` with the same `--mod-dir` to collect several textures into one
 mod.
+
+### Current replacement limits
+
+`extract` can preview more pixel formats than `replace` can encode. The write
+path currently supports `PF_DXT1`, `PF_DXT5`, `PF_BC5` and `PF_BC7`. It can read
+but not replace `PF_BC4`, `PF_BC6H`, `PF_B8G8R8A8`, `PF_G8` and
+`PF_FloatRGBA`; for example, the uncompressed UI brushes `T_Arrow` and
+`T_Checkbox_Checked` cannot yet be rewritten by `texture replace`.
+
+For regular textures with a mip chain, new dimensions must be powers of two
+and multiples of four. A single-mip regular texture only requires multiples
+of four. Virtual textures must keep the original dimensions and currently
+support only single-layer, non-legacy tile layouts. Textures whose first
+serialized mip is not mip 0 are rejected. `--fit-original` solves a size
+mismatch, not an unsupported pixel format or layout. Separate-asset creation
+with `--as-asset` has the package-shape restrictions described below.
+
+These are limits of cooked `Texture2D` rewriting, not a claim that other
+visible images are unreachable: bundles can ship unshadowed images as `files`
+and packed cursor PNGs as `pak_files` (see
+[what these commands reach](#what-these-commands-reach)).
+
+### Create a separate texture asset
+
+For an NPC-specific material variant, assign a new package identity instead of
+overriding the stock texture:
+
+```powershell
+gore texture replace --game "$GAME" `
+  /Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Head_D `
+  --image clean-face.png --mod-dir beard-mod `
+  --as-asset /Game/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D --fit-original
+gore texture pack --game "$GAME" --mod-dir beard-mod --name zzz_Beard_P -o beard-out
+```
+
+`--as-asset` preserves the source codec, regular/virtual texture kind and
+serialized properties, but renames the cooked package and its texture export.
+It currently accepts single-export, top-level UE5.4 cooked `Texture2D` packages
+with canonical `/Game/` paths. Existing installed destinations or output files,
+other package shapes and paths are rejected. Normal `replace` behavior is
+unchanged when this flag is absent.
+
+Import `beard-out` with `gore mgr import`, enable its returned ID alongside the
+script bundle, then analyze, preflight and apply the selected loadout through
+the [Mod Manager](mod-manager.md). A script loads the example texture with
+`LoadObject` using `/Game/GoreMods/NpcBeardSwitch/T_NH_Head_Clean_D.T_NH_Head_Clean_D`
+and assigns it to a private material instance. An existing dynamic material
+must be copied into a fresh MID; a component factory may return the old MID.
+The NPC beard fixture documents the exact qualified API calls.
+
+Ordinary imported PNG resources cannot substitute for a virtual-texture resource
+in a material that expects VT sampling. The beard test 0.1.2 rendered black with
+that combination; 0.1.3 preserves the original VT type. Its cooking and packed
+readback passed offline checks. The user subsequently confirmed both face/beard
+variants render correctly, restore and survive a full restart. See the
+[0.1.3 runtime result](../../scripts/fixtures/npc-batch-tests/heads/beard-runtime-0.1.3.json).
 
 ## Pack and deploy
 
@@ -256,8 +314,11 @@ build, one sitting, and no screenshots.
   `DefaultEngine.ini` included, exists only inside a pak. This is the only route
   to any of them.
 
-One corner the pass did not reach: nothing about texture replacement has been
-checked on any build other than these two, 24340829 and 24539464.
+That 2026-08-07 pass did not check texture replacement on a later build. A
+separate [NPC beard-variant test](../../scripts/fixtures/npc-batch-tests/heads/beard-runtime-0.1.3.json)
+subsequently confirmed two newly packed virtual-texture assets, appearance
+restoration, and save/load after a full restart. Its result does not record a
+game BuildID or qualify every texture format and layout.
 
 A *deployed* triplet is verified by SHA-256 and by nothing else: `deploy` records
 a hash per file and confirms the bytes arrived. Nothing in this toolkit ever
@@ -272,6 +333,8 @@ that anything changed.
 | `--filter <TEXT>` | `list`, `paklist` | Keep only paths containing this substring. |
 | `-o, --out <PATH>` | `extract`, `pack`, `index` | Output PNG, triplet output dir, or index path. |
 | `--image <PNG>` | `replace` | Replacement PNG (RGBA8/RGB8). |
+| `--as-asset </Game/PATH>` | `replace` | Create a separate cooked texture package instead of overriding the source. |
+| `--fit-original` | `replace` | Resample to the original top-mip dimensions before encoding. |
 | `--mod-dir <DIR>` | `replace`, `pack` | Cooked-file staging dir laid out under its mount path. |
 | `--name <NAME>` | `pack`, `deploy`, `undeploy` | Triplet base name, e.g. `zzz_MyMod_P`. |
 | `--triplet-dir <DIR>` | `deploy` | Directory holding `<name>.{utoc,ucas,pak}`. |

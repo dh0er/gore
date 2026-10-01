@@ -6,6 +6,7 @@ pub mod compiler_backend;
 pub mod compiler_profile;
 pub mod compiler_target;
 pub mod diagnostics;
+pub mod force;
 pub mod full_graph_plan;
 pub mod generation_receipt;
 pub mod generation_receipt_v2;

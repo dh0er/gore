@@ -1,0 +1,113 @@
+{
+  "schema": "gore.npc-batch.profile-cleanup-after-quest-complete.v1",
+  "date": "2026-09-21",
+  "displayed_profile": 4,
+  "internal_profile_id": 2,
+  "stored_profile_name": "3",
+  "passed": true,
+  "operation": "live",
+  "archive": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-quest-complete-20260921T213016Z",
+  "manifest_sha256": "9149f42a4e127d11a5e24aa4b1d02761d67215bd5aaa9055ddadbb72f24a8e77",
+  "deleted_count": 10,
+  "retained_count": 0,
+  "retained": [],
+  "removed": [
+    "G1R-003",
+    "G1R-022",
+    "G1R-023",
+    "G1R-024",
+    "G1R-025",
+    "G1R-026",
+    "G1R-027",
+    "G1R-029",
+    "G1R-030",
+    "G1R-071"
+  ],
+  "profile_before": {
+    "bytes": 37507,
+    "sha256": "73d6085aece70e114f79bcb1f8112df1ac6d7e1793b56597ef1e5b34e56aed8b"
+  },
+  "profile_after": {
+    "bytes": 27836,
+    "sha256": "081e483fa991a52e783c780598d9a0659ba9307658e715ff1d17740d3644aea7"
+  },
+  "dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "titles": {
+    "G1R-071": "NPC 05 Quest - START",
+    "G1R-003": "Die Welt der Verurteilten, Tag 0, 12:36",
+    "G1R-022": "quest-absprache",
+    "G1R-023": "Die Welt der Verurteilten, Tag 0, 12:36",
+    "G1R-024": "Die Welt der Verurteilten, Tag 0, 12:36",
+    "G1R-025": "quest-lieferung",
+    "G1R-026": "quest-erfolg",
+    "G1R-027": "quest-erfolg-neustart",
+    "G1R-029": "quest-abbruch",
+    "G1R-030": "quest-abbruch-neustart"
+  },
+  "result_readback": {
+    "path": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-quest-complete-20260921T213016Z\\quest-save-evidence.json",
+    "bytes": 48950,
+    "sha256": "ff1c14c867c5e6865ffc3e057c9e4f0d9d6e0174abfed91d0aa4f7fefd1c1a0e"
+  },
+  "result_fingerprints": {
+    "path": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-quest-complete-20260921T213016Z\\result-fingerprints.json",
+    "bytes": 1455,
+    "sha256": "6b32bfc14dd3761b1d883e34e0bc93e512821e65fa0caceeef9c098413a21ff7"
+  },
+  "current_profile_snapshot_used": true,
+  "retained_save_hashes": {},
+  "removed_original_hashes": {
+    "G1R-003": {
+      "bytes": 1034749,
+      "sha256": "ba15b4bc7f26b379441ed5de65fc65c76ec7f3b336e065ba32f304e93ede9674"
+    },
+    "G1R-022": {
+      "bytes": 1036975,
+      "sha256": "7d39bf9f03e1ab00b3ff09233368702e80bb5c4df68eb3444b2e42267d36ce8f"
+    },
+    "G1R-023": {
+      "bytes": 1035182,
+      "sha256": "cb98486bdc42c5327c87a7b674dc42964ffe259c8331c8b4c863b2a4c8d9e3e6"
+    },
+    "G1R-024": {
+      "bytes": 1035360,
+      "sha256": "8fc2fa1fcd7ed8675cbae8a2e67ab71e75c3f3003cffcba07cdf3981f4cd781d"
+    },
+    "G1R-025": {
+      "bytes": 1037644,
+      "sha256": "11063696b9b7f1e42dd234269befe7fbbae53f3759f8e0ed2c7f18b5f6a93262"
+    },
+    "G1R-026": {
+      "bytes": 1037853,
+      "sha256": "587cbbfafe06eae261da1c8d0490df667cece64aa8244aed7253c80a10899fa6"
+    },
+    "G1R-027": {
+      "bytes": 1037618,
+      "sha256": "1620642a7fcf11bb2b2ef03cb089d78996e08807e5ec4b3b8c22cc67d51eeab9"
+    },
+    "G1R-029": {
+      "bytes": 1035385,
+      "sha256": "e6958713ab41fab4650e9bee2532fc9cf4e9b8b73f65ec6e70e73deb19d26b90"
+    },
+    "G1R-030": {
+      "bytes": 1042249,
+      "sha256": "522bcbf799d80a8f92866deba688f18b8afdc74cbcdd8e166c59c30df7cf5939"
+    },
+    "G1R-071": {
+      "bytes": 1018879,
+      "sha256": "aee18515288dc09ebc1f4687fc3da21cccdec946596b2744f2028ccdfaf68db5"
+    }
+  },
+  "exact_current_titles_and_source_hashes_verified": true,
+  "paired_backups_verified": true,
+  "other_profiles_byte_identical": true,
+  "retained_saves_byte_identical": true,
+  "other_live_files_unchanged": true,
+  "live_unchanged_during_preview": true,
+  "global_registry_exact_filtered_order": true,
+  "no_removed_slot_reference": true,
+  "archive_hashes_reverified": true
+}

@@ -1015,7 +1015,7 @@ String _managedProjectJson() => jsonEncode(<String, Object?>{
         'kind': 'quest_draft',
         'data': <String, Object?>{
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': 4,
+          'generator_version': 6,
           'input': <String, Object?>{
             'transition_plan':
                 AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
@@ -1046,7 +1046,7 @@ String _managedProjectJson() => jsonEncode(<String, Object?>{
       'origin': <String, Object?>{
         'type': 'generated',
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 4,
+        'generator_version': 6,
         'owner': <String, Object?>{
           'project_id': _projectId,
           'id': _questId,
@@ -1216,11 +1216,11 @@ Map<String, Object?> _contentIndexJson() => <String, Object?>{
         ownerId: _questId,
         ownerKind: 'quest_draft',
         generatorId: 'gore-authoring.draft-quest-skeleton',
-        generatorVersion: 4,
+        generatorVersion: 6,
       ),
       summaryData: <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 4,
+        'generator_version': 6,
         'module_namespace': 'PROJECT.QUESTS.SECUREGATE',
         'module_relative_path': 'PROJECT/QUESTS/SECUREGATE.as',
         'status': <String, Object?>{

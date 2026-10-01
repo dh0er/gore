@@ -1,0 +1,56 @@
+{
+  "schema": "gore.npc-weapon-voice.preparation.v1",
+  "date": "2026-09-10",
+  "mod": "NpcWarningRecovery 0.1.12; no mod changes for this test",
+  "source": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-054.sav",
+    "sha256": "18fc56bdee2eb56e043df6c9d101163fe10e4be63589cc8e6b47909aebf4f41c",
+    "bytes": 1124713
+  },
+  "published_save": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-061.sav",
+    "sha256": "5c5a7259fc3202a520d883f25f947ed891b92efeb03fa8df56ec5792ea02a740",
+    "bytes": 1124915
+  },
+  "name": "npc voice - waffentest start",
+  "slot": 61,
+  "profile_id": 2,
+  "added_item": {
+    "count": 1,
+    "equipped": false,
+    "id": "ItMw_1H_Sword_Old_01",
+    "path": "/Script/Angelscript.ItMw_1H_Sword_Old_01",
+    "removable": true,
+    "upgrades": []
+  },
+  "hero_strength": 10,
+  "item_required_strength": 5,
+  "original_numbered_saves_unchanged": true,
+  "B_position_and_routine_unchanged": true,
+  "existing_inventory_items_preserved": true,
+  "profile_import": {
+    "backupPath": null,
+    "bytesChanged": true,
+    "imported": true,
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-061.sav",
+    "persistentBackupPath": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\goresave_backups\\PersistentDataList.sav.bak.1789028912",
+    "persistentPath": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\PersistentDataList.sav",
+    "placementNoteWarning": null,
+    "profileId": 2,
+    "publicProfileUpdated": true,
+    "publicSlotUpdated": true,
+    "sourcePath": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-weapon-voice\\G1R-061.sav"
+  },
+  "persistent_before": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\PersistentDataList.sav",
+    "sha256": "33fbf73f0c7ea7a72ef7bb8f1fffd15a51b943957f93f73717554f16c0cf284a",
+    "bytes": 64509
+  },
+  "persistent_after": {
+    "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\PersistentDataList.sav",
+    "sha256": "f0a1d3af5b7acd881f8790fdbb9bcc5ef4281bf7abb9936d553d372654c84c2e",
+    "bytes": 65457
+  },
+  "runtime_status": "pending user; this is an authored test input, not runtime evidence",
+  "game_launched_by_agent": false
+}

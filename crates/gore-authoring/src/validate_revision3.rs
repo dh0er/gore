@@ -677,7 +677,7 @@ impl ProjectRevision3 {
             || quest.generator_version != REVISION3_QUEST_GENERATOR_VERSION
         {
             return Err(invalid(
-                "generator contract is not the revision-3 Quest version 4 contract",
+                "generator contract is not the current revision-3 Quest contract",
             ));
         }
         validate_draft_quest_objective_titles(

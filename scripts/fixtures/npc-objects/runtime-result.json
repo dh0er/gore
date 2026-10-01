@@ -1,0 +1,465 @@
+{
+  "schema": "gore.npc-objects.runtime-result.v1",
+  "package": "NpcObjectActivities",
+  "version": "0.1.10",
+  "date": "2026-09-08",
+  "tested_by": "user",
+  "user_report": "hat alles soweit perfekt funktioniert; B schlaeft bei 19 weiterhin",
+  "bed_entry": "passed, user observation",
+  "noon_walk_and_alchemy_use": "passed, user observation",
+  "evening_return_to_bed": "passed, user observation",
+  "restart_continuation_and_next_morning": "passed, user observation; 19 advances to08:00 while scheduled sleep continues until12:00",
+  "saves": [
+    {
+      "slot": 49,
+      "save": {
+        "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-049.sav",
+        "sha256": "f71a48b415f69493c406b80dfc3b8b0484d182e18b84ba75d04e1d29a9219d61",
+        "bytes": 1091034
+      },
+      "name": "npc objekte - bett",
+      "B": {
+        "actor": {
+          "globalId": "GORE_TEST_B-WP_WarningFlock_XT_02",
+          "hasEvents": true,
+          "hasInventory": true,
+          "hasKnowledge": false,
+          "isDead": false,
+          "isTrader": false,
+          "personalRelationship": null,
+          "uniqueName": "GORE_TEST_B"
+        },
+        "position": {
+          "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+          "pose": {
+            "compact": false,
+            "location": {
+              "x": 126682.3764476029,
+              "y": -143257.48036756704,
+              "z": 4445.473304926124
+            },
+            "locationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterLocation"
+            ],
+            "rotation": {
+              "pitch": 8.263135450269248e-06,
+              "roll": 0.01983546355015113,
+              "yaw": -0.019835468544272306
+            },
+            "rotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterRotation"
+            ],
+            "spawnLocation": {
+              "x": 125313.49,
+              "y": -142845.3,
+              "z": 1713.68
+            },
+            "spawnLocationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnLocation"
+            ],
+            "spawnRotation": {
+              "pitch": 0.0,
+              "roll": 0.0,
+              "yaw": 89.99999999999999
+            },
+            "spawnRotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnRotation"
+            ]
+          },
+          "routineClass": "/Script/Angelscript.DailyRoutine_GoreObjectActivities",
+          "routineClassPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "DailyRoutineByGlobalId",
+            "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+            "DailyRoutineClass"
+          ],
+          "undo": null
+        }
+      },
+      "game_time_seconds": 893203.2722012997,
+      "clock": "day 10 08:06:43",
+      "setup": [
+        {
+          "childCount": 0,
+          "depth": 3,
+          "display": "m_GenericData{GameStateDataBase} \u203a m_GenericData{gore_npc_objects_setup_v1}",
+          "editValue": null,
+          "editable": false,
+          "id": "private:949091",
+          "kind": "mapEntry",
+          "path": [
+            "m_GenericData",
+            "{GameStateDataBase}",
+            "m_GenericData",
+            "{gore_npc_objects_setup_v1}"
+          ],
+          "source": "private",
+          "structType": null,
+          "type": "FloatProperty",
+          "value": "gore_npc_objects_setup_v1 \u2192 2"
+        }
+      ]
+    },
+    {
+      "slot": 50,
+      "save": {
+        "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-050.sav",
+        "sha256": "938d27e0673b345a7b3800346256bda40a7f47b9ebf2d677808493778cd9857d",
+        "bytes": 1092330
+      },
+      "name": "npc objekte - alchemie",
+      "B": {
+        "actor": {
+          "globalId": "GORE_TEST_B-WP_WarningFlock_XT_02",
+          "hasEvents": true,
+          "hasInventory": true,
+          "hasKnowledge": false,
+          "isDead": false,
+          "isTrader": false,
+          "personalRelationship": null,
+          "uniqueName": "GORE_TEST_B"
+        },
+        "position": {
+          "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+          "pose": {
+            "compact": false,
+            "location": {
+              "x": 126966.6014239845,
+              "y": -142723.16928330238,
+              "z": 4379.13545
+            },
+            "locationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterLocation"
+            ],
+            "rotation": {
+              "pitch": -0.0,
+              "roll": 0.0,
+              "yaw": -79.53961299999997
+            },
+            "rotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterRotation"
+            ],
+            "spawnLocation": {
+              "x": 125313.49,
+              "y": -142845.3,
+              "z": 1713.68
+            },
+            "spawnLocationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnLocation"
+            ],
+            "spawnRotation": {
+              "pitch": 0.0,
+              "roll": 0.0,
+              "yaw": 89.99999999999999
+            },
+            "spawnRotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnRotation"
+            ]
+          },
+          "routineClass": "/Script/Angelscript.DailyRoutine_GoreObjectActivities",
+          "routineClassPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "DailyRoutineByGlobalId",
+            "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+            "DailyRoutineClass"
+          ],
+          "undo": null
+        }
+      },
+      "game_time_seconds": 907487.179231897,
+      "clock": "day 10 12:04:47",
+      "setup": [
+        {
+          "childCount": 0,
+          "depth": 3,
+          "display": "m_GenericData{GameStateDataBase} \u203a m_GenericData{gore_npc_objects_setup_v1}",
+          "editValue": null,
+          "editable": false,
+          "id": "private:949230",
+          "kind": "mapEntry",
+          "path": [
+            "m_GenericData",
+            "{GameStateDataBase}",
+            "m_GenericData",
+            "{gore_npc_objects_setup_v1}"
+          ],
+          "source": "private",
+          "structType": null,
+          "type": "FloatProperty",
+          "value": "gore_npc_objects_setup_v1 \u2192 2"
+        }
+      ]
+    },
+    {
+      "slot": 51,
+      "save": {
+        "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-051.sav",
+        "sha256": "481be06b67f21d59de336ac0f89ca93e149775905baf9f972708d86ea22282bb",
+        "bytes": 1093811
+      },
+      "name": "npc objekte - abend",
+      "B": {
+        "actor": {
+          "globalId": "GORE_TEST_B-WP_WarningFlock_XT_02",
+          "hasEvents": true,
+          "hasInventory": true,
+          "hasKnowledge": false,
+          "isDead": false,
+          "isTrader": false,
+          "personalRelationship": null,
+          "uniqueName": "GORE_TEST_B"
+        },
+        "position": {
+          "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+          "pose": {
+            "compact": false,
+            "location": {
+              "x": 126682.37646808391,
+              "y": -143257.48044395907,
+              "z": 4445.473304926125
+            },
+            "locationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterLocation"
+            ],
+            "rotation": {
+              "pitch": 8.263135484801582e-06,
+              "roll": 0.019835463550012374,
+              "yaw": -0.0197573494909875
+            },
+            "rotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterRotation"
+            ],
+            "spawnLocation": {
+              "x": 125313.49,
+              "y": -142845.3,
+              "z": 1713.68
+            },
+            "spawnLocationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnLocation"
+            ],
+            "spawnRotation": {
+              "pitch": 0.0,
+              "roll": 0.0,
+              "yaw": 89.99999999999999
+            },
+            "spawnRotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnRotation"
+            ]
+          },
+          "routineClass": "/Script/Angelscript.DailyRoutine_GoreObjectActivities",
+          "routineClassPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "DailyRoutineByGlobalId",
+            "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+            "DailyRoutineClass"
+          ],
+          "undo": null
+        }
+      },
+      "game_time_seconds": 929135.0189744979,
+      "clock": "day 10 18:05:35",
+      "setup": [
+        {
+          "childCount": 0,
+          "depth": 3,
+          "display": "m_GenericData{GameStateDataBase} \u203a m_GenericData{gore_npc_objects_setup_v1}",
+          "editValue": null,
+          "editable": false,
+          "id": "private:949532",
+          "kind": "mapEntry",
+          "path": [
+            "m_GenericData",
+            "{GameStateDataBase}",
+            "m_GenericData",
+            "{gore_npc_objects_setup_v1}"
+          ],
+          "source": "private",
+          "structType": null,
+          "type": "FloatProperty",
+          "value": "gore_npc_objects_setup_v1 \u2192 2"
+        }
+      ]
+    },
+    {
+      "slot": 52,
+      "save": {
+        "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-052.sav",
+        "sha256": "04f01a99e7e306e06e3d7ba869d3dbe516235ad3fdb715305e5872ad9e7c4b1f",
+        "bytes": 1103807
+      },
+      "name": "npc objekte - geladen",
+      "B": {
+        "actor": {
+          "globalId": "GORE_TEST_B-WP_WarningFlock_XT_02",
+          "hasEvents": true,
+          "hasInventory": true,
+          "hasKnowledge": false,
+          "isDead": false,
+          "isTrader": false,
+          "personalRelationship": null,
+          "uniqueName": "GORE_TEST_B"
+        },
+        "position": {
+          "inertRoutineClass": "/Script/Angelscript.DailyRoutine_Empty",
+          "pose": {
+            "compact": false,
+            "location": {
+              "x": 126682.37644706469,
+              "y": -143257.48036690673,
+              "z": 4445.473304926119
+            },
+            "locationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterLocation"
+            ],
+            "rotation": {
+              "pitch": 8.263135363484799e-06,
+              "roll": 0.019835463549963493,
+              "yaw": -0.01983546854387441
+            },
+            "rotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "CharacterRotation"
+            ],
+            "spawnLocation": {
+              "x": 125313.49,
+              "y": -142845.3,
+              "z": 1713.68
+            },
+            "spawnLocationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnLocation"
+            ],
+            "spawnRotation": {
+              "pitch": 0.0,
+              "roll": 0.0,
+              "yaw": 89.99999999999999
+            },
+            "spawnRotationPath": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "NPCCharacters",
+              "PositionByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "SpawnRotation"
+            ]
+          },
+          "routineClass": "/Script/Angelscript.DailyRoutine_GoreObjectActivities",
+          "routineClassPath": [
+            "m_GenericData",
+            "{CharacterStates}",
+            "NPCCharacters",
+            "DailyRoutineByGlobalId",
+            "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+            "DailyRoutineClass"
+          ],
+          "undo": null
+        }
+      },
+      "game_time_seconds": 979491.0812187195,
+      "clock": "day 11 08:04:51",
+      "setup": [
+        {
+          "childCount": 0,
+          "depth": 3,
+          "display": "m_GenericData{GameStateDataBase} \u203a m_GenericData{gore_npc_objects_setup_v1}",
+          "editValue": null,
+          "editable": false,
+          "id": "private:950335",
+          "kind": "mapEntry",
+          "path": [
+            "m_GenericData",
+            "{GameStateDataBase}",
+            "m_GenericData",
+            "{gore_npc_objects_setup_v1}"
+          ],
+          "source": "private",
+          "structType": null,
+          "type": "FloatProperty",
+          "value": "gore_npc_objects_setup_v1 \u2192 2"
+        }
+      ]
+    }
+  ],
+  "original_saves_unchanged": true,
+  "game_launched_by_agent": false,
+  "limits": "Recorded routines, positions and clock support saved state. Animations, walking and full restart are user observations. Recipe/ingredient/output handling and sitting/guard are not qualified."
+}

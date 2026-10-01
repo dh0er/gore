@@ -650,7 +650,7 @@ fn require_typed_default_scalar_stores(f: &Func, refs: &RefResolver) -> Result<(
                 .is_some();
         if !typed {
             return Err(format!(
-                "default scalar field {owner}.{field} has no declared value type; load the matching Binds.Cache to author this module's defaults"
+                "default scalar field {owner}.{field} has no declared value type; load the matching Binds.Cache to author this module's defaults, or rerun with --force to use unverified Binds.Cache types (the result may be wrong)"
             ));
         }
     }
@@ -750,6 +750,9 @@ fn emit_class(s: &mut String, c: &Class, module: &str, refs: &RefResolver, defau
     } else {
         "class"
     };
+    if c.is_abstract {
+        let _ = writeln!(s, "UCLASS(Abstract)");
+    }
     match &c.super_class {
         Some(sup) if !sup.is_empty() => {
             let _ = writeln!(s, "{kw} {} : {}", c.name, sup);
@@ -54299,7 +54302,7 @@ mod literal_value_lifetime_tests {
                 .into_iter().map(|(name, token, type_info)| super::super::model::Field { name: name.into(),
                     ty: DataType { token, type_info, is_object_const: token == 5, is_read_only: token == 5,
                         ..Default::default() }, is_uproperty: false }).collect(),
-            methods: Vec::new(), ctors: vec![f], flags: 1 }
+            methods: Vec::new(), ctors: vec![f], flags: 1, is_abstract: false }
     }
 
     #[test]
@@ -54422,13 +54425,27 @@ mod literal_value_lifetime_tests {
 
 
     #[test]
+    fn abstract_classes_keep_their_uclass_specifier() {
+        let refs = RefResolver::default();
+        let class = |is_abstract| super::Class { name: "UBase".into(), namespace: String::new(),
+            super_class: Some("UObject".into()), fields: Vec::new(), methods: Vec::new(),
+            ctors: Vec::new(), flags: 1, is_abstract };
+        let mut source = String::new();
+        super::emit_class(&mut source, &class(true), "Module", &refs, None);
+        assert!(source.starts_with("UCLASS(Abstract)\nclass UBase : UObject\n{"), "{source}");
+        let mut source = String::new();
+        super::emit_class(&mut source, &class(false), "Module", &refs, None);
+        assert!(source.starts_with("class UBase : UObject\n{"), "{source}");
+    }
+
+    #[test]
     fn readonly_default_sets_keep_their_const_field_declarations() {
         let refs = RefResolver::from_test_const_set_field();
         let field = super::super::model::Field { name: "Groups".into(),
             ty: DataType { token: 5, type_info: 201, is_object_const: true, is_read_only: true, ..Default::default() },
             is_uproperty: true };
         let class = super::Class { name: "UGroup".into(), namespace: String::new(), super_class: None,
-            fields: vec![field.clone()], methods: Vec::new(), ctors: Vec::new(), flags: 1 };
+            fields: vec![field.clone()], methods: Vec::new(), ctors: Vec::new(), flags: 1, is_abstract: false };
         let mut source = String::new();
         super::emit_class(&mut source, &class, "Module", &refs, None);
         assert!(source.contains("UPROPERTY()\n    const TSet<int> Groups;"), "{source}");
@@ -54466,7 +54483,7 @@ mod literal_value_lifetime_tests {
         for (at, value) in [(1, 1), (4, 11), (5, 2)] { f.bytecode[code[at].offset_dw + 1] = value; }
         let class = |f| super::Class { name: "Example".into(), namespace: "NS".into(), super_class: None,
             fields: vec![super::super::model::Field { name: "Path".into(), ty: DataType { token: 5, type_info: 201, ..Default::default() }, is_uproperty: true }],
-            methods: Vec::new(), ctors: vec![f], flags: 1 };
+            methods: Vec::new(), ctors: vec![f], flags: 1, is_abstract: false };
         let refs = RefResolver::from_test_native_direct_field(0);
         assert_eq!(super::directly_constructed_native_fields(&class(f.clone()), "Module", &refs), HashSet::from(["Path".into()]));
         let mut source = String::new();
@@ -54504,7 +54521,7 @@ mod literal_value_lifetime_tests {
         let class = |f| super::Class { name: "Example".into(), namespace: "NS".into(), super_class: None,
             fields: vec![super::super::model::Field { name: "Path".into(), ty: DataType { token: 5, type_info: 201, ..Default::default() }, is_uproperty: true },
                 super::super::model::Field { name: "Kind".into(), ty: DataType { token: 5, type_info: 202, ..Default::default() }, is_uproperty: true }],
-            methods: Vec::new(), ctors: vec![f], flags: 1 };
+            methods: Vec::new(), ctors: vec![f], flags: 1, is_abstract: false };
         assert_eq!(super::native_field_initializer_prefix(&class(f.clone()), "Module", &refs), HashSet::from(["Path".into(), "Kind".into()]));
         assert_eq!(super::native_field_initializer_prefix(&class(f.clone()), "Module", &RefResolver::from_test_native_field_initializer(6)), HashSet::from(["Path".into(), "Kind".into()]));
         for fault in [1, 2, 3, 4, 5, 7, 8, 9] {
@@ -56109,7 +56126,7 @@ mod literal_value_lifetime_tests {
             row
         }).collect();
         Func { name: "Fixture".into(), param_defaults: Vec::new(), namespace: String::new(),
-            ret: DataType::default(), params: Vec::new(), bytecode, obj_locals: Vec::new(),
+            ret: DataType::default(), params: Vec::new(), bytecode, variable_space: 0, obj_locals: Vec::new(),
             is_ufunction: false, traits: 0 }
     }
 

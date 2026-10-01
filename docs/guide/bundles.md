@@ -1,10 +1,9 @@
 # Bundling & deploying
 
-A **bundle** combines every deployable domain — item overrides, localized text,
-audio, voice archives, textures/assets, loose or packed files, scripts, and
-low-level dialog-topic registration adapters — into one mod that deploys and
-undeploys as a unit. This is the same engine
-[Mod Studio](../../apps/mod-studio/README.md) drives.
+A **bundle** combines every deployable domain — class-default values, localized
+text, audio, voice archives, textures/assets, loose or packed files, and
+scripts — into one mod that deploys and undeploys as a unit. This is the same
+engine [Mod Studio](../../apps/mod-studio/README.md) drives.
 
 ## The build spec
 
@@ -13,7 +12,7 @@ Write a `spec.json`:
 ```json
 {
   "meta": { "name": "MyMod", "version": "1.0.0", "author": "you" },
-  "overrides": [ { "class": "ItFo_Apple", "field": "m_Value", "value_int": 500 } ],
+  "values": [ { "class": "UItFo_Apple", "field": "m_Value", "value": { "int": 500 } } ],
   "loc_edits": { "ch1_bringlist_entry_3": { "german": "…", "german_new": "…" } },
   "audio":   [ { "bank": "SFX.bank", "sample": "Foo", "wav_path": "foo.wav" } ],
   "voice":   [ { "archive": "german_new.zip", "op": "replace", "archive_path": "NPC/Hero/DIA_Foo.ogg", "ogg_path": "DIA_Foo.ogg" } ],
@@ -56,21 +55,17 @@ is a property of the install's cache rather than of the spec — so the report a
 deploy time is where you find out. Check the id in a `gore loc export` and see
 [which language key to write](text-and-dialogs.md#which-language-key-to-write).
 
-**`overrides` class and field names are checked only if you ask.** Pass
-`--model model.json` and `build` rejects unknown classes, unknown fields and
-type mismatches before writing anything — the same check `gore gen --model`
-runs, through the same code. Without it the names go unchecked and the build
-says so on stderr. Nothing in the release zip is a model; building one is
-covered in [Catalogs & models](catalogs-and-models.md). An unchecked typo costs
-you a play session: the bundle builds, deploys, and its Lua polls once a second
-for 120 attempts before writing one "gave up" line to `UE4SS.log`.
+**`values` are checked against the script cache while `gore mod build` compiles
+them.** An unknown class, a wrong type, or a missing tag fails before a bundle
+is written. `--model` does not apply to that path.
 
 ```powershell
-gore mod build --spec spec.json -o build --model model.json
+gore mod build --spec spec.json --game "$GAME" --work-dir .gore-value-work -o build
 ```
 
-Every section is optional; `delay_ms` may be set alongside `overrides` to defer
-the CDO patch. Each section maps to the domain guide of the same name:
+`values` needs `--game` and `--work-dir`; without that section both can be
+omitted. `--model` is ignored. Every section is optional. Each section maps to
+the domain guide of the same name:
 [items](items.md), [text](text-and-dialogs.md), [audio](audio.md),
 [voice](voice.md), [textures](textures.md), [scripts](scripts.md).
 
@@ -138,7 +133,7 @@ What deploy does per domain:
 
 | Section | Deployment |
 |---|---|
-| `overrides` | a generated UE4SS Lua mod into `ue4ss\Mods\` |
+| `values` | compiled class-default edits, shipped as a script mini-cache |
 | `loc_edits` | in-place `.lcache` rewrite, original backed up to `*.gore-bak` |
 | `audio` | in-place bank rewrite, original backed up to `*.gore-bak` |
 | `voice` | transactional ZIP rewrite under `G1R\Story\VoiceOver` |
@@ -146,7 +141,7 @@ What deploy does per domain:
 | `files` | in-place replacement of a loose game file, original backed up to `*.gore-bak` |
 | `pak_files` | packs the same files into an override `.pak` in `~mods\` (additive) |
 | `scripts` | splices the mini-caches into the script cache, backed up to `*.gore-bak` |
-| `dialog_topics` | low-level legacy UE4SS topic-registration adapter |
+| `dialog_topics` | retired; dialog edits ship as a script mini-cache |
 
 `gore mod undeploy` restores every backup and removes every additive container.
 
@@ -308,34 +303,9 @@ choices, and ended cleanly without a generated UE4SS component. A separate new
 conversation Add module compiled, packaged and deployed but was not discovered,
 which is why the command now refuses a missing settings anchor.
 
-`dialog_topics` remains a separate low-level compatibility surface for old
-workspaces and explicitly hand-authored specs. Such an entry asks the generated
-UE4SS adapter to register an authored AngelScript topic at the target
-conversation's natural UI boundary. It needs explicit identities: the
-participant, the authored `topic_class`, and a vanilla `sentinel_class`:
-
-```json
-{
-  "dialog_topics": [
-    {
-      "id": "legacy-diego-test",
-      "participant_name": "oc_stt_diego",
-      "topic_class": "/Script/Angelscript.ChoiceMyModDiego",
-      "sentinel_class": "/Script/Angelscript.ChoiceDiegoExitGamestart"
-    }
-  ]
-}
-```
-
-For a state-dependent choice, add `"allow_hidden": true`. A clean zero-match
-after `IsVisible_Implementation` is then accepted as conditional, while
-duplicates and mixed identity/class matches still fail closed. The default
-remains strict: the registered topic must reach both UI proof stages.
-
-That `allow_hidden` flag belongs to this low-level adapter schema; it is not a
-`gore dialog new-topic` CLI option. Compilation and script-only packaging do
-not require UE4SS. The adapter's older runtime evidence does not replace the
-native current-path evidence or qualify other builds.
+`dialog_topics` is retired. `gore mod build` refuses a spec that still contains
+it, and `gore dialog check` and `stage` refuse a workspace that still carries
+one. Old workspaces have to be re-authored as a same-module script mini-cache.
 
 Full template, runtime evidence, and safe test order:
 [AngelScript dialog authoring](dialog-authoring.md).
@@ -396,12 +366,4 @@ for that probe after a separate off-game-thread crash in its own UE4SS Lua loop.
 
 ## Other helpers
 
-```powershell
-gore scaffold MyMod -o "$GAME\...\Mods"   # empty hand-written gore-lua mod skeleton
-gore deploy-shared --game "$GAME"         # install the gore-lua helpers (for custom Lua mods)
-gore package mod_dir/ -o MyMod.zip        # zip a Lua mod for sharing
-```
-
-`deploy-shared` takes an optional `--src` for unusual layouts; by default it
-locates the shared tree relative to the `gore` executable, independent of the
-working directory.
+Ship a built bundle directory. There is no Lua skeleton and no shared Lua SDK.

@@ -1,0 +1,169 @@
+{
+  "schema": "gore.npc-batch.published-start-saves.v1",
+  "published": true,
+  "published_utc": "2026-09-11T10:28:20.897316+00:00",
+  "displayed_profile": 4,
+  "internal_profile_id": 2,
+  "stored_profile_name": "3",
+  "dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "prepared_manifest_sha256": "d8c167d95a0bc138a752d7d668b60318f7f0020975308644761292fa77c4c028",
+  "persistent_before": {
+    "bytes": 38448,
+    "sha256": "5178291750a396a01dcddf37a7f46451ccf18400fc1608a58389dfae55587730"
+  },
+  "persistent_after": {
+    "bytes": 46149,
+    "sha256": "2e9fca57ef7c85d55123c3dc920a91a98908097020e7f7897a216cccf2d1b793"
+  },
+  "published_saves": [
+    {
+      "slot": "G1R-065",
+      "title": "NPC 01 Koepfe - START",
+      "bytes": 1018885,
+      "sha256": "ca540dc4cd6720554b4cdbe663052ed74a1708936322b643a27471f078de36bb",
+      "private_payload_sha256": "eebf7ca1a2a26e3dd57ed54c7daac8f371ad756b24a67725fd7ee6fa33e3ddc7",
+      "hero_lp": 0.0,
+      "hero_ore": 0,
+      "diving_learned": false,
+      "hero_advantages": null,
+      "backup_file": "goresave_backups\\G1R-065.sav.bak.1789122487",
+      "persistent_backup_file": "goresave_backups\\PersistentDataList.sav.bak.1789122487",
+      "persistent_backup_sha256": "5178291750a396a01dcddf37a7f46451ccf18400fc1608a58389dfae55587730"
+    },
+    {
+      "slot": "G1R-066",
+      "title": "NPC 02 Voice - START",
+      "bytes": 1018883,
+      "sha256": "b6c3c9ae057afcf6cf7a9cf75a8e964485e0b7e55d942837384df912df08ae7a",
+      "private_payload_sha256": "eebf7ca1a2a26e3dd57ed54c7daac8f371ad756b24a67725fd7ee6fa33e3ddc7",
+      "hero_lp": 0.0,
+      "hero_ore": 0,
+      "diving_learned": false,
+      "hero_advantages": null,
+      "backup_file": "goresave_backups\\G1R-066.sav.bak.1789122489",
+      "persistent_backup_file": "goresave_backups\\PersistentDataList.sav.bak.1789122489",
+      "persistent_backup_sha256": "aa4678a2edfbdb793beea857ea02e02de1f4e8432e9eee6680b64c388fc33191"
+    },
+    {
+      "slot": "G1R-067",
+      "title": "NPC 03 Handel - LP fehlt",
+      "bytes": 1034022,
+      "sha256": "8fe3741c6f935a80977087f145a58e15260658d81bdc0f2c4edfc1a470e0d724",
+      "private_payload_sha256": "0c98e41a21b2c84bbcb37bf6f911c810cc62e831cae524d43cf570a6135948df",
+      "hero_lp": 0.0,
+      "hero_ore": 50,
+      "diving_learned": false,
+      "hero_advantages": null,
+      "backup_file": "goresave_backups\\G1R-067.sav.bak.1789122491",
+      "persistent_backup_file": "goresave_backups\\PersistentDataList.sav.bak.1789122491",
+      "persistent_backup_sha256": "36715213d030be3f6d2556e8e2fe08c7ab4fa323c2c6b983e97dfa7de2e0a9db"
+    },
+    {
+      "slot": "G1R-068",
+      "title": "NPC 03 Lehrer - Erz fehlt",
+      "bytes": 1034001,
+      "sha256": "9617c001bb3b90901e038219f03bed775045fe5dac30012250186d79d332060f",
+      "private_payload_sha256": "b3128894a02b98bf85f0414139fdb2a99268c6f1e3891488a2bd3cd462157bab",
+      "hero_lp": 5.0,
+      "hero_ore": 0,
+      "diving_learned": false,
+      "hero_advantages": null,
+      "backup_file": "goresave_backups\\G1R-068.sav.bak.1789122493",
+      "persistent_backup_file": "goresave_backups\\PersistentDataList.sav.bak.1789122493",
+      "persistent_backup_sha256": "23d6e6cadf94331d7c0a9f489bf5dc3ec1933666a0a826218d8a55b6f5038670"
+    },
+    {
+      "slot": "G1R-069",
+      "title": "NPC 03 Lehrer - bereit",
+      "bytes": 1034020,
+      "sha256": "ed69d38a283ce759945bc212c03043508d060f4b7f6c35a85dad2b1f545931b7",
+      "private_payload_sha256": "1835d7a2a5be1a93e790c9f79519275537788587438fe7c66761150c759137d9",
+      "hero_lp": 15.0,
+      "hero_ore": 200,
+      "diving_learned": false,
+      "hero_advantages": null,
+      "backup_file": "goresave_backups\\G1R-069.sav.bak.1789122494",
+      "persistent_backup_file": "goresave_backups\\PersistentDataList.sav.bak.1789122494",
+      "persistent_backup_sha256": "059d469583a63ada44d8e8073bf7ee292e93185cd74f544bea6b380a95dbbfc9"
+    },
+    {
+      "slot": "G1R-070",
+      "title": "NPC 04 Rollen - START",
+      "bytes": 1034811,
+      "sha256": "e4462d2e0a1bc6d0ed3661a26e813cba9f20bad879b299376813f3c4c94385fe",
+      "private_payload_sha256": "ee2cc3165afc221523a2738db14e8ba0e01262913765e44cecc72d43e0f21b4e",
+      "hero_lp": 0.0,
+      "hero_ore": 0,
+      "diving_learned": false,
+      "hero_advantages": null,
+      "backup_file": "goresave_backups\\G1R-070.sav.bak.1789122496",
+      "persistent_backup_file": "goresave_backups\\PersistentDataList.sav.bak.1789122496",
+      "persistent_backup_sha256": "e10eacae991253c30792d94dcc706085cc9e022b9d84b9f46141608ff6667296"
+    },
+    {
+      "slot": "G1R-071",
+      "title": "NPC 05 Quest - START",
+      "bytes": 1018883,
+      "sha256": "936af9525543703c04b94defee36cb02a80fa48bafd9d6ae3c21990f085ed5c3",
+      "private_payload_sha256": "eebf7ca1a2a26e3dd57ed54c7daac8f371ad756b24a67725fd7ee6fa33e3ddc7",
+      "hero_lp": 0.0,
+      "hero_ore": 0,
+      "diving_learned": false,
+      "hero_advantages": null,
+      "backup_file": "goresave_backups\\G1R-071.sav.bak.1789122498",
+      "persistent_backup_file": "goresave_backups\\PersistentDataList.sav.bak.1789122498",
+      "persistent_backup_sha256": "2b07f9dd5c8d85d28bfdf171ed724825d47c7e860837c3a935c54d87ab220e89"
+    },
+    {
+      "slot": "G1R-072",
+      "title": "NPC 04 Rollen - Kampf bereit",
+      "bytes": 1034842,
+      "sha256": "a86fca67c4251bf3bb796ca88519a84e93ebc924623429eabcd0f618430043bc",
+      "private_payload_sha256": "92e786ba1103d1a3238e4f1a1c9217ce1db048a7135f281b1b285e0e096d090a",
+      "hero_lp": 0.0,
+      "hero_ore": 0,
+      "diving_learned": false,
+      "hero_advantages": {
+        "Strength": 250,
+        "Health": 3000,
+        "MaxHealth": 3000,
+        "Resistance_Blunt": 100,
+        "Resistance_Edge": 100,
+        "Resistance_Point": 100
+      },
+      "backup_file": "goresave_backups\\G1R-072.sav.bak.1789122500",
+      "persistent_backup_file": "goresave_backups\\PersistentDataList.sav.bak.1789122500",
+      "persistent_backup_sha256": "ba552c632d806d480446dfc1c78dd1e0826f4239973666e4c97e6c9f99e9585a"
+    }
+  ],
+  "retained_existing_slots": [
+    "G1R-023",
+    "G1R-027",
+    "G1R-030",
+    "G1R-048",
+    "G1R-052",
+    "G1R-054",
+    "G1R-060",
+    "G1R-061",
+    "G1R-062",
+    "G1R-063",
+    "G1R-064"
+  ],
+  "checks": {
+    "game_closed_before_each_publish": true,
+    "exclusive_new_files_only": true,
+    "both_public_branches_and_cached_metadata_verified": true,
+    "eight_global_slots_registered_once_in_order": true,
+    "target_profile_count": 19,
+    "eleven_retained_saves_byte_identical": true,
+    "other_profiles_byte_identical": true,
+    "all_other_original_live_files_unchanged": true,
+    "staged_files_unchanged": true,
+    "whole_save_and_private_payloads_identical_to_staged": true,
+    "eight_paired_backups_verified": true,
+    "live_persistent_not_replaced_with_detached_file": true
+  }
+}

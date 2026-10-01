@@ -1,0 +1,76 @@
+{
+  "schema": "gore.npc-head.runtime-result.v1",
+  "package": "NpcHeadNeckFix",
+  "version": "0.1.8",
+  "tested_by": "user",
+  "date": "2026-09-08",
+  "head_shape_and_neck_join": "passed visually; user confirms the connection now fits",
+  "restore_15": "failed: game crashed after saving and selecting option15",
+  "apply_14_twice": "not tested for this version",
+  "full_restart": "not established",
+  "save": {
+    "slot": 46,
+    "name": "npc kopf - halsanimation",
+    "sha256": "976ccd883d382a7c5be28088a208508b3ebd804d800a32a6a1842203b84f95dd",
+    "bytes": 1092412
+  },
+  "diagnostics": {
+    "gore_head_v1_mode": 1.0,
+    "gore_head_v3_rigid": 0.0,
+    "gore_head_v1_loaded": 1.0,
+    "gore_head_v1_bones": 1.0,
+    "gore_head_v4_active": 1.0,
+    "gore_head_v4_frames": 2286.0,
+    "gore_head_v4_facial": 194.0,
+    "gore_head_v4_head_error": 1.4336492e-11,
+    "gore_head_v4_neck_error": 9.861278e-12,
+    "gore_head_v1_matched": 31.0,
+    "gore_head_v1_hidden": 186.0,
+    "gore_head_v2_expected": 186.0,
+    "gore_head_v1_status": 4.0
+  },
+  "screenshots": [
+    {
+      "file": "codex-clipboard-5178691a-3006-484a-92e7-234bc487534e.png",
+      "bytes": 921378,
+      "sha256": "92c1f4d717e5f8140b58bb07075046a822e08ff113022b5e3aa74e79567938fc"
+    },
+    {
+      "file": "codex-clipboard-ea71f9fd-5adb-4150-9bae-15ad5f77a94b.png",
+      "bytes": 853049,
+      "sha256": "221b8eea51915be318d9f26e5dbc31cdb9c5902d127ebc4323bf598b9ff22d4e"
+    },
+    {
+      "file": "codex-clipboard-c319c902-2f1c-46da-b60c-96b43d25bd71.png",
+      "bytes": 740058,
+      "sha256": "db229582c4547be57b92241666a87b08d5f1e2beacd21533a119d81fac45b265"
+    },
+    {
+      "file": "codex-clipboard-ae29f77b-ba00-4cec-8e7c-67a9f56856c6.png",
+      "bytes": 201476,
+      "sha256": "ffe8d553c301971d5ac8c7be6509c731c0177b6a875ccedf36aedb56856d2b8e"
+    }
+  ],
+  "crash_files": [
+    {
+      "file": "CrashContext.runtime-xml",
+      "bytes": 46934,
+      "sha256": "a06c6015e9c28f63cd0882e5e9b136a56dfc7c0d85b0580e784a7e13795aecc6"
+    },
+    {
+      "file": "gothic_crash_info.log",
+      "bytes": 70297,
+      "sha256": "519fef548a89c05aed037d568578facb8dead10337e221cf03fcfaf86acf82a7"
+    },
+    {
+      "file": "UEMinidump.dmp",
+      "bytes": 747326,
+      "sha256": "ede32374c5c81b6073540b8028e4436bd15e3936b5050ed66acff227b7e0fa1b"
+    }
+  ],
+  "crash_error": "EXCEPTION_ACCESS_VIOLATION reading address 0x0000000000000d50",
+  "crash_cause": "offline dump shows an unchecked failed SkeletalMeshComponent cast in BFG interpolation; exact PoseHead instance identity unavailable",
+  "crash_analysis": "restore-crash-analysis.json",
+  "original_save_unchanged": true,
+  "game_launched_by_agent": false
+}

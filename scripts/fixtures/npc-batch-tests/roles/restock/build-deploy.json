@@ -1,0 +1,113 @@
+{
+  "schema": "gore.npc-restock.build-deploy.v1",
+  "date": "2026-09-22T07:01:33.965828+00:00",
+  "bundle": {
+    "name": "NpcTraderRestockTest",
+    "version": "0.1.0",
+    "author": ""
+  },
+  "game_build": "g1r-steam-25168047",
+  "manager_id": "npctraderrestocktest-e70337b6",
+  "manager_status": "in_sync",
+  "previous_disabled": "npcquestcallbackstest-967ab254",
+  "runtime": "pending user test",
+  "agent_played_game": false,
+  "cli_path": "C:/tools/gore-cli/gore.exe",
+  "cli_sha256": "bf48dc461d0f919180dd7cf3e852f911026382f1d3f4dbd9deb53fd3780038de",
+  "build": {
+    "authored_modules": [
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+        "operation": "Add",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+        "source_byte_len": 37570,
+        "source_sha256": "1dc61a75b1069ec3b5721c4f899a68ed3ea18d15c42861258a1e14a55652eba2"
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+        "operation": "Add",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+        "source_byte_len": 29806,
+        "source_sha256": "0d966700e37052aefe5005d24a2272f7c8e64e2572ae87939de38b3d2e5343b5"
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+        "operation": "Edit",
+        "relative_path": "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+        "source_byte_len": 5203,
+        "source_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+      },
+      {
+        "module_name": "LevelScripts.XardasTower_AI",
+        "operation": "Edit",
+        "relative_path": "LevelScripts/XardasTower_AI.as",
+        "source_byte_len": 1814,
+        "source_sha256": "ee74734e29cafb76445abe5000bc662d2c9e79d3cd6b88a989a17f81d42056eb"
+      }
+    ],
+    "elapsed_seconds": 197.8295154,
+    "full_modules": 7319,
+    "full_sha256": "4a9edbb526e3f2c539336c39b52f7861a1171b2d0a6f277b2018ef6c712b4958",
+    "game_backend_attempted": false,
+    "mini_compose_upsert": true,
+    "mini_modules": 4,
+    "mini_sha256": "dad1e47c7affb9a03ed38750d617ba655b8e8e295b3acf23e4be969bf0921f63",
+    "passed": true,
+    "product_generation_receipt": true,
+    "route": "productive Core FullGraph; frozen-manifest plan",
+    "source_modules_verified": 7319,
+    "target_closing_audit": true,
+    "unselected_pristine_modules_byte_identical": 7315
+  },
+  "source_manifest_sha256": "8b3eefbc9ba99ade119eb4746b501f1547a7d8924876a33a58df2feac415144e",
+  "generation_receipt_sha256": "d027c6ad5b159af0704179c4376bba9b46cb4e7cf6e85f231eef62d7caf5523f",
+  "bundle_tree_sha256": "11afdb45822152f50e4bcf0217998a3de2961a95a1e414d1d4a342ff75e27150",
+  "bundle_manifest_sha256": "73d407f948d0529eeedc5efec64d9edc7eac68fe364f9731cf0c6db6922b9a87",
+  "bundle_components": [
+    {
+      "type": "loc_patch",
+      "path": "loc/edits.json",
+      "target_count": 42,
+      "footprint_coverage": "exact"
+    },
+    {
+      "type": "voice_archive_patch",
+      "path": "voice",
+      "target_count": 5,
+      "footprint_coverage": "exact"
+    },
+    {
+      "type": "angel_script_patch",
+      "path": "scripts",
+      "target_count": 4,
+      "footprint_coverage": "exact"
+    }
+  ],
+  "bundle_path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\restock-25168047\\packages\\NpcTraderRestockTest",
+  "build_path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\restock-25168047\\build",
+  "deployed_cache_sha256": "8fed9c5f37d8ee7e7ab422cfd7b958ad5d968c07050f22e25ed82e3d987df52c",
+  "pristine_cache_sha256": "b913264a50327da30b48c3b35f431e90197f3eafdebe431501a90ffd2d793d54",
+  "installed_npc_readback_sha256": "4cf4916982f0c368827dae2dae7ac0f5b879a284d7dfc98659aa386d225afe96",
+  "inspection_note": "Dedicated MCP inspect used the older pinned0.3.0 server and rejected the four-module mini pattern. Current installed CLI inspection passed all four targets. This was format-version incompatibility, not an approval denial.",
+  "checks": {
+    "strict_standalone_full_graph_and_closing_audit": true,
+    "original_7315_unselected_module_spans_byte_identical": true,
+    "authored_source_hashes_match_build": true,
+    "no_recognized_loadout_conflicts": true,
+    "dedicated_manager_preflight_game_closed_no_recovery": true,
+    "only_restock_bundle_enabled_and_in_sync": true,
+    "deployed_new_menu_native_event_implementations_present": true,
+    "deployed_initial_and_late_batch_defaults_present": true,
+    "pristine_backup_and_binds_unchanged": true,
+    "one_clean_noon_start_published": true,
+    "focused_source_and_checklist_review_no_findings": true
+  },
+  "start_save_report": "start-save.json",
+  "source_archive": {
+    "path": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-economy-reload-20260912T215210Z\\G1R-067.sav",
+    "bytes": 1034015,
+    "sha256": "528cad0ac5889bf377e8527f7d4bd2704fa86875d84f73288e87b841e0bb05a7"
+  },
+  "apply_command": "C:/tools/gore-cli/gore.exe mgr apply --game \"C:/Program Files (x86)/Steam/steamapps/common/Gothic 1 Remake\"",
+  "reset_command": "C:/tools/gore-cli/gore.exe mgr reset --game \"C:/Program Files (x86)/Steam/steamapps/common/Gothic 1 Remake\""
+}

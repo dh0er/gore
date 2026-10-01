@@ -307,7 +307,7 @@ fn revision3_multi_objectives_round_trip_in_order_with_stable_slots() {
 }
 
 #[test]
-fn quest_wire_requires_a_transition_plan_and_generator_v4() {
+fn quest_wire_requires_a_transition_plan_and_current_generator() {
     let mut project = quest_project();
     let quest_id = entity_id(10);
     let Revision3EntityPayload::QuestDraft(quest) =
@@ -319,7 +319,7 @@ fn quest_wire_requires_a_transition_plan_and_generator_v4() {
     input.as_object_mut().unwrap().remove("transition_plan");
     assert!(serde_json::from_value::<Revision3QuestDraftInput>(input).is_err());
 
-    quest.generator_version = 3;
+    quest.generator_version = 4;
     assert!(matches!(
         project.validate_closed_model(),
         Err(ProjectRevision3ValidationError::InvalidQuestArtifactRef { .. })

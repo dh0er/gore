@@ -367,16 +367,35 @@ const EXPECT_BASE_SHA256: ArgSpec = ArgSpec::new(
     false,
 );
 
+const EXPECT_SOURCE_SHA256: ArgSpec = ArgSpec::new(
+    "expect_source_sha256",
+    Long("expect-source-sha256"),
+    Hex,
+    "Refuse to compile if the authored source differs from this SHA-256.",
+    false,
+);
+
+const SOURCE_OVERLAYS: ArgSpec = ArgSpec::new(
+    "overlays",
+    Switch("overlays"),
+    Bool,
+    "Read only authored Add/Edit modules at canonical Script-relative paths; retain absent base \
+     modules without exporting or comparing the full source tree. Every supplied file is a change; \
+     no deletes. Requires strict standalone (automatic on gore_as_compile; explicitly set backend \
+     to standalone on gore_as).",
+    false,
+);
+
 const COMPILE_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "src",
         Positional { order: 0 },
         Path,
-        "Complete `.as` tree emitted from the target cache and then edited. Added or changed \
-         modules become authored additions or edits; missing base modules request an unsupported \
-         delete and are rejected.",
+        "Complete `.as` tree, or with overlays=true only the authored Add/Edit files at their \
+         canonical Script-relative paths. Without overlays, missing base modules are rejected.",
         true,
     ),
+    SOURCE_OVERLAYS,
     ArgSpec::new(
         "out",
         Long("out"),
@@ -395,6 +414,15 @@ const COMPILE_ARGS: &[ArgSpec] = &[
         false,
     ),
     ArgSpec::new(
+        "only_changes",
+        LongRepeated("only-change"),
+        StrList,
+        "Require exactly these add:Module:Path or edit:Module:Path changes; append :SHA256 to \
+         bind source bytes. This is a scope check, not a file filter; overlays avoids full-tree \
+         comparison.",
+        false,
+    ),
+    ArgSpec::new(
         "work_dir",
         Long("work-dir"),
         Path,
@@ -408,8 +436,9 @@ const COMPILE_ARGS: &[ArgSpec] = &[
         "backend",
         Long("backend"),
         Enum(&["game", "standalone", "standalone-then-game"]),
-        "Product-owned compiler selection. Standalone package paths and hashes are never \
-         accepted from this command line.",
+        "Product-owned compiler selection. With overlays=true, explicitly select standalone; \
+         game, fallback and an omitted backend are rejected. Standalone package paths and hashes \
+         are never accepted from this command line.",
         false,
     )
     .with_default("standalone-then-game"),
@@ -453,8 +482,8 @@ const COMPILE_MODULE_ARGS: &[ArgSpec] = &[
         "work_dir",
         Long("work-dir"),
         Path,
-        "Existing persistent compiler workspace outside the game installation, used for the \
-         emitted tree and intermediate compiler cache.",
+        "Existing persistent compiler workspace outside the game installation for intermediate \
+         compiler artifacts. Only a game-backed run emits the full source tree.",
         true,
     ),
     ArgSpec::new(
@@ -476,6 +505,7 @@ const COMPILE_MODULE_ARGS: &[ArgSpec] = &[
     GAME,
     EXPECT_BASE,
     EXPECT_BASE_SHA256,
+    EXPECT_SOURCE_SHA256,
     ArgSpec::new(
         "backend",
         Long("backend"),
@@ -541,11 +571,11 @@ const STANDALONE_COMPILE_ARGS: &[ArgSpec] = &[
         "src",
         Positional { order: 0 },
         Path,
-        "Complete `.as` tree emitted from the target cache and then edited. Added or changed \
-         modules become authored additions or edits; missing base modules request an unsupported \
-         delete and are rejected.",
+        "Complete `.as` tree, or with overlays=true only the authored Add/Edit files at their \
+         canonical Script-relative paths. Without overlays, missing base modules are rejected.",
         true,
     ),
+    SOURCE_OVERLAYS,
     ArgSpec::new(
         "out",
         Long("out"),
@@ -560,6 +590,15 @@ const STANDALONE_COMPILE_ARGS: &[ArgSpec] = &[
         "Also publish a deployable multi-module mini-cache holding only the authored Add/Edit \
          modules, remapped to the pristine cache. Point a bundle spec's `scripts[].mini_cache` \
          at it when a mod spans several modules.",
+        false,
+    ),
+    ArgSpec::new(
+        "only_changes",
+        LongRepeated("only-change"),
+        StrList,
+        "Require exactly these add:Module:Path or edit:Module:Path changes; append :SHA256 to \
+         bind source bytes. This is a scope check, not a file filter; overlays avoids full-tree \
+         comparison.",
         false,
     ),
     ArgSpec::new(
@@ -634,6 +673,7 @@ const STANDALONE_COMPILE_MODULE_ARGS: &[ArgSpec] = &[
     GAME,
     EXPECT_BASE,
     EXPECT_BASE_SHA256,
+    EXPECT_SOURCE_SHA256,
     ArgSpec::new(
         "generation_receipt",
         Long("generation-receipt"),
@@ -993,9 +1033,10 @@ const AS_COMMANDS: &[CommandSpec] = &[
     .guide("scripts"),
     CommandSpec::new(
         "compile",
-        "Resolve a complete AngelScript tree as one graph, then publish a full cache that preserves \
-         untouched pristine modules and selectively composes authored additions and edits. Uses \
-         the requested standalone/game policy; only game or explicit fallback may launch the game.",
+        "Resolve AngelScript sources as one graph, then publish a full cache that preserves \
+         untouched pristine modules and selectively composes authored additions and edits. Use \
+         overlays=true and backend=standalone for only changed/new modules, without full-tree \
+         export. Complete trees also support game or fallback policies that may launch the game.",
         COMPILE_ARGS,
         Safety::game_launch_except("backend", "standalone")
             .also_writes(&[("work_dir", Derived::Child("tree"))]),
@@ -1005,8 +1046,9 @@ const AS_COMMANDS: &[CommandSpec] = &[
     .guide("scripts"),
     CommandSpec::new(
         "compile-module",
-        "Compile one authored module into a deployable 1-module mini-cache. Wraps the complete \
-         Studio pipeline with an explicit standalone/game policy.",
+        "Compile one authored module into a deployable 1-module mini-cache. Standalone reads \
+         unchanged dependencies from the pristine cache; a game fallback emits the full source \
+         tree. The compiled module is extracted and remapped to the pristine cache.",
         COMPILE_MODULE_ARGS,
         Safety::game_launch_except("backend", "standalone")
             .also_writes(&[("work_dir", Derived::Child("tree"))])
@@ -1080,7 +1122,7 @@ pub const AS: GroupSpec = GroupSpec {
 
 const STANDALONE_COMPILE_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
     "compile",
-    "Resolve a complete AngelScript tree with GORE's bundled standalone compiler, then publish a full cache that preserves untouched pristine modules and selectively composes authored additions and edits. This never starts the game or stages files in the installation; a fresh workspace needs no consent, while replacing an existing generated work tree remains protected.",
+    "Resolve AngelScript sources with GORE's bundled standalone compiler, then publish a full cache that preserves untouched pristine modules and selectively composes authored additions and edits. Set overlays=true to supply only changed/new modules without full-tree export; otherwise supply a complete tree. This never starts the game or stages files in the installation; a fresh workspace needs no consent, while replacing an existing generated work tree remains protected.",
     STANDALONE_COMPILE_ARGS,
     Safety::write().also_writes(&[("work_dir", Derived::Child("tree"))]),
     T_COMPILE,
@@ -1098,14 +1140,14 @@ pub const AS_COMPILE: GroupSpec = GroupSpec {
     tool: "gore_as_compile",
     title: "gore as compile (standalone)",
     cli: "as",
-    summary: "Strict standalone full-tree AngelScript resolution with selective Add/Edit cache composition, native diagnostics, no game-launch consent, and install-write protection only for an occupied generated work tree.",
+    summary: "Strict standalone AngelScript compilation from sparse overlays or a complete tree, with selective Add/Edit cache composition, native diagnostics, no game-launch consent, and install-write protection only for an occupied generated work tree.",
     shape: GroupShape::Nested,
     commands: STANDALONE_COMPILE_COMMANDS,
 };
 
 const STANDALONE_COMPILE_MODULE_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
     "compile-module",
-    "Compile one authored AngelScript module with GORE's bundled standalone compiler. This never starts the game; a fresh workspace and ordinary build outputs need no consent, while an occupied generated work tree or outputs aimed into the installation remain protected.",
+    "Compile one authored AngelScript module with GORE's bundled standalone compiler, reading unchanged dependencies from the pristine cache without a full source-tree export. This never starts the game; a fresh workspace and ordinary build outputs need no consent, while an occupied generated work tree or outputs aimed into the installation remain protected.",
     STANDALONE_COMPILE_MODULE_ARGS,
     Safety::write()
         .also_writes(&[("work_dir", Derived::Child("tree"))])

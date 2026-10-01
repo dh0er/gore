@@ -372,7 +372,7 @@ AuthoringRevision3QuestSourceInspectionResult _inspection() {
       },
       'generated': <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 4,
+        'generator_version': 6,
         'owner': questRef,
         'module_namespace': 'GoreMods.Quests.Test',
         'module_relative_path': 'GoreMods/Quests/Test.as',

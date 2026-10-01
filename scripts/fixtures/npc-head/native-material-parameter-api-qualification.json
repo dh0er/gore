@@ -1,0 +1,397 @@
+{
+  "format": "gore-native-api-material-parameter-qualification-v1",
+  "qualified": true,
+  "scope": "Exactly two UMaterialInstanceDynamic methods; no new types, properties, templates or wildcard admission.",
+  "source_snapshot_sha256": "6b7061cfa3a36ca2e58821b629e86acd82096d9666e2900969175f5cc71c257c",
+  "previous_qualification": {
+    "path": "scripts/fixtures/npc-head/native-poseable-api-qualification.json",
+    "sha256": "de4192161854911db8ab24702991d115ca938564f5cd0109a7a760edf8bf8fdb"
+  },
+  "pristine_cache_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "pristine_cache_guid_hex": "7835bcc09c5eee488d72cb5ffb0fb0c3",
+  "pristine_tail_offset": 88127207,
+  "pristine_t4_end": 111948149,
+  "profile_file_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
+  "authority_file_sha256": {
+    "registration-trace.json": "17f374a632eadb354207aad9de7512367cad72e1c4c7a3253a3f68d9e075999c",
+    "post-bind-snapshot.json": "e355aeead72953582c31a2c1b933d08f87c4daa20f4cd55ae71db1f51713d4c5",
+    "reflected-type-graph.bin": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2"
+  },
+  "audit_script_sha256": "f82c74264a50247a10668fe001f98840383d9f04f0b820c53470fbf4aeadaa10",
+  "tail_reader_sha256": "96d35c4b297f45a8051d71d8b13d3350f686add84a1a171648c11edb76d556ec",
+  "qualification_script_sha256": "08006e8be1922dd7c09f496f88f0e503f2d568d439a9f48bad914b28d9b27a68",
+  "native_api_check_sha256": "d344095a1d7a776192afd06bf2f16409d45073d41c12717c874e329a1230a39a",
+  "datatype_flag_order": [
+    "IsReference",
+    "IsObjectConst",
+    "IsObjectHandle",
+    "IsReadOnly",
+    "IsAuto",
+    "HasIfHandleThenConst"
+  ],
+  "functions": [
+    {
+      "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:23:GetVectorParameterValue1:043:6:object1:51:01:01:01:016:0:0:5:FName1:00:,50:6:object1:51:01:01:01:024:0:0:12:FLinearColor1:00:",
+      "expected_t3": {
+        "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:23:GetVectorParameterValue1:043:6:object1:51:01:01:01:016:0:0:5:FName1:00:,50:6:object1:51:01:01:01:024:0:0:12:FLinearColor1:00:",
+        "name": "GetVectorParameterValue",
+        "owner_full_identity": "0:0:24:UMaterialInstanceDynamic1:00:",
+        "is_const": false,
+        "is_method": true,
+        "is_imported": false,
+        "type_dependencies": [
+          {
+            "full_identity": "0:0:5:FName1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+          },
+          {
+            "full_identity": "0:0:12:FLinearColor1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:024:0:0:12:FLinearColor1:00:"
+          }
+        ]
+      },
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 106602,
+        "registration_id": 106602,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58701,
+        "owner_type_id": 3680,
+        "declaration": "FLinearColor GetVectorParameterValue(FName ParameterName)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 9304,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140854380,
+        "engine_function_id": 60025
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58701,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "binds_method": {
+        "declaration": "FLinearColor GetVectorParameterValue(FName ParameterName)",
+        "unreal_path": "K2_GetVectorParameterValue",
+        "static_in_unreal": false,
+        "static_in_script": false,
+        "global_scope": false,
+        "not_angelscript_property": false,
+        "trivial": false,
+        "world_context_argument": -1,
+        "determines_output_type_argument": -1,
+        "class_name": "",
+        "script_name": ""
+      },
+      "type_dependencies": [
+        {
+          "full_identity": "0:0:24:UMaterialInstanceDynamic1:00:",
+          "pristine_t1_present": true,
+          "registration_id": 16171,
+          "trace_type_id": 3680,
+          "post_bind": {
+            "kind": "object_type",
+            "engine_type_id": 1140854380
+          },
+          "final_state": {
+            "kind": "object_type",
+            "type_id": 3680,
+            "byte_size": 0,
+            "alignment": 8,
+            "flags": 1310721,
+            "base_type_id": null,
+            "shadow_type_id": 3677,
+            "interface_type_ids": [],
+            "interface_vft_offsets": [],
+            "has_implicit_constructors": false,
+            "accepts_value_subtype": true,
+            "accepts_reference_subtype": true,
+            "is_invalid_generated_type": false
+          }
+        },
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "pristine_t1_present": true,
+          "registration_id": 28768,
+          "trace_type_id": 12959,
+          "post_bind": {
+            "kind": "object_type",
+            "engine_type_id": 67121835
+          },
+          "final_state": {
+            "kind": "object_type",
+            "type_id": 12959,
+            "byte_size": 8,
+            "alignment": 4,
+            "flags": 778,
+            "base_type_id": null,
+            "shadow_type_id": null,
+            "interface_type_ids": [],
+            "interface_vft_offsets": [],
+            "has_implicit_constructors": false,
+            "accepts_value_subtype": true,
+            "accepts_reference_subtype": true,
+            "is_invalid_generated_type": false
+          }
+        },
+        {
+          "full_identity": "0:0:12:FLinearColor1:00:",
+          "pristine_t1_present": true,
+          "registration_id": 21221,
+          "trace_type_id": 8699,
+          "post_bind": {
+            "kind": "object_type",
+            "engine_type_id": 67117575
+          },
+          "final_state": {
+            "kind": "object_type",
+            "type_id": 8699,
+            "byte_size": 16,
+            "alignment": 4,
+            "flags": 778,
+            "base_type_id": null,
+            "shadow_type_id": null,
+            "interface_type_ids": [],
+            "interface_vft_offsets": [],
+            "has_implicit_constructors": false,
+            "accepts_value_subtype": true,
+            "accepts_reference_subtype": true,
+            "is_invalid_generated_type": false
+          }
+        }
+      ],
+      "pristine_name_owner_namespace_matches": 0,
+      "origin": "independently registrar-derived; no newly compiled T3/T4 ID claimed"
+    },
+    {
+      "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:23:SetVectorParameterValue1:094:6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:01:024:0:0:12:FLinearColor1:00:,27:9:primitive2:821:01:01:01:0",
+      "expected_t3": {
+        "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:23:SetVectorParameterValue1:094:6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:01:024:0:0:12:FLinearColor1:00:,27:9:primitive2:821:01:01:01:0",
+        "name": "SetVectorParameterValue",
+        "owner_full_identity": "0:0:24:UMaterialInstanceDynamic1:00:",
+        "is_const": false,
+        "is_method": true,
+        "is_imported": false,
+        "type_dependencies": [
+          {
+            "full_identity": "0:0:5:FName1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+          },
+          {
+            "full_identity": "0:0:12:FLinearColor1:00:",
+            "token": 5,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "6:object1:51:01:01:01:024:0:0:12:FLinearColor1:00:"
+          },
+          {
+            "full_identity": null,
+            "token": 82,
+            "flags": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "datatype_identity": "9:primitive2:821:01:01:01:0"
+          }
+        ]
+      },
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 106614,
+        "registration_id": 106614,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58713,
+        "owner_type_id": 3680,
+        "declaration": "void SetVectorParameterValue(FName ParameterName,FLinearColor Value)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 9309,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140854380,
+        "engine_function_id": 60037
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58713,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "binds_method": {
+        "declaration": "void SetVectorParameterValue(FName ParameterName,FLinearColor Value)",
+        "unreal_path": "SetVectorParameterValue",
+        "static_in_unreal": false,
+        "static_in_script": false,
+        "global_scope": false,
+        "not_angelscript_property": false,
+        "trivial": false,
+        "world_context_argument": -1,
+        "determines_output_type_argument": -1,
+        "class_name": "",
+        "script_name": ""
+      },
+      "type_dependencies": [
+        {
+          "full_identity": "0:0:24:UMaterialInstanceDynamic1:00:",
+          "pristine_t1_present": true,
+          "registration_id": 16171,
+          "trace_type_id": 3680,
+          "post_bind": {
+            "kind": "object_type",
+            "engine_type_id": 1140854380
+          },
+          "final_state": {
+            "kind": "object_type",
+            "type_id": 3680,
+            "byte_size": 0,
+            "alignment": 8,
+            "flags": 1310721,
+            "base_type_id": null,
+            "shadow_type_id": 3677,
+            "interface_type_ids": [],
+            "interface_vft_offsets": [],
+            "has_implicit_constructors": false,
+            "accepts_value_subtype": true,
+            "accepts_reference_subtype": true,
+            "is_invalid_generated_type": false
+          }
+        },
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "pristine_t1_present": true,
+          "registration_id": 28768,
+          "trace_type_id": 12959,
+          "post_bind": {
+            "kind": "object_type",
+            "engine_type_id": 67121835
+          },
+          "final_state": {
+            "kind": "object_type",
+            "type_id": 12959,
+            "byte_size": 8,
+            "alignment": 4,
+            "flags": 778,
+            "base_type_id": null,
+            "shadow_type_id": null,
+            "interface_type_ids": [],
+            "interface_vft_offsets": [],
+            "has_implicit_constructors": false,
+            "accepts_value_subtype": true,
+            "accepts_reference_subtype": true,
+            "is_invalid_generated_type": false
+          }
+        },
+        {
+          "full_identity": "0:0:12:FLinearColor1:00:",
+          "pristine_t1_present": true,
+          "registration_id": 21221,
+          "trace_type_id": 8699,
+          "post_bind": {
+            "kind": "object_type",
+            "engine_type_id": 67117575
+          },
+          "final_state": {
+            "kind": "object_type",
+            "type_id": 8699,
+            "byte_size": 16,
+            "alignment": 4,
+            "flags": 778,
+            "base_type_id": null,
+            "shadow_type_id": null,
+            "interface_type_ids": [],
+            "interface_vft_offsets": [],
+            "has_implicit_constructors": false,
+            "accepts_value_subtype": true,
+            "accepts_reference_subtype": true,
+            "is_invalid_generated_type": false
+          }
+        }
+      ],
+      "pristine_name_owner_namespace_matches": 0,
+      "origin": "independently registrar-derived; no newly compiled T3/T4 ID claimed"
+    }
+  ],
+  "already_pristine": [
+    {
+      "name": "CreateDynamicMaterialInstance",
+      "namespace": "",
+      "owner_full_identity": "0:0:19:UPrimitiveComponent1:00:"
+    },
+    {
+      "name": "GetVectorParameterValue",
+      "namespace": "Material",
+      "owner_full_identity": ""
+    },
+    {
+      "name": "SetVectorParameterValue",
+      "namespace": "Material",
+      "owner_full_identity": ""
+    }
+  ],
+  "proof_limit": "Exact native declaration and binding qualification only. Generated cache T3/T4 membership and visible tint remain separate checks."
+}

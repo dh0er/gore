@@ -91,7 +91,77 @@ How much of the decompiled tree is proven identical to the shipping cache — an
 numbers come from the whole corpus rather than a sample — is written down in the repository, in
 `crates/gore-as/DECOMPILER_STATUS.md`.
 
+## Engine callbacks in new classes
+
+To override a native Blueprint event in a new script class, use
+`UFUNCTION(BlueprintOverride)` and the unsuffixed event name. For example:
+
+```angelscript
+class UAIState_MyWalk : UGothicCharacterSimulateableAIState
+{
+    UFUNCTION(BlueprintOverride)
+    void DoTask()
+    {
+        ::GotoPreferredLocation(this.AI);
+    }
+}
+```
+
+Likewise, a graceful-exit handler is `UFUNCTION(BlueprintOverride)` followed by
+`void OnGracefulExitRequested()`. The compiler adds `_Implementation` to the
+script method and records its binding to the native event. This rule concerns
+overridden native events; ordinary helpers and delegate/timer callbacks do not
+become Blueprint overrides just because another object calls them.
+
+The emitter prints bare `UFUNCTION()` and suffixed implementation names for
+these methods; it does not reproduce every reflection flag. Editing an existing
+shipping declaration restores its original metadata, but a newly authored class
+has no shipping metadata to restore. Copying the emitted form into a new class
+can therefore compile and install successfully while its callback never runs.
+Comparing emitted source before and after installation cannot detect that loss.
+
+This occurred in the NPC activity fixture: both `DoTask` and the graceful-exit
+handler were ordinary callable methods, so the new state never reached its
+navigation/action body. See the
+[failure and correction](../../scripts/fixtures/npc-appearance-routine/RESULTS.md).
+Correct native event names and override/event flags are verified in the binary
+cache separately from the subsequent user-run gameplay test.
+
 ## Recompiling: standalone first, game fallback
+
+The MCP server automatically includes a read-only compiler readiness snapshot
+in its initialization instructions. It checks the configured or auto-detected
+game before the first tool call and does not launch or modify the game. For a
+different game or changed inputs, run Doctor again.
+
+Before exporting a tree or starting script authoring, run `gore doctor`. Its
+`standalone_compiler` check must be `ok` for the offline compiler route. Doctor
+returns exit code 0 when it produced a report, including reports with problems;
+automation must inspect the verdicts in `gore doctor --json`.
+
+An `ok` verdict establishes authenticated compiler and target cache/API
+readiness, including `native_api: ready` for the sealed extended native
+declarations. A compatible compiler with missing native authority is a
+`problem`: sources may compile while selective or Manager composition refuses
+them. Doctor and MCP startup check both using the authenticated input bytes.
+This does not compile the requested sources or prove that every
+reconstructed native call binds. Workspace checks, successful compilation,
+bundle inspection and observed gameplay are separate evidence. Unchanged
+shipped source can still expose a toolkit/compiler defect after readiness passes.
+
+Doctor reports the running CLI path and the deployment-aware pristine cache
+path/hash. Use that original for exports and `--expect-base-sha256`. With a
+script mod installed, exporting the live modified cache would include that
+mod and disagree with the original that the compiler selects.
+
+An **absent embedded compiler catalog** means the host `gore.exe` was built
+without its product catalog. It does not mean the compiler beside it is too
+old. Reinstall the complete matching CLI package, or build it using
+`python build.py gore-cli dist`. A plain `cargo build -p gore` without a catalog is refused. Only an explicitly
+selected debug `development-cli` build may omit it; that binary is labelled
+`development-unbundled` and must not be installed as the product CLI. Copy the
+contents of the generated package together, including `compiler/`, and restart
+MCP after replacing the CLI. Do not downgrade the CLI to bypass this error.
 
 GORE ships its standalone compiler as an internal part of GORE CLI and Mod
 Studio. The normal product commands authenticate the sidecar and profile, then
@@ -124,66 +194,130 @@ source binding runs before their original traits are restored. Those are
 compiler-resolution fixes; they do not by themselves prove deployment or game
 runtime behavior.
 
-The default policy is `standalone-then-game`: GORE tries the qualified
-standalone compiler first. If the package is absent, the selected game's cache
-format or API is incompatible, or the standalone result is rejected, the reason is retained and
-shown before GORE uses the game's embedded compiler as a fallback. That fallback
-launches the shipping executable with **`-as-generate-precompiled-data`** and
-temporarily stages loose `.as` files under `<install>\G1R\Script\`.
+`gore as compile` resolves coordinated Add/Edit sources together, so visible
+references between changed modules can bind in one compiler run. The native
+standalone backend compiles only those sources and reads unchanged dependencies
+from the sealed original cache. Choose the input shape explicitly:
 
-`gore as compile` takes one complete source tree and resolves all authored
-modules together, so visible references between changed modules can bind in one
-compiler run. The compiler's raw whole-tree regeneration is only intermediate
-dependency evidence: GORE never publishes those raw bytes. Instead it starts
-from the exact target cache and selectively composes only source-classified
-Add/Edit modules. Every untouched module and every pre-existing global-tail
-record remain pristine; only records required by new symbols are appended to
-the separately published complete cache. The command never installs that output
-implicitly.
+### Compile only authored modules
 
-Start from a current `emit-all` tree. A byte-identical emitted file is base;
-changing or adding a file requests Edit or Add. Omitting a base file requests
-Delete, which currently fails closed because GORE cannot yet prove safe tail
-pruning and absence of retained references. A dependency chain such as a new
-provider module followed by an edited consumer can be composed in order;
-cyclic dependencies among new modules remain unsupported and fail closed.
+For a mod changing several modules, put **only the new or edited modules** in a
+source directory and use `--overlays --backend standalone`. No `emit-all` export
+or full-tree baseline emission is needed. Each file is the complete source of
+one module, not a fragment to append to its original. Keep its canonical
+Script-relative path, for example:
+
+```text
+authored/
+  MyMod/Provider.as
+  Story/G1R/Conversation/Conversation_OC_STT_DIEGO.as
+```
+
+An existing path requests Edit; a new canonical module/path requests Add. Every
+supplied `.as` file is an explicit change, even if its bytes equal an original
+export. Leave unrelated files out. Sparse input accepts **1–256 modules**;
+more than 256 supplied `.as` files are rejected during discovery, before
+compilation. Original modules absent from `authored/` stay in the base cache;
+absence never requests Delete in this mode. Overlay compilation does not
+support deleting a module or bypass module-private symbols.
 
 ```powershell
-# dump the vanilla modules as an editable tree
-gore as emit-all "$GAME\G1R\Script\PrecompiledScript_Shipping.Cache" out_as
-# …edit modules in out_as…
-
-# resolve the full graph and publish a selectively composed no-clobber cache
-New-Item -ItemType Directory -Force .gore-as-work | Out-Null
-gore as compile out_as -o regen.Cache --work-dir .gore-as-work --game "$GAME"
+# Author complete new/edited modules under authored/ at their Script-relative paths.
+New-Item -ItemType Directory -Force .gore-as-work, out | Out-Null
+gore as compile authored --overlays --backend standalone `
+  -o out/full.Cache --mini out/MyMod.mini.Cache `
+  --work-dir .gore-as-work --game "$GAME"
 ```
+
+Use `--expect-base-sha256 <hash-from-doctor>` to bind the build to the original
+cache you authored against. Optionally repeat
+`--only-change add:MyMod.Provider:MyMod/Provider.as` and
+`--only-change edit:Story.G1R.Conversation.Conversation_OC_STT_DIEGO:Story/G1R/Conversation/Conversation_OC_STT_DIEGO.as`
+to require exactly that change set. Append `:SHA256` to each entry to bind its
+source bytes, too. `--only-change` is a **scope check**, not a file filter or a
+performance switch: it rejects unexpected, missing or differently hashed
+changes. `--overlays` is what avoids exporting and comparing the full tree.
+
+Overlay compilation requires explicit `--backend standalone`. `game`,
+`standalone-then-game`, and an omitted backend are rejected before source
+planning; there is no game fallback for sparse inputs. The installed pristine
+cache and matching Binds API still have to pass normal compatibility checks.
+
+Both input modes publish the same selective full cache and optional
+multi-module mini-cache. Untouched modules and every pre-existing global-tail
+record remain pristine; only records required by new symbols are appended.
+The full cache is never installed implicitly. For a bundle, use the `--mini`
+output as described in [Multi-module mini-caches](#multi-module-mini-caches).
+New modules can depend on each other in an acyclic chain; cycles among new
+modules remain unsupported and fail closed.
 
 The install is resolved from `--game`, else the configured game path, else
-Steam auto-detect. The source tree, output, and workspace are required. The
-output must be outside the game installation and outside the workspace; it is
-published without overwriting an existing file.
+Steam auto-detect. Source directory, output and existing workspace are required.
+The output must be outside the game installation and the workspace; its parent
+and the workspace must be disjoint (neither contains the other). Keep source,
+work and output in separate sibling directories as above. Outputs are published
+without overwriting existing files.
 
-Choose the policy explicitly when needed:
+Through MCP, call `gore_as_compile` with `overlays: true` and these paths as
+top-level arguments; the tool selects strict standalone itself. For example:
 
-```powershell
-# Never launch or modify the game; fail if no compatible standalone package is available.
-gore as compile out_as -o regen.Cache --work-dir .gore-as-work `
-  --backend standalone --game "$GAME"
-
-# Deliberately use only the game's embedded compiler.
-gore as compile out_as -o regen.Cache --work-dir .gore-as-work `
-  --backend game --game "$GAME"
+```json
+{
+  "src": "authored",
+  "overlays": true,
+  "out": "out/full.Cache",
+  "mini": "out/MyMod.mini.Cache",
+  "work_dir": ".gore-as-work"
+}
 ```
 
-`--backend standalone-then-game` is the default. `standalone` and `game` never
-fall back silently.
+The mixed `gore_as` equivalent uses `subcommand: "compile"` and an `args` object
+containing those values plus `backend: "standalone"`. Prefer the dedicated tool
+for ordinary authoring. A fresh workspace and ordinary outputs outside the
+installation need no consent; existing generated work trees retain their write
+protection. `gore_as_compile_module` remains the dedicated one-module tool.
 
-Through the GORE MCP plugin, use `gore_as_compile` or
-`gore_as_compile_module` for normal authoring. Those dedicated tools force the
-strict standalone backend and run without a consent question because they
-cannot launch the game or touch the installation. The mixed `gore_as` routes
-remain available only for a deliberately selected game-capable backend and
-correctly ask before a call that may use the game compiler.
+### Compile a complete source tree
+
+Without `--overlays`, the original complete-tree contract remains unchanged.
+Start from a current `emit-all` tree. Planning re-emits the original modules and
+compares their exact source bytes: an unchanged file stays Base, a modified file
+requests Edit, and a new file requests Add. Missing base files request Delete
+and fail closed because safe tail pruning and retained-reference proof are not
+available. `--only-change` checks the resulting change set after that scan; it
+does not accelerate it. Reusing an export saves the initial export, not the
+repeated baseline comparison.
+
+```powershell
+# Use the pristine cache path reported by Doctor (possibly the owned .gore-bak).
+$BASE = '<pristine cache path from gore doctor>'
+gore as emit-all "$BASE" out_as
+# …edit modules in out_as…
+New-Item -ItemType Directory -Force .gore-as-work, out | Out-Null
+gore as compile out_as -o out/full.Cache --work-dir .gore-as-work `
+  --backend standalone --game "$GAME"
+```
+
+Keep the emitter and compiler versions matched for this route. An emitter
+correction can change the spelling of an untouched call, so an old export may
+be classified as thousands of edits. Retain your authored files separately;
+refresh only exports proved untouched against the same pristine cache.
+
+A timed-out MCP export may still be running. Establish whether its child process
+stopped before retrying; do not rename or reuse a destination an active export
+is still writing.
+
+Complete trees also support `--backend game` or `--backend standalone-then-game`
+(the default when the backend is omitted). The latter tries standalone first and
+reports its failure before falling back to the game's embedded compiler. A
+game-backed run launches the shipping executable with
+**`-as-generate-precompiled-data`** and temporarily stages loose `.as` files under
+`<install>\G1R\Script\`. Its raw whole-tree regeneration is intermediate
+dependency evidence and is never the published cache; publication still
+selectively composes only the authored Add/Edit modules. Through MCP these
+game-capable policies require the mixed `gore_as` route and the corresponding
+launch and installation-write consent. `standalone` and `game` never fall back
+silently.
 
 ### Safety rules around compilation
 
@@ -233,6 +367,17 @@ the vanilla cache) or `--expect-base-sha256 <HEX>`. Both refuse the compile
 when the selected original differs and print both hashes; neither picks the
 base. The deployment-aware selection stays the only source of truth.
 
+Use that same original for creating, checking and staging related workspaces.
+Pass Doctor's pristine path through `--cache` where supported; compare every
+workspace manifest's `cache_sha256` with Doctor before combining overlays.
+An inspection of the live deployed cache describes the installed modded state
+and may have a different hash. If a workspace used the wrong base, preserve it,
+create a fresh workspace against the original, carry over only intentional
+source edits and check again. Do not rewrite manifest hashes, reset the loadout
+or select a `.gore-bak` by filename to silence the mismatch. If staging still
+requires the live hash while Doctor and the workspace agree on the pristine
+hash, report the conflicting paths/hashes as a toolkit inconsistency.
+
 ### Compiler diagnostics
 
 Strict `standalone` returns the bundled compiler's native diagnostics with the
@@ -240,6 +385,17 @@ source file, line, column, severity, and message. On the normal fresh-workspace,
 outside-install route, diagnostics require no game launch and no consent question.
 Existing-path and inside-install write protections still apply. The optional runtime diagnostics
 hook belongs only to the game backend; strict standalone compilation never loads it.
+
+For a failure in unchanged reconstructed source, keep the exact diagnostic,
+CLI version/path, pristine cache hash and authored module paths. For dialog/quest
+work, strictly compile the minimal checkout plus scaffolded topic before adding
+quest/content helpers. Compare failing lines with the original source; preserve
+emitted shipped calls and defaults. After readiness passes, swapping in an older
+EXE, rewriting emitter output or guessing default parameters can conceal a
+compiler/emitter defect. Keep the failure unresolved until the affected sources
+compile successfully. Sparse overlays
+have no game fallback; any deliberate complete-tree game compile still needs
+game-launch and installation-write authority.
 
 When a game-capable backend runs on Windows, compile automatically attempts an
 embedded, temporary x86-64 diagnostics hook. The selected AMD64 executable must
@@ -283,13 +439,12 @@ a whole-file executable checksum.
 
 ## The normal authoring workflow: one module
 
-Do not ship a whole regenerated cache. Compile one authored module and splice
-it into the vanilla cache. The high-level command performs the entire
-emit → overlay → compile → extract → remap chain and returns a deployable
-mini-cache:
+For a change confined to one module, `compile-module` returns a deployable
+mini-cache. Strict standalone reads unchanged dependencies from the original
+cache and needs no full source-tree export:
 
 ```powershell
-gore as compile-module --op add --module MyMod.Dialog `
+gore as compile-module --backend standalone --op add --module MyMod.Dialog `
   --rel-path MyMod/Dialog.as --source Dialog.as --work-dir .gore-as-work `
   --allow-new-symbols -o MyMod.Dialog.mini.Cache --game "$GAME"
 ```
@@ -300,10 +455,73 @@ gore as compile-module --op add --module MyMod.Dialog `
 | `--module <NAME>` | Expected module name. For `add`, the compiler-detected name is reported and used. |
 | `--rel-path <PATH>` | Safe path of the authored file relative to the game's `Script\` tree. |
 | `--source <FILE>` | The authored `.as` file to overlay. |
-| `--work-dir <DIR>` | Existing workspace outside the game installation (emitted tree + intermediate cache). |
+| `--work-dir <DIR>` | Existing workspace outside the game installation for intermediate artifacts; only the game backend emits a full source tree. |
 | `--allow-new-symbols` | Retain minimal rows for classes/functions/names absent from the pristine cache. |
 | `-o, --out <PATH>` | The remapped 1-module mini-cache. |
 | `--expect-base <CACHE>` / `--expect-base-sha256 <HEX>` | Refuse to compile unless the selected original is this file's bytes / has this SHA-256. Neither selects the base; both exist on `compile` as well. |
+
+New native references also need verified engine declarations. GORE includes
+sealed qualification of the mesh/material APIs used by the
+[NPC head probe](../../scripts/fixtures/npc-head/README.md). This is reusable
+technical API evidence: it admits exact native declarations, independently of
+the chosen head, clothing, NPC or combination. Compilation, selective FullGraph
+composition and Manager composition use the same authority. Complete type and
+function identities, datatype flags and native property offsets remain exact;
+unknown signatures and unqualified template specializations still fail closed.
+
+Snapshot selection starts from the exact supported generation row for the
+pristine cache's hash and GUID. A supported target generation reuses an
+authenticated snapshot when its row and the snapshot's source row share exact
+Binds bytes, native ancestry, class and field profiles. Build 25414091 can
+therefore reuse the existing authenticated evidence; a changed cache hash or
+GUID does not require duplicate snapshots or qualification of each asset choice.
+Unknown generations or changed API/layout evidence still require qualification.
+The reused snapshot retains its original source provenance; emitted mini-caches
+are bound to the current target GUID, so recompile after a game update.
+
+The original [qualification record](../../scripts/fixtures/npc-head/native-api-qualification.json)
+identifies the audited compiler-profile, registration and Binds evidence.
+The [poseable API record](../../scripts/fixtures/npc-head/native-poseable-api-qualification.json)
+and [material API extension](../../scripts/fixtures/npc-batch-tests/heads/fresh-mid-native-api-qualification.json)
+record later additions; the [hotfix record](../../scripts/fixtures/npc-batch-tests/quest/native-api-25168047-qualification.json)
+records the 25168047 snapshot's provenance. These establish declaration and
+binding evidence. Visual quality, animation, restoration and persistence still
+need an observed game test of the authored mod.
+
+### Probe head APIs before assembling the mod
+
+After Doctor passes, compile a minimal probe against its pristine cache before
+adding the NPC, dialog and quest content. Put only the required native types,
+calls and property accesses in a small source. For a poseable head, this starting
+probe at `head-probe/MyMod/HeadApiProbe.as` exercises the type, factory and
+pose-copy/reset references; add any other native APIs the intended head path uses:
+
+```angelscript
+void GoreHeadApiProbe(AActor Owner, USkeletalMeshComponent Body)
+{
+    UPoseableMeshComponent Head =
+        UPoseableMeshComponent::GetOrCreate(Owner, n"GoreHeadApiProbe");
+    Head.CopyPoseFromSkeletalComponent(Body);
+    Head.ResetBoneTransformByName(n"head");
+}
+```
+
+Use the overlay route to exercise selective composition as well as compilation,
+with fresh work and output paths outside the installation:
+
+```powershell
+New-Item -ItemType Directory -Force .gore-as-head-probe, out | Out-Null
+gore as compile head-probe --overlays --backend standalone `
+  --expect-base-sha256 <hash-from-doctor> --game "$GAME" `
+  --work-dir .gore-as-head-probe -o out/head-probe.Cache `
+  --mini out/head-probe.mini.Cache
+```
+
+A compiler success followed by a native declaration-membership refusal is a
+composition/qualification failure. Preserve the exact target hash/GUID and
+missing identity. On a known compatible generation, resolve snapshot selection
+or update the matching toolkit package; do not use `--force` to bypass it.
+Probe success establishes offline reference admission, not head-swap gameplay.
 
 The high-level `dialog new-topic` scaffold uses the same compiler command in a
 more specific shape. A new root or direct sub-topic is appended to the
@@ -395,10 +613,11 @@ catalog identity. Normal users should not set the development overrides.
 A mini-cache may carry more than one module. When a mod spans several
 modules — a new provider module plus an edited shipped module that calls it —
 compile them together and let `gore as compile` publish the mini next to the
-complete cache:
+complete cache. Put only their complete sources in `authored/` at canonical
+Script-relative paths; no full export is needed:
 
 ```powershell
-gore as compile out_as -o full.Cache --mini MyMod.mini.Cache `
+gore as compile authored --overlays -o out/full.Cache --mini out/MyMod.mini.Cache `
   --work-dir .gore-as-work --backend standalone --game "$GAME"
 ```
 
@@ -472,7 +691,14 @@ dependency against the effective base-plus-mini tables before it creates a game
 backup, deploy record, or mutation lock. A mini built for an older game cache is
 therefore refused rather than spliced. After a game update, compile or remap the
 module again against the new pristine `PrecompiledScript_Shipping.Cache`; do not
-reuse the previous mini-cache or copy its old GUID.
+reuse the previous mini-cache or copy its old GUID. Supported equivalent
+generations reuse the authenticated native API evidence described above while
+still targeting the new cache. A membership refusal on a known compatible
+generation needs a toolkit correction, not `--force`, even if a generic error
+hint suggests it. If the generation is genuinely unqualified, the error says
+whether the global `--force` flag can override that check. A forced result may
+be broken; see
+[game updates](../reference/game-updates.md#forcing-compile-and-decompile-before-qualification).
 
 These checks depend only on the cache contents, never on where the mod came
 from. A GORE bundle, a community download, and a manually prepared package all
@@ -498,8 +724,8 @@ now preserves that distinction, reuses matching names, and fails closed if a
 prepared operand has no row. Do not rewrite those numeric operands by hand; the
 wire-level contract is in [`gore-as/FORMAT.md`](../../crates/gore-as/FORMAT.md#staticnames-indices-in-raw-and-prepared-minis).
 
-The separate low-level `dialog_topics` registration-adapter composition has one
-older live observation. On 2026-08-18 the GORE-authored Viper fixture rendered
+The retired `dialog_topics` registration adapter has one older live observation.
+`gore mod build` now refuses that section. On 2026-08-18 the GORE-authored Viper fixture rendered
 `[Gore probe] UI fixture`; `UE4SS.log`
 recorded `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with `exact_count=1`. The run
 used the PR #91-fixed app-local Core DLL. It was not a genuine third-party

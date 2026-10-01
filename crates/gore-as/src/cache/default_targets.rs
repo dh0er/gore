@@ -7,7 +7,7 @@
 //! and arguments may change and new targets/classes may be appended; an existing target may not
 //! silently disappear.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::disasm::{disassemble, Instr};
 use super::model;
@@ -15,6 +15,7 @@ use super::refs::RefResolver;
 
 const MAX_AUTHORED_DEFAULTS: usize = 250_000;
 const MAX_CALL_RECEIVER_INSTRUCTIONS: usize = 32;
+const MAX_FLUENT_CHAIN: usize = 64;
 
 type TargetCounts = BTreeMap<String, usize>;
 type ClassTargets = BTreeMap<ClassIdentity, TargetCounts>;
@@ -134,13 +135,14 @@ fn raw_module_targets(cache: &[u8], module_name: &str) -> Result<ClassTargets, S
             namespace: class.namespace.clone(),
             name: class.name.clone(),
         };
-        let targets = bytecode_targets(&initializer.bytecode, &refs).map_err(|reason| {
-            format!(
-                "inventorying {}::{}::__InitDefaults: {reason}",
-                module_name,
-                identity.display()
-            )
-        })?;
+        let targets = bytecode_targets(&initializer.bytecode, initializer.variable_space, &refs)
+            .map_err(|reason| {
+                format!(
+                    "inventorying {}::{}::__InitDefaults: {reason}",
+                    module_name,
+                    identity.display()
+                )
+            })?;
         if classes.insert(identity.clone(), targets).is_some() {
             return Err(format!(
                 "default-target proof found duplicate class identity {}",
@@ -151,18 +153,35 @@ fn raw_module_targets(cache: &[u8], module_name: &str) -> Result<ClassTargets, S
     Ok(classes)
 }
 
-fn bytecode_targets(bytecode: &[i32], refs: &RefResolver) -> Result<TargetCounts, String> {
+fn bytecode_targets(
+    bytecode: &[i32],
+    variable_space: i32,
+    refs: &RefResolver,
+) -> Result<TargetCounts, String> {
     let instructions = disassemble(bytecode).map_err(|error| error.to_string())?;
+    let refcpy_entries = refcpy_branch_entries(&instructions)?;
+    let fluent_entries = branch_entries(&instructions).ok();
     let mut targets = BTreeMap::new();
     for (index, instruction) in instructions.iter().enumerate() {
+        if matches!(instruction.op.name, "STOREOBJ" | "CpyRtoV8") {
+            prove_local_store(instruction, variable_space)?;
+            continue;
+        }
         if is_unclassified_store(instruction) {
             return Err(format!(
                 "unsupported store opcode {} at dword {}; default-target coverage is unproven",
                 instruction.op.name, instruction.offset_dw
             ));
         }
-        if instruction.op.name.starts_with("WRTV") {
-            let member = store_member_operand(&instructions, index).ok_or_else(|| {
+        if instruction.op.name.starts_with("WRTV") || instruction.op.name == "REFCPY" {
+            // REFCPY writes through the address on the stack, not the value register.
+            // In particular, LoadThisR and PopRPtr cannot prove its destination.
+            let member = if instruction.op.name == "REFCPY" {
+                refcpy_member_operand(&instructions, index, &refcpy_entries)
+            } else {
+                store_member_operand(&instructions, index)
+            }
+            .ok_or_else(|| {
                 format!(
                     "cannot prove member target for {} at dword {}",
                     instruction.op.name, instruction.offset_dw
@@ -180,6 +199,7 @@ fn bytecode_targets(bytecode: &[i32], refs: &RefResolver) -> Result<TargetCounts
         if !is_call(instruction)
             || is_argument_constructor(&instructions, index)
             || is_value_call(&instructions, index)
+            || is_hidden_return_value_call(&instructions, index, refs)
         {
             continue;
         }
@@ -202,6 +222,13 @@ fn bytecode_targets(bytecode: &[i32], refs: &RefResolver) -> Result<TargetCounts
             }
             Err(()) if is_compiler_internal(&symbol) => continue,
             Err(()) => {
+                if let Some(target) = fluent_entries
+                    .as_ref()
+                    .and_then(|entries| fluent_root_target(&instructions, index, refs, entries))
+                {
+                    increment(&mut targets, target)?;
+                    continue;
+                }
                 return Err(format!(
                     "cannot prove receiver target for method call {symbol} at dword {}",
                     instruction.offset_dw
@@ -230,10 +257,17 @@ fn store_member_operand(instructions: &[Instr], index: usize) -> Option<&Instr> 
     if before.op.name == "LoadThisR" {
         return Some(before);
     }
-    let mut at = index.checked_sub(1)?;
-    if instructions.get(at)?.op.name == "PopRPtr" {
-        at = at.checked_sub(1)?;
+    let mut end = index;
+    if before.op.name == "PopRPtr" {
+        end = end.checked_sub(1)?;
     }
+    stack_member_operand(instructions, end)
+}
+
+/// The top stack address must be a contiguous member chain rooted in `this`.
+/// A pointer loaded from a local is not a local address and may alias any object.
+fn stack_member_operand(instructions: &[Instr], end: usize) -> Option<&Instr> {
+    let mut at = end.checked_sub(1)?;
     let mut root = None;
     while instructions.get(at)?.op.name == "ADDSi" {
         root = instructions.get(at);
@@ -243,32 +277,147 @@ fn store_member_operand(instructions: &[Instr], index: usize) -> Option<&Instr> 
         .then_some(root?)
 }
 
+/// A lexical REFCPY suffix is evidence only if no jump bypasses its `this` push.
+/// This needs entry offsets, not a general control-flow or alias analysis.
+fn refcpy_branch_entries(instructions: &[Instr]) -> Result<BTreeSet<i64>, String> {
+    if !instructions.iter().any(|ins| ins.op.name == "REFCPY") {
+        return Ok(BTreeSet::new());
+    }
+    branch_entries(instructions).map_err(|error| match error {
+        BranchEntryError::MissingOperand => "missing REFCPY proof branch operand".to_owned(),
+        BranchEntryError::ComputedJump => {
+            "cannot prove REFCPY member targets across a computed jump".to_owned()
+        }
+    })
+}
+
+enum BranchEntryError {
+    MissingOperand,
+    ComputedJump,
+}
+
+fn branch_entries(instructions: &[Instr]) -> Result<BTreeSet<i64>, BranchEntryError> {
+    let mut entries = BTreeSet::new();
+    for ins in instructions {
+        match ins.op.name {
+            "JMP" | "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ" => {
+                let offset = ins
+                    .dwords
+                    .first()
+                    .ok_or(BranchEntryError::MissingOperand)?;
+                entries.insert(ins.offset_dw as i64 + 2 + (*offset as i32 as i64));
+            }
+            "JMPP" => return Err(BranchEntryError::ComputedJump),
+            _ => {}
+        }
+    }
+    Ok(entries)
+}
+
+/// A fluent link hands one call's object result directly to the next call as its receiver:
+/// `STOREOBJ wN; PshVPtr wN` or `PshRPtr`, with no branch entering between producer and call.
+/// The whole chain then targets whatever its first call targets, which is also the root the
+/// authored `default` statement names. Any other receiver shape stays unproven.
+fn fluent_root_target(
+    instructions: &[Instr],
+    index: usize,
+    refs: &RefResolver,
+    entries: &BTreeSet<i64>,
+) -> Option<String> {
+    let mut at = index;
+    for _ in 0..MAX_FLUENT_CHAIN {
+        let producer = fluent_producer(instructions, at, entries)?;
+        let is_method = is_method_call(&instructions[producer], refs);
+        if !is_method {
+            return None;
+        }
+        match proven_call_member_receiver(instructions, producer, true) {
+            Ok(Some(member)) => return resolve_member(member, refs),
+            Ok(None) => {
+                return call_symbol(&instructions[producer], refs)
+                    .filter(|symbol| !is_compiler_internal(symbol))
+            }
+            Err(()) => at = producer,
+        }
+    }
+    None
+}
+
+fn fluent_producer(
+    instructions: &[Instr],
+    index: usize,
+    entries: &BTreeSet<i64>,
+) -> Option<usize> {
+    let receiver = index.checked_sub(1)?;
+    let push = instructions.get(receiver)?;
+    let producer = match push.op.name {
+        "PshRPtr" => receiver.checked_sub(1)?,
+        "PshVPtr" => {
+            let slot = push.words.first().filter(|slot| **slot != 0)?;
+            let store = instructions.get(receiver.checked_sub(1)?)?;
+            if store.op.name != "STOREOBJ" || store.words.first() != Some(slot) {
+                return None;
+            }
+            receiver.checked_sub(2)?
+        }
+        _ => return None,
+    };
+    let first = instructions.get(producer + 1)?.offset_dw as i64;
+    let finish = instructions.get(index)?.offset_dw as i64;
+    (is_call(instructions.get(producer)?) && entries.range(first..=finish).next().is_none())
+        .then_some(producer)
+}
+
+fn refcpy_member_operand<'a>(
+    instructions: &'a [Instr],
+    index: usize,
+    entries: &BTreeSet<i64>,
+) -> Option<&'a Instr> {
+    let member = stack_member_operand(instructions, index)?;
+    let finish = instructions.get(index)?.offset_dw as i64;
+    entries
+        .range(member.offset_dw as i64..=finish)
+        .next()
+        .is_none()
+        .then_some(member)
+}
+
 enum CallReceiver<'a> {
     DirectThis,
     Member(&'a Instr),
     Unproven,
 }
 
-/// Prove only a direct receiver rooted in `this`. `CHKREF` may decorate a nested member chain,
-/// but a receiver produced through locals, globals, or another call stays unproven so a fluent
+/// Prove only a direct receiver rooted in `this`. `CHKREF` may decorate a nested member chain and
+/// `RDSPtr` may follow a handle member into its object; the outermost `this` member stays the
+/// root. A receiver produced through locals, globals, or another call stays unproven so a fluent
 /// expression can never be mistaken for a free call target.
 fn call_receiver(instructions: &[Instr], index: usize) -> CallReceiver<'_> {
     let floor = index.saturating_sub(MAX_CALL_RECEIVER_INSTRUCTIONS);
     let mut at = index;
     let mut root = None;
+    let mut dereferenced = false;
+    let mut next: Option<&Instr> = None;
     while at > floor {
         at -= 1;
         let Some(instruction) = instructions.get(at) else {
             return CallReceiver::Unproven;
         };
         match instruction.op.name {
-            "CHKREF" => {}
+            // A null check may sit between `this` and its member. It is not the
+            // instruction the handle-adjacency rule has to see.
+            "CHKREF" => continue,
+            "RDSPtr" => dereferenced = true,
             "ADDSi" => root = Some(instruction),
             "PshVPtr" if instruction.words.first() == Some(&0) => {
+                if dereferenced && next.map(|next| next.op.name) != Some("ADDSi") {
+                    return CallReceiver::Unproven;
+                }
                 return root.map_or(CallReceiver::DirectThis, CallReceiver::Member);
             }
             _ => return CallReceiver::Unproven,
         }
+        next = Some(instruction);
     }
     CallReceiver::Unproven
 }
@@ -305,8 +454,35 @@ fn is_method_call(instruction: &Instr, refs: &RefResolver) -> bool {
 fn is_unclassified_store(instruction: &Instr) -> bool {
     matches!(
         instruction.op.name,
-        "STOREOBJ" | "REFCPY" | "CpyVtoV4" | "CpyVtoV8" | "CpyRtoV4" | "CpyRtoV8" | "CpyGtoV4"
+        "CpyVtoV4" | "CpyVtoV8" | "CpyRtoV4" | "CpyGtoV4"
     )
+}
+
+/// Vendored as_context.cpp executes STOREOBJ as a direct pointer-sized write of
+/// objectRegister to `frame - signed_slot`; it never dereferences that cell.
+/// CpyRtoV8 independently writes the 64-bit valueRegister to the same frame address.
+/// On Win64 both occupy two dwords. The entire write must lie in VariableSpace,
+/// below `this` at slot zero: slot 1 would overlap `this`, and negative slots are
+/// arguments. The old contents of a local (even an alias) cannot redirect either write.
+fn prove_local_store(instruction: &Instr, variable_space: i32) -> Result<(), String> {
+    let width = match instruction.op.name {
+        "STOREOBJ" => model::AS_PTR_SIZE,
+        "CpyRtoV8" => 2,
+        _ => return Err("opcode has no proven local-store semantics".to_owned()),
+    };
+    let slot = match instruction.words.as_slice() {
+        [word] => Some(*word as i16 as i32),
+        _ => None,
+    };
+    if slot.is_some_and(|slot| slot >= width && slot <= variable_space) {
+        Ok(())
+    } else {
+        Err(format!(
+            "cannot prove local destination for {} at dword {}: signed slot {:?}, \
+             width {width}, VariableSpace {variable_space}; default-target coverage is unproven",
+            instruction.op.name, instruction.offset_dw, slot
+        ))
+    }
 }
 
 fn resolve_member(instruction: &Instr, refs: &RefResolver) -> Option<String> {
@@ -361,13 +537,119 @@ fn is_argument_constructor(instructions: &[Instr], index: usize) -> bool {
         && before.words.first() == after.words.first()
 }
 
+/// A method returning a value struct writes through a hidden destination pushed directly below
+/// its receiver: `PSF wN; <this chain>; CALL`. It only produces a value when that slot is pushed
+/// again right after the call and consumed as an argument by the next call, whose own receiver
+/// is rooted in `this`. A consumer that itself returns a value struct could be reusing `wN` as its
+/// destination, so it proves nothing.
+fn is_hidden_return_value_call(instructions: &[Instr], index: usize, refs: &RefResolver) -> bool {
+    let (Some(call), Some(start)) = (
+        instructions.get(index),
+        this_receiver_start(instructions, index),
+    ) else {
+        return false;
+    };
+    if !is_method_call(call, refs) || !returns_value_struct(call, refs) {
+        return false;
+    }
+    let Some(slot) = start
+        .checked_sub(1)
+        .and_then(|at| instructions.get(at))
+        .filter(|push| push.op.name == "PSF")
+        .and_then(|push| push.words.first().copied())
+        .filter(|slot| *slot != 0)
+    else {
+        return false;
+    };
+    let Some(read) = instructions.get(index + 1) else {
+        return false;
+    };
+    if read.op.name != "PSF" || read.words.first() != Some(&slot) {
+        return false;
+    }
+    let Some(consumer) = (index + 2..instructions.len())
+        .take(MAX_CALL_RECEIVER_INSTRUCTIONS)
+        .find(|at| is_call(&instructions[*at]))
+    else {
+        return false;
+    };
+    let consumer_call = &instructions[consumer];
+    this_receiver_start(instructions, consumer) == Some(index + 2)
+        && is_method_call(consumer_call, refs)
+        && call_params(consumer_call, refs).is_some_and(|params| !params.is_empty())
+        && !returns_value_struct(consumer_call, refs)
+}
+
+/// Index of the `PshVPtr w0` that starts a call's `this`-rooted receiver chain.
+fn this_receiver_start(instructions: &[Instr], index: usize) -> Option<usize> {
+    if matches!(call_receiver(instructions, index), CallReceiver::Unproven) {
+        return None;
+    }
+    (index.saturating_sub(MAX_CALL_RECEIVER_INSTRUCTIONS)..index)
+        .rev()
+        .find(|at| {
+            let push = &instructions[*at];
+            push.op.name == "PshVPtr" && push.words.first() == Some(&0)
+        })
+}
+
+fn call_params<'a>(instruction: &Instr, refs: &'a RefResolver) -> Option<&'a [super::types::DataType]> {
+    match instruction.op.name {
+        "CALLSYS" => refs.func_params_by_ptr(*instruction.qwords.first()? as i64),
+        "CALL" | "CALLBND" | "CALLINTF" => refs.func_params_by_id(*instruction.dwords.first()? as i32),
+        _ => None,
+    }
+}
+
+fn returns_value_struct(instruction: &Instr, refs: &RefResolver) -> bool {
+    let ret = match instruction.op.name {
+        "CALLSYS" => instruction
+            .qwords
+            .first()
+            .and_then(|ptr| refs.func_ret_by_ptr(*ptr as i64)),
+        "CALL" | "CALLBND" | "CALLINTF" => instruction
+            .dwords
+            .first()
+            .and_then(|id| refs.func_ret_by_id(*id as i32)),
+        _ => None,
+    };
+    ret.is_some_and(|ret| ret.token == 5 && !ret.is_reference && !ret.is_object_handle)
+}
+
 fn is_value_call(instructions: &[Instr], index: usize) -> bool {
-    instructions.get(index + 1).is_some_and(|next| {
-        matches!(
-            next.op.name,
-            "STOREOBJ" | "PshRPtr" | "CpyRtoV4" | "CpyRtoV8"
-        )
-    })
+    let Some(next) = instructions.get(index + 1) else {
+        return false;
+    };
+    let push_index = match next.op.name {
+        "STOREOBJ" | "CpyRtoV4" | "CpyRtoV8" => {
+            let Some(push) = instructions.get(index + 2) else {
+                return false;
+            };
+            let loads_result = match next.op.name {
+                // PSF only takes the slot's address: it may instead be the next
+                // statement's constructor destination after temporary-slot reuse.
+                "STOREOBJ" => push.op.name == "PshVPtr",
+                "CpyRtoV4" => push.op.name == "PshV4",
+                "CpyRtoV8" => push.op.name == "PshV8",
+                _ => unreachable!(),
+            };
+            if !loads_result || next.words.first().is_none() || next.words != push.words {
+                return false;
+            }
+            index + 2
+        }
+        "PshRPtr" => index + 1,
+        _ => return false,
+    };
+    // CompileExpressionStatement discards an unused object result with PopPtr.
+    // OptimizeLocally removes the matching push/pop, leaving STOREOBJ in place:
+    // a local result store alone therefore cannot hide the producing default call.
+    // Require the same result to be pushed onwards, and reject an unoptimized discard
+    // too. Delayed/branching result loads stay on the ordinary call-target path.
+    instructions[push_index + 1..]
+        .iter()
+        .find(|instruction| !matches!(instruction.op.name, "CHKREF" | "RDSPtr"))
+        .is_some_and(|instruction| !matches!(instruction.op.name, "PopPtr" | "RET"))
 }
 
 #[derive(Clone, Debug)]
@@ -814,16 +1096,356 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_store_families_are_fail_closed() {
-        for name in [
-            "STOREOBJ", "REFCPY", "CpyVtoV4", "CpyVtoV8", "CpyRtoV4", "CpyRtoV8", "CpyGtoV4",
+    fn handle_member_receivers_keep_the_outer_this_member_as_root() {
+        let through_handle = vec![
+            instruction("PshVPtr", &[0], &[]),
+            instruction("ADDSi", &[2688], &[1]),
+            instruction("RDSPtr", &[], &[]),
+            instruction("ADDSi", &[40], &[2]),
+            instruction("CALLSYS", &[], &[]),
+        ];
+        let CallReceiver::Member(root) = call_receiver(&through_handle, 4) else {
+            panic!("handle member receiver is rooted in this");
+        };
+        assert_eq!(root.words, vec![2688]);
+
+        let checked_handle = vec![
+            instruction("PshVPtr", &[0], &[]),
+            instruction("CHKREF", &[], &[]),
+            instruction("ADDSi", &[2688], &[1]),
+            instruction("RDSPtr", &[], &[]),
+            instruction("ADDSi", &[40], &[2]),
+            instruction("CALLSYS", &[], &[]),
+        ];
+        let CallReceiver::Member(root) = call_receiver(&checked_handle, 5) else {
+            panic!("a null check before the handle member stays rooted in this");
+        };
+        assert_eq!(root.words, vec![2688]);
+
+        let handle_object = vec![
+            instruction("PshVPtr", &[0], &[]),
+            instruction("ADDSi", &[2688], &[1]),
+            instruction("RDSPtr", &[], &[]),
+            instruction("CALLSYS", &[], &[]),
+        ];
+        assert!(matches!(
+            call_receiver(&handle_object, 3),
+            CallReceiver::Member(_)
+        ));
+
+        for unproven in [
+            vec![
+                instruction("PshVPtr", &[0], &[]),
+                instruction("RDSPtr", &[], &[]),
+                instruction("ADDSi", &[40], &[2]),
+                instruction("CALLSYS", &[], &[]),
+            ],
+            vec![
+                instruction("PshVPtr", &[4], &[]),
+                instruction("ADDSi", &[2688], &[1]),
+                instruction("RDSPtr", &[], &[]),
+                instruction("CALLSYS", &[], &[]),
+            ],
         ] {
+            assert!(matches!(
+                call_receiver(&unproven, unproven.len() - 1),
+                CallReceiver::Unproven
+            ));
+        }
+    }
+
+    #[test]
+    fn fluent_links_require_an_adjacent_result_handoff() {
+        let mut chain = vec![
+            instruction("PshVPtr", &[0], &[]),
+            instruction("CALLSYS", &[], &[]),
+            instruction("STOREOBJ", &[8], &[]),
+            instruction("PshVPtr", &[8], &[]),
+            instruction("CALLSYS", &[], &[]),
+            instruction("PshRPtr", &[], &[]),
+            instruction("CALLSYS", &[], &[]),
+        ];
+        for (offset, instruction) in chain.iter_mut().enumerate() {
+            instruction.offset_dw = offset * 3;
+        }
+        let none = BTreeSet::new();
+        assert_eq!(fluent_producer(&chain, 4, &none), Some(1));
+        assert_eq!(fluent_producer(&chain, 6, &none), Some(4));
+        assert_eq!(fluent_producer(&chain, 1, &none), None, "this is not a fluent link");
+
+        let entered = BTreeSet::from([chain[3].offset_dw as i64]);
+        assert_eq!(fluent_producer(&chain, 4, &entered), None);
+
+        let mut other_slot = chain.clone();
+        other_slot[3].words[0] = 12;
+        assert_eq!(fluent_producer(&other_slot, 4, &none), None);
+
+        let mut no_store = chain.clone();
+        no_store[2] = instruction("PshVPtr", &[8], &[]);
+        assert_eq!(fluent_producer(&no_store, 4, &none), None);
+
+        let mut not_call = chain;
+        not_call[1] = instruction("PshC4", &[], &[1]);
+        assert_eq!(fluent_producer(&not_call, 4, &none), None);
+    }
+
+    #[test]
+    fn unsupported_store_families_are_fail_closed() {
+        for name in ["CpyVtoV4", "CpyVtoV8", "CpyRtoV4", "CpyGtoV4"] {
             assert!(
                 is_unclassified_store(&instruction(name, &[], &[])),
                 "{name}"
             );
         }
         assert!(!is_unclassified_store(&instruction("WRTV4", &[], &[])));
+    }
+
+    fn word_code(name: &str, slot: u16) -> i32 {
+        let op = instruction(name, &[slot], &[]);
+        (u32::from(slot) << 16 | u32::from(op.op.opcode)) as i32
+    }
+
+    #[test]
+    fn discarded_local_results_cannot_hide_default_calls() {
+        for (store, push) in [
+            ("STOREOBJ", "PshVPtr"),
+            ("STOREOBJ", "PSF"),
+            ("CpyRtoV8", "PshV8"),
+        ] {
+            // Optimized standalone Factory(): its result is stored but never read.
+            let mut code = vec![word_code("CALL", 0), 1, word_code(store, 2)];
+            let error = bytecode_targets(&code, 2, &RefResolver::default()).unwrap_err();
+            assert!(error.contains("cannot resolve CALL"), "{error}");
+
+            // The unoptimized push/pop must not turn the same call into a value call.
+            code.extend([word_code(push, 2), word_code("PopPtr", 0)]);
+            let error = bytecode_targets(&code, 2, &RefResolver::default()).unwrap_err();
+            assert!(error.contains("cannot resolve CALL"), "{error}");
+        }
+    }
+
+    #[test]
+    fn local_result_calls_require_a_load_of_the_same_result() {
+        for (store, push) in [("STOREOBJ", "PshVPtr"), ("CpyRtoV8", "PshV8")] {
+            let mut code = vec![
+                instruction("CALL", &[], &[1]),
+                instruction(store, &[2], &[]),
+                instruction(push, &[2], &[]),
+                instruction("CALL", &[], &[2]),
+            ];
+            assert!(is_value_call(&code, 0));
+            code[2].words[0] = 4;
+            assert!(!is_value_call(&code, 0));
+        }
+    }
+
+    #[test]
+    fn an_address_of_a_reused_slot_does_not_prove_a_result_read() {
+        // Factory(); then construction of the next statement's temporary in slot 2.
+        // PSF supplies the constructor destination, not the discarded Factory value.
+        let code = [
+            word_code("CALL", 0),
+            1,
+            word_code("STOREOBJ", 2),
+            word_code("PSF", 2),
+            word_code("CALL", 0),
+            2,
+            word_code("PSF", 2),
+        ];
+        let error = bytecode_targets(&code, 2, &RefResolver::default()).unwrap_err();
+        assert!(error.contains("cannot resolve CALL at dword 0"), "{error}");
+
+        // An address followed by `this` may also be a reused hidden return buffer.
+        // Without a proven read, keep the producer in the target inventory.
+        let argument = vec![
+            instruction("CALL", &[], &[1]),
+            instruction("STOREOBJ", &[2], &[]),
+            instruction("PSF", &[2], &[]),
+            instruction("PshVPtr", &[0], &[]),
+            instruction("ADDSi", &[8], &[1]),
+            instruction("CALL", &[], &[2]),
+        ];
+        assert!(!is_value_call(&argument, 0));
+    }
+
+    #[test]
+    fn storeobj_is_a_direct_local_write_only_inside_the_complete_frame() {
+        for slot in [2, 8, 1122] {
+            let code = [word_code("STOREOBJ", slot)];
+            assert!(
+                bytecode_targets(&code, i32::from(slot), &RefResolver::default())
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        for slot in [0, 1, 9, i16::MAX as u16, (-2i16) as u16] {
+            let error =
+                bytecode_targets(&[word_code("STOREOBJ", slot)], 8, &RefResolver::default())
+                    .unwrap_err();
+            assert!(
+                error.contains("cannot prove local destination for STOREOBJ"),
+                "{error}"
+            );
+        }
+        assert!(prove_local_store(&instruction("STOREOBJ", &[], &[]), 8).is_err());
+    }
+
+    #[test]
+    fn cpyrtov8_has_its_own_full_width_local_proof() {
+        let code = [word_code("CpyRtoV8", 10), word_code("PshV8", 10)];
+        assert!(bytecode_targets(&code, 10, &RefResolver::default())
+            .unwrap()
+            .is_empty());
+        for slot in [0, 1, 11, (-2i16) as u16] {
+            assert!(
+                bytecode_targets(&[word_code("CpyRtoV8", slot)], 10, &RefResolver::default())
+                    .unwrap_err()
+                    .contains("cannot prove local destination for CpyRtoV8")
+            );
+        }
+        for space in [-1, 0, 9] {
+            assert!(bytecode_targets(&code, space, &RefResolver::default()).is_err());
+        }
+        assert!(prove_local_store(&instruction("CpyRtoV8", &[2, 4], &[]), 10).is_err());
+    }
+
+    #[test]
+    fn refcpy_counts_the_member_root_including_nested_fields() {
+        let mut stores = vec![
+            instruction("PshVPtr", &[2], &[]), // source temporary is not the target
+            instruction("PshVPtr", &[0], &[]),
+            instruction("ADDSi", &[1856], &[1]),
+            instruction("ADDSi", &[8], &[2]),
+            instruction("REFCPY", &[], &[]),
+        ];
+        assert_eq!(stack_member_operand(&stores, 4).unwrap().words, vec![1856]);
+        stores.remove(3);
+        assert_eq!(stack_member_operand(&stores, 3).unwrap().words, vec![1856]);
+
+        // Even a proven address must resolve to a semantic member; REFCPY is never skipped.
+        let code = [
+            word_code("PshVPtr", 0),
+            word_code("ADDSi", 48),
+            1,
+            word_code("REFCPY", 0),
+        ];
+        let error = bytecode_targets(&code, 2, &RefResolver::default()).unwrap_err();
+        assert!(
+            error.contains("cannot resolve member target for REFCPY"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn refcpy_refuses_aliases_and_register_destinations() {
+        for prefix in [
+            vec![],
+            vec![
+                instruction("PshVPtr", &[2], &[]),
+                instruction("ADDSi", &[48], &[1]),
+            ],
+            vec![
+                instruction("PshGPtr", &[], &[]),
+                instruction("ADDSi", &[48], &[1]),
+            ],
+            vec![instruction("PSF", &[2], &[])],
+            vec![instruction("LoadThisR", &[48], &[1])],
+            vec![
+                instruction("PshVPtr", &[0], &[]),
+                instruction("ADDSi", &[48], &[1]),
+                instruction("PopRPtr", &[], &[]),
+            ],
+        ] {
+            assert!(
+                stack_member_operand(&prefix, prefix.len()).is_none(),
+                "{prefix:?}"
+            );
+        }
+        let code = [word_code("LoadThisR", 48), 1, word_code("REFCPY", 0)];
+        assert!(bytecode_targets(&code, 2, &RefResolver::default())
+            .unwrap_err()
+            .contains("cannot prove member target for REFCPY"));
+    }
+
+    #[test]
+    fn refcpy_refuses_jump_entry_into_an_apparent_member_chain() {
+        // The taken jump writes through PSF 2, bypassing the apparent this.member address.
+        let mut code = vec![
+            word_code("PshNull", 0),
+            word_code("PSF", 2),
+            word_code("JMP", 0),
+            3,
+            word_code("PshVPtr", 0),
+            word_code("ADDSi", 48),
+            1,
+            word_code("REFCPY", 0),
+        ];
+        let error = bytecode_targets(&code, 2, &RefResolver::default()).unwrap_err();
+        assert!(
+            error.contains("cannot prove member target for REFCPY"),
+            "{error}"
+        );
+        // Entry at the start of the address chain is safe; resolution is the next gate.
+        code[3] = 0;
+        assert!(bytecode_targets(&code, 2, &RefResolver::default())
+            .unwrap_err()
+            .contains("cannot resolve member target for REFCPY"));
+        code[2] = word_code("JMPP", 2);
+        assert!(bytecode_targets(&code, 2, &RefResolver::default())
+            .unwrap_err()
+            .contains("computed jump"));
+    }
+
+    #[test]
+    #[ignore = "requires GORE_AS_CACHE pointing to the shipped cache"]
+    fn real_shipped_store_population_is_classified() {
+        let cache = std::fs::read(std::env::var_os("GORE_AS_CACHE").expect("set GORE_AS_CACHE"))
+            .expect("read cache");
+        let refs = RefResolver::build(&cache).unwrap();
+        let modules = model::parse_modules(&cache).unwrap();
+        let mut counts = BTreeMap::<&str, usize>::new();
+        let mut initializers = 0;
+        for module in &modules {
+            for class in &module.classes {
+                for func in class.methods.iter().filter(|f| f.name == "__InitDefaults") {
+                    initializers += 1;
+                    let ins = disassemble(&func.bytecode).unwrap();
+                    let entries = refcpy_branch_entries(&ins).unwrap();
+                    for (at, instruction) in ins.iter().enumerate() {
+                        let name = instruction.op.name;
+                        match name {
+                            "STOREOBJ" | "CpyRtoV8" => {
+                                prove_local_store(instruction, func.variable_space).unwrap_or_else(
+                                    |e| panic!("{}::{}: {e}", module.name, class.name),
+                                )
+                            }
+                            "REFCPY" => {
+                                let member = refcpy_member_operand(&ins, at, &entries)
+                                    .expect("REFCPY member address");
+                                assert!(
+                                    resolve_member(member, &refs).is_some(),
+                                    "{}::{}",
+                                    module.name,
+                                    class.name
+                                );
+                            }
+                            _ if is_unclassified_store(instruction) => {
+                                panic!("unexpected shipped {name}")
+                            }
+                            _ => continue,
+                        }
+                        *counts.entry(name).or_default() += 1;
+                    }
+                }
+            }
+        }
+        eprintln!("{initializers} initializers; classified stores: {counts:?}");
+        for name in ["STOREOBJ", "REFCPY", "CpyRtoV8"] {
+            assert!(
+                counts.get(name).is_some_and(|count| *count > 0),
+                "missing evidence for {name}"
+            );
+        }
     }
 
     #[test]

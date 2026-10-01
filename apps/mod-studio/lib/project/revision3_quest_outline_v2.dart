@@ -23,7 +23,7 @@ final class AuthoringRevision3QuestOutlineObjectiveEditV2 {
   };
 }
 
-/// Stable-slot-aware outline request for an exact semantic (generator-v4)
+/// Stable-slot-aware outline request for an exact semantic (generator-v6)
 /// Quest. The full active slot permutation and transition-plan seal are
 /// derived from the exact project; callers cannot invent either authority.
 final class AuthoringRevision3QuestOutlineEditRequestV2 {
@@ -733,7 +733,7 @@ _questOutlineRequireBasisPair(
           ) !=
           _authoringRevision3QuestGeneratorVersion) {
     throw const FormatException(
-      'authoring revision-3 Quest outlines require generator version 4',
+      'authoring revision-3 Quest outlines require generator version 6',
     );
   }
   final scriptRef = _authoringRequiredObject(

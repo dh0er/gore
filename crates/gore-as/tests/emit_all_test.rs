@@ -22,6 +22,7 @@ fn function(name: &str, namespace: &str, params: Vec<Param>) -> Func {
         ret: primitive(0x52),
         params,
         bytecode: Vec::new(),
+        variable_space: 0,
         obj_locals: Vec::new(),
         is_ufunction: false,
         traits: 0,
@@ -63,6 +64,7 @@ fn collision_plan_matches_emitted_functions_and_reference_modifiers() {
         methods: vec![function("Mirror", "Owner", Vec::new())],
         ctors: Vec::new(),
         flags: 0,
+        is_abstract: false,
     };
     let modules = vec![
         module(
@@ -375,6 +377,7 @@ fn overlay_scanner_is_comment_safe_and_understands_class_members_and_handles() {
         methods: vec![function("Shared", "VanillaClass", Vec::new())],
         ctors: Vec::new(),
         flags: 0,
+        is_abstract: false,
     });
     let mut refs = RefResolver::default();
     let prepared = PreparedEmit::new(&modules, &mut refs, None).unwrap();
@@ -596,6 +599,7 @@ fn full_tree_resolver_preparation_includes_classes_fields_and_unreferenced_metho
         },
         params: Vec::new(),
         bytecode: Vec::new(),
+        variable_space: 0,
         obj_locals: Vec::new(),
         is_ufunction: false,
         traits: 0,
@@ -617,6 +621,7 @@ fn full_tree_resolver_preparation_includes_classes_fields_and_unreferenced_metho
                 methods: vec![method],
                 ctors: Vec::new(),
                 flags: 0,
+                is_abstract: false,
             },
             Class {
                 name: "UChildFixture".into(),
@@ -626,6 +631,7 @@ fn full_tree_resolver_preparation_includes_classes_fields_and_unreferenced_metho
                 methods: Vec::new(),
                 ctors: Vec::new(),
                 flags: 0,
+                is_abstract: false,
             },
         ],
         enums: Vec::new(),

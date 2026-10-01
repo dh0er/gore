@@ -82,10 +82,10 @@ def main() -> int:
     codes: list[int] = []
 
     if "rust" in suites:
-        codes.append(run("Rust tests", [str(CARGO), "test"]))
+        codes.append(run("Rust tests", [str(CARGO), "test", "--features", "gore/development-cli"]))
 
     if "build-native" in suites:
-        codes.append(run("Rust native build", [str(CARGO), "build"]))
+        codes.append(run("Rust native build", [str(CARGO), "build", "-p", "gore-save"]))
 
     if "analyze" in suites:
         codes.append(run("Flutter pub get", [str(FLUTTER), "pub", "get"], APP))

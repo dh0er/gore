@@ -26,4 +26,3 @@ Only the guide ships in the CLI release zip, as Markdown plus a browsable
 - [Save Editor](../apps/save-editor/README.md)
 - [Mod Studio](../apps/mod-studio/README.md)
 - [Mod Manager](../apps/mod-manager/README.md)
-- [gore-lua helper library](../lua/README.md)

@@ -5,23 +5,36 @@ uses the matching version section as the GitHub release notes.
 
 ## [Unreleased]
 
-- `gore as` now recompiles the Gothic Remake 1.0.5 hotfix source tree with all
-  164,724 functions aligned and no semantic differences or alignment loss.
-- `gore as emit-all --skip <module>` leaves a module out of the tree.
-- `GORE_AS_SIDECAR_TRACE=1` prints compiler errors as they happen, so a crashed
-  compile still names the module and line.
-- `gore as compile` and `compile-module` no longer require undeploying an
-  installed script mod first; the compiler target is the deployment's pristine
-  backup.
-- `--expect-base <CACHE>` / `--expect-base-sha256 <HEX>` on `gore as compile`
-  and `compile-module` refuse to compile against any original but the given one.
-- Support multi-module mini-caches: `gore as compile --mini` publishes the
-  authored modules as one deployable mini, and build, deploy, the Manager and
-  `as splice --upsert` compose it as one unit. Qualified in game with a
-  two-module Diego dialog fixture whose topic text comes from a new provider
-  module.
-- `gore as compile` refuses an invalid work-directory/output layout before it
-  plans the complete source graph instead of minutes later.
+## [0.4.0] - 2026-09-29
+
+- Add `gore npc levels` to list the level scripts available for character
+  placement. `gore npc list|show|sites` read characters, their class chain,
+  world points and spawn sites from the game's script cache.
+- Add `gore npc new|clone|checkout|delete|check|stage|text` to author characters,
+  change shipped character defaults and control placement. Add `npc routine`
+  commands for daily schedules and interaction spots. An authored character
+  was built, deployed and observed in game under its own identity. `checkout`
+  uses the single-module standalone compiler and refuses unproven writes.
+- Author item, ability and character class-default values from the Shipping
+  script cache with `gore value inspect` and a bundle's `values` section. Builds
+  compile script mini-caches instead of using the retired `gore gen` and
+  `overrides.toml` path. Value and damage changes were observed in game on
+  Steam build 25414091.
+- Support multi-module script mini-caches. `gore as compile --mini` builds them
+  together; bundle build, deploy, the Manager and `as splice --upsert` compose
+  them as a unit. A two-module Diego dialog fixture was observed in game.
+- Improve AngelScript source recovery and qualify the Gothic Remake 1.0.5
+  hotfix source tree with all 164,724 functions aligned and no semantic
+  differences or alignment loss. `gore as emit-all --skip <module>` leaves a
+  selected module out of the emitted tree.
+- `gore as compile` and `compile-module` use a deployed script mod's pristine
+  backup, without first undeploying it. `--expect-base` and
+  `--expect-base-sha256` can pin the exact original cache; invalid work-directory
+  and output layouts fail before a full-tree compile starts.
+- Add `GORE_AS_SIDECAR_TRACE=1` for immediate compiler diagnostics, including
+  the module and line when a compilation crashes.
+- Harden NPC workspaces, value builds and bundle targets against ambiguous
+  names, mismatched caches, overlapping edits and unsafe output paths.
 
 ## [0.3.0] - 2026-09-02
 

@@ -17,7 +17,8 @@ Everything you need to mod Gothic 1 Remake with GORE. Start with
 
 | Page | What it covers |
 |---|---|
-| [Item & stat values](items.md) | `overrides.toml` → UE4SS Lua CDO override mod |
+| [Item & stat values](items.md) | `gore value inspect` and a `values` section compiled into a script mini-cache |
+| [Characters](npc-authoring.md) | `gore npc`: which characters exist, the class chain one is made of, and which world points spawn it |
 | [Text & dialogs](text-and-dialogs.md) | Decrypt, edit, and re-encrypt the localization `.lcache` |
 | [Audio](audio.md) | Read and replace samples in the encrypted FMOD banks |
 | [Voice-over](voice.md) | Index and copy-on-write edit the voice-over ZIP archives |

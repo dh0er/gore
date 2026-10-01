@@ -23,7 +23,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 
-use crate::consent::{self, Decision, Needs, Peer, Policy, APPROVAL_FIELD, APPROVAL_REQUEST_FIELD};
+use crate::consent::{
+    self, Decision, Needs, Peer, Policy, APPROVAL_FIELD, APPROVAL_REQUEST_FIELD, FORCE_FIELD,
+};
 use crate::exec::{self, ProcessSpawn, Spawn};
 use crate::rpc::{errors, Frame, OutRequest, Request, Response, Transport, MAX_FRAME_BYTES};
 use crate::{argv, capabilities, resources, spec, tools};
@@ -36,6 +38,9 @@ pub struct Options {
     pub exe: PathBuf,
     /// Version of that binary, reported as `serverInfo.version`.
     pub server_version: String,
+    /// Read-only readiness snapshot supplied by the host, exposed during initialize before tools.
+    /// This is advisory and never grants consent or substitutes for per-command validation.
+    pub startup_diagnostics: Option<String>,
     /// Treat commands that modify the game installation or rewrite files in place as already
     /// approved, so they run without asking. Off by default: they are not forbidden, they are
     /// confirmed with the user (see [`crate::consent`]). Turn it on where nobody is watching —
@@ -43,6 +48,8 @@ pub struct Options {
     pub allow_write: bool,
     /// The same pre-approval for commands that launch the game executable.
     pub allow_game_launch: bool,
+    /// The same pre-approval for calls that pass `force`, i.e. the CLI's global `--force`.
+    pub allow_force: bool,
     /// Never put a question to the user; refuse anything that would need one.
     ///
     /// This is the strict posture, for a server exposed to something whose calls nobody reviews.
@@ -79,8 +86,10 @@ impl Options {
         Self {
             exe,
             server_version: server_version.into(),
+            startup_diagnostics: None,
             allow_write: false,
             allow_game_launch: false,
+            allow_force: false,
             never_ask: false,
             timeout_override_secs: 0,
             max_stdout_bytes: DEFAULT_MAX_STDOUT_BYTES,
@@ -91,7 +100,9 @@ impl Options {
     ///
     /// Pre-approval, not permission: an uncovered call is not refused, it is put to the user.
     pub fn pre_approves(&self, needs: &Needs) -> bool {
-        (!needs.write || self.allow_write) && (!needs.game_launch || self.allow_game_launch)
+        (!needs.write || self.allow_write)
+            && (!needs.game_launch || self.allow_game_launch)
+            && (!needs.force || self.allow_force)
     }
 }
 
@@ -109,6 +120,8 @@ pub struct Session {
     /// was actually refused, not merely to a tool or subcommand name.
     pending_approvals: VecDeque<PendingApproval>,
     next_approval_id: u64,
+    /// Set once the user allowed one forced call; later `force` calls no longer ask.
+    force_allowed: bool,
 }
 
 impl Session {
@@ -128,6 +141,7 @@ impl Session {
             client_can_elicit: false,
             pending_approvals: VecDeque::new(),
             next_approval_id: 0,
+            force_allowed: false,
         }
     }
 
@@ -428,10 +442,40 @@ impl Session {
             );
         }
 
-        let invocation = match argv::build(group, &subcommand, &args, &self.opts) {
+        let force = match arguments.get(FORCE_FIELD) {
+            None | Some(Value::Null) | Some(Value::Bool(false)) => false,
+            Some(Value::Bool(true)) => true,
+            Some(_) => {
+                return Response::ok(
+                    id,
+                    exec::to_error_result(format!("`{FORCE_FIELD}` must be a boolean.")),
+                )
+            }
+        };
+
+        let mut invocation = match argv::build(group, &subcommand, &args, &self.opts) {
             Ok(invocation) => invocation,
             Err(error) => return Response::ok(id, exec::to_error_result(error.to_string())),
         };
+        if force {
+            invocation = argv::with_force(invocation, &self.opts);
+            if !self.force_allowed && !self.opts.allow_force {
+                let (path, command_line) = (invocation.path.clone(), invocation.display.clone());
+                let consent = invocation.consent.get_or_insert_with(|| consent::Consent {
+                    path,
+                    reason: String::new(),
+                    remedy: None,
+                    command_line,
+                    needs: Needs::default(),
+                });
+                consent.reason = if consent.reason.is_empty() {
+                    consent::FORCE_REASON.to_owned()
+                } else {
+                    format!("{}, and {}", consent.reason, consent::FORCE_REASON)
+                };
+                consent.needs.force = true;
+            }
+        }
         let command = group
             .command(&subcommand)
             .expect("argv::build validated the subcommand");
@@ -461,6 +505,9 @@ impl Session {
                     )),
                 );
             }
+            if request.needs.force {
+                self.force_allowed = true;
+            }
             if let Decision::AllowedByAssertion(words) = decision {
                 asserted = Some(words);
             }
@@ -482,6 +529,10 @@ impl Session {
                 // nobody here confirmed should say so where the run itself is recorded.
                 if let Some(words) = &asserted {
                     exec::append_note(&mut result, consent::assertion_note(words));
+                }
+                if !force && exec::offers_force(&outcome) {
+                    let allowed = self.force_allowed || self.opts.allow_force;
+                    exec::append_note(&mut result, consent::force_hint_note(allowed));
                 }
                 Response::ok(id, result)
             }
@@ -530,7 +581,7 @@ fn normalize_group_arguments(
     let is_meta = |key: &str| {
         matches!(
             key,
-            "subcommand" | "args" | APPROVAL_FIELD | APPROVAL_REQUEST_FIELD
+            "subcommand" | "args" | APPROVAL_FIELD | APPROVAL_REQUEST_FIELD | FORCE_FIELD
         )
     };
 
@@ -1007,7 +1058,9 @@ mod tests {
 
     #[test]
     fn initialize_reports_a_version_capabilities_identity_and_instructions() {
-        let mut session = Session::new(options());
+        let mut opts = options();
+        opts.startup_diagnostics = Some("standalone_compiler: problem — missing catalog".into());
+        let mut session = Session::new(opts);
         let response = session
             .handle_unasked(&request(
                 "initialize",
@@ -1020,6 +1073,8 @@ mod tests {
         assert_eq!(result["serverInfo"]["name"], "gore");
         assert_eq!(result["serverInfo"]["version"], "0.1.0");
         assert!(result["capabilities"].get("tools").is_some());
+        assert!(result["instructions"].as_str().unwrap()
+            .contains("standalone_compiler: problem — missing catalog"));
         assert!(
             result["instructions"]
                 .as_str()
@@ -1330,7 +1385,7 @@ mod tests {
         let response = session
             .handle_unasked(&request(
                 "tools/call",
-                json!({ "name": "gore_project", "arguments": { "subcommand": "deploy-shared" } }),
+                json!({ "name": "gore_mgr", "arguments": { "subcommand": "reset" } }),
             ))
             .expect("answered");
 
@@ -2002,6 +2057,139 @@ mod tests {
         assert_eq!(spawn.calls().len(), 1);
     }
 
+    fn a_forced_config_path() -> Request {
+        request(
+            "tools/call",
+            json!({
+                "name": "gore_config",
+                "arguments": { "subcommand": "path", "force": true },
+            }),
+        )
+    }
+
+    #[test]
+    fn force_is_confirmed_once_and_then_remembered_for_the_session() {
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+
+        let mut peer = Canned::allowing();
+        let first = session
+            .handle(&a_forced_config_path(), &mut peer)
+            .expect("answered")
+            .result
+            .unwrap();
+        assert_eq!(first["isError"], json!(false));
+        assert_eq!(peer.asked, 1, "the first forced call is confirmed");
+
+        // `NoOneToAsk` panics if reached: the second forced call must not ask again.
+        let second = session
+            .handle_unasked(&a_forced_config_path())
+            .expect("answered")
+            .result
+            .unwrap();
+        assert_eq!(second["isError"], json!(false));
+
+        let calls = spawn.calls();
+        assert_eq!(calls.len(), 2);
+        for call in calls.iter() {
+            let argv: Vec<String> = call
+                .argv
+                .iter()
+                .map(|token| token.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(argv, vec!["--force", "config", "path"]);
+        }
+    }
+
+    #[test]
+    fn a_declined_force_is_not_remembered() {
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+
+        let mut peer = Canned::declining();
+        let refused = session
+            .handle(&a_forced_config_path(), &mut peer)
+            .expect("answered")
+            .result
+            .unwrap();
+        assert_eq!(refused["isError"], json!(true));
+        assert!(spawn.calls().is_empty());
+
+        let mut peer = Canned::declining();
+        session
+            .handle(&a_forced_config_path(), &mut peer)
+            .expect("answered");
+        assert_eq!(
+            peer.asked, 1,
+            "a no does not stop the next forced call from asking"
+        );
+    }
+
+    #[test]
+    fn a_refusal_offering_force_tells_the_model_to_ask_once() {
+        let (mut session, _spawn) = faked(exec::Outcome::failure(
+            1,
+            "error: refusing structure preservation\nhint: rerun with --force to proceed anyway.\n",
+        ));
+        let result = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({ "name": "gore_config", "arguments": { "subcommand": "path" } }),
+            ))
+            .expect("answered")
+            .result
+            .unwrap();
+        let notes: Vec<&str> = result["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|block| block["text"].as_str())
+            .collect();
+        assert_eq!(result["isError"], json!(true));
+        assert!(
+            notes.iter().any(|text| text.contains("rerun with --force")),
+            "{notes:?}"
+        );
+        assert!(
+            notes.iter().any(|text| text.contains("\"force\": true")
+                && text.contains("Do not ask them per command")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn successful_output_mentioning_force_does_not_offer_force_consent() {
+        let mut outcome = exec::Outcome::success(
+            "documentation: on failure, rerun with --force to proceed anyway.\n",
+        );
+        outcome.stderr = "warning: do not rerun with --force unless a command fails.\n".to_owned();
+        outcome.stderr_total = outcome.stderr.len();
+        let (mut session, _spawn) = faked(outcome);
+
+        let result = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({ "name": "gore_config", "arguments": { "subcommand": "path" } }),
+            ))
+            .expect("answered")
+            .result
+            .unwrap();
+        let notes: Vec<&str> = result["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|block| block["text"].as_str())
+            .collect();
+
+        assert_eq!(result["isError"], json!(false));
+        assert!(
+            !notes.iter().any(|text| text.contains("\"force\": true")),
+            "{notes:?}"
+        );
+    }
+
     /// The same call, carrying what the caller says the user already answered.
     fn an_approved_call(words: &str, approval_request_id: &str) -> Request {
         request(
@@ -2216,6 +2404,92 @@ mod tests {
     }
 
     #[test]
+    fn npc_stage_with_only_a_snapshot_is_refused_without_consent_prompts() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("npc-work");
+        let game = temp.path().join("custom-game");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&game).unwrap();
+        let snapshot = workspace.join(".gore-npc-staged-source.as");
+        std::fs::write(&snapshot, b"previous checked source").unwrap();
+        assert!(!workspace.join("spec.json").exists());
+        assert!(!temp.path().join("npc-work.work").exists());
+
+        let mut opts = options();
+        opts.never_ask = true;
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("staged\n")));
+        let mut session = Session::with_spawn(opts, Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+        let result = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({
+                    "name": "gore_npc",
+                    "arguments": {
+                        "subcommand": "stage",
+                        "args": {
+                            "dir": workspace.to_string_lossy(),
+                            "game": game.to_string_lossy(),
+                        },
+                    },
+                }),
+            ))
+            .expect("answered")
+            .result
+            .unwrap();
+
+        assert_eq!(result["isError"], json!(true));
+        let text = result["content"][0]["text"].as_str().expect("text");
+        assert!(text.contains(".gore-npc-staged-source.as"), "{text}");
+        assert!(text.contains("--no-consent-prompts"), "{text}");
+        assert!(spawn.calls().is_empty(), "stage must not start before consent");
+        assert_eq!(std::fs::read(&snapshot).unwrap(), b"previous checked source");
+        assert!(!workspace.join("spec.json").exists());
+        assert!(!temp.path().join("npc-work.work").exists());
+    }
+
+    #[test]
+    fn npc_stage_in_a_free_workspace_can_start_without_consent_prompts() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("npc-work");
+        let game = temp.path().join("custom-game");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&game).unwrap();
+        assert_eq!(std::fs::read_dir(&workspace).unwrap().count(), 0);
+        assert!(!temp.path().join("npc-work.work").exists());
+
+        let mut opts = options();
+        opts.never_ask = true;
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("staged\n")));
+        let mut session = Session::with_spawn(opts, Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+        let result = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({
+                    "name": "gore_npc",
+                    "arguments": {
+                        "subcommand": "stage",
+                        "args": {
+                            "dir": workspace.to_string_lossy(),
+                            "game": game.to_string_lossy(),
+                        },
+                    },
+                }),
+            ))
+            .expect("answered")
+            .result
+            .unwrap();
+
+        assert_eq!(result["isError"], json!(false));
+        let calls = spawn.calls();
+        assert_eq!(calls.len(), 1, "a first stage needs no overwrite consent");
+        assert_eq!(calls[0].argv[0], "npc");
+        assert_eq!(calls[0].argv[1], "stage");
+        assert_eq!(calls[0].argv.last().unwrap(), workspace.as_os_str());
+    }
+
+    #[test]
     fn an_approval_that_is_not_words_is_reported_rather_than_believed() {
         // A number, a boolean or an empty string quotes nobody. Reading any of them as agreement
         // would make the emptiest possible claim the cheapest way past the gate.
@@ -2301,6 +2575,132 @@ mod tests {
             json!(false)
         );
         assert_eq!(spawn.calls().len(), 1);
+    }
+
+    #[test]
+    fn invalid_compile_overlays_fail_before_consent_or_spawn() {
+        for (tool, direct) in [
+            ("gore_as", false),
+            ("gore_as_compile", true),
+            ("gore_as_compile", false),
+        ] {
+            for backend in [None, Some("game"), Some("standalone-then-game")] {
+                if tool == "gore_as_compile" && backend.is_none() {
+                    continue; // This route forces standalone, so an omitted backend is valid.
+                }
+                let mut args = json!({
+                    "src": "scripts", "out": "fresh.Cache", "work_dir": "compiler-work",
+                    "overlays": true,
+                });
+                if let Some(backend) = backend {
+                    args["backend"] = json!(backend);
+                }
+                let (mut session, spawn) = faked(exec::Outcome::success("compiled\n"));
+                initialize_with(&mut session, json!({ "elicitation": {} }));
+                let mut peer = Canned::allowing();
+                let result = session
+                    .handle(&compile_call(tool, args, direct), &mut peer)
+                    .expect("answered")
+                    .result
+                    .unwrap();
+
+                assert_eq!(result["isError"], json!(true), "{tool}: {result}");
+                let message = result["content"][0]["text"].as_str().unwrap();
+                assert!(message.contains("backend"), "{message}");
+                if tool == "gore_as" {
+                    assert!(message.contains("overlays=true"), "{message}");
+                    assert!(message.contains("backend=standalone"), "{message}");
+                }
+                assert_eq!(peer.asked, 0, "{tool}: invalid arguments must not prompt");
+                assert!(
+                    spawn.calls().is_empty(),
+                    "{tool}: invalid arguments must not run"
+                );
+            }
+        }
+    }
+
+    fn compile_call(tool: &str, args: Value, direct: bool) -> Request {
+        let arguments = if direct {
+            args
+        } else {
+            json!({ "subcommand": "compile", "args": args })
+        };
+        request(
+            "tools/call",
+            json!({ "name": tool, "arguments": arguments }),
+        )
+    }
+
+    #[test]
+    fn valid_compile_overlays_run_standalone_without_prompting() {
+        for (tool, direct) in [
+            ("gore_as", false),
+            ("gore_as_compile", true),
+            ("gore_as_compile", false),
+        ] {
+            let mut args = json!({
+                "src": "scripts", "out": "fresh.Cache", "work_dir": "compiler-work",
+                "overlays": true,
+            });
+            if tool == "gore_as" {
+                args["backend"] = json!("standalone");
+            }
+            let (mut session, spawn) = faked(exec::Outcome::success("compiled\n"));
+            initialize_with(&mut session, json!({ "elicitation": {} }));
+            let result = session
+                .handle_unasked(&compile_call(tool, args, direct))
+                .expect("answered")
+                .result
+                .unwrap();
+
+            assert_eq!(result["isError"], json!(false), "{tool}: {result}");
+            let calls = spawn.calls();
+            assert_eq!(calls.len(), 1, "{tool}");
+            assert!(!calls[0].may_launch_game, "{tool}");
+            assert!(calls[0].consent.is_none(), "{tool}");
+            assert!(calls[0].argv.iter().any(|arg| arg == "--overlays"));
+            assert!(calls[0]
+                .argv
+                .windows(2)
+                .any(|pair| pair[0] == "--backend" && pair[1] == "standalone"));
+        }
+    }
+
+    #[test]
+    fn complete_tree_compile_keeps_launch_consent_with_false_or_omitted_overlays() {
+        for overlays in [None, Some(false)] {
+            for backend in [None, Some("game"), Some("standalone-then-game")] {
+                let mut args = json!({
+                    "src": "scripts", "out": "fresh.Cache", "work_dir": "compiler-work",
+                });
+                if let Some(overlays) = overlays {
+                    args["overlays"] = json!(overlays);
+                }
+                if let Some(backend) = backend {
+                    args["backend"] = json!(backend);
+                }
+                let (mut session, spawn) = faked(exec::Outcome::success("compiled\n"));
+                initialize_with(&mut session, json!({ "elicitation": {} }));
+                let mut peer = Canned::declining();
+                let result = session
+                    .handle(&compile_call("gore_as", args, false), &mut peer)
+                    .expect("answered")
+                    .result
+                    .unwrap();
+
+                assert_eq!(result["isError"], json!(true));
+                assert_eq!(peer.asked, 1, "overlays={overlays:?}, backend={backend:?}");
+                assert!(
+                    spawn.calls().is_empty(),
+                    "declining must prevent the launch"
+                );
+                assert!(result["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("launches the game executable"));
+            }
+        }
     }
 
     #[test]

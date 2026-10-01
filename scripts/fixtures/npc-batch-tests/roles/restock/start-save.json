@@ -1,0 +1,47 @@
+{
+  "schema": "gore.npc-batch.restock-start-save.v1",
+  "published": true,
+  "published_utc": "2026-09-22T06:58:15.466899+00:00",
+  "slot": "G1R-067",
+  "title": "NPC 06 Nachschub - START",
+  "displayed_profile": 4,
+  "internal_profile_id": 2,
+  "stored_profile_name": "3",
+  "clock": "12:00:00",
+  "day": 0,
+  "file": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-067.sav",
+  "bytes": 1034015,
+  "sha256": "56d39254d23734b452d6faa1f7bcb1a28e3b582ecbb625d855d09971caa74430",
+  "hero_ore": 50,
+  "shop_initialized": false,
+  "dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "prepared_manifest_sha256": "393322550499fef87f3c2ada016b753061ce8103779355f4cd114f7842ee4dee",
+  "persistent_before": {
+    "bytes": 27836,
+    "sha256": "081e483fa991a52e783c780598d9a0659ba9307658e715ff1d17740d3644aea7"
+  },
+  "persistent_after": {
+    "bytes": 28800,
+    "sha256": "df3794263b6ffae912e462ce5698bcbc949b9e99a0943968533448373350049a"
+  },
+  "backup_file": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\goresave_backups\\G1R-067.sav.bak.1790060295",
+  "persistent_backup_file": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\goresave_backups\\PersistentDataList.sav.bak.1790060295",
+  "evidence_directory": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\restock-25168047\\publish-evidence",
+  "checks": {
+    "game_closed_before_publish_and_registration": true,
+    "exclusive_new_file": true,
+    "both_public_branches_and_cached_metadata_verified": true,
+    "global_slot_registered_exactly_once": true,
+    "target_profile_only_slot067": true,
+    "paired_backups_verified": true,
+    "other_profiles_byte_identical": true,
+    "all_other_live_files_unchanged": true,
+    "staged_save_and_manifest_unchanged": true,
+    "whole_save_including_private_data_matches_staged": true,
+    "core_scans_only_on_copied_registry": true,
+    "current_live_registry_updated_by_core": true
+  }
+}

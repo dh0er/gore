@@ -1,14 +1,16 @@
-//! Read-only planning of a complete authored source tree against one sealed base cache.
+//! Read-only planning of complete trees or explicit overlays against one sealed base cache.
 //!
-//! Every `.as` file in `source_root` is authoritative: an identity already present in the base is
-//! an Edit, a new identity is an Add, and every base identity absent from the tree is a Delete.
+//! Complete-tree planning treats absent base identities as Deletes; explicit overlay planning
+//! retains them. Overlay files are always Edits or Adds, even when their bytes match the base.
 //! The planner reads all source bytes into the returned value, so compilation never reopens the
-//! caller's tree. It does not launch the game or mutate the installation.
+//! caller's tree. The explicit overlay route retains absent base modules and never emits original
+//! source. Neither route launches the game or mutates the installation.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
+use crate::cache::selective_fullgraph::MAX_SELECTIVE_FULLGRAPH_CHANGES;
 use crate::compile::{
     base_full_graph_manifest_v1, FullGraphCompileChangeV1, FullGraphCompileOperationV1,
     FullGraphFinalModuleV1, MAX_FULL_GRAPH_COMPILE_CHANGES_V1, MAX_FULL_GRAPH_FINAL_MODULES_V1,
@@ -57,6 +59,23 @@ pub fn plan_complete_source_tree_v1(
         .collect::<Vec<_>>();
     let sources = collect_authored_sources(source_root)?;
     plan_inventory(base, sources)
+}
+
+/// Plan a sparse directory of authored Add/Edit sources. Every supplied `.as` file is an explicit
+/// change; absent base modules remain Base. No emitter or Binds input is needed to discover changes.
+/// As with complete-tree planning, source paths are canonical and the returned bytes are owned:
+/// subsequent edits to the caller's directory cannot alter this plan.
+pub fn plan_source_overlays_v1(
+    base_cache: &[u8],
+    source_root: &Path,
+) -> Result<PlannedFullGraphSourceTreeV1, FullGraphSourcePlanErrorV1> {
+    let base = base_full_graph_manifest_v1(base_cache)
+        .map_err(|error| FullGraphSourcePlanErrorV1::BaseCache(error.to_string()))?
+        .into_iter()
+        .map(|entry| (entry.module_name, entry.relative_path))
+        .collect::<Vec<_>>();
+    let sources = collect_authored_sources_bounded(source_root, MAX_SELECTIVE_FULLGRAPH_CHANGES)?;
+    plan_inventory_with_missing(base, sources, true, |_| Ok(false))
 }
 
 /// Build an Add/Edit/Delete plan while recognizing source files which are byte-identical to the
@@ -118,11 +137,26 @@ fn plan_inventory(
 
 fn plan_inventory_with_unchanged(
     base: Vec<(String, String)>,
+    sources: Vec<AuthoredSourceV1>,
+    is_unchanged: impl FnMut(&AuthoredSourceV1) -> Result<bool, FullGraphSourcePlanErrorV1>,
+) -> Result<PlannedFullGraphSourceTreeV1, FullGraphSourcePlanErrorV1> {
+    plan_inventory_with_missing(base, sources, false, is_unchanged)
+}
+
+fn plan_inventory_with_missing(
+    base: Vec<(String, String)>,
     mut sources: Vec<AuthoredSourceV1>,
+    retain_missing: bool,
     mut is_unchanged: impl FnMut(&AuthoredSourceV1) -> Result<bool, FullGraphSourcePlanErrorV1>,
 ) -> Result<PlannedFullGraphSourceTreeV1, FullGraphSourcePlanErrorV1> {
     if sources.is_empty() {
         return Err(FullGraphSourcePlanErrorV1::EmptySourceTree);
+    }
+    if retain_missing && sources.len() > MAX_SELECTIVE_FULLGRAPH_CHANGES {
+        return Err(FullGraphSourcePlanErrorV1::TooManySourceModules {
+            actual: sources.len(),
+            max: MAX_SELECTIVE_FULLGRAPH_CHANGES,
+        });
     }
     sources.sort_by(|left, right| {
         canonical_identity(&left.module_name, &left.relative_path).cmp(&canonical_identity(
@@ -184,13 +218,18 @@ fn plan_inventory_with_unchanged(
     }
 
     for (_, (module_name, relative_path)) in base_by_name {
-        changes.push(FullGraphCompileChangeV1 {
-            operation: FullGraphCompileOperationV1::Delete,
-            module_name,
-            relative_path,
-            source: None,
-        });
+        if retain_missing {
+            final_manifest.push(FullGraphFinalModuleV1 { module_name, relative_path });
+        } else {
+            changes.push(FullGraphCompileChangeV1 {
+                operation: FullGraphCompileOperationV1::Delete,
+                module_name,
+                relative_path,
+                source: None,
+            });
+        }
     }
+    final_manifest.sort_by_key(|entry| canonical_identity(&entry.module_name, &entry.relative_path));
     changes.sort_by(|left, right| {
         canonical_identity(&left.module_name, &left.relative_path).cmp(&canonical_identity(
             &right.module_name,
@@ -213,6 +252,13 @@ fn plan_inventory_with_unchanged(
 
 fn collect_authored_sources(
     root: &Path,
+) -> Result<Vec<AuthoredSourceV1>, FullGraphSourcePlanErrorV1> {
+    collect_authored_sources_bounded(root, MAX_FULL_GRAPH_FINAL_MODULES_V1)
+}
+
+fn collect_authored_sources_bounded(
+    root: &Path,
+    max_modules: usize,
 ) -> Result<Vec<AuthoredSourceV1>, FullGraphSourcePlanErrorV1> {
     if !root.is_absolute() {
         return Err(FullGraphSourcePlanErrorV1::UnsafeRoot);
@@ -241,10 +287,10 @@ fn collect_authored_sources(
             } else if metadata.is_file() {
                 if is_angelscript_path(&relative) {
                     paths.push(relative);
-                    if paths.len() > MAX_FULL_GRAPH_FINAL_MODULES_V1 {
-                        return Err(FullGraphSourcePlanErrorV1::TooManyModules {
-                            changes: paths.len(),
-                            final_modules: paths.len(),
+                    if paths.len() > max_modules {
+                        return Err(FullGraphSourcePlanErrorV1::TooManySourceModules {
+                            actual: paths.len(),
+                            max: max_modules,
                         });
                     }
                 }
@@ -513,6 +559,8 @@ pub enum FullGraphSourcePlanErrorV1 {
     UnsafeRelativePath(String),
     #[error("full-graph source tree contains no .as modules")]
     EmptySourceTree,
+    #[error("source directory has {actual} authored modules; maximum is {max}")]
+    TooManySourceModules { actual: usize, max: usize },
     #[error("full-graph source tree has {changes} changes and {final_modules} final modules")]
     TooManyModules {
         changes: usize,
@@ -604,6 +652,115 @@ mod tests {
             error,
             FullGraphSourcePlanErrorV1::BaseIdentityMismatch { .. }
         ));
+    }
+
+    #[test]
+    fn sparse_changes_retain_the_entire_unprovided_base_without_emission() {
+        let base = (0..7317).map(|i| (format!("Base.M{i}"), format!("Base/M{i}.as"))).collect::<Vec<_>>();
+        let planned = plan_inventory_with_missing(
+            base.clone(),
+            vec![source("New/Provider.as", b"int Answer() { return 42; }"),
+                 source("Base/M5.as", b"int Consumer() { return Answer(); }")],
+            true,
+            |_| Ok(false),
+        ).unwrap();
+        assert_eq!(planned.final_manifest.len(), base.len() + 1);
+        assert_eq!(planned.changes.len(), 2);
+        assert!(planned.changes.iter().all(|change| change.operation != FullGraphCompileOperationV1::Delete));
+        assert!(planned.changes.iter().any(|change| change.module_name == "Base.M5" && change.operation == FullGraphCompileOperationV1::Edit));
+        assert!(planned.changes.iter().any(|change| change.module_name == "New.Provider" && change.operation == FullGraphCompileOperationV1::Add));
+        for (name, path) in base {
+            assert!(planned.final_manifest.iter().any(|entry| entry.module_name == name && entry.relative_path == path));
+        }
+    }
+
+    #[test]
+    fn sparse_identity_drift_collisions_empty_and_overlarge_inputs_fail_closed() {
+        for sources in [vec![source("base/Foo.as", b"drift")],
+                        vec![source("Base/Foo.as.generated.as", b"wrong path")]] {
+            let base_name = sources[0].module_name.to_lowercase();
+            let base = if base_name.ends_with("generated") {
+                vec![("Base.Foo.generated".into(), "Base/Foo/generated.as".into())]
+            } else { vec![("Base.Foo".into(), "Base/Foo.as".into())] };
+            assert!(matches!(plan_inventory_with_missing(base, sources, true, |_| Ok(false)),
+                Err(FullGraphSourcePlanErrorV1::BaseIdentityMismatch { .. })));
+        }
+        assert!(matches!(plan_inventory_with_missing(vec![], vec![source("New.as", b"a"), source("new.as", b"b")], true, |_| Ok(false)),
+            Err(FullGraphSourcePlanErrorV1::IdentityCollision { .. })));
+        assert!(matches!(plan_inventory_with_missing(vec![], vec![], true, |_| Ok(false)),
+            Err(FullGraphSourcePlanErrorV1::EmptySourceTree)));
+        let too_many = (0..=MAX_SELECTIVE_FULLGRAPH_CHANGES).map(|i| source(&format!("M{i}.as"), b"change")).collect();
+        assert!(matches!(plan_inventory_with_missing(vec![], too_many, true, |_| Ok(false)),
+            Err(FullGraphSourcePlanErrorV1::TooManySourceModules { actual: 257, max: 256 })));
+    }
+
+    #[test]
+    fn sparse_discovery_rejects_257_modules_before_reading_source_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        for index in 0..=MAX_SELECTIVE_FULLGRAPH_CHANGES {
+            std::fs::write(dir.path().join(format!("M{index}.as")), [0xff]).unwrap();
+        }
+        assert!(matches!(plan_source_overlays_v1(&minimal_base(), dir.path()),
+            Err(FullGraphSourcePlanErrorV1::TooManySourceModules { actual: 257, max: 256 })));
+    }
+
+    fn minimal_base() -> Vec<u8> {
+        fn string(bytes: &mut Vec<u8>, value: &str, includes_nul: bool) {
+            bytes.extend_from_slice(&((value.len() + usize::from(includes_nul)) as i32).to_le_bytes());
+            bytes.extend_from_slice(value.as_bytes());
+            bytes.push(0);
+        }
+        let mut bytes = vec![0x11; 16];
+        bytes.extend_from_slice(&crate::cache::header::CACHE_MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&1i32.to_le_bytes());
+        string(&mut bytes, "Base", true);
+        string(&mut bytes, "Base", false);
+        bytes.extend_from_slice(&[0; 44]); // five arrays, code hash, imports, statics, events, delegates
+        string(&mut bytes, "Base.as", false);
+        bytes.extend_from_slice(&0i32.to_le_bytes()); // post-init functions
+        bytes.extend_from_slice(&[0; crate::cache::tables::N_TABLES * 4]);
+        bytes
+    }
+
+    #[test]
+    fn sparse_public_planner_owns_source_bytes_and_needs_no_original_source_or_binds() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("New")).unwrap();
+        let path = dir.path().join("New/Provider.as");
+        std::fs::write(&path, b"int Answer() { return 42; }").unwrap();
+        let plan = plan_source_overlays_v1(&minimal_base(), dir.path()).unwrap();
+        std::fs::write(&path, b"int Answer() { return 99; }").unwrap();
+        assert_eq!(plan.changes[0].source.as_deref(), Some(b"int Answer() { return 42; }".as_slice()));
+        assert_eq!(plan.changes[0].module_name, "New.Provider");
+        assert_eq!(plan.changes[0].operation, FullGraphCompileOperationV1::Add);
+    }
+
+    #[test]
+    fn sparse_reader_rejects_malformed_and_oversized_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Bad.as");
+        std::fs::write(&path, [0xff]).unwrap();
+        assert!(matches!(plan_source_overlays_v1(&minimal_base(), dir.path()), Err(FullGraphSourcePlanErrorV1::InvalidUtf8(_))));
+        std::fs::write(&path, b"int x;\0").unwrap();
+        assert!(matches!(plan_source_overlays_v1(&minimal_base(), dir.path()), Err(FullGraphSourcePlanErrorV1::NulSource(_))));
+        std::fs::File::create(&path).unwrap().set_len(MAX_FULL_GRAPH_SOURCE_FILE_BYTES_V1 + 1).unwrap();
+        assert!(matches!(plan_source_overlays_v1(&minimal_base(), dir.path()), Err(FullGraphSourcePlanErrorV1::SourceTooLarge { .. })));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sparse_reader_rejects_linked_sources_and_directories() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("Real.as");
+        std::fs::write(&target, b"int x;").unwrap();
+        let link = dir.path().join("Link.as");
+        symlink(&target, &link).unwrap();
+        assert!(matches!(plan_source_overlays_v1(&minimal_base(), dir.path()), Err(FullGraphSourcePlanErrorV1::UnsafeEntry(_))));
+        std::fs::remove_file(&link).unwrap();
+        symlink(outside.path(), dir.path().join("Nested")).unwrap();
+        assert!(matches!(plan_source_overlays_v1(&minimal_base(), dir.path()), Err(FullGraphSourcePlanErrorV1::UnsafeEntry(_))));
     }
 
     #[test]

@@ -124,6 +124,12 @@ pub enum BuildError {
         given: Vec<String>,
         exactly_one: bool,
     },
+    RequiresValue {
+        sub: &'static str,
+        name: &'static str,
+        required_name: &'static str,
+        required_value: &'static str,
+    },
 }
 
 impl fmt::Display for BuildError {
@@ -273,6 +279,15 @@ impl fmt::Display for BuildError {
                     )
                 }
             }
+            BuildError::RequiresValue {
+                sub,
+                name,
+                required_name,
+                required_value,
+            } => write!(
+                f,
+                "`{sub}` with `{name}=true` requires `{required_name}={required_value}`."
+            ),
         }
     }
 }
@@ -309,6 +324,7 @@ pub fn build(
 
     reject_unknown_arguments(command, &args)?;
     check_argument_sets(command, &args)?;
+    check_compile_overlays(group, command, &args)?;
     check_derived_sources(command, &args)?;
     let may_launch_game = command.safety.requirements(&args).game_launch;
     // Dropped rather than never computed, so that turning a flag on cannot change which arm the
@@ -370,11 +386,11 @@ pub fn build(
         }
     }
 
-    let mut argv: Vec<OsString> = Vec::new();
-    if group.shape == GroupShape::Nested {
-        argv.push(group.cli.into());
-    }
-    argv.push(command.sub.into());
+    let mut argv: Vec<OsString> = group
+        .command_path(command.sub)
+        .into_iter()
+        .map(OsString::from)
+        .collect();
     argv.extend(flags);
     argv.extend(command.forced_argv.iter().map(OsString::from));
     if command.json == JsonSupport::Stdout {
@@ -392,11 +408,17 @@ pub fn build(
         }
     }
 
-    let timeout = Duration::from_secs(if opts.timeout_override_secs > 0 {
+    let timeout_secs = if opts.timeout_override_secs > 0 {
         opts.timeout_override_secs
+    } else if group.tool == "gore_mod" && command.sub == "build" {
+        // A values build compiles one module at a time. Each call has its own sidecar
+        // deadline, so the static cap would kill a later module, or a hung first one
+        // before that deadline can report and clean up.
+        mod_build_timeout_secs(&args, command.timeout_secs)
     } else {
         command.timeout_secs
-    });
+    };
+    let timeout = Duration::from_secs(timeout_secs);
 
     // One rendering, used in both places: what the user is asked about and what the tool result
     // reports as having run are then the same line by construction, not by agreement.
@@ -413,6 +435,42 @@ pub fn build(
         may_launch_game,
         consent,
     })
+}
+
+/// Add the CLI's global `--force` in front of the command path.
+pub fn with_force(mut invocation: Invocation, opts: &Options) -> Invocation {
+    invocation.argv.insert(0, "--force".into());
+    invocation.display = render(&opts.exe, &invocation.argv);
+    if let Some(consent) = invocation.consent.as_mut() {
+        consent.command_line = invocation.display.clone();
+    }
+    invocation
+}
+
+/// Sparse source input is only supported by the strict standalone compiler. Check before any
+/// safety calculation; the dedicated route supplies the backend through its forced arguments.
+fn check_compile_overlays(
+    group: &GroupSpec,
+    command: &CommandSpec,
+    args: &Map<String, Value>,
+) -> Result<(), BuildError> {
+    if group.cli == "as"
+        && command.sub == "compile"
+        && args.get("overlays").and_then(Value::as_bool) == Some(true)
+        && args.get("backend").and_then(Value::as_str) != Some("standalone")
+        && !command
+            .forced_argv
+            .windows(2)
+            .any(|pair| pair == ["--backend", "standalone"])
+    {
+        return Err(BuildError::RequiresValue {
+            sub: command.sub,
+            name: "overlays",
+            required_name: "backend",
+            required_value: "standalone",
+        });
+    }
+    Ok(())
 }
 
 fn reject_unknown_arguments(
@@ -517,6 +575,7 @@ fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> 
             Needs {
                 write: required.write,
                 game_launch: true,
+                force: false,
             },
         );
     }
@@ -525,6 +584,7 @@ fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> 
         let needs = Needs {
             write: true,
             game_launch: false,
+            force: false,
         };
         if required.rewrites_in_place {
             let escape = command.safety.in_place_without.unwrap_or("out");
@@ -545,7 +605,27 @@ fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> 
 
     // Some outputs are only harmless because of where they usually point. Aim one at the game tree
     // and the command has installed something, which is what the question is really about.
-    if let Some((name, target)) = installs_into_game_tree(command, args) {
+    if let Some((name, target, derived)) = installs_into_game_tree(command, args) {
+        let needs = Needs {
+            write: true,
+            game_launch: false,
+            force: false,
+        };
+        // A derived child can land in the game while the argument that produced it does not.
+        // Saying the argument itself points there tells the caller to move the wrong path.
+        if derived {
+            return question(
+                format!(
+                    "writes `{target}`, a path it derives from `{name}` rather than being given, \
+                     and that path is inside the game installation, so writing there installs the \
+                     result instead of producing a file to deploy later"
+                ),
+                Some(format!(
+                    "Keep the path derived from `{name}` outside the installation"
+                )),
+                needs,
+            );
+        }
         return question(
             format!(
                 "`{name}` points at `{target}`, inside the game installation, so writing there \
@@ -554,10 +634,7 @@ fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> 
             Some(format!(
                 "Point `{name}` outside the installation to produce a file to deploy later"
             )),
-            Needs {
-                write: true,
-                game_launch: false,
-            },
+            needs,
         );
     }
 
@@ -568,6 +645,7 @@ fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> 
         let needs = Needs {
             write: true,
             game_launch: false,
+            force: false,
         };
         return match occupancy {
             Occupancy::Existing(target) => question(
@@ -625,7 +703,7 @@ fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> 
 fn installs_into_game_tree(
     command: &CommandSpec,
     args: &Map<String, Value>,
-) -> Option<(&'static str, String)> {
+) -> Option<(&'static str, String, bool)> {
     let game = args
         .get("game")
         .and_then(Value::as_str)
@@ -641,13 +719,17 @@ fn installs_into_game_tree(
     // a link into the installation while the PNG beside it is not.
     output_paths(command, args)
         .into_iter()
-        .find_map(|(name, path)| {
+        .find_map(|(name, path, derived)| {
             // Resolved first, always. A relative output is resolved by the *child* against this
             // process's working directory, so comparing it lexically would miss `--out .` run from
             // inside the installation — which is the same deployment by a shorter name.
             let Some(path) = resolve(&path) else {
                 // Too many links to follow. Where the write lands is unknown, so it is gated.
-                return Some((name, "a symlink chain too deep to follow".to_string()));
+                return Some((
+                    name,
+                    "a symlink chain too deep to follow".to_string(),
+                    derived,
+                ));
             };
 
             let under_game = game.as_ref().is_some_and(|root| path.starts_with(root));
@@ -656,7 +738,7 @@ fn installs_into_game_tree(
                 .any(|part| part.as_os_str().eq_ignore_ascii_case("G1R"));
 
             (under_game || names_the_game_folder)
-                .then(|| (name, path.to_string_lossy().into_owned()))
+                .then(|| (name, path.to_string_lossy().into_owned(), derived))
         })
 }
 
@@ -664,7 +746,7 @@ fn installs_into_game_tree(
 fn output_paths(
     command: &CommandSpec,
     args: &Map<String, Value>,
-) -> Vec<(&'static str, std::path::PathBuf)> {
+) -> Vec<(&'static str, std::path::PathBuf, bool)> {
     let named = command
         .safety
         .installs_via
@@ -678,23 +760,30 @@ fn output_paths(
         // occupancy facet to be classified by.
         .chain(command.safety.writes_into.iter().copied());
 
-    let mut paths: Vec<(&'static str, std::path::PathBuf)> = named
+    let mut paths: Vec<(&'static str, std::path::PathBuf, bool)> = named
         .filter_map(|name| {
             let given = args.get(name)?.as_str()?;
-            Some((name, std::path::PathBuf::from(given)))
+            Some((name, std::path::PathBuf::from(given), false))
         })
         .collect();
 
-    paths.extend(command.safety.derives.iter().filter_map(|(name, how)| {
-        let given = args.get(*name)?.as_str()?;
+    for (name, how) in command
+        .safety
+        .derives
+        .iter()
+        .chain(command.safety.installs_derived.iter())
+    {
+        let Some(given) = args.get(*name).and_then(Value::as_str) else {
+            continue;
+        };
         // An underivable last component leaves the directory it would have gone in, which is the
         // part that decides whether this lands in the game tree.
         let derived = match derived_target(args, std::path::Path::new(given), *how) {
             DerivedTarget::At(path) => path,
             DerivedTarget::Unknown { .. } => std::path::PathBuf::from(given),
         };
-        Some((*name, derived))
-    }));
+        paths.push((*name, derived, true));
+    }
 
     paths
 }
@@ -879,8 +968,47 @@ fn derived_target(
             }
         }
         Derived::Extension(extension) => DerivedTarget::At(base.with_extension(extension)),
+        Derived::Suffix(suffix) => {
+            let mut path = base
+                .components()
+                .collect::<std::path::PathBuf>()
+                .into_os_string();
+            path.push(suffix);
+            DerivedTarget::At(path.into())
+        }
         Derived::Child(child) => DerivedTarget::At(base.join(child)),
     }
+}
+
+/// Outer deadline for `gore mod build`.
+///
+/// Without `values`, the static command cap stands. Each value edit can be its own module, and
+/// each module starts a standalone sidecar with a 30-minute deadline (`standalone_sidecar.rs`).
+/// The edit count is an upper bound on those sequential calls. The extra quarter hour is the same
+/// headroom [`crate::spec::T_COMPILE`] leaves so the inner timeout can report and clean up before
+/// the wrapper is killed.
+fn mod_build_timeout_secs(args: &Map<String, Value>, fallback: u64) -> u64 {
+    const SIDECAR_TIMEOUT_SECS: u64 = 30 * 60;
+    const CLEANUP_HEADROOM_SECS: u64 = 15 * 60;
+    let Some(spec) = args.get("spec").and_then(Value::as_str) else {
+        return fallback;
+    };
+    let Ok(text) = std::fs::read_to_string(spec) else {
+        return fallback;
+    };
+    let Ok(document) = serde_json::from_str::<Value>(&text) else {
+        return fallback;
+    };
+    let Some(values) = document.pointer("/values").and_then(Value::as_array) else {
+        return fallback;
+    };
+    if values.is_empty() {
+        return fallback;
+    }
+    (values.len() as u64)
+        .saturating_mul(SIDECAR_TIMEOUT_SECS)
+        .saturating_add(CLEANUP_HEADROOM_SECS)
+        .max(fallback)
 }
 
 /// Read one string out of a JSON file, and refuse anything that would not be a single path
@@ -910,9 +1038,10 @@ fn name_in_json(path: &str, pointer: &str) -> Result<String, SourceProblem> {
 /// The child's rule for a bundle directory name, restated.
 ///
 /// `gore_mod::is_safe_mod_name` is the 198-UTF-8-byte limit plus `!contains('/') &&
-/// !contains('\\')` and `gore_vo::validate_archive_entry_path` for one component. This crate
-/// cannot call either validator: it depends on `serde` alone and reaches the toolkit by spawning
-/// it. Restating the rule is the cost of that, so it is restated in full rather than in part.
+/// !contains('\\')` and `gore_vo::validate_archive_entry_path` for one component, and it reserves
+/// `.value-minis` for the values compiler. This crate cannot call that validator: it depends on
+/// `serde` alone and reaches the toolkit by spawning it. Restating the rule is the cost of that,
+/// so it is restated in full rather than in part.
 ///
 /// An earlier version kept only the escape-relevant half — separators, `..`, drive letters — on
 /// the grounds that a rule copied imperfectly could refuse a call the child accepts. The half left
@@ -923,7 +1052,12 @@ fn name_in_json(path: &str, pointer: &str) -> Result<String, SourceProblem> {
 fn is_safe_mod_name(name: &str) -> bool {
     const MAX_PORTABLE_MOD_NAME_BYTES: usize = 198;
 
-    if name.is_empty() || name.len() > MAX_PORTABLE_MOD_NAME_BYTES || name == "." || name == ".." {
+    if name.is_empty()
+        || name.len() > MAX_PORTABLE_MOD_NAME_BYTES
+        || name == "."
+        || name == ".."
+        || name.eq_ignore_ascii_case(".value-minis")
+    {
         return false;
     }
     if name.contains(['/', '\\', ':', '\0'])
@@ -1306,6 +1440,7 @@ mod tests {
                 == Needs {
                     write: true,
                     game_launch: false,
+                    force: false,
                 }
         })
     }
@@ -1638,6 +1773,78 @@ mod tests {
     }
 
     #[test]
+    fn private_value_workspaces_left_behind_do_not_ask_for_consent() {
+        // A values build writes `out/.value-minis/<invocation>/` and
+        // `work_dir/<invocation>/`, then leaves both parents in place. The next
+        // build with the same roots adds another child. Treating the parent as
+        // occupied blocked every retry and every other mod that shares them.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("spec.json");
+        std::fs::write(
+            &spec,
+            br#"{"meta":{"name":"DaniTestMod","version":"1.0.0"}}"#,
+        )
+        .expect("write");
+        let out = dir.path().join("build");
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(out.join(".value-minis").join("111-earlier")).expect("mkdir");
+        std::fs::create_dir_all(work.join("111-earlier")).expect("mkdir");
+        std::fs::create_dir_all(work.join("tree")).expect("mkdir");
+        let call = json!({
+            "spec": spec.to_string_lossy(),
+            "out": out.to_string_lossy(),
+            "work_dir": work.to_string_lossy(),
+        });
+        assert!(
+            question("gore_mod", "build", call, &options()).is_none(),
+            "private invocation directories are not the bundle this command replaces"
+        );
+    }
+
+    #[test]
+    fn a_value_mini_link_into_the_game_tree_asks_for_consent() {
+        // `out` itself can sit outside the installation while `out/.value-minis` is a
+        // junction into it. The values compiler follows that link. Occupancy on the
+        // same directory would ask about every leftover invocation child.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("spec.json");
+        std::fs::write(
+            &spec,
+            br#"{"meta":{"name":"DaniTestMod","version":"1.0.0"}}"#,
+        )
+        .expect("write");
+        let out = dir.path().join("build");
+        std::fs::create_dir_all(&out).expect("mkdir");
+        let install = dir.path().join("G1R").join("Script");
+        std::fs::create_dir_all(&install).expect("install-like tree");
+        if !symlink_directory(&install, &out.join(".value-minis")) {
+            eprintln!("skipping: this platform/user cannot create symlinks");
+            return;
+        }
+        let call = json!({
+            "spec": spec.to_string_lossy(),
+            "out": out.to_string_lossy(),
+        });
+        let raised = question("gore_mod", "build", call, &options())
+            .expect("a mini-cache link into the installation is a deployment");
+        assert!(asks_about_a_write(Some(raised.clone())));
+        assert!(
+            raised.reason.contains("derives from `out`"),
+            "{}",
+            raised.reason
+        );
+        assert!(
+            !raised.reason.contains("`out` points at"),
+            "{}",
+            raised.reason
+        );
+        let remedy = raised
+            .remedy
+            .expect("a derived install path names a remedy");
+        assert!(remedy.contains("derived from `out`"), "{remedy}");
+    }
+
+    #[test]
     fn a_bundle_name_that_is_not_one_component_is_a_spec_defect_not_a_consent_question() {
         // This test used to assert the opposite, on the premise that the spec is fine and
         // `gore mod build` would run it. It does not: `build_bundle_relative_to` rejects an unsafe
@@ -1649,7 +1856,7 @@ mod tests {
         let out = dir.path().join("build");
         let spec = dir.path().join("spec.json");
 
-        let elsewhere: [&[u8]; 9] = [
+        let elsewhere: [&[u8]; 11] = [
             br#"{"meta":{"name":"../escape"}}"#,
             br#"{"meta":{"name":"nested/mod"}}"#,
             br#"{"meta":{"name":"C:\\elsewhere"}}"#,
@@ -1665,6 +1872,10 @@ mod tests {
             br#"{"meta":{"name":"MyMod "}}"#,
             br#"{"meta":{"name":"CON"}}"#,
             br#"{"meta":{"name":"bad?"}}"#,
+            // The values compiler writes `out/.value-minis/<invocation>/`. That name as the
+            // bundle is the same directory, so a failed rebuild would edit the published bundle.
+            br#"{"meta":{"name":".value-minis"}}"#,
+            br#"{"meta":{"name":".VALUE-MINIS"}}"#,
         ];
         for body in elsewhere {
             std::fs::write(&spec, body).expect("write");
@@ -1896,21 +2107,18 @@ mod tests {
 
     #[test]
     fn generating_a_mod_into_the_live_mods_folder_is_gated() {
-        // `dump-mod` and `scaffold` write a mod folder containing an executable Scripts/main.lua.
+        // `dump-mod` writes a mod folder containing an executable Scripts/main.lua.
         // Into a scratch directory that is a build artifact; into the game's own ue4ss/Mods it is
         // an installed, enabled mod.
         let dir = tempfile::tempdir().expect("tempdir");
         let scratch = dir.path().to_string_lossy().into_owned();
         let live = "D:/Games/G1R/G1R/Binaries/Win64/ue4ss/Mods";
 
-        for (tool, sub, extra) in [
-            (
-                "gore_catalog",
-                "dump-mod",
-                json!({ "model": "m.json", "catalog": "c.json" }),
-            ),
-            ("gore_project", "scaffold", json!({ "mod_name": "MyMod" })),
-        ] {
+        for (tool, sub, extra) in [(
+            "gore_catalog",
+            "dump-mod",
+            json!({ "model": "m.json", "catalog": "c.json" }),
+        )] {
             let call = |out: &str| {
                 let mut args = extra.as_object().expect("object").clone();
                 args.insert("out".into(), Value::String(out.to_string()));
@@ -2016,10 +2224,32 @@ mod tests {
         }
     }
 
+    /// Create a directory symlink, reporting whether the platform and user allow it.
+    fn symlink_directory(target: &std::path::Path, link: &std::path::Path) -> bool {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(target, link).is_ok()
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+    }
+
     #[test]
     fn a_relative_output_is_resolved_before_the_game_tree_is_judged() {
         // The child resolves a relative path against this process's working directory, so judging
         // it lexically would wave through `--out .` run from inside the installation.
+        const CHILD: &str = "GORE_MCP_RELATIVE_OUTPUT_CWD_CHILD";
+        let call = |out: &str| json!({ "mod_dir": "mod", "name": "zzz_Mine_P", "out": out });
+        if std::env::var_os(CHILD).as_deref() == Some(std::ffi::OsStr::new("1")) {
+            assert!(
+                question("gore_texture", "pack", call("."), &options()).is_some(),
+                "`--out .` inside the installation is the same deployment by a shorter name"
+            );
+            return;
+        }
+
         let dir = tempfile::tempdir().expect("tempdir");
         let inside = dir
             .path()
@@ -2029,46 +2259,29 @@ mod tests {
             .join("~mods");
         std::fs::create_dir_all(&inside).expect("create install-like tree");
 
-        let call = |out: &str| json!({ "mod_dir": "mod", "name": "zzz_Mine_P", "out": out });
         let absolute = inside.to_string_lossy().into_owned();
         assert!(
             question("gore_texture", "pack", call(&absolute), &options()).is_some(),
             "the absolute form was already caught"
         );
 
-        // The same directory named relatively, from a working directory inside it.
-        let previous = std::env::current_dir().expect("cwd");
-        std::env::set_current_dir(&inside).expect("enter the install tree");
-        let relative = question("gore_texture", "pack", call("."), &options());
-        std::env::set_current_dir(previous).expect("restore cwd");
-
+        // A process-wide cwd change would race every parallel test that resolves relative paths.
+        // Run just this assertion in a child whose cwd already is the simulated installation.
+        let child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "argv::tests::a_relative_output_is_resolved_before_the_game_tree_is_judged",
+            ])
+            .env(CHILD, "1")
+            .current_dir(&inside)
+            .output()
+            .expect("run isolated relative-output assertion");
         assert!(
-            relative.is_some(),
-            "`--out .` inside the installation is the same deployment by a shorter name"
+            child.status.success(),
+            "isolated relative-output assertion failed:\n{}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
         );
-    }
-
-    #[test]
-    fn scaffolding_over_an_existing_mod_folder_is_gated_but_a_fresh_name_is_not() {
-        // The CLI only refuses when `Scripts/main.lua` exists, so an existing non-Lua mod under
-        // the same name is entered and its `enabled.txt` truncated. The folder is `<out>/<mod_name>`
-        // -- both arguments -- so the collision can be caught without gating ordinary scaffolding.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let call = |name: &str| json!({ "mod_name": name, "out": dir.path().to_string_lossy() });
-
-        assert!(question("gore_project", "scaffold", call("BrandNew"), &options()).is_none());
-
-        std::fs::create_dir(dir.path().join("Existing")).expect("create mod dir");
-        assert!(
-            asks_about_a_write(question(
-                "gore_project",
-                "scaffold",
-                call("Existing"),
-                &options()
-            )),
-            "an occupied mod folder must be asked about"
-        );
-        assert!(question("gore_project", "scaffold", call("Existing"), &permissive()).is_none());
     }
 
     #[test]
@@ -2147,7 +2360,8 @@ mod tests {
             raised.needs,
             Needs {
                 write: true,
-                game_launch: true
+                game_launch: true,
+                force: false,
             }
         );
         assert_eq!(raised.needs.flags(), "--allow-game-launch --allow-write");
@@ -2234,6 +2448,114 @@ mod tests {
     }
 
     #[test]
+    fn sparse_compile_forwards_the_switch_and_scope_guards_on_both_routes() {
+        let base_hash = format!("sha256:{}", "a".repeat(64));
+        let edit = format!("edit:Story.Dialog:Story/Dialog.as:{}", "b".repeat(64));
+        let add = format!("add:MyMod.Provider:MyMod/Provider.as:{}", "c".repeat(64));
+        for tool in ["gore_as", "gore_as_compile"] {
+            let mut args = json!({
+                "src": "authored-overlays",
+                "overlays": true,
+                "out": "fresh-full.Cache",
+                "mini": "fresh-mod.mini.Cache",
+                "work_dir": "compiler-work-overlays",
+                "game": "G",
+                "expect_base_sha256": base_hash,
+                "only_changes": [edit, add],
+            });
+            if tool == "gore_as" {
+                args["backend"] = json!("standalone");
+            }
+            let invocation = build_with(tool, "compile", args, &options()).unwrap();
+            assert!(invocation.consent.is_none(), "{tool} asked for consent");
+            assert!(!invocation.may_launch_game);
+            let argv: Vec<_> = invocation
+                .argv
+                .iter()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(argv.iter().filter(|arg| *arg == "--overlays").count(), 1);
+            assert_eq!(argv.iter().filter(|arg| *arg == "--backend").count(), 1);
+            for pair in [
+                ["--backend", "standalone"],
+                ["--mini", "fresh-mod.mini.Cache"],
+                ["--expect-base-sha256", base_hash.as_str()],
+                ["--only-change", edit.as_str()],
+                ["--only-change", add.as_str()],
+                ["--", "authored-overlays"],
+            ] {
+                assert!(argv.windows(2).any(|actual| actual == pair), "{argv:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_compile_rejects_game_capable_backends_before_safety_even_when_preapproved() {
+        for opts in [options(), permissive()] {
+            for backend in [None, Some("game"), Some("standalone-then-game")] {
+                let mut args = compile_args();
+                args["overlays"] = json!(true);
+                if let Some(backend) = backend {
+                    args["backend"] = json!(backend);
+                }
+                let error = build_with("gore_as", "compile", args, &opts).unwrap_err();
+                assert_eq!(
+                    error,
+                    BuildError::RequiresValue {
+                        sub: "compile",
+                        name: "overlays",
+                        required_name: "backend",
+                        required_value: "standalone",
+                    }
+                );
+                assert_eq!(
+                    error.to_string(),
+                    "`compile` with `overlays=true` requires `backend=standalone`."
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compile_keeps_complete_tree_behavior_unless_overlays_is_true() {
+        for tool in ["gore_as", "gore_as_compile"] {
+            for overlays in [None, Some(json!(false))] {
+                let mut args = compile_args();
+                if let Some(overlays) = overlays {
+                    args["overlays"] = overlays;
+                }
+                if tool == "gore_as" {
+                    args["backend"] = json!("standalone");
+                }
+                let invocation = build_with(tool, "compile", args, &options()).unwrap();
+                assert!(!invocation.argv.iter().any(|arg| arg == "--overlays"));
+            }
+            let mut args = compile_args();
+            args["overlays"] = json!("true");
+            assert!(matches!(
+                build_with(tool, "compile", args, &options()),
+                Err(BuildError::WrongType {
+                    name: "overlays",
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn dedicated_sparse_compile_does_not_accept_a_game_backend_override() {
+        for backend in ["game", "standalone-then-game"] {
+            let mut args = compile_args();
+            args["overlays"] = json!(true);
+            args["backend"] = json!(backend);
+            assert!(matches!(
+                build_with("gore_as_compile", "compile", args, &permissive()),
+                Err(BuildError::UnknownArgument { given, .. }) if given == "backend"
+            ));
+        }
+    }
+
+    #[test]
     fn standalone_module_outputs_inside_the_game_keep_install_consent() {
         let mixed = json!({
             "op": "add",
@@ -2272,6 +2594,7 @@ mod tests {
                     Needs {
                         write: true,
                         game_launch: false,
+                        force: false,
                     },
                     "{tool} `{output}`"
                 );
@@ -2348,6 +2671,7 @@ mod tests {
                 Needs {
                     write: true,
                     game_launch: false,
+                    force: false,
                 },
                 "{tool}"
             );
@@ -2374,7 +2698,8 @@ mod tests {
                 raised.needs,
                 Needs {
                     write: true,
-                    game_launch: true
+                    game_launch: true,
+                    force: false,
                 }
             );
             assert!(
@@ -2512,6 +2837,238 @@ mod tests {
                 json!({ "sdk_dir": "SDK", "out": "model.json" })
             ),
             vec!["dump", "--out", "model.json", "--", "SDK"]
+        );
+    }
+
+    #[test]
+    fn routine_leaf_paths_are_tokens_but_argument_values_stay_intact() {
+        assert_eq!(
+            argv_of(
+                "gore_npc",
+                "routine set",
+                json!({
+                    "dir": "workspace with spaces", "time": "12:00", "activity": "read", "spot": "FP_Test", "game": "game path"
+                })
+            ),
+            vec![
+                "npc",
+                "routine",
+                "set",
+                "--time",
+                "12:00",
+                "--activity",
+                "read",
+                "--spot",
+                "FP_Test",
+                "--game",
+                "game path",
+                "--",
+                "workspace with spaces"
+            ]
+        );
+        assert_eq!(
+            argv_of("gore_npc", "routine show", json!({ "dir": "work" })),
+            vec!["npc", "routine", "show", "--json", "--", "work"]
+        );
+        assert_eq!(
+            argv_of(
+                "gore_npc",
+                "routine remove",
+                json!({ "dir": "work", "time": "12:00" })
+            ),
+            vec!["npc", "routine", "remove", "--time", "12:00", "--", "work"]
+        );
+        assert_eq!(
+            argv_of(
+                "gore_npc",
+                "routine spots",
+                json!({ "activity": "sit", "area": "OldCamp", "prefix": "IO_", "max": 7 })
+            ),
+            vec![
+                "npc",
+                "routine",
+                "spots",
+                "--activity",
+                "sit",
+                "--area",
+                "OldCamp",
+                "--prefix",
+                "IO_",
+                "--max",
+                "7",
+                "--json"
+            ]
+        );
+        assert!(build_with(
+            "gore_npc",
+            "routine spots",
+            json!({ "activity": "invented" }),
+            &permissive()
+        )
+        .is_err());
+        assert!(build_with("gore_npc", "routine invented", json!({}), &permissive()).is_err());
+    }
+
+    #[test]
+    fn routine_workspace_edits_use_the_existing_write_gate_but_inspection_does_not() {
+        for (sub, args) in [
+            (
+                "routine set",
+                json!({ "dir": "work", "time": "12:00", "activity": "read", "spot": "FP_Test" }),
+            ),
+            ("routine remove", json!({ "dir": "work", "time": "12:00" })),
+        ] {
+            assert!(asks_about_a_write(question(
+                "gore_npc",
+                sub,
+                args.clone(),
+                &options()
+            )));
+            let consent = question("gore_npc", sub, args.clone(), &options()).unwrap();
+            assert!(consent.command_line.contains("npc routine"));
+            assert!(question("gore_npc", sub, args, &permissive()).is_none());
+        }
+        for (sub, args) in [
+            ("routine show", json!({ "dir": "work" })),
+            ("routine spots", json!({ "activity": "sleep" })),
+        ] {
+            assert!(question("gore_npc", sub, args, &options()).is_none());
+        }
+    }
+
+    #[test]
+    fn npc_stage_forwards_obsolete_tree_without_claiming_it_as_an_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let game = temp.path().join("G1R");
+        let work = temp.path().join("npc-work");
+        let obsolete_tree = game.join("npc-tree");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&work).unwrap();
+        let args = json!({
+            "dir": work.to_string_lossy(),
+            "tree": obsolete_tree.to_string_lossy(),
+            "game": game.to_string_lossy()
+        });
+        let invocation = build_with("gore_npc", "stage", args, &options()).unwrap();
+        // The CLI refuses --tree before writing. Keep the argument so that rejection reaches
+        // old clients, but do not ask permission for a tree that stage never writes anymore.
+        assert!(invocation.consent.is_none());
+        assert!(!invocation.may_launch_game);
+        assert!(invocation
+            .argv
+            .windows(2)
+            .any(|pair| pair[0] == "--tree" && pair[1] == obsolete_tree.as_os_str()));
+    }
+
+    #[test]
+    fn npc_stage_protects_its_workspace_outputs_without_a_tree_argument() {
+        let temp = tempfile::tempdir().unwrap();
+        let game = temp.path().join("G1R");
+        let work = temp.path().join("npc-work");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&work).unwrap();
+        let args = json!({
+            "dir": work.to_string_lossy(),
+            "game": game.to_string_lossy()
+        });
+        assert!(question("gore_npc", "stage", args.clone(), &options()).is_none());
+        std::fs::write(work.join("spec.json"), b"existing spec").unwrap();
+        assert!(asks_about_a_write(question(
+            "gore_npc",
+            "stage",
+            args,
+            &options()
+        )));
+        assert!(asks_about_a_write(question(
+            "gore_npc",
+            "stage",
+            json!({
+                "dir": game.join("npc-work").to_string_lossy(),
+                "game": game.to_string_lossy()
+            }),
+            &options()
+        )));
+    }
+
+    #[test]
+    fn npc_stage_classifies_the_lexical_work_sibling_of_a_linked_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let game = temp.path().join("G1R");
+        let outside = temp.path().join("outside-workspace");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let workspace_link = game.join("npc-work");
+        if !symlink_directory(&outside, &workspace_link) {
+            eprintln!("skipping: this platform/user cannot create directory symlinks");
+            return;
+        }
+        for dir in [
+            workspace_link.to_string_lossy().to_string(),
+            format!("{}/", workspace_link.display()),
+        ] {
+            let args = json!({
+                "dir": dir,
+                "game": game.to_string_lossy()
+            });
+            assert!(asks_about_a_write(question(
+                "gore_npc",
+                "stage",
+                args,
+                &options()
+            )));
+        }
+    }
+
+    #[test]
+    fn npc_stage_classifies_its_snapshot_under_an_explicit_game_root() {
+        let temp = tempfile::tempdir().unwrap();
+        // No G1R component: only the explicit game argument can identify this installation.
+        let game = temp.path().join("custom-game");
+        let workspace = temp.path().join("npc-work");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&workspace).unwrap();
+        let target = game.join("absent-source.as");
+        let snapshot = workspace.join(".gore-npc-staged-source.as");
+        if !symlink_file(&target, &snapshot) {
+            eprintln!("skipping: this platform/user cannot create file symlinks");
+            return;
+        }
+        // A dangling snapshot is not caught by occupancy; the derived destination must be
+        // classified independently of the outside workspace, spec and compiler work directory.
+        assert!(!snapshot.exists());
+        assert!(question(
+            "gore_npc",
+            "stage",
+            json!({ "dir": workspace.to_string_lossy() }),
+            &options()
+        )
+        .is_none());
+        let consent = question(
+            "gore_npc",
+            "stage",
+            json!({
+                "dir": workspace.to_string_lossy(),
+                "game": game.to_string_lossy(),
+            }),
+            &options(),
+        )
+        .expect("the derived snapshot destination is inside the explicit game root");
+        assert!(consent.needs.write);
+        assert!(!consent.needs.game_launch);
+        assert!(consent.reason.contains("derives from `dir`"), "{}", consent.reason);
+        assert!(consent.reason.contains("absent-source.as"), "{}", consent.reason);
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn suffix_target_normalizes_a_trailing_separator() {
+        let target = derived_target(
+            &Map::new(),
+            std::path::Path::new("npc-work/"),
+            Derived::Suffix(".work"),
+        );
+        assert!(
+            matches!(target, DerivedTarget::At(path) if path == std::path::Path::new("npc-work.work"))
         );
     }
 
@@ -2655,13 +3212,13 @@ mod tests {
 
     #[test]
     fn an_install_mutating_command_asks_and_names_the_flag_when_it_cannot() {
-        let raised =
-            question("gore_project", "deploy-shared", json!({}), &options()).expect("must ask");
+        let raised = question("gore_mgr", "reset", json!({}), &options()).expect("must ask");
         assert_eq!(
             raised.needs,
             Needs {
                 write: true,
-                game_launch: false
+                game_launch: false,
+                force: false,
             }
         );
 
@@ -2718,7 +3275,7 @@ mod tests {
         // sentence they read in the dialog before deciding.
         for (tool, sub, typed) in [
             ("gore_mgr", "reset", "gore mgr reset"),
-            ("gore_project", "deploy-shared", "gore deploy-shared"),
+            ("gore_mgr", "apply", "gore mgr apply"),
         ] {
             let raised = question(tool, sub, json!({}), &options()).expect("must ask");
             let shown = crate::consent::elicitation_params(&raised);
@@ -2736,7 +3293,8 @@ mod tests {
             raised.needs,
             Needs {
                 write: true,
-                game_launch: true
+                game_launch: true,
+                force: false,
             }
         );
 
@@ -2784,22 +3342,62 @@ mod tests {
     fn the_same_command_builds_once_allow_write_is_set() {
         let mut opts = options();
         opts.allow_write = true;
-        let invocation =
-            build_with("gore_project", "deploy-shared", json!({}), &opts).expect("permitted");
-        assert_eq!(invocation.display, "gore deploy-shared");
+        let invocation = build_with("gore_mgr", "reset", json!({}), &opts).expect("permitted");
+        assert_eq!(invocation.display, "gore mgr reset");
     }
 
     #[test]
     fn commands_that_only_write_new_files_need_no_flag() {
-        // `gen` is deliberately not here: it rewrites a mod folder inside the directory it is
-        // given, so it is a mutation. `scaffold` refuses to clobber an existing mod itself.
         assert!(build_with(
-            "gore_project",
-            "scaffold",
-            json!({ "mod_name": "MyMod", "out": "Mods" }),
+            "gore_catalog",
+            "dump",
+            json!({ "sdk_dir": "SDK", "out": "fresh-model.json" }),
             &options()
         )
         .is_ok());
+    }
+
+    #[test]
+    fn a_values_build_outlives_every_sequential_compiler_call() {
+        const SIDECAR_TIMEOUT_SECS: u64 = 30 * 60;
+        const CLEANUP_HEADROOM_SECS: u64 = 15 * 60;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("spec.json");
+        let out = dir.path().join("build");
+        let call = |body: &[u8]| {
+            std::fs::write(&spec, body).expect("write");
+            build_with(
+                "gore_mod",
+                "build",
+                json!({
+                    "spec": spec.to_string_lossy(),
+                    "out": out.to_string_lossy(),
+                }),
+                &permissive(),
+            )
+            .expect("build")
+        };
+
+        let plain = call(br#"{"meta":{"name":"DaniTestMod","version":"1.0.0"}}"#);
+        assert_eq!(plain.timeout, Duration::from_secs(spec::T_LONG));
+
+        let one = call(
+            br#"{"meta":{"name":"DaniTestMod","version":"1.0.0"},"values":[{"class":"UFoo","field":"m_Value","value":{"int":1}}]}"#,
+        );
+        assert_eq!(
+            one.timeout,
+            Duration::from_secs(SIDECAR_TIMEOUT_SECS + CLEANUP_HEADROOM_SECS)
+        );
+        assert!(one.timeout > Duration::from_secs(SIDECAR_TIMEOUT_SECS));
+
+        let two = call(
+            br#"{"meta":{"name":"DaniTestMod","version":"1.0.0"},"values":[{"class":"UFoo","field":"m_Value","value":{"int":1}},{"class":"UBar","field":"m_Value","value":{"int":2}}]}"#,
+        );
+        assert_eq!(
+            two.timeout,
+            Duration::from_secs(2 * SIDECAR_TIMEOUT_SECS + CLEANUP_HEADROOM_SECS)
+        );
+        assert!(two.timeout > Duration::from_secs(2 * SIDECAR_TIMEOUT_SECS));
     }
 
     #[test]

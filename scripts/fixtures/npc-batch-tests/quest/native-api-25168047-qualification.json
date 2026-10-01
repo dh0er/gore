@@ -1,0 +1,3508 @@
+{
+  "format": "gore-native-api-generation-qualification-v1",
+  "qualified": true,
+  "scope": "Exact existing 7 native leaves, 36 full function identities and 2 property tuples, separately qualified for Steam25168047. No added declarations or wildcard authority.",
+  "source_snapshot": {
+    "path": "crates/gore-as/data/npc-head-native-api-v1.json",
+    "sha256": "e1c3b72c4641b9e0fa5df8ca8d67b91266f13ab68ebae94a30a40dbf6c1a5c78"
+  },
+  "new_generation": {
+    "id": "g1r-steam-25168047",
+    "files": {
+      "G1R-Win64-Shipping.exe": "dafd816b62230087cdb65ad504f4d8d003cd6013dba1b2b5b4f51457d78f729a",
+      "PrecompiledScript_Shipping.Cache": "b913264a50327da30b48c3b35f431e90197f3eafdebe431501a90ffd2d793d54",
+      "Binds.Cache": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2",
+      "G1R-5.4.3-173255-272ce2f8.usmap": "08a98e01fb44a7632fdbe69b587ff40f0f14ad3a27f2bcca53a0e0ecf60b5e38"
+    },
+    "cache_guid_hex": "cc072d82367ad34bbf51117546a8c7ce"
+  },
+  "generation_qualification": {
+    "path": "crates/gore-generation/qualifications/g1r-steam-25168047.json",
+    "sha256": "5035eefc884d9192f5c90555a8a41c55d75ac00fb88140dcdd2f9e58c7f3e45d"
+  },
+  "derived_generation_check": {
+    "path": "C:\\gt\\hotfix_25168047\\qualify_v5_final.json",
+    "sha256": "dcc5e2f62a8c4672e6105015ab75f8b96c7bec8a90009a18050762361963efd4",
+    "complete": true,
+    "diverged_from_sealed_row": []
+  },
+  "compiler_profile_sha256": "8d816e27cf7d2a20283239ed3d06347e56a7c5813b9f03eda9a865659d022ba8",
+  "authority_file_sha256": {
+    "registration-trace.json": "17f374a632eadb354207aad9de7512367cad72e1c4c7a3253a3f68d9e075999c",
+    "post-bind-snapshot.json": "e355aeead72953582c31a2c1b933d08f87c4daa20f4cd55ae71db1f51713d4c5",
+    "reflected-type-graph.bin": "aa73402c11d4007035a2df32c55e50086a6d9c5b6da8619cdfcb4df53f02cea2"
+  },
+  "reused_profile_basis": "The exact hotfix generation qualification retains the ordered24878692 standalone API profile: byte-identical Binds, unchanged USMAP native ancestry/field bridge, and a complete offline source-tree roundtrip. Registrar/Post-bind files above remain independently SHA-verified.",
+  "qualification_script_sha256": "eb6711591cfe0ecf78c801b69100b3c2dcc98a506e1705004c825e37027c9ff0",
+  "audit_script_sha256": "f82c74264a50247a10668fe001f98840383d9f04f0b820c53470fbf4aeadaa10",
+  "tail_reader_sha256": "96d35c4b297f45a8051d71d8b13d3350f686add84a1a171648c11edb76d556ec",
+  "native_property_layout": {
+    "compared_count": 2308,
+    "all_exactly_equal": true,
+    "canonical_rows_sha256": "9f8f37a0fd13c696fc7732ada3e21d13c2c4c6e66800851182cf322df1c55d2b"
+  },
+  "full_tree_roundtrip": {
+    "path": "C:\\gt\\hotfix_25168047\\new_vs_regen.json",
+    "sha256": "d6a7a801c6e879c96a10f459fd75d80ec2454d96a77a20bc41c142948d445f78",
+    "aligned_functions": 164724,
+    "semantic_differences": 0,
+    "alignment_loss": 0
+  },
+  "types": [
+    {
+      "full_identity": "0:0:17:UMaterialInstance1:00:",
+      "object_kind": 67108864,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 16168,
+        "registration_id": 16168,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 3677,
+        "declaration": "UMaterialInstance",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140854377
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 3677,
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 3378,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      }
+    },
+    {
+      "full_identity": "0:0:21:USkinnedMeshComponent1:00:",
+      "object_kind": 67108864,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 14957,
+        "registration_id": 14957,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 2466,
+        "declaration": "USkinnedMeshComponent",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140853166
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 2466,
+        "byte_size": 0,
+        "alignment": 16,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 2325,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      }
+    },
+    {
+      "full_identity": "0:0:22:UPoseableMeshComponent1:00:",
+      "object_kind": 67108864,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 16404,
+        "registration_id": 16404,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 3913,
+        "declaration": "UPoseableMeshComponent",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140854613
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 3913,
+        "byte_size": 0,
+        "alignment": 16,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 2466,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      }
+    },
+    {
+      "full_identity": "0:0:13:USkinnedAsset1:00:",
+      "object_kind": 67108864,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 15393,
+        "registration_id": 15393,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 2902,
+        "declaration": "USkinnedAsset",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140853602
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 2902,
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 2602,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      }
+    },
+    {
+      "full_identity": "0:0:11:EBoneSpaces1:00:",
+      "object_kind": 0,
+      "trace": {
+        "kind": "enum",
+        "ordinal": 4572,
+        "registration_id": 4572,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 606,
+        "declaration": "EBoneSpaces",
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": false,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": true,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 1,
+            "value_alignment": 1,
+            "is_object_pointer": false
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "enum",
+        "engine_type_id": 618
+      },
+      "final_state": null
+    },
+    {
+      "full_identity": "0:0:8:UTexture1:00:",
+      "object_kind": 67108864,
+      "trace": {
+        "kind": "object_type",
+        "ordinal": 15094,
+        "registration_id": 15094,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 2603,
+        "declaration": "UTexture",
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": true,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": false,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 8,
+            "value_alignment": 8,
+            "is_object_pointer": true
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "object_type",
+        "engine_type_id": 1140853303
+      },
+      "final_state": {
+        "kind": "object_type",
+        "type_id": 2603,
+        "byte_size": 0,
+        "alignment": 8,
+        "flags": 1310721,
+        "base_type_id": null,
+        "shadow_type_id": 2602,
+        "interface_type_ids": [],
+        "interface_vft_offsets": [],
+        "has_implicit_constructors": false,
+        "accepts_value_subtype": true,
+        "accepts_reference_subtype": true,
+        "is_invalid_generated_type": false
+      }
+    },
+    {
+      "full_identity": "0:0:17:EMIDCreationFlags1:00:",
+      "object_kind": 0,
+      "trace": {
+        "kind": "enum",
+        "ordinal": 5614,
+        "registration_id": 5614,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "type_id": 762,
+        "declaration": "EMIDCreationFlags",
+        "type_operations": {
+          "kind": "fixed",
+          "operations": {
+            "can_create_property": true,
+            "never_requires_gc": false,
+            "requires_property": false,
+            "can_be_template_subtype": true,
+            "can_construct": true,
+            "need_construct": false,
+            "can_destruct": true,
+            "need_destruct": false,
+            "can_copy": true,
+            "need_copy": true,
+            "can_compare": true,
+            "can_hash_value": true,
+            "value_size": 1,
+            "value_alignment": 1,
+            "is_object_pointer": false
+          }
+        }
+      },
+      "post_bind": {
+        "kind": "enum",
+        "engine_type_id": 774
+      },
+      "final_state": null
+    }
+  ],
+  "functions": [
+    {
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:19:ShowMaterialSection1:0112:9:primitive2:681:01:01:01:0,9:primitive2:681:01:01:01:0,9:primitive2:651:01:01:01:0,9:primitive2:681:01:01:01:0,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103057,
+        "registration_id": 103057,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55156,
+        "owner_type_id": 2466,
+        "declaration": "void ShowMaterialSection(int MaterialID,int SectionIndex,bool bShow,int LODIndex)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 9134,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853166,
+        "engine_function_id": 56351
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55156,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": null,
+          "token": 68,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:681:01:01:01:0"
+        },
+        {
+          "full_identity": null,
+          "token": 68,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:681:01:01:01:0"
+        },
+        {
+          "full_identity": null,
+          "token": 65,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:651:01:01:01:0"
+        },
+        {
+          "full_identity": null,
+          "token": 68,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:681:01:01:01:0"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "void ShowMaterialSection(int MaterialID,int SectionIndex,bool bShow,int LODIndex)",
+          "unreal_path": "ShowMaterialSection",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:34:0:0:22:USkeletalMeshComponent1:00:20:GetSkeletalMeshAsset1:10:51:6:object1:51:01:01:11:025:0:0:13:USkeletalMesh1:00:",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103102,
+        "registration_id": 103102,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55201,
+        "owner_type_id": 2467,
+        "declaration": "USkeletalMesh GetSkeletalMeshAsset() const",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8681,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853167,
+        "engine_function_id": 56398
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55201,
+        "trait_bits": 516,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:13:USkeletalMesh1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:025:0:0:13:USkeletalMesh1:00:"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "USkeletalMesh GetSkeletalMeshAsset() const",
+          "unreal_path": "GetSkeletalMeshAsset",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:global0:22:USkeletalMeshComponent0:11:GetOrCreate1:087:6:object1:51:01:01:11:017:0:0:6:AActor1:00:,6:object1:51:11:11:01:016:0:0:5:FName1:00:,60:6:object1:51:01:01:11:034:0:0:22:USkeletalMeshComponent1:00:",
+      "trace": {
+        "kind": "global_function",
+        "ordinal": 145680,
+        "registration_id": 145680,
+        "context": {
+          "namespace": "USkeletalMeshComponent",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 78828,
+        "declaration": "USkeletalMeshComponent GetOrCreate(AActor Actor, const FName& WithName = NAME_None)",
+        "call_convention": "cdecl",
+        "callable_stub_id": 43,
+        "auxiliary_object_stub_id": null
+      },
+      "post_bind": {
+        "kind": "global_function",
+        "engine_function_id": 81834
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 78828,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "script_function"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:6:AActor1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:017:0:0:6:AActor1:00:"
+        },
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            1,
+            1,
+            0,
+            1,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:11:11:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": "0:0:22:USkeletalMeshComponent1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:034:0:0:22:USkeletalMeshComponent1:00:"
+        }
+      ],
+      "binds_methods": []
+    },
+    {
+      "full_identity": "6:method0:0:27:0:0:15:USceneComponent1:00:17:AttachToComponent1:0151:6:object1:51:01:01:11:027:0:0:15:USceneComponent1:00:,6:object1:51:11:11:01:016:0:0:5:FName1:00:,6:object1:51:01:01:01:027:0:0:15:EAttachmentRule1:00:,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 102264,
+        "registration_id": 102264,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 54363,
+        "owner_type_id": 2299,
+        "declaration": "void AttachToComponent(USceneComponent Parent,const FName& SocketName = NAME_None,EAttachmentRule AttachmentRule = EAttachmentRule::SnapToTarget)",
+        "call_convention": "cdecl_object_first",
+        "callable_stub_id": 8978,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140852999,
+        "engine_function_id": 55525
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 54363,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:15:USceneComponent1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:027:0:0:15:USceneComponent1:00:"
+        },
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            1,
+            1,
+            0,
+            1,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:11:11:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": "0:0:15:EAttachmentRule1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:027:0:0:15:EAttachmentRule1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": []
+    },
+    {
+      "full_identity": "6:method0:0:27:0:0:15:USceneComponent1:00:20:SetRelativeTransform1:049:6:object1:51:11:11:01:022:0:0:10:FTransform1:00:,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 102281,
+        "registration_id": 102281,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 54380,
+        "owner_type_id": 2299,
+        "declaration": "void SetRelativeTransform(const FTransform& NewTransform)",
+        "call_convention": "cdecl_object_first",
+        "callable_stub_id": 4,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140852999,
+        "engine_function_id": 55542
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 54380,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:10:FTransform1:00:",
+          "token": 5,
+          "flags": [
+            1,
+            1,
+            0,
+            1,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:11:11:01:022:0:0:10:FTransform1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": []
+    },
+    {
+      "full_identity": "6:method0:0:34:0:0:22:USkeletalMeshComponent1:00:20:SetSkeletalMeshAsset1:052:6:object1:51:01:01:11:025:0:0:13:USkeletalMesh1:00:,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103156,
+        "registration_id": 103156,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55255,
+        "owner_type_id": 2467,
+        "declaration": "void SetSkeletalMeshAsset(USkeletalMesh NewMesh)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8703,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853167,
+        "engine_function_id": 56452
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55255,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:13:USkeletalMesh1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:025:0:0:13:USkeletalMesh1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "void SetSkeletalMeshAsset(USkeletalMesh NewMesh)",
+          "unreal_path": "SetSkeletalMeshAsset",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:11:GetNumBones1:10:27:9:primitive2:681:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103024,
+        "registration_id": 103024,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55123,
+        "owner_type_id": 2466,
+        "declaration": "int GetNumBones() const",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8679,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853166,
+        "engine_function_id": 56316
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55123,
+        "trait_bits": 516,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": null,
+          "token": 68,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:681:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "int GetNumBones() const",
+          "unreal_path": "GetNumBones",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:11:GetBoneName1:128:9:primitive2:681:01:01:01:0,42:6:object1:51:01:01:01:016:0:0:5:FName1:00:",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103018,
+        "registration_id": 103018,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55117,
+        "owner_type_id": 2466,
+        "declaration": "FName GetBoneName(int BoneIndex) const",
+        "call_convention": "thiscall",
+        "callable_stub_id": 9126,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853166,
+        "engine_function_id": 56310
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55117,
+        "trait_bits": 516,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": null,
+          "token": 68,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:681:01:01:01:0"
+        },
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "FName GetBoneName(int BoneIndex) const",
+          "unreal_path": "GetBoneName",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:12:GetBoneIndex1:143:6:object1:51:01:01:01:016:0:0:5:FName1:00:,27:9:primitive2:681:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103017,
+        "registration_id": 103017,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55116,
+        "owner_type_id": 2466,
+        "declaration": "int GetBoneIndex(FName BoneName) const",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8915,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853166,
+        "engine_function_id": 56309
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55116,
+        "trait_bits": 516,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 68,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:681:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "int GetBoneIndex(FName BoneName) const",
+          "unreal_path": "GetBoneIndex",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:22:SetLeaderPoseComponent1:0116:6:object1:51:01:01:11:033:0:0:21:USkinnedMeshComponent1:00:,9:primitive2:651:01:01:01:0,9:primitive2:651:01:01:01:0,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103044,
+        "registration_id": 103044,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55143,
+        "owner_type_id": 2466,
+        "declaration": "void SetLeaderPoseComponent(USkinnedMeshComponent NewLeaderBoneComponent,bool bForceUpdate = false,bool bInFollowerShouldTickPose = false)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 9132,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853166,
+        "engine_function_id": 56336
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55143,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:21:USkinnedMeshComponent1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:033:0:0:21:USkinnedMeshComponent1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 65,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:651:01:01:01:0"
+        },
+        {
+          "full_identity": null,
+          "token": 65,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:651:01:01:01:0"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "void SetLeaderPoseComponent(USkinnedMeshComponent NewLeaderBoneComponent,bool bForceUpdate = false,bool bInFollowerShouldTickPose = false)",
+          "unreal_path": "SetLeaderPoseComponent",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:22:IsMaterialSectionShown1:056:9:primitive2:681:01:01:01:0,9:primitive2:681:01:01:01:0,27:9:primitive2:651:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103037,
+        "registration_id": 103037,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55136,
+        "owner_type_id": 2466,
+        "declaration": "bool IsMaterialSectionShown(int MaterialID,int LODIndex)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8825,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853166,
+        "engine_function_id": 56329
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55136,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": null,
+          "token": 68,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:681:01:01:01:0"
+        },
+        {
+          "full_identity": null,
+          "token": 68,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:681:01:01:01:0"
+        },
+        {
+          "full_identity": null,
+          "token": 65,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:651:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "bool IsMaterialSectionShown(int MaterialID,int LODIndex)",
+          "unreal_path": "IsMaterialSectionShown",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:10:GetNumLODs1:10:27:9:primitive2:681:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103025,
+        "registration_id": 103025,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55124,
+        "owner_type_id": 2466,
+        "declaration": "int GetNumLODs() const",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8679,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853166,
+        "engine_function_id": 56317
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55124,
+        "trait_bits": 516,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": null,
+          "token": 68,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:681:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "int GetNumLODs() const",
+          "unreal_path": "GetNumLODs",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:31:0:0:19:UPrimitiveComponent1:00:15:GetNumMaterials1:10:27:9:primitive2:681:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 101937,
+        "registration_id": 101937,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 54036,
+        "owner_type_id": 2300,
+        "declaration": "int GetNumMaterials() const",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8679,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853000,
+        "engine_function_id": 55191
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 54036,
+        "trait_bits": 516,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": null,
+          "token": 68,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:681:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "int GetNumMaterials() const",
+          "unreal_path": "GetNumMaterials",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:global0:0:0:10:LoadObject1:090:6:object1:51:01:01:11:018:0:0:7:UObject1:00:,6:object1:51:11:11:01:018:0:0:7:FString1:00:,44:6:object1:51:01:01:11:018:0:0:7:UObject1:00:",
+      "trace": {
+        "kind": "global_function",
+        "ordinal": 29498,
+        "registration_id": 29498,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 3729,
+        "declaration": "UObject LoadObject(UObject Outer, const FString& Name)",
+        "call_convention": "cdecl",
+        "callable_stub_id": 5,
+        "auxiliary_object_stub_id": null
+      },
+      "post_bind": {
+        "kind": "global_function",
+        "engine_function_id": 3755
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 3729,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:7:UObject1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:018:0:0:7:UObject1:00:"
+        },
+        {
+          "full_identity": "0:0:7:FString1:00:",
+          "token": 5,
+          "flags": [
+            1,
+            1,
+            0,
+            1,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:11:11:01:018:0:0:7:FString1:00:"
+        },
+        {
+          "full_identity": "0:0:7:UObject1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:018:0:0:7:UObject1:00:"
+        }
+      ],
+      "binds_methods": []
+    },
+    {
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:15:SetRenderStatic1:028:9:primitive2:651:01:01:01:0,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103050,
+        "registration_id": 103050,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55149,
+        "owner_type_id": 2466,
+        "declaration": "void SetRenderStatic(bool bNewValue)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8807,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853166,
+        "engine_function_id": 56342
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55149,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": null,
+          "token": 65,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:651:01:01:01:0"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "void SetRenderStatic(bool bNewValue)",
+          "unreal_path": "SetRenderStatic",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:19:GetRefPoseTransform1:128:9:primitive2:681:01:01:01:0,48:6:object1:51:01:01:01:022:0:0:10:FTransform1:00:",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103029,
+        "registration_id": 103029,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55128,
+        "owner_type_id": 2466,
+        "declaration": "FTransform GetRefPoseTransform(int BoneIndex) const",
+        "call_convention": "thiscall",
+        "callable_stub_id": 9130,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853166,
+        "engine_function_id": 56321
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55128,
+        "trait_bits": 516,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": null,
+          "token": 68,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:681:01:01:01:0"
+        },
+        {
+          "full_identity": "0:0:10:FTransform1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:022:0:0:10:FTransform1:00:"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "FTransform GetRefPoseTransform(int BoneIndex) const",
+          "unreal_path": "GetRefPoseTransform",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:13:GetParentBone1:143:6:object1:51:01:01:01:016:0:0:5:FName1:00:,42:6:object1:51:01:01:01:016:0:0:5:FName1:00:",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103026,
+        "registration_id": 103026,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55125,
+        "owner_type_id": 2466,
+        "declaration": "FName GetParentBone(FName BoneName) const",
+        "call_convention": "thiscall",
+        "callable_stub_id": 9128,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853166,
+        "engine_function_id": 56318
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55125,
+        "trait_bits": 516,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "FName GetParentBone(FName BoneName) const",
+          "unreal_path": "GetParentBone",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:22:0:0:10:FTransform1:00:5:opMul1:149:6:object1:51:11:11:01:022:0:0:10:FTransform1:00:,48:6:object1:51:01:01:01:022:0:0:10:FTransform1:00:",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 29601,
+        "registration_id": 29601,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 3816,
+        "owner_type_id": 9360,
+        "declaration": "FTransform opMul(const FTransform& Other) const",
+        "call_convention": "thiscall",
+        "callable_stub_id": 501,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 67118236,
+        "engine_function_id": 3844
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 3816,
+        "trait_bits": 516,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:10:FTransform1:00:",
+          "token": 5,
+          "flags": [
+            1,
+            1,
+            0,
+            1,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:11:11:01:022:0:0:10:FTransform1:00:"
+        },
+        {
+          "full_identity": "0:0:10:FTransform1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:022:0:0:10:FTransform1:00:"
+        }
+      ],
+      "binds_methods": []
+    },
+    {
+      "full_identity": "6:method0:0:22:0:0:10:FTransform1:00:7:Inverse1:10:48:6:object1:51:01:01:01:022:0:0:10:FTransform1:00:",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 29598,
+        "registration_id": 29598,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 3813,
+        "owner_type_id": 9360,
+        "declaration": "FTransform Inverse() const",
+        "call_convention": "thiscall",
+        "callable_stub_id": 499,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 67118236,
+        "engine_function_id": 3841
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 3813,
+        "trait_bits": 516,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:10:FTransform1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:022:0:0:10:FTransform1:00:"
+        }
+      ],
+      "binds_methods": []
+    },
+    {
+      "full_identity": "6:global0:22:UPoseableMeshComponent0:11:GetOrCreate1:087:6:object1:51:01:01:11:017:0:0:6:AActor1:00:,6:object1:51:11:11:01:016:0:0:5:FName1:00:,60:6:object1:51:01:01:11:034:0:0:22:UPoseableMeshComponent1:00:",
+      "trace": {
+        "kind": "global_function",
+        "ordinal": 145887,
+        "registration_id": 145887,
+        "context": {
+          "namespace": "UPoseableMeshComponent",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 79035,
+        "declaration": "UPoseableMeshComponent GetOrCreate(AActor Actor, const FName& WithName = NAME_None)",
+        "call_convention": "cdecl",
+        "callable_stub_id": 43,
+        "auxiliary_object_stub_id": null
+      },
+      "post_bind": {
+        "kind": "global_function",
+        "engine_function_id": 82041
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 79035,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "script_function"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:6:AActor1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:017:0:0:6:AActor1:00:"
+        },
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            1,
+            1,
+            0,
+            1,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:11:11:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": "0:0:22:UPoseableMeshComponent1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:034:0:0:22:UPoseableMeshComponent1:00:"
+        }
+      ],
+      "binds_methods": []
+    },
+    {
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:15:GetSkinnedAsset1:10:51:6:object1:51:01:01:11:025:0:0:13:USkinnedAsset1:00:",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103031,
+        "registration_id": 103031,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55130,
+        "owner_type_id": 2466,
+        "declaration": "USkinnedAsset GetSkinnedAsset() const",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8681,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853166,
+        "engine_function_id": 56323
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55130,
+        "trait_bits": 516,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:13:USkinnedAsset1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:025:0:0:13:USkinnedAsset1:00:"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "USkinnedAsset GetSkinnedAsset() const",
+          "unreal_path": "GetSkinnedAsset",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:33:0:0:21:USkinnedMeshComponent1:00:24:SetSkinnedAssetAndUpdate1:080:6:object1:51:01:01:11:025:0:0:13:USkinnedAsset1:00:,9:primitive2:651:01:01:01:0,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 103051,
+        "registration_id": 103051,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 55150,
+        "owner_type_id": 2466,
+        "declaration": "void SetSkinnedAssetAndUpdate(USkinnedAsset NewMesh,bool bReinitPose = true)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8882,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853166,
+        "engine_function_id": 56343
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 55150,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:13:USkinnedAsset1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:025:0:0:13:USkinnedAsset1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 65,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:651:01:01:01:0"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "void SetSkinnedAssetAndUpdate(USkinnedAsset NewMesh,bool bReinitPose = true)",
+          "unreal_path": "SetSkinnedAssetAndUpdate",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:34:0:0:22:UPoseableMeshComponent1:00:29:CopyPoseFromSkeletalComponent1:061:6:object1:51:01:01:11:034:0:0:22:USkeletalMeshComponent1:00:,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 106791,
+        "registration_id": 106791,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58890,
+        "owner_type_id": 3913,
+        "declaration": "void CopyPoseFromSkeletalComponent(USkeletalMeshComponent InComponentToCopy)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8703,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140854613,
+        "engine_function_id": 60215
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58890,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:22:USkeletalMeshComponent1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:034:0:0:22:USkeletalMeshComponent1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "void CopyPoseFromSkeletalComponent(USkeletalMeshComponent InComponentToCopy)",
+          "unreal_path": "CopyPoseFromSkeletalComponent",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:34:0:0:22:UPoseableMeshComponent1:00:24:ResetBoneTransformByName1:043:6:object1:51:01:01:01:016:0:0:5:FName1:00:,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 106796,
+        "registration_id": 106796,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58895,
+        "owner_type_id": 3913,
+        "declaration": "void ResetBoneTransformByName(FName BoneName)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8820,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140854613,
+        "engine_function_id": 60220
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58895,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "void ResetBoneTransformByName(FName BoneName)",
+          "unreal_path": "ResetBoneTransformByName",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:34:0:0:22:UPoseableMeshComponent1:00:22:GetBoneTransformByName1:093:6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:01:023:0:0:11:EBoneSpaces1:00:,48:6:object1:51:01:01:01:022:0:0:10:FTransform1:00:",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 106795,
+        "registration_id": 106795,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58894,
+        "owner_type_id": 3913,
+        "declaration": "FTransform GetBoneTransformByName(FName BoneName,EBoneSpaces BoneSpace)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8899,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140854613,
+        "engine_function_id": 60219
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58894,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": "0:0:11:EBoneSpaces1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:023:0:0:11:EBoneSpaces1:00:"
+        },
+        {
+          "full_identity": "0:0:10:FTransform1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:022:0:0:10:FTransform1:00:"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "FTransform GetBoneTransformByName(FName BoneName,EBoneSpaces BoneSpace)",
+          "unreal_path": "GetBoneTransformByName",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:27:0:0:15:UActorComponent1:00:28:AddTickPrerequisiteComponent1:054:6:object1:51:01:01:11:027:0:0:15:UActorComponent1:00:,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 101377,
+        "registration_id": 101377,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 53476,
+        "owner_type_id": 2124,
+        "declaration": "void AddTickPrerequisiteComponent(UActorComponent PrerequisiteComponent)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8703,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140852824,
+        "engine_function_id": 54618
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 53476,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:15:UActorComponent1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:027:0:0:15:UActorComponent1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "void AddTickPrerequisiteComponent(UActorComponent PrerequisiteComponent)",
+          "unreal_path": "AddTickPrerequisiteComponent",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:27:0:0:15:UActorComponent1:00:31:RemoveTickPrerequisiteComponent1:054:6:object1:51:01:01:11:027:0:0:15:UActorComponent1:00:,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 101391,
+        "registration_id": 101391,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 53490,
+        "owner_type_id": 2124,
+        "declaration": "void RemoveTickPrerequisiteComponent(UActorComponent PrerequisiteComponent)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8703,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140852824,
+        "engine_function_id": 54632
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 53490,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:15:UActorComponent1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:027:0:0:15:UActorComponent1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "void RemoveTickPrerequisiteComponent(UActorComponent PrerequisiteComponent)",
+          "unreal_path": "RemoveTickPrerequisiteComponent",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:23:GetVectorParameterValue1:043:6:object1:51:01:01:01:016:0:0:5:FName1:00:,50:6:object1:51:01:01:01:024:0:0:12:FLinearColor1:00:",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 106602,
+        "registration_id": 106602,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58701,
+        "owner_type_id": 3680,
+        "declaration": "FLinearColor GetVectorParameterValue(FName ParameterName)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 9304,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140854380,
+        "engine_function_id": 60025
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58701,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": "0:0:12:FLinearColor1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:024:0:0:12:FLinearColor1:00:"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "FLinearColor GetVectorParameterValue(FName ParameterName)",
+          "unreal_path": "K2_GetVectorParameterValue",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:23:SetVectorParameterValue1:094:6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:01:024:0:0:12:FLinearColor1:00:,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 106614,
+        "registration_id": 106614,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58713,
+        "owner_type_id": 3680,
+        "declaration": "void SetVectorParameterValue(FName ParameterName,FLinearColor Value)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 9309,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140854380,
+        "engine_function_id": 60037
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58713,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": "0:0:12:FLinearColor1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:024:0:0:12:FLinearColor1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "void SetVectorParameterValue(FName ParameterName,FLinearColor Value)",
+          "unreal_path": "SetVectorParameterValue",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:global0:9:Rendering0:21:ImportFileAsTexture2D1:090:6:object1:51:01:01:11:018:0:0:7:UObject1:00:,6:object1:51:11:11:01:018:0:0:7:FString1:00:,48:6:object1:51:01:01:11:022:0:0:10:UTexture2D1:00:",
+      "trace": {
+        "kind": "global_function",
+        "ordinal": 106134,
+        "registration_id": 106134,
+        "context": {
+          "namespace": "Rendering",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58233,
+        "declaration": "UTexture2D ImportFileAsTexture2D(UObject WorldContextObject,const FString& Filename)",
+        "call_convention": "cdecl",
+        "callable_stub_id": 5,
+        "auxiliary_object_stub_id": null
+      },
+      "post_bind": {
+        "kind": "global_function",
+        "engine_function_id": 59547
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58233,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": 0,
+        "hidden_argument_default": "__WorldContext",
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:7:UObject1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:018:0:0:7:UObject1:00:"
+        },
+        {
+          "full_identity": "0:0:7:FString1:00:",
+          "token": 5,
+          "flags": [
+            1,
+            1,
+            0,
+            1,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:11:11:01:018:0:0:7:FString1:00:"
+        },
+        {
+          "full_identity": "0:0:10:UTexture2D1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:022:0:0:10:UTexture2D1:00:"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "UTexture2D ImportFileAsTexture2D(UObject WorldContextObject,const FString& Filename)",
+          "unreal_path": "ImportFileAsTexture2D",
+          "static_in_unreal": true,
+          "static_in_script": true,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": 0,
+          "determines_output_type_argument": -1,
+          "class_name": "Rendering",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:24:SetTextureParameterValue1:089:6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:11:019:0:0:8:UTexture1:00:,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 106612,
+        "registration_id": 106612,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58711,
+        "owner_type_id": 3680,
+        "declaration": "void SetTextureParameterValue(FName ParameterName,UTexture Value)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8877,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140854380,
+        "engine_function_id": 60035
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58711,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": "0:0:8:UTexture1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:019:0:0:8:UTexture1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "void SetTextureParameterValue(FName ParameterName,UTexture Value)",
+          "unreal_path": "SetTextureParameterValue",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:global0:6:FPaths0:17:ProjectContentDir1:00:44:6:object1:51:01:01:01:018:0:0:7:FString1:00:",
+      "trace": {
+        "kind": "global_function",
+        "ordinal": 37630,
+        "registration_id": 37630,
+        "context": {
+          "namespace": "FPaths",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 3926,
+        "declaration": "FString ProjectContentDir()",
+        "call_convention": "cdecl",
+        "callable_stub_id": 220,
+        "auxiliary_object_stub_id": null
+      },
+      "post_bind": {
+        "kind": "global_function",
+        "engine_function_id": 3956
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 3926,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:7:FString1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:018:0:0:7:FString1:00:"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "FString ProjectContentDir()",
+          "unreal_path": "ProjectContentDir",
+          "static_in_unreal": true,
+          "static_in_script": true,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "Paths",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:global0:6:FPaths0:25:ConvertRelativePathToFull1:045:6:object1:51:11:11:01:018:0:0:7:FString1:00:,44:6:object1:51:01:01:01:018:0:0:7:FString1:00:",
+      "trace": {
+        "kind": "global_function",
+        "ordinal": 37658,
+        "registration_id": 37658,
+        "context": {
+          "namespace": "FPaths",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 3954,
+        "declaration": "FString ConvertRelativePathToFull(const FString& InPath)",
+        "call_convention": "cdecl",
+        "callable_stub_id": 192,
+        "auxiliary_object_stub_id": null
+      },
+      "post_bind": {
+        "kind": "global_function",
+        "engine_function_id": 3984
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 3954,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:7:FString1:00:",
+          "token": 5,
+          "flags": [
+            1,
+            1,
+            0,
+            1,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:11:11:01:018:0:0:7:FString1:00:"
+        },
+        {
+          "full_identity": "0:0:7:FString1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:018:0:0:7:FString1:00:"
+        }
+      ],
+      "binds_methods": []
+    },
+    {
+      "full_identity": "6:method0:0:31:0:0:19:UPrimitiveComponent1:00:11:SetMaterial1:085:9:primitive2:681:01:01:01:0,6:object1:51:01:01:11:030:0:0:18:UMaterialInterface1:00:,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 102010,
+        "registration_id": 102010,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 54109,
+        "owner_type_id": 2300,
+        "declaration": "void SetMaterial(int ElementIndex,UMaterialInterface Material)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8933,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140853000,
+        "engine_function_id": 55264
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 54109,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": null,
+          "token": 68,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:681:01:01:01:0"
+        },
+        {
+          "full_identity": "0:0:18:UMaterialInterface1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:030:0:0:18:UMaterialInterface1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "void SetMaterial(int ElementIndex,UMaterialInterface Material)",
+          "unreal_path": "SetMaterial",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:global0:8:Material0:29:CreateDynamicMaterialInstance1:0201:6:object1:51:01:01:11:018:0:0:7:UObject1:00:,6:object1:51:01:01:11:030:0:0:18:UMaterialInterface1:00:,6:object1:51:01:01:01:016:0:0:5:FName1:00:,6:object1:51:01:01:01:029:0:0:17:EMIDCreationFlags1:00:,62:6:object1:51:01:01:11:036:0:0:24:UMaterialInstanceDynamic1:00:",
+      "trace": {
+        "kind": "global_function",
+        "ordinal": 106112,
+        "registration_id": 106112,
+        "context": {
+          "namespace": "Material",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58211,
+        "declaration": "UMaterialInstanceDynamic CreateDynamicMaterialInstance(UObject WorldContextObject,UMaterialInterface Parent,FName OptionalName = NAME_None,EMIDCreationFlags CreationFlags = EMIDCreationFlags::None)",
+        "call_convention": "cdecl",
+        "callable_stub_id": 9657,
+        "auxiliary_object_stub_id": null
+      },
+      "post_bind": {
+        "kind": "global_function",
+        "engine_function_id": 59525
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58211,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": 0,
+        "hidden_argument_default": "__WorldContext",
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:7:UObject1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:018:0:0:7:UObject1:00:"
+        },
+        {
+          "full_identity": "0:0:18:UMaterialInterface1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:030:0:0:18:UMaterialInterface1:00:"
+        },
+        {
+          "full_identity": "0:0:5:FName1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:016:0:0:5:FName1:00:"
+        },
+        {
+          "full_identity": "0:0:17:EMIDCreationFlags1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:01:029:0:0:17:EMIDCreationFlags1:00:"
+        },
+        {
+          "full_identity": "0:0:24:UMaterialInstanceDynamic1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:036:0:0:24:UMaterialInstanceDynamic1:00:"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "UMaterialInstanceDynamic CreateDynamicMaterialInstance(UObject WorldContextObject,UMaterialInterface Parent,FName OptionalName = NAME_None,EMIDCreationFlags CreationFlags = EMIDCreationFlags::None)",
+          "unreal_path": "CreateDynamicMaterialInstance",
+          "static_in_unreal": true,
+          "static_in_script": true,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": 0,
+          "determines_output_type_argument": -1,
+          "class_name": "Material",
+          "script_name": ""
+        }
+      ]
+    },
+    {
+      "full_identity": "6:method0:0:36:0:0:24:UMaterialInstanceDynamic1:00:22:CopyParameterOverrides1:056:6:object1:51:01:01:11:029:0:0:17:UMaterialInstance1:00:,27:9:primitive2:821:01:01:01:0",
+      "trace": {
+        "kind": "object_method",
+        "ordinal": 106595,
+        "registration_id": 106595,
+        "context": {
+          "namespace": "",
+          "config_group": null,
+          "access_mask": 4294967295
+        },
+        "function_id": 58694,
+        "owner_type_id": 3680,
+        "declaration": "void CopyParameterOverrides(UMaterialInstance MaterialInstance)",
+        "call_convention": "thiscall",
+        "callable_stub_id": 8703,
+        "auxiliary_object_stub_id": null,
+        "composite_offset": 0,
+        "is_composite_indirect": false,
+        "accessor_type": 255
+      },
+      "post_bind": {
+        "kind": "object_method",
+        "owner_engine_type_id": 1140854380,
+        "engine_function_id": 60018
+      },
+      "final_state": {
+        "kind": "function",
+        "function_id": 58694,
+        "trait_bits": 512,
+        "exposed_type": 255,
+        "hidden_argument_index": null,
+        "hidden_argument_default": null,
+        "determines_output_type_argument_index": null,
+        "compile_out_mode": "compile_calls",
+        "first_param_metadata": "none"
+      },
+      "datatypes": [
+        {
+          "full_identity": "0:0:17:UMaterialInstance1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:029:0:0:17:UMaterialInstance1:00:"
+        },
+        {
+          "full_identity": null,
+          "token": 82,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:821:01:01:01:0"
+        }
+      ],
+      "binds_methods": [
+        {
+          "declaration": "void CopyParameterOverrides(UMaterialInstance MaterialInstance)",
+          "unreal_path": "CopyParameterOverrides",
+          "static_in_unreal": false,
+          "static_in_script": false,
+          "global_scope": false,
+          "not_angelscript_property": false,
+          "trivial": false,
+          "world_context_argument": -1,
+          "determines_output_type_argument": -1,
+          "class_name": "",
+          "script_name": ""
+        }
+      ]
+    }
+  ],
+  "properties": [
+    {
+      "owner_full_identity": "0:0:17:UMaterialInstance1:00:",
+      "name": "Parent",
+      "member_offset": 272,
+      "owner_object_kind": 67108864,
+      "value_type_full_identity": "0:0:18:UMaterialInterface1:00:",
+      "evidence": {
+        "trace": {
+          "kind": "object_property",
+          "ordinal": 123891,
+          "registration_id": 123891,
+          "context": {
+            "namespace": "",
+            "config_group": null,
+            "access_mask": 4294967295
+          },
+          "property_id": 26448,
+          "owner_type_id": 3677,
+          "declaration": "UMaterialInterface unresolved_object Parent",
+          "byte_offset": 272,
+          "composite_offset": 0,
+          "is_composite_indirect": false,
+          "accessor_type": 255,
+          "is_protected": false
+        },
+        "post_bind": {
+          "kind": "object_property",
+          "owner_engine_type_id": 1140854377,
+          "property_index": 2
+        },
+        "final_state": {
+          "kind": "object_property",
+          "property_id": 26448,
+          "byte_offset": 272,
+          "access_mask": 4294967295,
+          "composite_offset": 0,
+          "is_composite_indirect": false,
+          "is_private": false,
+          "is_protected": false,
+          "is_app_bind_property": true,
+          "exposed_type": 255
+        },
+        "binds_property": {
+          "declaration": "UMaterialInterface unresolved_object Parent",
+          "unreal_path": "Parent",
+          "can_write": false,
+          "can_read": false,
+          "can_edit": false,
+          "generated_getter": false,
+          "generated_setter": false,
+          "generated_name": "",
+          "generated_handle": false,
+          "generated_unresolved_object": false
+        },
+        "value_type_full_identity": "0:0:18:UMaterialInterface1:00:",
+        "value_datatype": {
+          "full_identity": "0:0:18:UMaterialInterface1:00:",
+          "token": 5,
+          "flags": [
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "6:object1:51:01:01:11:030:0:0:18:UMaterialInterface1:00:"
+        }
+      }
+    },
+    {
+      "owner_full_identity": "0:0:6:UQuest1:00:",
+      "name": "bExternalAvailabilityTrigger",
+      "member_offset": 322,
+      "owner_object_kind": 67108864,
+      "value_type_full_identity": "9:primitive2:651:01:01:01:0",
+      "evidence": {
+        "trace": {
+          "kind": "object_property",
+          "ordinal": 134064,
+          "registration_id": 134064,
+          "context": {
+            "namespace": "",
+            "config_group": null,
+            "access_mask": 4294967295
+          },
+          "property_id": 33925,
+          "owner_type_id": 5674,
+          "declaration": "bool bExternalAvailabilityTrigger",
+          "byte_offset": 322,
+          "composite_offset": 0,
+          "is_composite_indirect": false,
+          "accessor_type": 255,
+          "is_protected": false
+        },
+        "post_bind": {
+          "kind": "object_property",
+          "owner_engine_type_id": 1140856374,
+          "property_index": 6
+        },
+        "final_state": {
+          "kind": "object_property",
+          "property_id": 33925,
+          "byte_offset": 322,
+          "access_mask": 4294967295,
+          "composite_offset": 0,
+          "is_composite_indirect": false,
+          "is_private": false,
+          "is_protected": false,
+          "is_app_bind_property": true,
+          "exposed_type": 255
+        },
+        "binds_property": {
+          "declaration": "bool bExternalAvailabilityTrigger",
+          "unreal_path": "bExternalAvailabilityTrigger",
+          "can_write": false,
+          "can_read": false,
+          "can_edit": false,
+          "generated_getter": false,
+          "generated_setter": false,
+          "generated_name": "",
+          "generated_handle": false,
+          "generated_unresolved_object": false
+        },
+        "value_type_full_identity": null,
+        "value_datatype": {
+          "full_identity": null,
+          "token": 65,
+          "flags": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "datatype_identity": "9:primitive2:651:01:01:01:0"
+        }
+      }
+    }
+  ],
+  "proof_limit": "Offline declaration/admission authority only. Full identities include effective datatype qualifiers; native property offsets are authenticated registrar values, corroborated by unchanged available pristine native property rows. USMAP is shape/ancestry evidence, not an offset oracle. No new-game registration capture or runtime head/quest behavior is claimed. Unknown declarations and other pristine SHA/GUID pairs remain unauthorized."
+}

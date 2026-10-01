@@ -148,6 +148,14 @@ impl LoadoutScriptIdPlanBuilder {
             .map_err(loadout_splice_error)
     }
 
+    /// Retain pristine-bound native evidence during both inspection and canonicalization.
+    /// Missing or changed Binds never authorizes extended native declarations.
+    pub fn new_with_binds(pristine_base: &[u8], binds: &[u8]) -> Result<Self, SpliceError> {
+        super::remap::LoadoutScriptIdPlanBuilder::new_with_binds(pristine_base, binds)
+            .map(Self)
+            .map_err(loadout_splice_error)
+    }
+
     /// Inspect one exact mini atomically without retaining its bytes.
     pub fn inspect(&mut self, mini: &[u8]) -> Result<(), SpliceError> {
         self.0.inspect(mini).map_err(loadout_splice_error)
@@ -517,6 +525,21 @@ fn preflight_property_reference(c: &mut Cursor<'_>) -> Result<(), WireError> {
 impl SequentialMiniGuard {
     /// Bind the guard to the exact base all incoming minis were independently remapped against.
     pub fn new(base: &[u8]) -> Result<Self, SpliceError> {
+        Self::new_with_native_authority(base, None)
+    }
+
+    /// Admit audited native declarations only with the exact Binds.Cache used by the compiler.
+    pub fn new_with_binds(base: &[u8], binds: &[u8]) -> Result<Self, SpliceError> {
+        let authority = super::remap::PristineNativeApiAuthority::from_pristine(base, binds);
+        Self::new_with_native_authority(base, Some(&authority))
+    }
+
+    /// FullGraph keeps original native authority while rebuilding script authority from each
+    /// successfully composed running cache. Ordinary callers still authenticate their own base.
+    pub(super) fn new_with_native_authority(
+        base: &[u8],
+        native_authority: Option<&super::remap::PristineNativeApiAuthority>,
+    ) -> Result<Self, SpliceError> {
         let header = CacheHeader::parse(base)?;
         // A raw-file component can replace the effective script base before Manager composition.
         // Reject an oversized or record-amplified base before any StaticName, identity, module-name,
@@ -537,7 +560,14 @@ impl SequentialMiniGuard {
             Err(error) => return Err(SpliceError::StaticNameRebase(error)),
             Ok(context) => context,
         };
-        let reference_context = match super::remap::EffectiveReferenceBase::build(base) {
+        let reference_context = match native_authority {
+            Some(authority) => super::remap::EffectiveReferenceBase::build_with_native_authority(
+                base,
+                Some(authority),
+            ),
+            None => super::remap::EffectiveReferenceBase::build(base),
+        };
+        let reference_context = match reference_context {
             Err(super::remap::RemapError::ModuleNameCollision { name }) => {
                 return Err(SpliceError::InnerNameCollision(name));
             }

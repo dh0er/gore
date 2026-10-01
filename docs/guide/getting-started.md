@@ -14,8 +14,11 @@ Two ways to get `gore.exe`:
 
 **Download a release.** Grab a `gore-cli-v*` asset from the
 [releases page](https://github.com/dh0er/gore/releases). The zip contains
-`gore.exe`, the `shared\` Lua SDK, and this whole guide under `docs\` — so the
-documentation is available offline, right next to the binary.
+`gore.exe`, its required `compiler\` tree, and this whole guide under
+`docs\` — so the compiler and documentation are available offline, right next
+to the binary. Unpack the complete zip into a stable directory such as
+`C:\Tools\gore-cli`, add that directory to `PATH`, and keep all companion files
+together when installing or updating.
 
 To read it offline, open `docs\guide.html`: one browsable file with every page,
 a collapsible sidebar and a filter box. The `docs\*.md` files next to it are the
@@ -24,15 +27,24 @@ too, but from a copy compiled into `gore.exe` rather than from these files —
 editing them changes what you read, not what an assistant is told. You can
 regenerate the HTML at any time with `gore guide html`.
 
-**Build it yourself.** Requires a stable Rust toolchain:
+**Build it yourself.** Requires Python 3, a stable Rust toolchain, and the
+Visual Studio C++ tools; see [Building](../development.md) for the full
+toolchain requirements. From the repository root:
 
 ```powershell
-cargo build --release -p gore
-# → target\release\gore.exe
+python build.py gore-cli dist             # recommended installable zip → dist\gore-cli\
+python build.py gore-cli build --release  # CLI + compiler → target\release\
 ```
 
-See [Building](../development.md) for the full toolchain requirements and the
-`build.py` orchestrator that also builds the GUI apps.
+For installation, unpack the complete zip as described above; `dist` includes
+the compiler and offline guide. Keep the complete output together, including
+`compiler\` and `docs\`, rather than copying only `gore.exe`.
+
+Normal CLI builds require a nonempty embedded compiler catalog prepared by
+`build.py`. Raw `cargo build -p gore` without it fails. The explicit debug-only
+`development-cli` feature is for development and tests; see
+[Building](../development.md#the-rust-workspace). It cannot bypass the catalog
+requirement in release builds.
 
 GORE is Windows-only. Every example in this documentation is PowerShell, assumes
 `gore` is on your `PATH`, and uses the variable `$GAME` for your install root —
@@ -74,10 +86,9 @@ apps read too, so the install is configured in exactly one place.
 gore doctor
 ```
 
-One read-only pass over everything the rest of this guide assumes. Ten checks,
-one line each: where the install is and which of the three sources above
-answered, whether that folder holds Gothic 1 Remake, whether [UE4SS](#ue4ss) is
-present, which UE4SS mods are enabled, what is deployed, whether the `~mods`
+One read-only pass over everything the rest of this guide assumes. One line
+each: where the install is and which of the three sources above
+answered, whether that folder holds Gothic 1 Remake, what is deployed, whether the `~mods`
 override folder is there, what an interrupted run left behind, whether the
 executable is running, whether the authenticated standalone AngelScript
 compiler matches the installed cache/API, and whether the shared localized-text
@@ -88,14 +99,12 @@ check can point to the earlier missing prerequisite instead. Abridged example:
 
 ```
 ok      game path     D:\SteamLibrary\steamapps\common\Gothic 1 Remake (source: config)
-ok      UE4SS         installed at …\G1R\Binaries\Win64\ue4ss
-ok      UE4SS mods    22 mod folder(s), 7 enabled
 ok      deployment    nothing is deployed (no deploy record in the install)
 ok      AS standalone authenticated standalone compiler is compatible with this cache/API; native diagnostics are available without a game launch
 problem loc catalog   43851 ids in 19 language(s), but stale: extracted from 37081808 bytes and the installed cache is now 37093440
                       fix: … Run 'gore loc extract' so the shared catalog describes the file that is actually installed
 
-10 check(s): 9 ok, 0 note, 1 problem, 0 skipped
+check(s): the counts on the last line say how many of each verdict you have
 ```
 
 | Verdict | Meaning |
@@ -115,7 +124,11 @@ counts.
 Nothing here writes, creates or removes anything. The `deployment` check hashes
 the files the deploy record claims, exactly as `gore mgr status` does. The
 standalone-compiler check separately authenticates its package and verifies that
-the installed compiler inputs match a qualified cache/API.
+the installed compiler inputs match a qualified cache/API. It also reports
+`native_api: ready` or `native_api: missing` for extended native reference
+authority. Missing authority is an actionable problem even when the compiler
+itself is compatible; ordinary references already present in the pristine
+cache may still work.
 
 What each check reads — and therefore what it can and cannot prove — is in the
 [CLI reference](cli-reference.md#doctor).
@@ -128,7 +141,6 @@ What each check reads — and therefore what it can and cannot prove — is in t
 | do the same without a terminal, for one mod | [Mod Studio](mod-studio.md) |
 | install and order **many** mods at once | [Mod Manager](../../apps/mod-manager/README.md) or [`gore mgr`](mod-manager.md) |
 | edit your saved progress | [Save Editor](../../apps/save-editor/README.md) |
-| hand-write custom Lua behavior | [gore-lua](../../lua/README.md) |
 
 The Flutter GUIs call the same Rust engine as the CLI through a `dart:ffi`
 bridge. Use the CLI for expert and automated workflows; use a GUI when its
@@ -141,7 +153,7 @@ Every domain produces a mod a different way, and each one is usable on its own:
 
 | Domain | Mechanism | Touches | Guide |
 |--------|-----------|---------|-------|
-| Item/stat values | [UE4SS](#ue4ss) Lua CDO override, applied at runtime | a new mod folder under `ue4ss\Mods\` | [items.md](items.md) |
+| Item/stat values | rewritten class `default`, compiled into the script cache | the Shipping script cache | [items.md](items.md) |
 | Text & dialogs | re-encrypted `.lcache` | the localization cache, in place | [text-and-dialogs.md](text-and-dialogs.md) |
 | Audio | re-packed FMOD `.bank` | the sound bank, in place | [audio.md](audio.md) |
 | Voice-over | copy-on-write localized ZIP edit | the selected language archive, in place | [voice.md](voice.md) |
@@ -167,118 +179,80 @@ see [Bundling & deploying](bundles.md).
   (`.gore-install-mutation.lock`) so two GORE processes cannot fight, but the
   game itself does not participate in that lock.
 
-## UE4SS
+## A first mod: apple prices
 
-Of the domains in the table above, item and stat values are the only one applied
-while the game runs: instead of changing a file the game loads, GORE emits a
-small Lua mod that sets the value in memory. Something has to run that Lua, and
-that something is UE4SS — a third-party loader that attaches to the running game
-and executes the Lua mods it finds in a `Mods\` folder. It is a separate
-community project, not part of Gothic 1 Remake and not part of GORE.
-Hand-written [gore-lua](../../lua/README.md) mods run the same way; the other
-rows of the table above never involve it.
+Change the default value of an apple with a small native script bundle. This
+uses the same class-default builder as larger value mods and needs no UE4SS.
+The build and inspection steps write only your work and output directories.
 
-GORE does not install it, and no command checks whether it is there. `gore gen`
-and `gore mod build` produce a well-formed mod either way, and `gore mod deploy`
-creates `ue4ss\Mods\` itself when it is missing — so a deploy that reports
-success means the files are in place, never that anything will run them.
-
-`gore doctor` answers whether you have it — the `UE4SS` line — along with which
-mods in it are enabled. To look for yourself:
+### 1. Inspect the target
 
 ```powershell
-ls "$GAME\G1R\Binaries\Win64\ue4ss"
+gore value inspect --class UItFo_Apple --game "$GAME"
 ```
 
-An install has `UE4SS.dll`, `UE4SS-settings.ini` and a `Mods\` directory sitting
-beside each other. If the `ue4ss` folder is not there at all, you do not have it,
-and an override mod will sit in the install doing nothing, with nothing on either
-side reporting a problem.
+Find `m_Value` in the recovered defaults. An unknown class, an unsupported
+field or an incompatible compiler fails with a reason; resolve that before
+building. [Item & stat values](items.md) explains the supported types and how
+class defaults affect existing saves.
 
-**Where to get it.** UE4SS is [UE4SS-RE/RE-UE4SS](https://github.com/UE4SS-RE/RE-UE4SS)
-on GitHub (MIT). GORE neither ships nor installs it.
+### 2. Build the bundle
 
-Read the release list before you download, because the newest *tagged* release
-is not the newest build:
+Save this as `first-mod.spec.json`:
 
-| Channel | What it is |
-|---|---|
-| `v3.0.1` | the latest stable tag — published **February 2024**, which predates this game |
-| `experimental-latest` | a rolling prerelease, rebuilt continuously from `main` |
-
-Everything in this guide was checked against an **experimental** build, the one
-this machine runs: `v3.0.1 Beta #0`, git `272ce2f8` (7 June 2026). Note the
-version string — experimental assets are still named `UE4SS_v3.0.1-<n>-g<sha>.zip`,
-so "v3.0.1" alone does not tell you which of the two you have. The git SHA does.
-
-To see what you have, read the second line of `UE4SS.log`:
-
+```json
+{
+  "meta": { "name": "MyFirstMod", "version": "0.1.0", "author": "" },
+  "values": [
+    { "class": "UItFo_Apple", "field": "m_Value", "value": { "int": 500 } }
+  ]
+}
 ```
-[…] UE4SS - v3.0.1 Beta #0 - Git SHA #272ce2f8
-```
-
-Nothing here has been tested against the 2024 stable tag.
-
-Inside `Mods\`, each mod is one folder holding `Scripts\main.lua` and an empty
-`enabled.txt`. That empty file is the switch — UE4SS loads a folder because
-`enabled.txt` is present. `gore gen` and `gore scaffold` write both for you.
-
-**Confirming an override applied.** UE4SS writes a log next to itself,
-`G1R\Binaries\Win64\ue4ss\UE4SS.log`, and a generated override mod prints one
-line there for every override it applies:
-
-```
-[<timestamp>] [Lua] [MyBalanceMod] ItFo_Apple.m_Value 10 -> 500
-```
-
-That line is the only machine-readable evidence that the change took effect, and
-it is worth reading before you conclude a mod failed: it separates "nothing
-happened" from "something happened and you were looking at the wrong thing".
-
-Do not judge it in the first seconds. The class defaults an override targets do
-not exist yet when the mod starts, so the generated Lua polls for them — every
-1000 ms, up to 120 attempts. In the one run that was measured, the line appeared
-about four seconds after the mod started, after several retries. If a class never
-appears at all, the log says that instead:
-
-```
-[<timestamp>] [Lua] [MyBalanceMod] gave up after 120 attempts; 1 CDO(s) never appeared
-```
-
-## A first mod
-
-Make apples worth 500 gold. This is an override, so it needs UE4SS in the game
-install — see [UE4SS](#ue4ss) above if you have not checked. Save this as
-`overrides.toml`:
-
-```toml
-[meta]
-name = "MyBalanceMod"
-
-[[override]]
-class = "ItFo_Apple"
-field = "m_Value"
-value_int = 500
-```
-
-Then compile it into the game's UE4SS mods folder:
 
 ```powershell
-gore gen overrides.toml -o "$GAME\G1R\Binaries\Win64\ue4ss\Mods"
+gore mod build --spec first-mod.spec.json --game "$GAME" `
+  --work-dir work/first-mod -o build
+gore mod inspect build\MyFirstMod
 ```
 
-Start the game. The value is applied a few seconds in rather than at the moment
-of launch, and `UE4SS.log` is where you see it happen — see [UE4SS](#ue4ss)
-above. Details and the full override format: [Item & stat values](items.md).
+The bundle is `build\MyFirstMod`. Keep it outside the game installation;
+`build` compiles the changed module with the standalone compiler and does not
+launch the game.
 
-If apples still cost what they did, run [`gore doctor`](#check-the-setup) before
-anything else. Nothing in the build or the deploy would have told you that UE4SS
-is missing, that another enabled mod is setting the same value, or that the
-folder has no `enabled.txt`; that one command checks all three.
+### 3. Apply, observe, remove
+
+Close the game, then deploy the inspected bundle:
+
+```powershell
+gore mod deploy --bundle build\MyFirstMod --game "$GAME"
+gore doctor --game "$GAME"
+```
+
+Start the game yourself and compare apple prices at a trader. The class's
+`m_Value` is now 500; buy and sell prices also use the trader's multipliers, so
+they need not display 500. This edit does not change saved inventory counts.
+
+Close the game again and remove the direct deployment:
+
+```powershell
+gore mod undeploy --game "$GAME"
+gore doctor --game "$GAME"
+```
+
+The second check should show no direct deployment and restored original files.
+If you already use a Manager loadout, import the bundle and use that loadout's
+Apply/Reset workflow instead; see [Running many mods](mod-manager.md).
+
+For a new NPC with dialogs or a quest, continue with
+[Characters](npc-authoring.md) and the shipped source examples. A new character's
+private conversation is authored in its source module. `dialog new-conversation`
+reads a pristine cache's already-loaded settings anchor; it does not read an
+uncompiled `npc new` workspace.
 
 ## Next steps
 
-- [Item & stat values](items.md)
+- [Characters](npc-authoring.md)
+- [Dialog authoring](dialog-authoring.md)
 - [Text & dialogs](text-and-dialogs.md)
 - [Bundling & deploying](bundles.md)
-- [CLI reference](cli-reference.md) — every command and flag
+- [CLI reference](cli-reference.md)

@@ -1,0 +1,221 @@
+# NPC role test sources
+
+Two **sequential** fixtures built from tested `NpcWarningRecovery 0.1.12`.
+Run `python scripts/fixtures/npc-batch-tests/roles/prepare.py` from the repository.
+It writes `work/npc-batch-tests/roles/{economy,field}/GORE_TEST_{A,B}.as`
+and source hashes. See the parent BUILD.md for compilation and packaging.
+
+Both retain every old A class, hide its 29 previous choices, and append the new
+menu to A. B's complete original source is an exact prefix; its equipment,
+personality, AI mapping and existing fields are unchanged. Build and inspection
+results are recorded in the parent batch; runtime results are recorded below. Use the
+prepared starts below with A and B already present. Reload the same clean input
+between combat cases.
+
+## Economy / teacher
+
+Completed as `NpcEconomyRolesTest 0.1.3` on2026-09-12; now disabled.
+The separate [late-restock follow-up](restock/README.md) passed as0.1.0
+on2026-09-22: late delivery, repeated dispatch, purchase and two full restarts.
+Its six START/result saves are archived outside the game. See the
+[runtime result](restock/runtime-0.1.0.json); no repeated teacher tests were needed.
+The [runtime result](economy-runtime-0.1.3.json) confirms both reloads preserve
+the traded stock and Hero inventory. The [reload correction](economy-reload-0.1.3.json) records the focused rebuild.
+The [0.1.0 deployment report](economy-deployment.json) remains historical.
+Natural-voice testing has finished its restart check, and the completed Voice
+saves are archived outside the game.
+
+Talk to A. This test uses native trader configuration and the stock learning helper.
+
+Runtime2026-09-12: the user confirms all teacher cases and the full-restart
+recheck. They do not need repeating for the commerce follow-up. Trading0.1.0
+failed visually: both goods lists were empty, Hero showed50 ore and A0.
+The0.1.1 explicit region/type follow-up also failed on the saved and fresh inputs.
+The [root-cause report](economy-runtime-0.1.1.json) corrects the earlier readback:
+save024 contains3 cheese,10 arrows and100 ore in A's **NPC inventory container**,
+but his separate global shop row has empty `m_Items` and `m_DefaultItems`.
+Choice01 wrote to the wrong pool. The Hero owns only the
+quest letter, glossary and50 ore, so an initially empty sellable-goods list is
+not itself a defect. See the [runtime result](economy-runtime-0.1.0.json).
+
+### Commerce follow-up0.1.3 (passed)
+
+The user confirms the complete checklist below. All three result saves have
+A current2 cheese/10 arrows/108 ore, default3/10/100, and Hero1 cheese/42 ore.
+The starting save067 and results are now [archived outside the game](../profile-cleanup-after-economy-reload.json).
+No additional commerce/teacher test is needed for this initial-stock path.
+
+The [0.1.2 user test](economy-runtime-0.1.2.json) passed stock visibility,
+purchase/sale and cancel, but failed persistence:026 had3/10/105 current stock
+and an empty default map;027 had6/20/205 current stock and3/10/100 defaults.
+The generated-event ledger and once marker survived unchanged. This rules out
+a lost menu marker; saves alone do not identify the exact native replay/delta
+implementation. That historical path remains unqualified; the later
+[initial-plus-late batch test](restock/runtime-0.1.0.json) passes persistence.
+
+For initial stock0.1.3 uses the shipped `OnWorldStart` batch. No choice dispatches
+a stock event or adds goods.01 only acknowledges the prepared stock and unlocks
+02. Original trading modules and teacher logic are preserved. Use untouched067;
+026 already lacks its default baseline and027 already contains duplicates.
+
+1. Profile4: load **067 `NPC 03 Handel - LP fehlt`**. At A choose
+   **01 Anfangsbestand bereit**, then02. Expect3 cheese,10 arrows and100 trader ore.
+2. Buy1 cheese and note A's resulting ore. Expect2 cheese and10 arrows.
+   End trade, choose05 and save **`handel-startbestand`**.
+3. Fully quit/restart, reload that save, choose02 directly. Expect exactly the
+   recorded stock/ore, including2 cheese. Choose05, save **`handel-reload-1`**.
+4. Reload `handel-reload-1` once more, repeat02/05 and save **`handel-reload-2`**.
+   Counts must still match. Neither restocking nor an additional grant is expected.
+
+No repeated teacher or cancel tests. If stock is empty or changes, save the
+observed result and report counts. Readback must inspect both global stock maps,
+the event ledger and Hero inventory; menu markers alone are not proof.
+
+### Original full checklist (teacher already passed)
+
+Historical checklist: all economy/teacher starts and results are now archived
+outside the game; no commerce input needs to stay in the live profile.
+
+Profil 4: **067 „NPC 03 Handel - LP fehlt“** (0 LP/50 Erz),
+**068 „NPC 03 Lehrer - Erz fehlt“** (5 LP/0 Erz),
+**069 „NPC 03 Lehrer - bereit“** (15 LP/200 Erz).
+Bei 067 und 068 zuerst 03 ausprobieren, bevor du handelst oder 04 benutzt.
+Bei 069 reicht das Geld auch beim zweiten Versuch noch aus; so wird die Sperre
+fuer bereits gelerntes Tauchen geprueft. 04 ist fuer diese Starts nicht notwendig.
+Ergebnisse bitte `lehrer-lp-fehlt`, `lehrer-erz-fehlt`, `lehrer-gelernt`,
+`lehrer-neustart` und nach dem Handel `rolle-handel` nennen.
+
+| Choice | Test / expected observation |
+| --- | --- |
+| 01 | Acknowledge the native initial shop stock and unlock02; this choice never grants goods. |
+| 02 | Open trade, buy 1 cheese, then sell it back. Check both inventories and ore changes; cancel a second pending transaction and confirm no transfer. |
+| 03, before 04 | On an input without Diving and with fewer than 5 LP **or** 30 ore, learning must fail and charge nothing. For separate LP/ore gates, use inputs satisfying only the other requirement. The fixture never removes existing resources to manufacture this state. |
+| 04 | Optional, once per save: explicitly grants 5 LP and 50 ore for the positive test. It does not reset resources or unlearn skills. |
+| 03 | With Diving unknown and both resources sufficient, learn it: precisely 5 LP and 30 ore deducted. Repeat: already learned must cause no second charge. |
+| 05 | Record current ore/LP, skill and requirement checks. Save, reload, talk again and repeat 05: Diving and changed stock must persist; 01 and 04 must stay unavailable if already used in that save. |
+
+If the input already knows Diving, its positive learning case is inapplicable:
+use an earlier test-save copy without the skill. Never count a skipped gate as
+tested. Stock prices depend on shipped trading rules; compare displayed prices
+and actual ore deltas, not a fabricated fixed price.
+
+## Field roles / lifecycle / mixed weapons
+
+**Active: `NpcFieldRolesTest 0.1.0`**, unchanged qualified build, Manager `in_sync`.
+See [deployment](field-deployment.json) and the **[German step-by-step test list](FIELD-TEST.md)**.
+Runtime results are pending. Profile4 now contains only070/071/072.
+
+Talk to A. B is the subject; keep A alive as the control menu. Start each combat,
+faction, flee or death case from the same clean copied save, rather than carrying
+hostility or injuries from a previous case.
+
+Profil 4: **070 „NPC 04 Rollen - START“** fuer die Waffen-Diagnose
+und Folgen/Warten. B steht auf der freien Flaeche vor dem Alten Lager; A steht
+am Tor etwa 30 Meter hinter dir. Dort 30 einschalten, dann innerhalb der
+60 Sekunden zu B zurueckgehen. **072 „NPC 04 Rollen - Kampf bereit“** hat einen
+verstaerkten Helden fuer die positiven Niederlage-/Tod-Tests. Seit2026-09-13
+haben **beide Starts Hero Health/MaxHealth10.000 und B Health/MaxHealth50**,
+jeweils base/current. Nach der Rueckmeldung zu kaum vorhandenem Schaden wurden
+zusaetzlich in beiden Starts **Hero Strength 1000 und Bs Resistance_Blunt/Edge/Point 0**
+gesetzt, ebenfalls base/current. Waffen und Kampfregeln bleiben erhalten.
+Die Originale sind archiviert: [Lebenswerte](field-health-starts.json),
+[Staerke und Schutzwerte](field-damage-starts.json). Diese Starts sind bewusst
+erleichterte Kampfbedingungen. Zwischen den Zweigen frisch laden.
+
+Ergebnisse bitte passend benennen: `rolle-waffenwahl`, `rolle-folgen`,
+`rolle-warten`, `rolle-niederlage`, `rolle-feind-besiegt`, `rolle-gilde-neutral`,
+`rolle-gilde-zurueck`, `rolle-flucht`, `rolle-tod`, `rolle-wiederbelebt`.
+Falls Speichern wegen eines aktiven Konflikts gesperrt bleibt, diesen Befund
+melden; der fehlende Spielstand ist dann kein Grund, den Test zu erzwingen.
+
+| Choice | Test / expected observation |
+| --- | --- |
+| 20 / 21 / 20 | Follow, stop at current area, resume. Walk away after each; check B follows only while requested. Save/load once following and once waiting. |
+| 22 | Stock training fight with a defeat goal, both weapons retained. Win and observe defeat/recovery without a death goal. |
+| 23 | B becomes Hero's enemy until defeat. Observe actual hostility/combat and relationship reset after defeat. This is a personal modifier, not a guild change. |
+| 24 / 25 | Change **B only** to guild None, then restore his original ShadowLeader guild. Inspect saved guild and relationships. Do this on a separate clean branch from 23 so its personal modifier cannot mask faction effects. |
+| 26 / 27 | Since0.1.2, assign an authored retreat routine using native pathfinding away from the explicit player, without introducing enmity. Approach within10m immediately; it lasts approximately60 real seconds. 27 exchanges it for the wait routine and restores any captured legacy flee policy. Reload the clean input afterward. |
+| 28 | Stock training fight with a death goal. Kill B through combat/execution and verify the corpse/dead state persists through save/load. This is deliberately separate from ordinary defeat. |
+| 29 | Available only while B is dead: explicitly enable his same-NPC native timed revival policy. Since0.1.1 the filter also accepts the actual execution memory. Leave the area and allow at least one game hour; return and inspect. Verify the **same global ID**, living state, one B only, and retained inventory/state. Then use21 to disable this policy again. No actor is spawned by this choice. The user confirmed revival on the tested execution-save workflow; other death types and streaming conditions remain unverified. |
+| 30 | Arm a 60-second passive mixed-weapon trace. Close dialogue and reproduce warning sword → combat bow on the known input, keeping both weapons and arrows. Save promptly after the transition. |
+| 31 | Record B's health, dead/defeated, relationship, follow and flee state before saving. |
+
+Run weapon choice 30 on the fresh070 input **before** faction/flee or
+training controls. The trace reads B's actual selected item, equipped item,
+conflict phase, character-of-interest, distance and the exact 100-unit grounded
+reachability query used by the close-target multiplier. It never calls selection,
+draw, inventory-update or scoring-manager functions. It captures changes and
+the first ten combat samples, at most 40 rows. This tests a concrete cause of
+the already-reproduced transition; it is not another generic terrain comparison.
+
+The2026-09-13 user requested easier health, strength and protection values because
+the Hero died before a save could be made and dealt too little damage. These new
+traces use modified combat attributes; do not attribute them to the original
+baseline. The trace does not clear its captured
+values when combat or the60-second window ends. Defeat B without killing him
+or withdraw, end the conflict and save; do not re-arm30 before saving.
+
+World-float keys `gore_role_weapon_<row>_<field>` contain `seconds`, `phase`
+(0 other / 1 warning / 2 combat), `selected` and `equipped` (0 none / 1 Diego
+sword / 2 Diego bow / 3 other), `target` (0 none / 1 player / 2 other), `distance`,
+`reachable` (-1 no target / 0 false / 1 true), and `close_gate`.
+`gore_role_weapon_samples` bounds valid rows; older rows above it are ignored.
+If no rows are produced, the tracer did not run: do not infer combat values.
+The capture samples conditions, **not internal winning scores** or a proof of
+vanilla/mod attribution. In particular, a true close gate does not by itself
+prove which item ought to win after all other multipliers.
+
+Readback must distinguish command markers from observed results. For example,
+`gore_role_revive_enabled=1` only proves the policy was requested, and
+`gore_role_follow_command=1` only proves the follow request was sent. Record
+visible behavior, original/final saves and exact inventory/resource deltas.
+
+### Runtime result — 13 September2026
+
+The user completed cases1–7: follow/wait/resume, training defeat/recovery,
+enmity until defeat, guild roundtrip and death surviving reload passed.
+The eleven [result saves](field-runtime-0.1.0.json) confirm one B with the same
+identity, the follow/wait routines, Guild_None/ShadowLeader effects and retained death.
+The weapon trace contains a close reachable Hero and warning sword, but no combat-phase
+sample; it cannot settle the earlier bow-selection cause.
+
+Flucht0.1.0 failed: Always-flee was only an unfavorable-combat preference, and
+the stock flee target collector also excludes the same species.0.1.1 explicitly
+selects Hero in an authored state using native weapon-sheathing and navigation tasks;
+it does not change the stock combat/flee assessment rules.
+Wiederkehr0.1.0 failed:032 is still dead82.7 game minutes after the execution
+memory, despite the assigned revival routine. The authored Conflict.Killed filter
+did not include the actual Character.Defeated.Kill execution tag. These are
+targeted mod corrections; no vanilla-defect attribution is established.
+
+The0.1.1 retest confirms revival. Flight stopped attacking but still did not move;
+no new result save was available for a readback. See [the user report](field-runtime-0.1.1.json).
+The0.1.2 candidate uses the proven scheduled-state entry path, resolves the player
+explicitly and uses GotoPosition for five-metre retreat goals. The previous
+straight nav-ray gate is removed; its role in the failure is not yet proven.
+It records `gore_role_flee_entered`, `_distance`, `_attempts`, `_moved_cm` and `_exit`
+for the next save. Exit0 means no recorded completion,1 end of the bounded loop,
+2 explicit stop, negative values an unavailable AI/body (-1) or player (-2).
+In0.1.2, choice27 overwrites the exit code with2 but keeps entry, distance and
+movement measurements. Since0.1.3, it writes2 only when the code is still0,
+preserving earlier completion/error codes as well.
+The0.1.3 user observation and movement measurements now confirm visible flight;
+a queued routine alone would not be movement proof.
+
+The [0.1.2 result save](field-runtime-0.1.2.json) records entry0, attempts0,
+distance-1 and movement0, despite the accepted command.31/27/31 did not erase
+these values. The live event metadata matches the working activity state.
+The flee template, however, explicitly disabled simulated steps, unlike its
+base and the proven walking/activity templates.0.1.3 enables that flag and
+keeps the navigation code unchanged. The native scheduler's precise gate is
+not exposed in script source. The [0.1.3 test passed](field-runtime-0.1.3.json):
+entry1,41 movement attempts and5381.774cm cumulative movement, followed by the
+wait routine. The retained exit-1 indicates an invocation without a valid AI/body;
+it does not erase the measured movement or imply every streaming case is qualified.
+
+Completed results are [archived outside the game](../profile-cleanup-after-field.json).
+After the revival pass,030 is [archived too](../profile-cleanup-after-revive.json);
+070/071/072 were retained at that stage.
+The completed0.1.2 flight result is [also archived](../profile-cleanup-after-flee-v3.json).
+After the successful0.1.3 field campaign, [070/072 and its result are archived](../profile-cleanup-after-field-complete.json).
+Only071 remains in Profile4 for the next quest package.

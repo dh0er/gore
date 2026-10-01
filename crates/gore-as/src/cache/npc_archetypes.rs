@@ -2063,6 +2063,7 @@ mod tests {
 
     fn function(name: &str, bytecode: Vec<i32>) -> Func {
         Func {
+            variable_space: 0,
             name: name.to_owned(),
             namespace: String::new(),
             param_defaults: Vec::new(),
@@ -2084,6 +2085,7 @@ mod tests {
             methods,
             ctors: Vec::new(),
             flags: 1,
+            is_abstract: false,
         }
     }
 

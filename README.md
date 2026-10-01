@@ -1,90 +1,86 @@
-# ⚔️ GORE
+<p align="center">
+  <img src="docs/images/gore_logo.png" alt="GORE Logo" width="400"/>
+</p>
 
-**GORE** (Go-thic Re-make) is a vibe-coded modding and save-editing toolsuite for Gothic 1 Remake. One Rust engine, one CLI, and three Windows apps built on top of it.
+<p align="center">
+  <a href="https://github.com/dh0er/gore/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/dh0er/gore/ci.yml?style=flat&label=Build" alt="Build Status"></a>
+  <a href="https://github.com/dh0er/gore/issues"><img src="https://img.shields.io/github/issues/dh0er/gore?style=flat&label=Issues" alt="Issues"></a>
+  <a href="https://github.com/dh0er/gore/blob/main/LICENSE"><img src="https://img.shields.io/github/license/dh0er/gore?style=flat&label=License" alt="License"></a>
+</p>
 
-[<img src="docs/images/screenshot_dark.png" alt="GORE Save Editor" width="600"/>](docs/images/screenshot_light.png)
+#
+
+**GORE** (Go-thic Re-make) is a modding and save-editing toolkit for Gothic 1 Remake which works
+completely without UE4SS. It comes with a plugin for your agents, so you can easily mod using AI.
+
+In fact, the whole CLI is intended to be used by AI agents only. You can of course use it manually,
+but except for this README, the whole documentation is written by AI and might be incomplete and/or
+hard to understand.
+
+A no-code GUI, Mod Studio, is planned for the future. Its unfinished GUI
+workflows do not limit the CLI, MCP plugin, or Mod Manager.
 
 ## 🧰 Tools
 
-| <div style="width:150px">Tool⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀</div> | What it does | <div style="width:150px">Status⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀</div> |
-|---|---|---|
-| **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing your save files. Never touches the game install. | ✅ Ready to use |
-| **[CLI](docs/guide/README.md)** | All modding from the terminal: item values, text and dialogs, audio, voice, textures, DataAssets, scripts. Start here. | ⚗️ Experimental use |
-| **[Mod Manager](apps/mod-manager/README.md)** | Windows GUI for installing and ordering *many* mods together. | ⚗️ Experimental use |
-| **[Assistant plugin](plugins/gore/README.md)** | The MCP server and the modding skill, installed into Claude Code, Codex or Cursor in one step. | ⚗️ Experimental use |
-| **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the same engine, for *authoring* one mod. | 📋 Planned |
-
-The Flutter GUIs reuse the same Rust engine as the CLI through a `dart:ffi`
-bridge. The CLI is the expert and automation surface; the GUIs package those
-contracts into guided workflows instead of maintaining a second engine.
-
-## ✅ Compatibility
-
-**Save Editor** is not tied to a specific game version. It edits the save file
-itself, never the game installation, and is designed to preserve data it does
-not understand. Its core save editing is stable across game versions, although
-a future patch can add or change save fields or make the bundled item and
-location catalogs stale. Keep backups of important saves.
-
-The **CLI** has been tested with Gothic 1 Remake **1.0.5 (Steam BuildID
-24878692)**; **Mod Manager** has been tested with **1.0.4a (CL171864)**.
-Neither uses a simple version-number lock. Mod Manager
-compatibility also depends on the individual mod and whether its target files,
-localization IDs, assets, and script targets exist in the installed game.
-Import validates the package, but cannot prove runtime compatibility; Apply
-checks the current installation and reports missing or incompatible targets.
-
-Many offline CLI commands are independent of the installed game version, while
-commands that read, build, or deploy game data depend on the relevant formats
-and APIs. In particular, the bundled standalone AngelScript compiler checks the
-installed Shipping cache format and complete ordered Binds API instead of the
-displayed game version. If they do not match, strict standalone compilation
-fails safely; the default `standalone-then-game` mode reports the reason and can
-use the game's embedded compiler as a fallback.
-
-## ⬇️ Downloads
-
-| Tool | Version | Release page |
-|---|---|---|
-| **CLI** | 0.3.0 | [gore-cli-v0.3.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.3.0) |
-| **Mod Manager** | 0.2.0 | [gore-mod-manager-v0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
-| **Save Editor** | 1.4.0 | [gore-save-editor-v1.4.0](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.4.0) |
-
-Every release page lists its own assets and changes. The full history is on the
-[releases page](https://github.com/dh0er/gore/releases). Mod Studio has no
-release yet — build it from source.
+| Tool⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀ | What it does | Status⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀ | Download |
+|---|---|---|---|
+| **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing savegames. | ✅ Ready to use | [1.5.0](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.5.0) |
+| **[CLI](docs/guide/README.md)** | All-in-one command-line tool for all modding tasks. | ⚗️ Experimental use | [0.4.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.4.0) |
+| **[Mod Manager](apps/mod-manager/README.md)** | Windows GUI for installing and ordering *many* mods together. | ⚗️ Experimental use | [0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
+| **[AI Plugins](plugins/gore/README.md)** | MCP server and skill for the CLI. | ⚗️ Experimental use | ⠀⠀⠀⠀⠀ |
+| **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the GORE engine, for *authoring* mods. | 📋 Planned | ⠀⠀⠀⠀⠀ |
 
 ## 📊 Status
 
-| Area | Status | What you can do | The catch |
+| Area | Status | What you can do | What's missing |
 |---|---|---|---|
-| [Item & stat values](docs/guide/items.md) | Full | Change what items are worth, what weapons do, what NPCs have | Needs UE4SS, which GORE does not install |
-| [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace localized game text across all 19 catalog slots | Twelve slots are ordinary languages; German and English use multiple generations, while `foreign` and `stagedirections` are not languages |
-| [Dialog authoring](docs/guide/dialog-authoring.md) | Mostly | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | A first conversation needs an exact already-loaded per-NPC settings module; cross-module new-symbol dependencies need a separate selective complete-cache compile, not dialog minis |
-| [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | Finding which sound plays where is guesswork |
-| [Voice-over](docs/guide/voice.md) | Mostly | Replace spoken lines and add voice to authored new lines | Publication requires Vorbis; a new member also needs matching script and localization, and receives generic lip movement rather than exact new lip sync |
-| [Textures](docs/guide/textures.md) | Full | Replace textures | A few, like the mouse cursors, are stored somewhere this cannot reach |
+| [Savegames](apps/save-editor/README.md) | Mostly | Edit Player and NPC values, inventories, quests and much more | Armor upgrades, chest and corpse loot, other loot points. No CLI support yet. |
+| [Item & stat values](docs/guide/items.md) | Partly | Change values, damage, icons and costs of existing items and abilities. | New items, and copies of existing items under a new name |
+| [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace all localized game text | ⠀⠀⠀⠀⠀ |
+| [Dialog authoring](docs/guide/dialog-authoring.md) | Full | Edit shipped topics and build new roots, submenus, multi-level trees and complete conversations with game effects | ⠀⠀⠀⠀⠀ |
+| [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | ⠀⠀⠀⠀⠀ |
+| [Voice](docs/guide/voice.md) | Mostly | Replace spoken lines and add voice to authored new lines | Other formats than Vorbis; Lip sync |
+| [Textures](docs/guide/textures.md) | Mostly | Replace supported cooked `Texture2D` assets; bundle loose images and cursor PNGs | Some pixel formats and virtual-texture layouts cannot yet be rewritten |
 | [DataAssets](docs/guide/dataassets.md) | Partly | Edit cooked game data | Only assets the engine describes natively; Blueprint ones are refused |
-| [Scripts](docs/guide/scripts.md) | Mostly | Read the game's script code, change it, add your own | Splicing recompiles the WHOLE module, including functions you did not touch. On BuildID 24878692, 7,311 of 7,317 modules have no known semantic difference among aligned functions; six carry 10 unresolved differences, which `emit` and `compile-module` warn about. The current BuildID 25168047 has a complete offline round trip with 164,724 aligned functions and zero semantic differences. This does not prove behavior for arbitrary edited mods in game. |
-| [Mods & load order](docs/guide/bundles.md) | Full | Ship all of the above as one mod, run many together, and install mods that GORE did not build — plain zips, pak files, UE4SS mod folders | Four Nexus mods have run through one real-install campaign; third-party AngelScript and three-way script conflicts remain unqualified |
+| [Scripts](docs/guide/scripts.md) | Full | Read the game's script code, change it, add your own | ⠀⠀⠀⠀⠀ |
+| [Mod managing](docs/guide/bundles.md) | Mostly | Ship all of the above as one mod, run many together, install third-party mods — plain zips, pak files, UE4SS mod folders | Mods have not yet been tested after game patches |
 
-GORE will not edit your saves — that is the
-[Save Editor](apps/save-editor/README.md) — and everything above was seen by one
-person, on one install.
+## 📸 Screenshots
+[<img src="docs/images/screenshot_dark.png" alt="GORE Save Editor" width="600"/>](docs/images/screenshot_light.png)
+
+## ✅ Compatibility
+
+**Save Editor** is compatible with any vanilla game version. It may also work for small mods, but there's no guarantee.
+
+**CLI** has been tested with **1.0.5 Hotfix 1 (CL173255)**.
+Many CLI commands are independent of the installed game version, while commands that read, build, or deploy game data depend on the relevant formats and APIs.
+
+**Mod Manager** has been tested with **1.0.4a (CL171864)**.
+Its compatibility depends on the individual mod and whether its target files, localization IDs, assets, and script targets exist in the installed game.
 
 ## 🚀 Quick start
 
-Get `gore.exe` from a `gore-cli-v*`
-[release](https://github.com/dh0er/gore/releases), or build it:
+Download and unpack the complete CLI zip from a `gore-cli-v*`
+[release](https://github.com/dh0er/gore/releases) into a stable directory such as
+`C:\Tools\gore-cli`, and add that directory to `PATH`. Keep its compiler and
+other companion files beside `gore.exe`. Update the package in that same
+directory. Alternatively, build it from the repository root:
 
 ```powershell
-cargo build --release -p gore     # → target\release\gore.exe
+python build.py gore-cli dist             # recommended installable zip → dist\gore-cli\
+python build.py gore-cli build --release  # CLI + compiler → target\release\
 ```
+
+For installation, unpack the complete zip into the directory on `PATH`, keeping
+`compiler\`, `docs\`, and the other companion files together. Normal CLI
+builds require the embedded compiler catalog prepared by `build.py`; plain
+Cargo builds without it fail. See [Building](docs/development.md) for the
+explicit debug-only development and test commands.
 
 Point it at your game once:
 
 ```powershell
-$GAME = 'D:\SteamLibrary\steamapps\common\Gothic 1 Remake'
+$GAME = 'C:\Program Files (x86)\Steam\steamapps\common\Gothic 1 Remake'
 gore config set game-path $GAME     # or: gore config detect
 ```
 
@@ -94,28 +90,16 @@ Check what you have before you rely on it:
 gore doctor
 ```
 
-It answers whether that path really is the game, whether UE4SS is there, what is
-deployed, and what an interrupted run left behind. Every line that is not `ok`
-carries a `fix:` line. Worth running now: the mod below is a UE4SS mod, and
-without UE4SS it installs cleanly and then does nothing at all.
-
-Then make apples worth 500 gold. Save this as `overrides.toml`:
-
-```toml
-[meta]
-name = "MyBalanceMod"
-
-[[override]]
-class = "ItFo_Apple"
-field = "m_Value"
-value_int = 500
-```
+Install the plugin for your favorite AI client, e.g. Claude:
 
 ```powershell
-gore gen overrides.toml -o "$GAME\G1R\Binaries\Win64\ue4ss\Mods"
+claude plugin marketplace add dh0er/gore
+claude plugin install gore@gore
 ```
 
-Full walkthrough: [Getting started](docs/guide/getting-started.md).
+Tell the agent what you want and then let him deploy the mod.
+
+If you want to start manually, follow the section "A first mod: apple prices" in this guide: [Getting started](docs/guide/getting-started.md).
 
 ## 🤖 Vibe Modding
 
@@ -130,10 +114,25 @@ claude plugin install gore@gore
 
 ### Codex plugin
 
+Keep the complete CLI package in one stable directory on `PATH` (for example
+`C:\Tools\gore-cli`) and update it there. Register your actual repository
+checkout as the marketplace:
+
 ```powershell
 codex plugin marketplace add C:\path\to\gore
 codex plugin add gore@gore
 ```
+
+The plugin starts `gore mcp serve` through `PATH`; it does not select or copy a
+CLI release. Its required MCP server has a 30-second startup timeout, so Codex
+waits for tool discovery or reports a startup failure. Older optional plugin
+versions can lose the first turn's tools to Codex's one-second startup grace;
+update the plugin from its marketplace. Check `Get-Command gore` and
+`gore --version`. After changing
+`PATH` or updating the CLI, restart Codex and use a new session.
+
+If an older local setup still uses a pinned release, see
+[updating and repairing the plugin](plugins/gore/README.md#updating-and-repairing-the-plugin).
 
 ### Manual installation (all clients)
 
@@ -174,7 +173,7 @@ Everything lives in [`docs/`](docs/README.md).
 | | |
 |---|---|
 | [Getting started](docs/guide/getting-started.md) | Install, configure, first mod, which tool for which job |
-| [Item & stat values](docs/guide/items.md) | `overrides.toml` → UE4SS Lua CDO override mod |
+| [Item & stat values](docs/guide/items.md) | `gore value inspect` and a `values` section compiled into a script mini-cache |
 | [Text & dialogs](docs/guide/text-and-dialogs.md) | Decrypt, edit, re-encrypt the localization `.lcache` |
 | [Dialog trees](docs/guide/dialog-trees.md) · [Dialog authoring](docs/guide/dialog-authoring.md) | Inspect conversations; edit defaults and behavior; add roots, submenus, multi-level trees and complete conversations |
 | [Audio](docs/guide/audio.md) · [Voice-over](docs/guide/voice.md) | FMOD bank samples; voice-over ZIP archives |
@@ -184,7 +183,7 @@ Everything lives in [`docs/`](docs/README.md).
 | [Running many mods](docs/guide/mod-manager.md) | `gore mgr`: library, load order, conflict evidence, preflight/recovery, Apply and Reset |
 | [CLI reference](docs/guide/cli-reference.md) | Every command, subcommand, and flag |
 | [AI assistants](docs/guide/mcp.md) | Install the plugin, or wire the MCP server up by hand; what gets confirmed with you |
-| [Mod Studio](docs/guide/mod-studio.md) | The no-code GUI: NPCs, quests, voice, project backups |
+| [Mod Studio](docs/guide/mod-studio.md) | Planned GUI and its current implementation; these limits apply only to Studio |
 | [Building](docs/development.md) | Toolchain, `build.py`, repo layout, crates, versioning |
 
 The CLI release zip carries the same guide offline: `docs\guide.html` is one
@@ -193,32 +192,14 @@ Markdown, for `grep`. The MCP server answers from its own copy, compiled into
 `gore.exe`, so editing those files changes what you read and not what an
 assistant is told. Regenerate the HTML any time with `gore guide html`.
 
-Implementation contracts behind the commands — receipt semantics, seal
-guarantees, why a patch is refused — live separately in
-[`docs/reference/`](docs/reference/README.md). They are not part of the guide.
-
 ## 🔨 Build
-
-Requires Windows 10+, a stable Rust toolchain, Python 3, Visual Studio 2022
-with "Desktop development with C++", and — for the GUI apps — Flutter with
-Windows desktop support.
-
-```powershell
-cargo build
-cargo test
-```
-
-Shippable products are driven by the top-level orchestrator. Registered
-projects: `gore-cli`, `gore-save-editor`, `gore-mod-studio`, `gore-mod-manager`.
-A project name is also its release-tag prefix and its artifact name.
 
 ```powershell
 python build.py <project> build|run|dist|installer|test
 python build.py all test
 ```
 
-Release tags and manual smoke builds run the [same CI quality gates](docs/development.md#release-quality-gates)
-on the exact commit before any product build.
+Registered projects: `gore-cli`, `gore-save-editor`, `gore-mod-studio`, `gore-mod-manager`.
 
 Details, repo layout, and the crate table: [Building](docs/development.md).
 

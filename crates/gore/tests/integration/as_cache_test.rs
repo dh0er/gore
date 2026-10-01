@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use predicates::str::contains;
+use predicates::prelude::PredicateBooleanExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -9,6 +10,330 @@ fn fixture_path() -> String {
         "/tests/fixtures/cache_head_8k.bin"
     )
     .to_string()
+}
+
+#[test]
+fn overlays_reject_game_policies_before_resolving_game_or_creating_outputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out/result.Cache");
+    for backend in [None, Some("game"), Some("standalone-then-game")] {
+        let mut command = Command::cargo_bin("gore").unwrap();
+        command.args(["as", "compile", "--overlays"])
+            .arg(dir.path().join("source"))
+            .arg("--work-dir").arg(dir.path().join("work"))
+            .arg("--out").arg(&out)
+            .arg("--game").arg(dir.path().join("absent-game"));
+        if let Some(backend) = backend { command.args(["--backend", backend]); }
+        command.assert().failure().stderr(contains("--overlays requires --backend standalone"));
+        assert!(!out.parent().unwrap().exists());
+        assert!(!dir.path().join("work").exists());
+    }
+}
+
+#[test]
+fn overlays_cannot_accidentally_request_complete_qualification() {
+    let dir = tempfile::tempdir().unwrap();
+    Command::cargo_bin("gore").unwrap()
+        .args(["as", "compile", "--overlays", "--backend", "standalone"])
+        .arg(dir.path().join("source"))
+        .arg("--work-dir").arg(dir.path().join("work"))
+        .arg("--out").arg(dir.path().join("out/result.Cache"))
+        .env("GORE_AS_COMPLETE_QUALIFICATION", "1")
+        .assert().failure().stderr(contains("--overlays cannot be combined"));
+    assert!(!dir.path().join("out").exists());
+    assert!(!dir.path().join("work").exists());
+}
+
+#[test]
+fn overlays_cannot_publish_into_or_reset_the_authored_source_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let work = dir.path().join("work");
+    let game = dir.path().join("game");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::create_dir_all(game.join("G1R")).unwrap();
+    let authored = source.join("Authored.as");
+    std::fs::write(&authored, b"int PreserveMe() { return 42; }").unwrap();
+    let sentinel = work.join("tree/sentinel");
+    std::fs::create_dir(sentinel.parent().unwrap()).unwrap();
+    std::fs::write(&sentinel, b"keep").unwrap();
+    for (src, workspace, out) in [
+        (source.clone(), work.clone(), source.join("result.Cache")),
+        (source.clone(), source.clone(), dir.path().join("out/result.Cache")),
+        (work.join("tree"), work.clone(), dir.path().join("out/result.Cache")),
+    ] {
+        Command::cargo_bin("gore").unwrap()
+            .args(["as", "compile", "--overlays", "--backend", "standalone"])
+            .arg(src).arg("--work-dir").arg(workspace).arg("--out").arg(out)
+            .arg("--game").arg(&game)
+            .assert().failure().stderr(contains("overlay source root").and(contains("disjoint")));
+        assert_eq!(std::fs::read(&authored).unwrap(), b"int PreserveMe() { return 42; }");
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep");
+    }
+    for flag in ["--mini", "--generation-receipt"] {
+        Command::cargo_bin("gore").unwrap()
+            .args(["as", "compile", "--overlays", "--backend", "standalone"])
+            .arg(&source).arg("--work-dir").arg(&work)
+            .arg("--out").arg(dir.path().join("out/result.Cache"))
+            .arg(flag).arg(source.join("side-output"))
+            .arg("--game").arg(&game)
+            .assert().failure().stderr(contains("overlay source root").and(contains("disjoint")));
+        assert_eq!(std::fs::read(&authored).unwrap(), b"int PreserveMe() { return 42; }");
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep");
+    }
+    assert!(!dir.path().join("out").exists());
+}
+
+/// Offline qualification against independent, qualified game inputs and a complete product CLI.
+/// No game launch, deployment, or edits to the installation are performed.
+#[test]
+#[ignore = "requires GORE_OVERLAY_TEST_GAME and GORE_OVERLAY_TEST_CLI (complete product package)"]
+fn real_sparse_add_edit_links_preserves_the_base_and_rejects_missing_dependencies() {
+    use gore_as::cache::walk_modules::{collect_function_bytecodes, module_ranges};
+    use std::path::PathBuf;
+    let game = PathBuf::from(std::env::var_os("GORE_OVERLAY_TEST_GAME").unwrap());
+    let cli = PathBuf::from(std::env::var_os("GORE_OVERLAY_TEST_CLI").unwrap());
+    let base_path = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+    let base = std::fs::read(&base_path).unwrap();
+    let base_sha = format!("{:x}", Sha256::digest(&base));
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("authored");
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(source.join("GoreSparse")).unwrap();
+    std::fs::create_dir(source.join("AI")).unwrap();
+    std::fs::create_dir(&work).unwrap();
+    let provider = source.join("GoreSparse/Provider.as");
+    let consumer = source.join("AI/ImGuiDebugTool_Party.as");
+    std::fs::write(&provider, "int GoreSparseProvider() { return 42; }\n").unwrap();
+    std::fs::write(&consumer, "int GoreSparseConsumer() { return GoreSparseProvider(); }\n").unwrap();
+    let compile = |output: &std::path::Path| {
+        let mut command = Command::new(&cli);
+        command.args(["as", "compile", "--overlays", "--backend", "standalone"])
+            .arg(&source).arg("--work-dir").arg(&work)
+            .arg("--game").arg(&game).arg("--expect-base-sha256").arg(&base_sha)
+            .arg("--out").arg(output.join("full.Cache"))
+            .arg("--mini").arg(output.join("mini.Cache"))
+            .arg("--generation-receipt").arg(output.join("receipt.json"));
+        for (op, module, relative, path) in [
+            ("add", "GoreSparse.Provider", "GoreSparse/Provider.as", &provider),
+            ("edit", "AI.ImGuiDebugTool_Party", "AI/ImGuiDebugTool_Party.as", &consumer),
+        ] {
+            let hash = format!("{:x}", Sha256::digest(std::fs::read(path).unwrap()));
+            command.arg("--only-change").arg(format!("{op}:{module}:{relative}:{hash}"));
+        }
+        command
+    };
+    let out = dir.path().join("out");
+    let started = std::time::Instant::now();
+    let result = compile(&out).assert().success();
+    eprintln!("real sparse Add+Edit completed in {:.2}s\n{}\n{}", started.elapsed().as_secs_f64(),
+        String::from_utf8_lossy(&result.get_output().stdout),
+        String::from_utf8_lossy(&result.get_output().stderr));
+    let generated = std::fs::read(out.join("full.Cache")).unwrap();
+    let base_ranges = module_ranges(&base).unwrap();
+    let output_ranges = module_ranges(&generated).unwrap();
+    assert_eq!(output_ranges.len(), base_ranges.len() + 1);
+    for (name, start, end) in &base_ranges {
+        if name == "AI.ImGuiDebugTool_Party" { continue; }
+        let (_, after_start, after_end) = output_ranges.iter().find(|(n, _, _)| n == name).unwrap();
+        assert_eq!(&base[*start..*end], &generated[*after_start..*after_end], "base module changed: {name}");
+    }
+    let mini = std::fs::read(out.join("mini.Cache")).unwrap();
+    let names: Vec<_> = module_ranges(&mini).unwrap().into_iter().map(|(name, _, _)| name).collect();
+    assert_eq!(names.len(), 2);
+    assert!(names.iter().any(|name| name == "GoreSparse.Provider"));
+    assert!(names.iter().any(|name| name == "AI.ImGuiDebugTool_Party"));
+    let functions = collect_function_bytecodes(&generated).unwrap();
+    let consumer_code = functions.iter().find(|f| f.func.ends_with("::GoreSparseConsumer")).unwrap();
+    let instructions = gore_as::cache::disasm::disassemble(&consumer_code.bytecode).unwrap();
+    let refs = gore_as::cache::refs::RefResolver::build(&generated).unwrap();
+    assert!(instructions.iter().any(|instruction| instruction.op.name == "CALL"
+        && instruction.dwords.first().and_then(|id| refs.func_by_id(*id as i32))
+            .is_some_and(|name| name.contains("GoreSparseProvider"))), "consumer must call the new provider");
+    let mut pending = vec![work.join("tree")];
+    let mut files = Vec::new();
+    while let Some(path) = pending.pop() {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() { pending.push(entry.path()); }
+            else { files.push(entry.path()); }
+        }
+    }
+    assert_eq!(files.len(), 2, "prepared tree must contain only authored modules");
+    assert!(out.join("receipt.json").is_file());
+    std::fs::write(&provider, "int RenamedProvider() { return 42; }\n").unwrap();
+    let failed = dir.path().join("failed");
+    compile(&failed).assert().failure().stderr(contains("GoreSparseProvider"));
+    for name in ["full.Cache", "mini.Cache", "receipt.json"] {
+        assert!(!failed.join(name).exists(), "failed compilation published {name}");
+    }
+    assert_eq!(std::fs::read(base_path).unwrap(), base);
+}
+
+/// Compile a complete emitted conversation, including its cached speech mixins,
+/// rather than reducing the edited module to a trivial function.
+#[test]
+#[ignore = "requires GORE_OVERLAY_TEST_GAME and GORE_OVERLAY_TEST_CLI (complete product package)"]
+fn real_dialog_checkout_unicode_topic_and_document_segment_compile_as_one_overlay() {
+    use gore_as::cache::walk_modules::module_ranges;
+    use std::path::PathBuf;
+    let game = PathBuf::from(std::env::var_os("GORE_OVERLAY_TEST_GAME").unwrap());
+    let cli = PathBuf::from(std::env::var_os("GORE_OVERLAY_TEST_CLI").unwrap());
+    let base_path = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+    let base = std::fs::read(&base_path).unwrap();
+    let base_sha = format!("{:x}", Sha256::digest(&base));
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("dialog");
+    let class = "UChoiceGoreDialogCompileRegression";
+    let caption = "Wer ist der Typ da drüben?";
+    Command::new(&cli)
+        .args(["dialog", "new-topic", "OC_STT_Diego", "--caption", caption,
+            "--class", class, "--mod-name", "GoreDialogCompileRegression"])
+        .arg("--game").arg(&game).arg("--out").arg(&workspace)
+        .assert().success();
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(workspace.join("gore-dialog-edit.json")).unwrap()).unwrap();
+    let module = manifest["module"].as_str().unwrap();
+    assert_eq!(module, "Story.G1R.Conversation.Conversation_OC_STT_DIEGO");
+    assert_eq!(manifest["cache_sha256"], base_sha);
+    let relative = manifest["relative_path"].as_str().unwrap();
+    let authored = workspace.join(manifest["source_file"].as_str().unwrap());
+    let mut source = std::fs::read_to_string(&authored).unwrap();
+    assert!(source.contains(".Say("), "the fixture must exercise cached speech mixins");
+    assert!(source.contains(&format!("FText::FromString(\"{caption}\")")));
+    source.push_str("\nnamespace G1R::Document {\nclass UDocumentSegment_GoreDialogCompileRegression : UDocumentSegment { }\n}\n");
+    std::fs::write(&authored, &source).unwrap();
+    Command::new(&cli).args(["dialog", "check"]).arg(&workspace)
+        .arg("--game").arg(&game).assert().success();
+    let overlays = dir.path().join("overlays");
+    let overlay_file = overlays.join(relative);
+    std::fs::create_dir_all(overlay_file.parent().unwrap()).unwrap();
+    std::fs::write(&overlay_file, source).unwrap();
+    let work = dir.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let output = dir.path().join("output");
+    let source_sha = format!("{:x}", Sha256::digest(std::fs::read(&overlay_file).unwrap()));
+    let started = std::time::Instant::now();
+    let result = Command::new(&cli)
+        .args(["as", "compile", "--overlays", "--backend", "standalone"])
+        .arg(&overlays).arg("--game").arg(&game).arg("--work-dir").arg(&work)
+        .arg("--expect-base-sha256").arg(&base_sha)
+        .arg("--only-change").arg(format!("edit:{module}:{relative}:{source_sha}"))
+        .arg("--out").arg(output.join("full.Cache"))
+        .arg("--mini").arg(output.join("mini.Cache"))
+        .arg("--generation-receipt").arg(output.join("receipt.json"))
+        .assert().success();
+    eprintln!("real dialog overlay compiled in {:.2}s\n{}\n{}", started.elapsed().as_secs_f64(),
+        String::from_utf8_lossy(&result.get_output().stdout),
+        String::from_utf8_lossy(&result.get_output().stderr));
+    let generated = std::fs::read(output.join("full.Cache")).unwrap();
+    let output_ranges = module_ranges(&generated).unwrap();
+    let base_ranges = module_ranges(&base).unwrap();
+    assert_eq!(output_ranges.len(), base_ranges.len());
+    for (name, start, end) in base_ranges {
+        if name == module { continue; }
+        let (_, after_start, after_end) = output_ranges.iter().find(|(n, _, _)| n == &name).unwrap();
+        assert_eq!(&base[start..end], &generated[*after_start..*after_end], "base module changed: {name}");
+    }
+    let mini = std::fs::read(output.join("mini.Cache")).unwrap();
+    let names: Vec<_> = module_ranges(&mini).unwrap().into_iter().map(|(name, _, _)| name).collect();
+    assert_eq!(names, [module]);
+    // The mini is a patch fragment; inherited members and external calls resolve
+    // against the base. Inspect the complete compiled graph for its caption.
+    let graph = gore_as::cache::dialog::build(&generated).unwrap();
+    let topic = graph.conversations.iter().flat_map(|c| c.topics.iter())
+        .find(|t| t.class == class).unwrap();
+    assert_eq!(topic.caption, gore_as::cache::dialog::Caption::Literal { text: caption.to_owned() });
+    assert!(output.join("receipt.json").is_file());
+    assert_eq!(std::fs::read(base_path).unwrap(), base);
+}
+
+/// Exercise the reusable head API on a later qualified build, through both authoring and the
+/// Manager's pristine-bound composition guard. Mesh paths are content, never admission keys.
+#[test]
+#[ignore = "requires GORE_OVERLAY_TEST_GAME and GORE_OVERLAY_TEST_CLI (complete product package)"]
+fn real_head_api_overlay_and_manager_composition_reuse_qualified_native_evidence() {
+    use gore_as::cache::splice::{
+        remap_module_to_base_with_loadout_plan, LoadoutScriptIdPlanBuilder, SequentialMiniGuard,
+    };
+    use gore_as::cache::walk_modules::module_ranges;
+    use std::path::PathBuf;
+    let game = PathBuf::from(std::env::var_os("GORE_OVERLAY_TEST_GAME").unwrap());
+    let cli = PathBuf::from(std::env::var_os("GORE_OVERLAY_TEST_CLI").unwrap());
+    let base_path = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+    let base = std::fs::read(&base_path).unwrap();
+    let binds = std::fs::read(game.join("G1R/Script/Binds.Cache")).unwrap();
+    assert!(gore_as::cache::remap::qualified_native_api_binds_match(&base, &binds));
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("authored");
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(source.join("GoreHeadApi")).unwrap();
+    std::fs::create_dir(&work).unwrap();
+    let provider = source.join("GoreHeadApi/Provider.as");
+    std::fs::write(&provider, r#"
+UPoseableMeshComponent GoreHeadApiCreate(AActor Owner, USkeletalMeshComponent Body, FString MeshPath)
+{
+    UPoseableMeshComponent Head = UPoseableMeshComponent::GetOrCreate(Owner, n"GoreHeadApiProbe");
+    USkeletalMesh Mesh = Cast<USkeletalMesh>(LoadObject(nullptr, MeshPath));
+    Head.SetSkinnedAssetAndUpdate(Mesh, true);
+    Head.AttachToComponent(Body, NAME_None, EAttachmentRule::SnapToTarget);
+    Head.SetRelativeTransform(FTransform());
+    Head.CopyPoseFromSkeletalComponent(Body);
+    Head.ResetBoneTransformByName(n"head");
+    Head.GetBoneTransformByName(n"head", EBoneSpaces::ComponentSpace);
+    return Head;
+}
+UMaterialInterface GoreHeadApiMaterialParent(UMaterialInstance Material)
+{
+    return Material.Parent;
+}
+"#).unwrap();
+    let source_sha = format!("{:x}", Sha256::digest(std::fs::read(&provider).unwrap()));
+    let output = dir.path().join("output");
+    let result = Command::new(&cli)
+        .args(["as", "compile", "--overlays", "--backend", "standalone"])
+        .arg(&source).arg("--game").arg(&game).arg("--work-dir").arg(&work)
+        .arg("--expect-base-sha256").arg(format!("{:x}", Sha256::digest(&base)))
+        .arg("--only-change").arg(format!("add:GoreHeadApi.Provider:GoreHeadApi/Provider.as:{source_sha}"))
+        .arg("--out").arg(output.join("full.Cache"))
+        .arg("--mini").arg(output.join("mini.Cache"))
+        .arg("--generation-receipt").arg(output.join("receipt.json"))
+        .assert().success();
+    eprintln!("head API compiled without force\n{}\n{}",
+        String::from_utf8_lossy(&result.get_output().stdout),
+        String::from_utf8_lossy(&result.get_output().stderr));
+    let generated = std::fs::read(output.join("full.Cache")).unwrap();
+    let mini = std::fs::read(output.join("mini.Cache")).unwrap();
+    let mut guard = SequentialMiniGuard::new_with_binds(&base, &binds).unwrap();
+    let composed = guard.compose_add(&base, &mini).unwrap();
+    assert_eq!(composed, generated);
+    drop(guard);
+    let mut builder = LoadoutScriptIdPlanBuilder::new_with_binds(&base, &binds).unwrap();
+    builder.inspect(&mini).unwrap();
+    let plan = builder.finish().unwrap();
+    let canonical = remap_module_to_base_with_loadout_plan(&mini, &base, &plan).unwrap();
+    drop(plan);
+    let mut guard = SequentialMiniGuard::new_with_binds(&base, &binds).unwrap();
+    let manager_cache = guard.compose_add(&base, &canonical).unwrap();
+    assert_eq!(module_ranges(&manager_cache).unwrap().len(), module_ranges(&generated).unwrap().len());
+    let functions = gore_as::cache::walk_modules::collect_function_bytecodes(&manager_cache).unwrap();
+    assert!(functions.iter().any(|function| function.func.ends_with("::GoreHeadApiCreate")));
+    drop(guard);
+    let mut unqualified = SequentialMiniGuard::new_with_binds(&base, b"changed Binds.Cache").unwrap();
+    assert!(unqualified.compose_add(&base, &mini).is_err(), "changed Binds must not admit head APIs");
+    drop(unqualified);
+    let mut unqualified = LoadoutScriptIdPlanBuilder::new_with_binds(&base, b"changed Binds.Cache").unwrap();
+    assert!(unqualified.inspect(&mini).is_err(), "changed Binds must not authorize the ID plan");
+    let before = module_ranges(&base).unwrap();
+    let after = module_ranges(&generated).unwrap();
+    assert_eq!(after.len(), before.len() + 1);
+    for (name, start, end) in before {
+        let (_, after_start, after_end) = after.iter().find(|(n, _, _)| n == &name).unwrap();
+        assert_eq!(&base[start..end], &generated[*after_start..*after_end], "base module changed: {name}");
+    }
+    assert!(output.join("receipt.json").is_file());
+    assert_eq!(std::fs::read(base_path).unwrap(), base);
 }
 
 fn minimal_cache_header(guid: [u8; 16], module_count: u32) -> Vec<u8> {
@@ -247,7 +572,7 @@ fn cli_command_graph_has_stack_headroom_for_version_and_help() {
         ),
         (
             &["as", "decode-header", "--help"][..],
-            "decode-header <FILE>",
+            "decode-header [OPTIONS] <FILE>",
             false,
         ),
     ] {

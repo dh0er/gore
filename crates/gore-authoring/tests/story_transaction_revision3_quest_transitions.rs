@@ -209,6 +209,23 @@ fn quest(project: &ProjectRevision3) -> &Revision3QuestDraft {
     quest
 }
 
+#[test]
+fn incompatible_quest_generator_reports_the_required_version() {
+    let (project, _) = project_with_quest(&["Find the clue"]);
+    let mut stale = quest(&project).clone();
+    stale.generator_version = REVISION3_QUEST_GENERATOR_VERSION - 1;
+    let error = revision3_quest_transition_plan_basis_v1(&stale).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "unsupported Quest generator contract: expected \
+             {REVISION3_QUEST_GENERATOR_ID}@{REVISION3_QUEST_GENERATOR_VERSION}, got \
+             {REVISION3_QUEST_GENERATOR_ID}@{}",
+            stale.generator_version
+        )
+    );
+}
+
 fn request(
     project: &ProjectRevision3,
     basis_head: &WorkingHead,

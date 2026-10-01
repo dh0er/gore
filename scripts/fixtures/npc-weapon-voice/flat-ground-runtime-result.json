@@ -1,0 +1,29 @@
+{
+  "schema": "gore.npc-weapon-voice.flat-ground-runtime.v1",
+  "date": "2026-09-11",
+  "tested_by": "user",
+  "package": "NpcWarningRecovery",
+  "version": "0.1.12",
+  "input": {
+    "slot": 64,
+    "name": "npc kampf - B freie flaeche",
+    "published_sha256": "92b44ce937274c40d5439074f1b2b1b9c7a5a3a4b7899a53d8fb327578cd3954",
+    "record": "flat-ground-input.json"
+  },
+  "status": "weapon switch reproduced on the supplied open ground",
+  "user_observed": {
+    "warning": "B initially draws his sword when the Hero draws his sword.",
+    "escalation": "When the warning escalates, B draws his bow instead.",
+    "attribution": "User remains unsure whether vanilla behaves the same way."
+  },
+  "conclusion": "The hut and active hut routine are not required for reproduction. The observed transition is warning sword to combat bow.",
+  "unproven": [
+    "The live target and reachability query result.",
+    "The competing item scores at combat entry.",
+    "Whether the same behavior occurs in an unmodified vanilla scenario.",
+    "Whether the authored NPC configuration or warning override contributes."
+  ],
+  "new_post_combat_save": "none reported; no post-combat saved state is claimed",
+  "agent_changes": "documentation only; no tuning, deployment or save modifications",
+  "analysis": "WEAPON-SELECTION.md"
+}

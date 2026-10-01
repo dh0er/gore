@@ -1,0 +1,352 @@
+{
+  "schema": "gore.npc-batch.field-damage-starts.v1",
+  "date": "2026-09-13",
+  "published": true,
+  "displayed_profile": 4,
+  "archive": "C:\\Users\\Daniel\\Documents\\GORE\\Savegame-Archiv\\npc-field-damage-20260913T082906Z",
+  "dll": {
+    "bytes": 17931264,
+    "sha256": "54690b5fb7004ae89a5659d38a59cebf5c833fd6c558c73ba3e0a70342baaf14"
+  },
+  "write_save_options": {
+    "backup": true,
+    "syncPersistentDataList": false
+  },
+  "values_base_and_current": {
+    "Hero": {
+      "Strength": 1000.0
+    },
+    "B": {
+      "Resistance_Blunt": 0.0,
+      "Resistance_Edge": 0.0,
+      "Resistance_Point": 0.0
+    }
+  },
+  "saves": [
+    {
+      "slot": "G1R-070",
+      "before": {
+        "bytes": 1035017,
+        "sha256": "7d90d3b1adae82110223278fc2993930998967e54d8261422548e21d9c75944f"
+      },
+      "after": {
+        "bytes": 1035034,
+        "sha256": "60dd5ac6cebab1cd62f1005ae0fa47618161b6db6d83cda1ca88868f445922b4"
+      },
+      "edits": [
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{Hero}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Strength}",
+              "Attributes",
+              "{Strength}",
+              "BaseValue"
+            ],
+            "value": 1000.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{Hero}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Strength}",
+              "Attributes",
+              "{Strength}",
+              "CurrentValue"
+            ],
+            "value": 1000.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Armor}",
+              "Attributes",
+              "{Resistance_Blunt}",
+              "BaseValue"
+            ],
+            "value": 0.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Armor}",
+              "Attributes",
+              "{Resistance_Blunt}",
+              "CurrentValue"
+            ],
+            "value": 0.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Armor}",
+              "Attributes",
+              "{Resistance_Edge}",
+              "BaseValue"
+            ],
+            "value": 0.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Armor}",
+              "Attributes",
+              "{Resistance_Edge}",
+              "CurrentValue"
+            ],
+            "value": 0.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Armor}",
+              "Attributes",
+              "{Resistance_Point}",
+              "BaseValue"
+            ],
+            "value": 0.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Armor}",
+              "Attributes",
+              "{Resistance_Point}",
+              "CurrentValue"
+            ],
+            "value": 0.0
+          }
+        }
+      ],
+      "backup": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\goresave_backups\\G1R-070.sav.bak.1789288256"
+    },
+    {
+      "slot": "G1R-072",
+      "before": {
+        "bytes": 1035052,
+        "sha256": "2af60fcee66ed8d0be7177984a4a11d5d32e423f2ac9e8a899e3398e82d68258"
+      },
+      "after": {
+        "bytes": 1035056,
+        "sha256": "5feb135c3a3e689e38976823c1ee70d1c5ae57c4292a79e2aa9c8bbd605e6451"
+      },
+      "edits": [
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{Hero}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Strength}",
+              "Attributes",
+              "{Strength}",
+              "BaseValue"
+            ],
+            "value": 1000.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{Hero}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Strength}",
+              "Attributes",
+              "{Strength}",
+              "CurrentValue"
+            ],
+            "value": 1000.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Armor}",
+              "Attributes",
+              "{Resistance_Blunt}",
+              "BaseValue"
+            ],
+            "value": 0.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Armor}",
+              "Attributes",
+              "{Resistance_Blunt}",
+              "CurrentValue"
+            ],
+            "value": 0.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Armor}",
+              "Attributes",
+              "{Resistance_Edge}",
+              "BaseValue"
+            ],
+            "value": 0.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Armor}",
+              "Attributes",
+              "{Resistance_Edge}",
+              "CurrentValue"
+            ],
+            "value": 0.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Armor}",
+              "Attributes",
+              "{Resistance_Point}",
+              "BaseValue"
+            ],
+            "value": 0.0
+          }
+        },
+        {
+          "path": "private.typed.setValue",
+          "value": {
+            "path": [
+              "m_GenericData",
+              "{CharacterStates}",
+              "AnyCharacterType",
+              "AttributesByGlobalId",
+              "{GORE_TEST_B-WP_WarningFlock_XT_02}",
+              "AttributeSetsByClass",
+              "{/Script/G1R.AttributeSet_Armor}",
+              "Attributes",
+              "{Resistance_Point}",
+              "CurrentValue"
+            ],
+            "value": 0.0
+          }
+        }
+      ],
+      "backup": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\goresave_backups\\G1R-072.sav.bak.1789288274"
+    }
+  ],
+  "checks": {
+    "detached_previews_verified": true,
+    "live_outputs_match_previews": true,
+    "all_other_Hero_B_attributes_unchanged": true,
+    "public_bytes_unchanged": true,
+    "persistent_and_all_other_live_files_unchanged": true,
+    "preimage_backups_verified": true
+  },
+  "qualification": "Deliberately altered combat starts: Hero Strength 1000, B physical resistances 0. Hero Health/MaxHealth 10000 and B 50 retained. No script, weapon, equipment or AI edits. Runtime gameplay remains user-tested."
+}

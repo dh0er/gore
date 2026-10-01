@@ -1853,7 +1853,8 @@ where
     let mut standalone_attempt = standalone.as_deref_mut().map(|runner| {
         || {
             let retained_output = std::cell::RefCell::new(None);
-            let result = compile_module_with_source_tree(opts, false, |_, source_tree| {
+            let backend = CompilerBackendNameV1::Standalone;
+            let result = compile_module_with_source_tree(opts, backend, |_, source_tree| {
                 standalone_runner_called.set(true);
                 let operation = match opts.op.as_str() {
                     "add" => StandaloneCompilerOverlayOperationV1::Add,
@@ -2600,6 +2601,7 @@ where
                 let selective_changes = std::mem::take(&mut prepared.selective_changes);
                 let selective = crate::cache::selective_fullgraph::compose_selective_full_graph(
                     &opts.base_cache,
+                    &opts.binds_cache,
                     &bytes,
                     selective_changes,
                 )
@@ -3954,38 +3956,47 @@ fn prepare_full_graph_request_v1(
                 overlay_authors_defaults,
             )?;
             let default_targets = if overlay_authors_defaults {
-                crate::cache::default_targets::ExistingDefaultTargetPlan::prepare(
-                    &opts.base_cache,
-                    module_name,
-                    source,
+                crate::force::gate(
+                    crate::cache::default_targets::ExistingDefaultTargetPlan::prepare(
+                        &opts.base_cache,
+                        module_name,
+                        source,
+                    )
+                    .map_err(|reason| {
+                        format!(
+                            "refusing default-target preservation for FullGraph edit module {module_name:?}: {reason}"
+                        )
+                    }),
                 )
-                .map_err(|reason| {
-                    CompileError::Other(format!(
-                        "refusing default-target preservation for FullGraph edit module {module_name:?}: {reason}"
-                    ))
-                })?
+                .map_err(CompileError::Other)?
+                .flatten()
             } else {
                 None
             };
-            let metadata =
+            let metadata = crate::force::gate(
                 crate::cache::generated_defaults::ExistingFunctionMetadataPlan::prepare(
                     &opts.base_cache,
                     module_name,
                 )
                 .map_err(|reason| {
-                    CompileError::Other(format!(
+                    format!(
                         "refusing function-metadata preservation for FullGraph edit module {module_name:?}: {reason}"
-                    ))
-                })?;
-            let structure = crate::cache::generated_defaults::ExistingModuleStructurePlan::prepare(
-                &opts.base_cache,
-                module_name,
+                    )
+                }),
             )
-            .map_err(|reason| {
-                CompileError::Other(format!(
-                    "refusing structure preservation for FullGraph edit module {module_name:?}: {reason}"
-                ))
-            })?;
+            .map_err(CompileError::Other)?;
+            let structure = crate::force::gate(
+                crate::cache::generated_defaults::ExistingModuleStructurePlan::prepare(
+                    &opts.base_cache,
+                    module_name,
+                )
+                .map_err(|reason| {
+                    format!(
+                        "refusing structure preservation for FullGraph edit module {module_name:?}: {reason}"
+                    )
+                }),
+            )
+            .map_err(CompileError::Other)?;
             selective_changes.push(
                 crate::cache::selective_fullgraph::SelectiveFullGraphChange::edit(
                     module_name.clone(),
@@ -8202,23 +8213,46 @@ fn validate_opened_compiled_artifact(file: std::fs::File) -> Result<std::fs::Fil
     Ok(file)
 }
 
+fn compile_module_admission_binds<'a>(
+    backend: CompilerBackendNameV1,
+    base_path: &Path,
+    selected: Option<&'a [u8]>,
+) -> &'a [u8] {
+    let Some(selected) = selected else {
+        return &[];
+    };
+    if backend == CompilerBackendNameV1::Standalone {
+        return selected;
+    }
+    let installed_matches = base_path
+        .parent()
+        .and_then(|parent| std::fs::read(parent.join("Binds.Cache")).ok())
+        .is_some_and(|installed| installed == selected);
+    if installed_matches {
+        selected
+    } else {
+        &[]
+    }
+}
+
 /// `run_regen(game_dir, src_dir) -> regen cache path`. Injected so the orchestration is testable
 /// offline; the FFI passes [`game_run_regen`].
 pub fn compile_module<R>(opts: &CompileOpts, run_regen: R) -> Result<CompileOutput, CompileError>
 where
     R: FnOnce(&Path, &Path) -> Result<PathBuf, String>,
 {
-    compile_module_with_source_tree(opts, true, run_regen)
+    compile_module_with_source_tree(opts, CompilerBackendNameV1::Game, run_regen)
 }
 
 fn compile_module_with_source_tree<R>(
     opts: &CompileOpts,
-    emit_base_tree: bool,
+    backend: CompilerBackendNameV1,
     run_regen: R,
 ) -> Result<CompileOutput, CompileError>
 where
     R: FnOnce(&Path, &Path) -> Result<PathBuf, String>,
 {
+    let emit_base_tree = backend == CompilerBackendNameV1::Game;
     if opts.op != "add" && opts.op != "edit" {
         return Err(CompileError::Other(format!(
             "invalid script op {:?} for module {:?} (want \"add\" or \"edit\")",
@@ -8269,13 +8303,20 @@ where
     // and id-based free-function collision renames are all compile-significant; the old partial
     // setup produced 287 divergent vanilla files on the 1.0.3 cache before the authored overlay
     // was even considered.
-    let native_api = match &opts.binds_override {
-        Some(bytes) => Some(
+    let fallback_binds = opts
+        .binds_override
+        .is_none()
+        .then(|| native_api_bytes(&base_path))
+        .flatten();
+    let binds_bytes = opts.binds_override.as_deref().or(fallback_binds.as_deref());
+    let native_api = match binds_bytes {
+        Some(bytes) if opts.binds_override.is_some() => Some(
             crate::cache::binds::NativeApi::from_bytes(bytes).ok_or_else(|| {
                 CompileError::Other("sealed Binds.Cache override is invalid".to_owned())
             })?,
         ),
-        None => native_api(&base_path),
+        Some(bytes) => crate::cache::binds::NativeApi::from_bytes(bytes),
+        None => None,
     };
     let overlay = std::str::from_utf8(&overlay)
         .map_err(|error| CompileError::Other(format!("source .as is not valid UTF-8: {error}")))?;
@@ -8308,33 +8349,38 @@ where
         opts.allow_new_symbols,
     )?;
     let existing_default_targets = if opts.op == "edit" && baseline_defaults {
-        crate::cache::default_targets::ExistingDefaultTargetPlan::prepare(
-            &base,
-            &effective_module_name,
-            &overlay,
+        crate::force::gate(
+            crate::cache::default_targets::ExistingDefaultTargetPlan::prepare(
+                &base,
+                &effective_module_name,
+                &overlay,
+            )
+            .map_err(|reason| {
+                format!(
+                    "refusing default-target preservation for edit module {:?}: {reason}",
+                    effective_module_name
+                )
+            }),
         )
-        .map_err(|reason| {
-            CompileError::Other(format!(
-                "refusing default-target preservation for edit module {:?}: {reason}",
-                effective_module_name
-            ))
-        })?
+        .map_err(CompileError::Other)?
+        .flatten()
     } else {
         None
     };
     let existing_function_metadata = if opts.op == "edit" {
-        Some(
+        crate::force::gate(
             crate::cache::generated_defaults::ExistingFunctionMetadataPlan::prepare(
                 &base,
                 &effective_module_name,
             )
             .map_err(|reason| {
-                CompileError::Other(format!(
+                format!(
                     "refusing function-metadata preservation for edit module {:?}: {reason}",
                     effective_module_name
-                ))
-            })?,
+                )
+            }),
         )
+        .map_err(CompileError::Other)?
     } else {
         None
     };
@@ -8342,18 +8388,19 @@ where
     // an existing one.  Verify this only after all qualified repairs (defaults, function metadata
     // and authored-default targets) have completed; the plan copies no base structure itself.
     let existing_module_structure = if opts.op == "edit" {
-        Some(
+        crate::force::gate(
             crate::cache::generated_defaults::ExistingModuleStructurePlan::prepare(
                 &base,
                 &effective_module_name,
             )
             .map_err(|reason| {
-                CompileError::Other(format!(
+                format!(
                     "refusing structure preservation for edit module {:?}: {reason}",
                     effective_module_name
-                ))
-            })?,
+                )
+            }),
         )
+        .map_err(CompileError::Other)?
     } else {
         None
     };
@@ -8413,12 +8460,26 @@ where
     //    new rows that cannot resolve in vanilla; it never copies the regen's full global tables.
     //    Deploy still differs by op — gore-mod uses `splice_auto` for add and `replace_module` for
     //    edit — while both accept either minimal shape.
+    // The game backend reads the installed Binds.Cache. An environment-selected Binds file
+    // may help source recovery, but it cannot authorize native property types unless its
+    // bytes still match the game's own file after regeneration. Use the same evidence during
+    // composed default-target verification below.
+    // Standalone runners consume sealed inputs rather than the live install;
+    // their admission evidence must remain the same snapshot after regeneration.
+    let selected_admission_binds = if backend == CompilerBackendNameV1::Standalone {
+        opts.binds_override.as_deref()
+    } else {
+        binds_bytes
+    };
+    let admission_binds =
+        compile_module_admission_binds(backend, &base_path, selected_admission_binds);
     let mut mini = {
         let out = splice::extract_module(&regen, &target)
             .map_err(|e| CompileError::Other(format!("extract: {e}")))?;
-        remap::remap_module_to_base_with_options(
+        remap::remap_module_to_base_with_options_and_binds(
             &out,
             &base,
+            admission_binds,
             remap::RemapOptions {
                 allow_new_symbols: opts.allow_new_symbols,
             },
@@ -8427,51 +8488,68 @@ where
         .0
     };
     if generated_defaults.is_some() {
-        let plan = existing_function_metadata.as_ref().ok_or_else(|| {
-            CompileError::Other(format!(
-                "internal error: generated-default carry for edit module {:?} has no function-metadata preservation plan",
-                effective_module_name
-            ))
-        })?;
-        mini = plan.apply_present(&mini).map_err(|reason| {
-            CompileError::Other(format!(
-                "refusing pre-carry function-metadata normalization for edit module {:?}: {reason}",
-                effective_module_name
-            ))
-        })?;
+        match existing_function_metadata.as_ref() {
+            Some(plan) => {
+                let normalized = plan.apply_present(&mini).map_err(|reason| {
+                    format!(
+                        "refusing pre-carry function-metadata normalization for edit module {:?}: {reason}",
+                        effective_module_name
+                    )
+                });
+                mini = crate::force::gate(normalized)
+                    .map_err(CompileError::Other)?
+                    .unwrap_or(mini);
+            }
+            // Only a forced run can have skipped the plan; that skip has already been reported.
+            None if crate::force::enabled() => {}
+            None => {
+                return Err(CompileError::Other(format!(
+                    "internal error: generated-default carry for edit module {:?} has no function-metadata preservation plan",
+                    effective_module_name
+                )));
+            }
+        }
     }
     if let Some(plan) = generated_defaults {
-        mini = plan.apply(&mini).map_err(|reason| {
-            CompileError::Other(format!(
+        let carried = plan.apply(&mini).map_err(|reason| {
+            format!(
                 "refusing generated-default carry for edit module {:?}: {reason}",
                 effective_module_name
-            ))
-        })?;
+            )
+        });
+        mini = crate::force::gate(carried)
+            .map_err(CompileError::Other)?
+            .unwrap_or(mini);
     }
     if let Some(plan) = existing_function_metadata {
-        mini = plan.apply(&mini).map_err(|reason| {
-            CompileError::Other(format!(
+        let restored = plan.apply(&mini).map_err(|reason| {
+            format!(
                 "refusing function-metadata preservation for edit module {:?}: {reason}",
                 effective_module_name
-            ))
-        })?;
+            )
+        });
+        mini = crate::force::gate(restored)
+            .map_err(CompileError::Other)?
+            .unwrap_or(mini);
     }
     if let Some(plan) = existing_module_structure {
-        plan.verify(&mini).map_err(|reason| {
-            CompileError::Other(format!(
+        crate::force::gate(plan.verify(&mini).map_err(|reason| {
+            format!(
                 "refusing structure preservation for edit module {:?}: {reason}",
                 effective_module_name
-            ))
-        })?;
+            )
+        }))
+        .map_err(CompileError::Other)?;
     }
     canonicalize_mini_guid(&mut mini, &base).map_err(CompileError::Other)?;
     if let Some(plan) = existing_default_targets.as_ref() {
-        let mut guard = splice::SequentialMiniGuard::new(&base).map_err(|error| {
-            CompileError::Other(format!(
-                "preparing composed default-target verification for edit module {:?}: {error}",
-                effective_module_name
-            ))
-        })?;
+        let mut guard = splice::SequentialMiniGuard::new_with_binds(&base, admission_binds)
+            .map_err(|error| {
+                CompileError::Other(format!(
+                    "preparing composed default-target verification for edit module {:?}: {error}",
+                    effective_module_name
+                ))
+            })?;
         let composed = guard
             .compose_edit(&base, &mini, &effective_module_name)
             .map_err(|error| {
@@ -8480,12 +8558,13 @@ where
                     effective_module_name
                 ))
             })?;
-        plan.verify(&composed).map_err(|reason| {
-            CompileError::Other(format!(
+        crate::force::gate(plan.verify(&composed).map_err(|reason| {
+            format!(
                 "refusing default-target preservation for edit module {:?}: {reason}",
                 effective_module_name
-            ))
-        })?;
+            )
+        }))
+        .map_err(CompileError::Other)?;
     }
 
     let mini_path = opts.work_dir.join("module.cache");
@@ -8520,11 +8599,9 @@ fn write_compile_overlay(
         .map_err(io("writing overlay"))
 }
 
-/// Load native arities from the `GORE_AS_BINDS` env path if set, else a `Binds.Cache` sitting next
-/// to `cache_file`, if present. Mirrors `as_cache.rs::load_native_api` / gore-ffi's `as_native_api`
-/// so a dev who sets `GORE_AS_BINDS` for the CLI gets the same arities here (no emit/recompile
-/// divergence). Quiet by design (library helper — no logging). Absent/unparsable => None.
-fn native_api(cache_file: &Path) -> Option<crate::cache::binds::NativeApi> {
+/// Load the same Binds.Cache bytes for source recovery and native-property admission.
+/// `GORE_AS_BINDS` overrides the sibling path; absent/unreadable input remains optional.
+fn native_api_bytes(cache_file: &Path) -> Option<Vec<u8>> {
     let path = match std::env::var_os("GORE_AS_BINDS") {
         Some(p) => std::path::PathBuf::from(p),
         None => cache_file.parent()?.join("Binds.Cache"),
@@ -8532,7 +8609,7 @@ fn native_api(cache_file: &Path) -> Option<crate::cache::binds::NativeApi> {
     if !path.exists() {
         return None;
     }
-    crate::cache::binds::NativeApi::load(&path)
+    std::fs::read(&path).ok()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -12039,6 +12116,7 @@ mod tests {
             ret: DataType::default(),
             params: Vec::new(),
             bytecode: Vec::new(),
+            variable_space: 0,
             obj_locals: Vec::new(),
             is_ufunction: false,
             traits: 0,
@@ -12059,6 +12137,7 @@ mod tests {
                 methods: vec![test_function("Tick"), test_function("__InitDefaults")],
                 ctors: Vec::new(),
                 flags: 0,
+                is_abstract: false,
             }],
             enums: Vec::new(),
             globals: Vec::new(),
@@ -12159,6 +12238,7 @@ mod tests {
                 methods: vec![test_function("__InitDefaults")],
                 ctors: Vec::new(),
                 flags: 0,
+                is_abstract: false,
             }],
             enums: Vec::new(),
             globals: Vec::new(),
@@ -12190,6 +12270,7 @@ mod tests {
                 methods: vec![test_function("__InitDefaults")],
                 ctors: Vec::new(),
                 flags: 0,
+                is_abstract: false,
             }],
             enums: Vec::new(),
             globals: Vec::new(),
@@ -12238,6 +12319,7 @@ mod tests {
             methods,
             ctors: Vec::new(),
             flags: 0,
+            is_abstract: false,
         };
         let module = |classes| {
             vec![Module {
@@ -12309,6 +12391,7 @@ mod tests {
             methods,
             ctors: Vec::new(),
             flags: 0,
+            is_abstract: false,
         };
 
         let duplicate_modules = vec![module(Vec::new()), module(Vec::new())];
@@ -13797,7 +13880,16 @@ mod tests {
     fn full_graph_publishes_only_validated_add_edit_changes_on_the_sealed_base() {
         let root = unique_test_root("full-graph-retained");
         std::fs::create_dir_all(root.join("game")).unwrap();
-        let opts = full_graph_opts(&root);
+        let mut opts = full_graph_opts(&root);
+        let overlays = root.join("overlays");
+        std::fs::create_dir(&overlays).unwrap();
+        for change in &opts.changes {
+            std::fs::write(overlays.join(&change.relative_path), change.source.as_ref().unwrap()).unwrap();
+        }
+        let planned = crate::full_graph_plan::plan_source_overlays_v1(&opts.base_cache, &overlays).unwrap();
+        (opts.changes, opts.final_manifest) = planned.into_parts();
+        // The public planner owns an immutable snapshot; the backend must not reopen the inputs.
+        std::fs::remove_dir_all(&overlays).unwrap();
         let mut expected_output = cache_with_empty_modules(&[
             ("Keep", "Keep.as"),
             ("EditMe", "EditMe.as"),
@@ -17983,6 +18075,57 @@ mod tests {
             report.install_restore_disposition(),
             InstallRestoreDisposition::NotStarted
         );
+    }
+
+    #[test]
+    fn native_admission_keeps_sealed_standalone_inputs_and_rechecks_game_inputs() {
+        let root = unique_test_root("backend-native-admission");
+        std::fs::create_dir_all(&root).unwrap();
+        let base_path = root.join("PrecompiledScript_Shipping.Cache");
+        let live_binds = root.join("Binds.Cache");
+        let sealed = b"caller sealed native API snapshot";
+        // The same snapshot remains authoritative for the standalone runner
+        // when the install disappears or changes after the snapshot was taken.
+        for installed in [
+            Some(sealed.as_slice()),
+            Some(b"changed live inputs".as_slice()),
+            None,
+        ] {
+            if let Some(bytes) = installed {
+                std::fs::write(&live_binds, bytes).unwrap();
+            } else {
+                std::fs::remove_file(&live_binds).unwrap();
+            }
+            assert_eq!(
+                compile_module_admission_binds(
+                    CompilerBackendNameV1::Standalone,
+                    &base_path,
+                    Some(sealed),
+                ),
+                sealed
+            );
+            let game_evidence = compile_module_admission_binds(
+                CompilerBackendNameV1::Game,
+                &base_path,
+                Some(sealed),
+            );
+            assert_eq!(
+                game_evidence,
+                if installed == Some(sealed.as_slice()) {
+                    sealed.as_slice()
+                } else {
+                    &[]
+                },
+            );
+        }
+        assert!(compile_module_admission_binds(
+            CompilerBackendNameV1::Standalone,
+            &base_path,
+            None,
+        )
+        .is_empty());
+        assert!(!live_binds.exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

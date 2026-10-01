@@ -1,0 +1,929 @@
+{
+  "schema": "gore.npc-batch.field-runtime.v1",
+  "date": "2026-09-13",
+  "bundle": "NpcFieldRolesTest",
+  "version": "0.1.0",
+  "user_results": {
+    "tests_1_to_7_completed": true,
+    "follow_wait_resume_and_reload": true,
+    "training_defeat_recovery": true,
+    "enmity_until_defeat": true,
+    "guild_roundtrip": true,
+    "death_persists_on_load": true,
+    "flee": false,
+    "revive": false,
+    "failure_report": "B attacked instead of fleeing. B remained dead after waiting at the opposite end of Old Camp."
+  },
+  "saves": [
+    {
+      "slot": "G1R-003",
+      "title": "rolle-waffenwahl",
+      "file": {
+        "bytes": 1047189,
+        "sha256": "f28d8534f0d6150396ba84ed4a2472b87f6a8faa0db0eec8833095be60706176"
+      },
+      "global_id": "GORE_TEST_B-WP_WarningFlock_XT_02",
+      "one_saved_B": true,
+      "is_dead": false,
+      "health": {
+        "Health": 0.0,
+        "MaxHealth": 50.0
+      },
+      "routine": "/Script/Angelscript.DailyRoutine_Empty",
+      "guild_effects": [
+        "/Script/Angelscript.Default__GE_Guild_Human_OldCamp_ShadowLeader"
+      ],
+      "game_time_seconds": 43913.728838950396,
+      "memories": [
+        {
+          "tags": "Memory.Conflict.Start, Character.Player",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.Conflict.End",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.SaveAndLoad.Defeated",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.Guild.Joined, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43200.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43200.0
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.OldCampOutskirts",
+          "time_seconds": 43200.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Combat.WasDefeated",
+          "time_seconds": 43843.2866114378
+        },
+        {
+          "tags": "Action.Ambient.StandAround",
+          "time_seconds": 45163.332920759916
+        }
+      ],
+      "markers": {
+        "gore_role_weapon_armed": 1.0,
+        "gore_role_weapon_bow_count": 1.0,
+        "gore_role_weapon_sword_count": 1.0,
+        "gore_role_weapon_arrow_count": 100.0,
+        "gore_role_weapon_0_seconds": 0.11054467,
+        "gore_role_weapon_0_phase": 0.0,
+        "gore_role_weapon_0_selected": 0.0,
+        "gore_role_weapon_0_equipped": 0.0,
+        "gore_role_weapon_0_target": 0.0,
+        "gore_role_weapon_0_distance": -1.0,
+        "gore_role_weapon_0_reachable": -1.0,
+        "gore_role_weapon_0_close_gate": 0.0,
+        "gore_role_weapon_1_seconds": 11.426929,
+        "gore_role_weapon_1_phase": 0.0,
+        "gore_role_weapon_1_selected": 0.0,
+        "gore_role_weapon_1_equipped": 0.0,
+        "gore_role_weapon_1_target": 1.0,
+        "gore_role_weapon_1_distance": 97.21582,
+        "gore_role_weapon_1_reachable": 1.0,
+        "gore_role_weapon_1_close_gate": 1.0,
+        "gore_role_weapon_2_seconds": 11.581688,
+        "gore_role_weapon_2_phase": 1.0,
+        "gore_role_weapon_2_selected": 1.0,
+        "gore_role_weapon_2_equipped": 0.0,
+        "gore_role_weapon_2_target": 1.0,
+        "gore_role_weapon_2_distance": 97.21582,
+        "gore_role_weapon_2_reachable": 1.0,
+        "gore_role_weapon_2_close_gate": 1.0,
+        "gore_role_weapon_3_seconds": 11.909473,
+        "gore_role_weapon_3_phase": 1.0,
+        "gore_role_weapon_3_selected": 1.0,
+        "gore_role_weapon_3_equipped": 1.0,
+        "gore_role_weapon_3_target": 1.0,
+        "gore_role_weapon_3_distance": 97.21582,
+        "gore_role_weapon_3_reachable": 1.0,
+        "gore_role_weapon_3_close_gate": 1.0,
+        "gore_role_weapon_4_seconds": 24.567638,
+        "gore_role_weapon_4_phase": 0.0,
+        "gore_role_weapon_4_selected": 1.0,
+        "gore_role_weapon_4_equipped": 1.0,
+        "gore_role_weapon_4_target": 0.0,
+        "gore_role_weapon_4_distance": -1.0,
+        "gore_role_weapon_4_reachable": -1.0,
+        "gore_role_weapon_4_close_gate": 0.0,
+        "gore_role_weapon_5_seconds": 25.039272,
+        "gore_role_weapon_5_phase": 0.0,
+        "gore_role_weapon_5_selected": 1.0,
+        "gore_role_weapon_5_equipped": 0.0,
+        "gore_role_weapon_5_target": 0.0,
+        "gore_role_weapon_5_distance": -1.0,
+        "gore_role_weapon_5_reachable": -1.0,
+        "gore_role_weapon_5_close_gate": 0.0,
+        "gore_role_weapon_samples": 6.0
+      },
+      "readback_sha256": "9e24aa33e4c26e0702146558b8459936486e36a7cfc385c423df2526e7dcde44"
+    },
+    {
+      "slot": "G1R-022",
+      "title": "rolle-folgen",
+      "file": {
+        "bytes": 1042671,
+        "sha256": "0354e5dee162d3abc680125920330fa49c7e08744c0dcd351db6303f4192fb4a"
+      },
+      "global_id": "GORE_TEST_B-WP_WarningFlock_XT_02",
+      "one_saved_B": true,
+      "is_dead": false,
+      "health": {
+        "Health": 50.0,
+        "MaxHealth": 50.0
+      },
+      "routine": "/Script/Angelscript.DailyRoutine_Generic_FollowHero",
+      "guild_effects": [
+        "/Script/Angelscript.Default__GE_Guild_Human_OldCamp_ShadowLeader"
+      ],
+      "game_time_seconds": 43600.626592606306,
+      "memories": [
+        {
+          "tags": "Memory.Guild.Joined, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43200.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.OldCampOutskirts",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Action.Ambient.StandAround",
+          "time_seconds": 45163.332920759916
+        }
+      ],
+      "markers": {},
+      "readback_sha256": "d98d9c6e3ada67a4a41288da1eafe5490a9af5608964c5de358098deff41bb80"
+    },
+    {
+      "slot": "G1R-023",
+      "title": "rolle-warten",
+      "file": {
+        "bytes": 1051013,
+        "sha256": "1cf44cf50708597a50676a21913a8b557d7657703515350c35f301a9f1b32374"
+      },
+      "global_id": "GORE_TEST_B-WP_WarningFlock_XT_02",
+      "one_saved_B": true,
+      "is_dead": false,
+      "health": {
+        "Health": 50.0,
+        "MaxHealth": 50.0
+      },
+      "routine": "/Script/Angelscript.DailyRoutine_GoreRoleWait",
+      "guild_effects": [
+        "/Script/Angelscript.Default__GE_Guild_Human_OldCamp_ShadowLeader"
+      ],
+      "game_time_seconds": 43934.13587246835,
+      "memories": [
+        {
+          "tags": "Memory.Guild.Joined, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43200.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Area.Left, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43606.626592606306
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.OldCampOutskirts",
+          "time_seconds": 43606.626592606306
+        },
+        {
+          "tags": "Action.Ambient.StandAround",
+          "time_seconds": 43764.91004668176
+        }
+      ],
+      "markers": {},
+      "readback_sha256": "31eff0358e670512e19aeeb44c39e856dee99d164d59aa960e30acd352e1493c"
+    },
+    {
+      "slot": "G1R-024",
+      "title": "rolle-niederlage",
+      "file": {
+        "bytes": 1050256,
+        "sha256": "33eacde2bdda6a0c277fce5a64bad39873c40696a95d744e719ea86199497d37"
+      },
+      "global_id": "GORE_TEST_B-WP_WarningFlock_XT_02",
+      "one_saved_B": true,
+      "is_dead": false,
+      "health": {
+        "Health": 20.0,
+        "MaxHealth": 50.0
+      },
+      "routine": "/Script/Angelscript.DailyRoutine_GoreRoleWait",
+      "guild_effects": [
+        "/Script/Angelscript.Default__GE_Guild_Human_OldCamp_ShadowLeader"
+      ],
+      "game_time_seconds": 44437.38387425244,
+      "memories": [
+        {
+          "tags": "Memory.Conflict.Start, Character.Player",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.Conflict.End",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.Guild.Joined, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43200.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.OldCampOutskirts",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Combat.WasDamaged.Unintentionally, Character.Player",
+          "time_seconds": 43516.8709499985
+        },
+        {
+          "tags": "Memory.Combat.Hit, Event.SuperArmor.Me.After, Combat.HitType.Additive, Item.Weapon.Bow",
+          "time_seconds": 43555.8140219897
+        },
+        {
+          "tags": "Memory.Combat.WasDamaged.Unintentionally, Character.Player",
+          "time_seconds": 43556.1398640126
+        },
+        {
+          "tags": "Memory.Combat.WasDefeated",
+          "time_seconds": 43578.36560551822
+        },
+        {
+          "tags": "Memory.Conflict.Defeated.TrainingFight",
+          "time_seconds": 43578.36560551822
+        },
+        {
+          "tags": "Action.Ambient.StandAround",
+          "time_seconds": 44171.920051679015
+        }
+      ],
+      "markers": {},
+      "readback_sha256": "c2e9db4cd7def517b3958497a065196181192ce7de6129b6de2bc69464beb8b4"
+    },
+    {
+      "slot": "G1R-025",
+      "title": "rolle-feind-besiegt",
+      "file": {
+        "bytes": 1052079,
+        "sha256": "ef71fd6c05e25643b66f65507358f3fee0be7f6f91c431252c747a63fda554d9"
+      },
+      "global_id": "GORE_TEST_B-WP_WarningFlock_XT_02",
+      "one_saved_B": true,
+      "is_dead": false,
+      "health": {
+        "Health": 20.0,
+        "MaxHealth": 50.0
+      },
+      "routine": "/Script/Angelscript.DailyRoutine_Empty",
+      "guild_effects": [
+        "/Script/Angelscript.Default__GE_Guild_Human_OldCamp_ShadowLeader"
+      ],
+      "game_time_seconds": 44514.80602037907,
+      "memories": [
+        {
+          "tags": "Memory.Conflict.Start, Character.Player",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.Conflict.End",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.Conflict.End",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.Guild.Joined, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43200.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.OldCampOutskirts",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Combat.Hit, Event.SuperArmor.Me.After, Combat.HitType.Standard, Item.Weapon.Sword.OneHand",
+          "time_seconds": 43670.93059928715
+        },
+        {
+          "tags": "Memory.Combat.WasDamaged.Intentionally, Character.Player",
+          "time_seconds": 43671.21234281361
+        },
+        {
+          "tags": "Memory.Combat.Dodge, Combat.Direction.Back",
+          "time_seconds": 43679.523602858186
+        },
+        {
+          "tags": "",
+          "time_seconds": 43714.885312363505
+        },
+        {
+          "tags": "Memory.Combat.WasDefeated",
+          "time_seconds": 43740.9616843909
+        },
+        {
+          "tags": "Action.Ambient.StandAround",
+          "time_seconds": 45163.332920759916
+        }
+      ],
+      "markers": {},
+      "readback_sha256": "8ec335a712e0da48ebd6c7127e4372b9d902924884b49f4a6c03bc857e36edc8"
+    },
+    {
+      "slot": "G1R-026",
+      "title": "rolle-gilde-neutral",
+      "file": {
+        "bytes": 1037241,
+        "sha256": "f0b2b65f68c572098dbdb0910c6a1490d84a6aa26186031d3efd61deb3842035"
+      },
+      "global_id": "GORE_TEST_B-WP_WarningFlock_XT_02",
+      "one_saved_B": true,
+      "is_dead": false,
+      "health": {
+        "Health": 50.0,
+        "MaxHealth": 50.0
+      },
+      "routine": "/Script/Angelscript.DailyRoutine_Empty",
+      "guild_effects": [
+        "/Script/Angelscript.Default__GE_Guild_None"
+      ],
+      "game_time_seconds": 43423.29376499355,
+      "memories": [
+        {
+          "tags": "Memory.Guild.Joined, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43200.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.OldCampOutskirts",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Guild.Joined, Guild.None",
+          "time_seconds": 43360.50009895861
+        },
+        {
+          "tags": "Action.Ambient.StandAround",
+          "time_seconds": 45163.332920759916
+        }
+      ],
+      "markers": {},
+      "readback_sha256": "8cd8899c0a57319b461203cdb7e2cadb0cfc771afd46ae35b2b81bc098744266"
+    },
+    {
+      "slot": "G1R-027",
+      "title": "rolle-flucht",
+      "file": {
+        "bytes": 1044354,
+        "sha256": "49ffb99e035feaf8c99891a8547c8049fa2d46732bd1c8fd57ac87378fa6183f"
+      },
+      "global_id": "GORE_TEST_B-WP_WarningFlock_XT_02",
+      "one_saved_B": true,
+      "is_dead": false,
+      "health": {
+        "Health": 0.0,
+        "MaxHealth": 50.0
+      },
+      "routine": "/Script/Angelscript.DailyRoutine_Empty",
+      "guild_effects": [
+        "/Script/Angelscript.Default__GE_Guild_Human_OldCamp_ShadowLeader"
+      ],
+      "game_time_seconds": 43687.130077049136,
+      "memories": [
+        {
+          "tags": "Memory.Conflict.Start, Character.Player",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.SaveAndLoad.Defeated",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.Guild.Joined, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43200.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.OldCampOutskirts",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Combat.WasDefeated",
+          "time_seconds": 43545.55921922624
+        },
+        {
+          "tags": "Memory.Conflict.Defeated.TrueFight",
+          "time_seconds": 43545.55921922624
+        },
+        {
+          "tags": "Action.Ambient.StandAround",
+          "time_seconds": 45163.332920759916
+        }
+      ],
+      "markers": {
+        "gore_role_old_flee_mode": 2.0,
+        "gore_role_flee_override": 1.0,
+        "gore_role_dead": 0.0,
+        "gore_role_defeated": 1.0,
+        "gore_role_health": 0.0,
+        "gore_role_enemy": 0.0,
+        "gore_role_relationship": 4.0,
+        "gore_role_flee": 0.0,
+        "gore_role_follow": 0.0
+      },
+      "readback_sha256": "506587180fbaebfecec7032c0f8740443db1238bea6f4bcda496698f0273cd62"
+    },
+    {
+      "slot": "G1R-029",
+      "title": "rolle-gilde-zurueck",
+      "file": {
+        "bytes": 1042463,
+        "sha256": "0c8e6584509751392d904c763e89180f4497da37214d04fbc7800a4e74c91710"
+      },
+      "global_id": "GORE_TEST_B-WP_WarningFlock_XT_02",
+      "one_saved_B": true,
+      "is_dead": false,
+      "health": {
+        "Health": 50.0,
+        "MaxHealth": 50.0
+      },
+      "routine": "/Script/Angelscript.DailyRoutine_Empty",
+      "guild_effects": [
+        "/Script/Angelscript.Default__GE_Guild_Human_OldCamp_ShadowLeader"
+      ],
+      "game_time_seconds": 43693.321803465486,
+      "memories": [
+        {
+          "tags": "Memory.Guild.Joined, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43200.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.OldCampOutskirts",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Guild.Joined, Guild.None",
+          "time_seconds": 43360.50009895861
+        },
+        {
+          "tags": "Memory.Guild.Joined, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43630.610736235976
+        },
+        {
+          "tags": "Action.Ambient.StandAround",
+          "time_seconds": 45163.332920759916
+        }
+      ],
+      "markers": {},
+      "readback_sha256": "bd790e073444cc37c80ed9bbce87cfaa4b563ac6766ef2be1aef3d764bd3f5a7"
+    },
+    {
+      "slot": "G1R-030",
+      "title": "rolle-tod",
+      "file": {
+        "bytes": 1047266,
+        "sha256": "addca3838d2b701cf5988183bb722afaeb13a12efac89e039b967fc2772706ba"
+      },
+      "global_id": "GORE_TEST_B-WP_WarningFlock_XT_02",
+      "one_saved_B": true,
+      "is_dead": true,
+      "health": {
+        "Health": 20.0,
+        "MaxHealth": 50.0
+      },
+      "routine": "/Script/Angelscript.DailyRoutine_GoreRoleWait",
+      "guild_effects": [
+        "/Script/Angelscript.Default__GE_Guild_Human_OldCamp_ShadowLeader"
+      ],
+      "game_time_seconds": 43817.529560893774,
+      "memories": [
+        {
+          "tags": "Memory.Conflict.Start, Character.Player",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.SaveAndLoad.Defeated",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.Guild.Joined, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43200.0
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Combat.WasDamaged.Unintentionally, Character.Player",
+          "time_seconds": 43535.405938372016
+        },
+        {
+          "tags": "Memory.Combat.Hit, Event.SuperArmor.Me.After, Combat.HitType.Additive, Item.Weapon.Bow",
+          "time_seconds": 43573.80980847776
+        },
+        {
+          "tags": "Memory.Combat.WasDamaged.Unintentionally, Character.Player",
+          "time_seconds": 43574.109419986606
+        },
+        {
+          "tags": "Memory.Combat.WasDefeated",
+          "time_seconds": 43588.30048029125
+        },
+        {
+          "tags": "Memory.Conflict.Defeated.TrainingFight",
+          "time_seconds": 43588.30048029125
+        },
+        {
+          "tags": "Memory.Area.Left, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43615.43657672405
+        },
+        {
+          "tags": "Memory.Area.Left, Area",
+          "time_seconds": 43624.7224137187
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.OldCampOutskirts",
+          "time_seconds": 43624.7224137187
+        },
+        {
+          "tags": "Memory.Character.Defeated.Kill, Memory.Execution, Memory.KilledInsideCamp, Item.Weapon.Sword.OneHand, Species.Human, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43624.7224137187
+        },
+        {
+          "tags": "Memory.Conflict.Defeated.TrueFight",
+          "time_seconds": 43624.7224137187
+        },
+        {
+          "tags": "Memory.Area.Entered, Area",
+          "time_seconds": 43741.17892482877
+        },
+        {
+          "tags": "Memory.Area.Left, Area.OldCampOutskirts",
+          "time_seconds": 43741.17892482877
+        },
+        {
+          "tags": "Action.Ambient.StandAround",
+          "time_seconds": 45163.332920759916
+        }
+      ],
+      "markers": {
+        "gore_role_revive_enabled": 0.0,
+        "gore_role_dead": 1.0,
+        "gore_role_defeated": 0.0,
+        "gore_role_health": 20.0,
+        "gore_role_enemy": 0.0,
+        "gore_role_relationship": 4.0,
+        "gore_role_flee": 0.0,
+        "gore_role_follow": 0.0
+      },
+      "readback_sha256": "fe5c1b2665e78b7fc0abff486d5fc7b576ffd845b09123ddb94556024deae28b"
+    },
+    {
+      "slot": "G1R-031",
+      "title": "rolle-flucht-zurueck",
+      "file": {
+        "bytes": 1043853,
+        "sha256": "0cb99af5e5e074cd04e2d7dc72dc4f33df8d76ce548a9ea3ba3c1c8586a38910"
+      },
+      "global_id": "GORE_TEST_B-WP_WarningFlock_XT_02",
+      "one_saved_B": true,
+      "is_dead": false,
+      "health": {
+        "Health": 0.0,
+        "MaxHealth": 50.0
+      },
+      "routine": "/Script/Angelscript.DailyRoutine_Empty",
+      "guild_effects": [
+        "/Script/Angelscript.Default__GE_Guild_Human_OldCamp_ShadowLeader"
+      ],
+      "game_time_seconds": 43720.06970499456,
+      "memories": [
+        {
+          "tags": "Memory.Conflict.Start, Character.Player",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.SaveAndLoad.Defeated",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.Guild.Joined, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43200.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.OldCampOutskirts",
+          "time_seconds": 43206.0
+        },
+        {
+          "tags": "Memory.Area.Left, Area",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Combat.WasDefeated",
+          "time_seconds": 43545.55921922624
+        },
+        {
+          "tags": "Memory.Conflict.Defeated.TrueFight",
+          "time_seconds": 43545.55921922624
+        },
+        {
+          "tags": "Action.Ambient.StandAround",
+          "time_seconds": 45163.332920759916
+        }
+      ],
+      "markers": {
+        "gore_role_old_flee_mode": 2.0,
+        "gore_role_flee_override": 0.0,
+        "gore_role_dead": 0.0,
+        "gore_role_defeated": 1.0,
+        "gore_role_health": 0.0,
+        "gore_role_enemy": 0.0,
+        "gore_role_relationship": 4.0,
+        "gore_role_flee": 0.0,
+        "gore_role_follow": 0.0
+      },
+      "readback_sha256": "237e0acff088faa912d50eda40af4d44f0ed3299b636d62d7c1915101b26dce3"
+    },
+    {
+      "slot": "G1R-032",
+      "title": "rolle-wiederbelebt",
+      "file": {
+        "bytes": 1127490,
+        "sha256": "8fc8dcbf4b94acb0fc2c52cf3163d24aa6c0c1ef0fa96ee87b1edacfada446f6"
+      },
+      "global_id": "GORE_TEST_B-WP_WarningFlock_XT_02",
+      "one_saved_B": true,
+      "is_dead": true,
+      "health": {
+        "Health": 20.0,
+        "MaxHealth": 50.0
+      },
+      "routine": "/Script/Angelscript.DailyRoutine_GoreRoleRevive",
+      "guild_effects": [
+        "/Script/Angelscript.Default__GE_Guild_Human_OldCamp_ShadowLeader"
+      ],
+      "game_time_seconds": 48589.40046057105,
+      "memories": [
+        {
+          "tags": "Memory.Conflict.Start, Character.Player",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.SaveAndLoad.Defeated",
+          "time_seconds": -1.7976931348623157e+308
+        },
+        {
+          "tags": "Memory.Guild.Joined, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43200.0
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43236.226325914264
+        },
+        {
+          "tags": "Memory.Combat.WasDamaged.Unintentionally, Character.Player",
+          "time_seconds": 43535.405938372016
+        },
+        {
+          "tags": "Memory.Combat.Hit, Event.SuperArmor.Me.After, Combat.HitType.Additive, Item.Weapon.Bow",
+          "time_seconds": 43573.80980847776
+        },
+        {
+          "tags": "Memory.Combat.WasDamaged.Unintentionally, Character.Player",
+          "time_seconds": 43574.109419986606
+        },
+        {
+          "tags": "Memory.Combat.WasDefeated",
+          "time_seconds": 43588.30048029125
+        },
+        {
+          "tags": "Memory.Conflict.Defeated.TrainingFight",
+          "time_seconds": 43588.30048029125
+        },
+        {
+          "tags": "Memory.Area.Left, Area.XardasTower.RooftopTerrace",
+          "time_seconds": 43615.43657672405
+        },
+        {
+          "tags": "Memory.Character.Defeated.Kill, Memory.Execution, Memory.KilledInsideCamp, Item.Weapon.Sword.OneHand, Species.Human, Guild.Human.OldCamp.Shadow",
+          "time_seconds": 43624.7224137187
+        },
+        {
+          "tags": "Memory.Conflict.Defeated.TrueFight",
+          "time_seconds": 43624.7224137187
+        },
+        {
+          "tags": "Action.Ambient.StandAround",
+          "time_seconds": 45163.332920759916
+        },
+        {
+          "tags": "Memory.Area.Left, Area",
+          "time_seconds": 48181.885066747665
+        },
+        {
+          "tags": "Memory.Area.Entered, Area.OldCampOutskirts",
+          "time_seconds": 48181.885066747665
+        },
+        {
+          "tags": "Memory.Area.Entered, Area",
+          "time_seconds": 48294.9176479578
+        },
+        {
+          "tags": "Memory.Area.Left, Area.OldCampOutskirts",
+          "time_seconds": 48294.9176479578
+        }
+      ],
+      "markers": {
+        "gore_role_revive_enabled": 1.0,
+        "gore_role_dead": 1.0,
+        "gore_role_defeated": 0.0,
+        "gore_role_health": 20.0,
+        "gore_role_enemy": 0.0,
+        "gore_role_relationship": 4.0,
+        "gore_role_flee": 0.0,
+        "gore_role_follow": 0.0
+      },
+      "readback_sha256": "3c09b7af5612165040d194b5a2547774fabff7de2c84fa9213fcfb2474027e96"
+    }
+  ],
+  "weapon_trace": {
+    "rows": [
+      {
+        "seconds": 0.11054467,
+        "phase": 0.0,
+        "selected": 0.0,
+        "equipped": 0.0,
+        "target": 0.0,
+        "distance": -1.0,
+        "reachable": -1.0,
+        "close_gate": 0.0
+      },
+      {
+        "seconds": 11.426929,
+        "phase": 0.0,
+        "selected": 0.0,
+        "equipped": 0.0,
+        "target": 1.0,
+        "distance": 97.21582,
+        "reachable": 1.0,
+        "close_gate": 1.0
+      },
+      {
+        "seconds": 11.581688,
+        "phase": 1.0,
+        "selected": 1.0,
+        "equipped": 0.0,
+        "target": 1.0,
+        "distance": 97.21582,
+        "reachable": 1.0,
+        "close_gate": 1.0
+      },
+      {
+        "seconds": 11.909473,
+        "phase": 1.0,
+        "selected": 1.0,
+        "equipped": 1.0,
+        "target": 1.0,
+        "distance": 97.21582,
+        "reachable": 1.0,
+        "close_gate": 1.0
+      },
+      {
+        "seconds": 24.567638,
+        "phase": 0.0,
+        "selected": 1.0,
+        "equipped": 1.0,
+        "target": 0.0,
+        "distance": -1.0,
+        "reachable": -1.0,
+        "close_gate": 0.0
+      },
+      {
+        "seconds": 25.039272,
+        "phase": 0.0,
+        "selected": 1.0,
+        "equipped": 0.0,
+        "target": 0.0,
+        "distance": -1.0,
+        "reachable": -1.0,
+        "close_gate": 0.0
+      }
+    ],
+    "combat_phase_sample_count": 0,
+    "interpretation": "Warning sword captured at approximately97cm with a reachable Hero. No combat-phase sample captured, so this trace cannot resolve the prior combat bow-selection cause. User completed the observation; no additional weapon test requested in this retry."
+  },
+  "revive_diagnosis": {
+    "routine_request_saved": "/Script/Angelscript.DailyRoutine_GoreRoleRevive",
+    "still_dead": true,
+    "minutes_between_death_and_retry_saves": 79.53118166128795,
+    "minutes_since_execution_memory": 82.74463411420584,
+    "actual_death_memory": {
+      "tags": "Memory.Character.Defeated.Kill, Memory.Execution, Memory.KilledInsideCamp, Item.Weapon.Sword.OneHand, Species.Human, Guild.Human.OldCamp.Shadow",
+      "time_seconds": 43624.7224137187
+    },
+    "configured_filter": "Only Memory.Conflict.Killed.* in0.1.0; actual execution memory has Memory.Character.Defeated.Kill and Memory.Execution.",
+    "conclusion": "The authored filter misses the recorded execution; native subscription/distance gates also need a targeted corrected runtime test."
+  },
+  "qualification": "User observations establish visible behavior; saves verify retained routines, guild effects, death state and command markers. Markers alone do not prove movement or resurrection. Both starts used requested easier health/strength/protection values.",
+  "retry": "Only26/27 fleeing and29 same-NPC resurrection; use072 and retained030 respectively.",
+  "archive_report": "../profile-cleanup-after-field.json",
+  "correction": "field-fix-0.1.1.json"
+}

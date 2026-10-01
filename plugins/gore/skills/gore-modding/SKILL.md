@@ -1,6 +1,6 @@
 ---
 name: gore-modding
-description: Use when modding Gothic 1 Remake with GORE - changing textures, localized text, dialog, audio, voice-over, item values or AngelScript; building a bundle; or importing, enabling, ordering, analyzing, preflighting, applying, checking status, recovering, removing, and resetting GORE or external mods with the Mod Manager. Covers the consent gate and what "deployed" does and does not prove.
+description: Use when modding Gothic 1 Remake with GORE - changing textures, localized text, dialog, audio, voice-over, item values or AngelScript; authoring NPCs and quests; building a bundle; or importing, enabling, ordering, analyzing, preflighting, applying, checking status, recovering, removing, and resetting GORE or external mods with the Mod Manager. Covers the consent gate and what "deployed" does and does not prove.
 ---
 
 # Modding Gothic 1 Remake with GORE
@@ -12,20 +12,49 @@ remembered.
 
 ## If the tools are not there
 
-If no `gore_*` tool exists, the server did not start, and the overwhelmingly
-likely reason is that `gore.exe` is not on `PATH` — this plugin starts it as
-`gore mcp serve`, by name. Say so plainly rather than working around it: no
-`gore` command can be reached, and `gore --version` in a terminal is the check.
-Nothing below applies until that is fixed.
+Missing tools can mean deferred discovery, pending startup, a disabled server
+or a failed start. Search for exact GORE tool names before diagnosing a failure.
+Check `Get-Command gore` and `gore --version` in the client's environment; missing
+MCP tools alone do not prove the CLI is absent. For Codex, `codex plugin list`
+and `codex mcp get gore --json` establish installation and registration, not
+connection health. Use the client's MCP status or startup diagnostic to tell
+pending startup from an error.
+
+Codex may omit pending optional servers after its default one-second startup
+grace. The current plugin marks GORE as required with a 30-second startup
+timeout, so it waits for discovery or reports a startup failure. Update an older
+plugin through its registered marketplace; see [plugin repair](../../README.md#updating-and-repairing-the-plugin).
+Do not pin another executable or diagnose PATH without evidence.
+
+When the current CLI is reachable, offline authoring can continue through that
+same CLI and its shipped guide. Run `gore doctor` first and preserve the same
+base guards and consent boundaries. Explain a missing MCP connection separately;
+it does not establish a missing modding capability.
 
 ## Before you touch anything
 
+For a new authoring session, run `gore_doctor` once before creating workspaces,
+exporting script trees or compiling. Read the check verdicts: a successful tool
+call only means the report was produced. For AngelScript, NPC, dialog or quest
+work, resolve a `standalone_compiler` problem before expensive authoring steps.
+Read the `native_api: ready` or `native_api: missing` item too: compiler
+compatibility alone does not admit extended native references during composition.
+An `ok` verdict establishes compiler/cache/API readiness; it does not prove that
+the requested source compiles or its gameplay works. Keep native diagnostics
+from a failed compile, including failures in unchanged shipped source.
+Use the reported executable and pristine cache path; after replacing the CLI,
+restart the MCP server and repeat Doctor once. Do not downgrade to an older CLI
+or export another full tree to work around a missing embedded compiler catalog.
+
 Call `gore_guide` for the page that covers your domain: `textures`, `audio`,
 `voice`, `text-and-dialogs`, `dialog-trees`, `dialog-authoring`, `items`,
-`scripts`, `bundles`, `mod-manager`. Use
+`npc-authoring`, `scripts`, `bundles`, `mod-manager`. Use
 `action: "search"` once without `page` — it ranks single sections globally
-across the guide and reference, so never repeat the same search for candidate
-pages. If the page and section are already known, use `read` directly.
+across the guide and reference. Use a short mechanism query such as
+`quest callbacks`, rather than the whole story, and read the returned section. If a
+section lookup fails, use its returned section names or a focused search;
+do not expand to the entire HTML guide. If the page and section are already
+known, use `read` directly.
 `gore_help` gives exact current flags; the guide gives the order to do things in
 and what breaks when a step is skipped.
 
@@ -33,15 +62,80 @@ Do not preload every guide page or ask for help for every command in a planned
 workflow. Read one ranked section for the step in front of you, and call
 `gore_help` only when the tool schema leaves an argument unclear. `gore_help`
 takes one CLI command path: use `{"command":"loc export"}`, never a `gore_loc`
-tool name and never a separate `subcommand` field. For a broad smoke-test mod,
-run Doctor once and use the game path it reports; call `config get` only when
-that path is missing or contradictory. Prove each chosen target, build once,
+tool name and never a separate `subcommand` field. Use the game path Doctor reports; call `config get` only when that path is
+missing or contradictory. Prove each chosen target, build once,
 inspect once, and leave Manager help/import/preflight until the user actually
 chooses installation.
 
-When an MCP client defers or hides tools, list only the matching tool names.
-Never dump the complete tool registry or every tool description. Load only the
-definition of the next tool when its schema is not already available.
+When an MCP client defers or hides tools, match only the needed tool names;
+a description search for `GORE` matches almost the entire registry. Return names
+first and load only the next tool's schema. For known NPCs, prefer filtered
+`gore_npc list` with a small `max`, then one exact `show`, over broad `gore_find`
+results. Use filtered dialog `list`, a shallow `tree`, then exact topic `show`.
+Batch independent small reads; narrow a truncated result rather than raising
+its output budget or searching every installed CLI version.
+
+## Build new mods from supported capabilities
+
+For NPC identity, appearance, routines and placement, start with `npc-authoring`
+and `gore_npc`. Mod Studio's GUI coverage does not limit CLI or MCP authoring.
+Check current commands and evidence before claiming a build or authoring limit.
+
+Runtime fixtures demonstrate building blocks, not an allowlist of permitted
+mods. Combine supported NPC, appearance, dialog, quest and reward mechanisms
+for the user's request. Do not refuse because the exact character, clothing,
+head, dialogue or quest combination has not appeared in a previous test.
+Check the actual assets, APIs and documented technical constraints, then build
+and validate the new mod. Report what its own game test still needs to check
+without turning missing prior test coverage into an unsupported capability.
+
+Discover mesh paths from shipped/native visual references or existing asset
+metadata and confirm exact paths; do not guess names such as `XardasHead`.
+`texture paklist` is not a generic IoStore mesh index. Use documented CLI readers;
+report a discovery gap instead of writing an ad hoc IoStore parser.
+
+For head swaps or newly introduced native mesh/material references, read
+`scripts` / `probe-head-apis-before-assembling-the-mod`. After Doctor passes,
+compile a minimal source using the planned native types, calls and properties
+through strict standalone overlays before assembling the larger NPC/dialog/quest
+mod. Check selective FullGraph composition as well as the compiler result.
+Native API qualification is reusable across asset choices and exact supported
+generation rows whose Binds bytes, ancestry, class and field profiles match.
+Build 25414091 reuses authenticated snapshot evidence with its original source
+provenance; signatures, datatype flags and property offsets remain exact.
+Recompile for the target cache GUID after an update. A native-membership refusal
+on a known compatible generation needs a toolkit correction; retain the target
+hash/GUID and missing identity, and do not recommend `force` as a workaround.
+Keep API admission separate from the chosen head's pose, materials, restoration
+and persistence observed in game.
+
+If a documented command or NPC guide is missing, check the executable path
+printed by an MCP call against `Get-Command gore` and `gore --version`. An old
+plugin installation can pin an old CLI; establish the installed version before
+claiming the current toolkit cannot do the work. Keep the plugin's portable
+`command: "gore"` wiring; do not pin it to a version directory as a workaround.
+
+Offline NPC/quest examples are under `examples/npc-batch-tests/` beside the
+running `gore.exe`. For quests, read `quest/README.md` and `quest/quest-content.as`;
+`quest/GORE_TEST_A.as` is the complete surrounding overlay. Repository links
+record historical source/evidence; use the packaged files for normal authoring.
+If they are missing, report the CLI path/version and incomplete package instead
+of crawling HTML, searching old distributions or fetching source with `curl`.
+
+Use Doctor's pristine cache for every related workspace and source export.
+Pass it as `cache` where supported and compare each manifest's `cache_sha256`
+before combining overlays. Live-cache inspection describes the installed mod;
+it may have a different hash. Preserve base guards and existing workspaces.
+A mismatch needs a fresh checkout or toolkit correction, never edited manifest
+hashes or an automatic reset; `scripts` explains the installed-mod case.
+
+For a new NPC, use `npc stage <workspace>` without `--tree`. It snapshots only
+the checked authored modules and prints the strict standalone overlay compile
+with exact base and source hash guards. Run that command intact; stage again
+after editing sources. No full-tree export is needed. Read `scripts` /
+`compiling-while-a-script-mod-is-installed` when selecting a base with an active
+deployment. A timeout is not proof that the child process stopped: establish
+its state before retrying, and never rename its destination while it runs.
 
 ## Manage a loadout as one declarative deployment
 
@@ -126,9 +220,9 @@ a replaced sample lists as replaced, and `gore_mod_inspect` validates a built
 bundle and hashes its exact manifest plus complete normalized tree. Do that
 before reporting success, and say which items you could not check.
 
-## Never put an unproven name in a spec
+## Verify existing targets and define new identities
 
-Every id in a bundle spec — a sample name, an archive path, a texture asset, a
+A reference to existing game content — a sample name, an archive path, a texture asset, a
 localization id — has to be proved by an exact successful read or a listing you
 actually ran, not from the pattern the neighbouring names suggested. An exact
 texture extraction is proof; do not run the expensive full texture listing as a
@@ -140,12 +234,18 @@ Diego line that appeared in no listing, and it happened to exist. The failure
 mode when it does not is `mod build` accepting the spec and `mod deploy` refusing
 it afterwards, which costs you the whole build.
 
+New NPC names, topic classes, quest IDs and localization rows are authored by
+the mod; they do not have to exist in the vanilla game or an earlier fixture.
+Define them through the supported authoring path and verify the generated
+source or payload and its references during the normal check/build steps.
+
 ## Author dialogs through checked same-module workspaces
 
 Read `dialog-trees` to identify the exact participant, module, topic and menu
 position, then read `dialog-authoring` before changing source. Its capability
-table and "Practical limits only" section are the authority for what is
-supported, live-proven or still unproven on a particular game build.
+table records runtime examples; "Practical limits only" describes concrete
+technical restrictions. Missing an exact example is not a restriction on new
+content assembled from the supported mechanisms.
 
 Use `gore_dialog`, not a hand-built isolated Add module:
 
@@ -161,10 +261,16 @@ Use `gore_dialog`, not a hand-built isolated Add module:
   per-NPC settings module. It edits that anchor; there is no discovered Add
   fallback.
 
+Before layering quest/document/content helpers, check, stage and strictly
+compile the minimal checkout plus scaffolded topic against the same pristine
+base. This separates baseline emission/binding failures from new content. Then
+add the requested content and check/compile that assembled source.
+
 Deeper all-new trees stay in that generated module and must pass `check`, which
 guards the private-base, same-module, shipped-ABI, 20-slot and action-bearing
-tree contracts. Cross-module new-symbol dependencies use the guide's selective
-complete-cache `gore as compile` path, not dependent mini-caches. `caption_key`
+tree contracts. Cross-module new-symbol dependencies use one coordinated
+`gore_as_compile` call with `overlays: true` and `mini`, as the script guide
+describes; independent mini-caches cannot supply each other's symbols. `caption_key`
 only references localization; add the row separately. Voice is a third payload:
 structural validation can inspect Vorbis or Opus, but playable publication is
 fail-closed to Ogg/Vorbis because live Opus was silent. New lines receive the
@@ -172,6 +278,11 @@ game's generic facial placeholder; accurate line-specific lip sync needs
 separate cooked facial-animation assets that GORE cannot yet author.
 Compilation, bundle inspection, deployment and runtime proof remain separate
 steps.
+
+The dialog checker admits `UDocumentSegment` as a direct parent when shipped
+classes in the target cache use it. It does not cover every native parent. For a remaining coverage
+finding, read the quest recipe and use the script overlay route to establish
+resolution while keeping topic privacy and source-preservation guards.
 
 ## Compile AngelScript offline unless the user chooses a game fallback
 
@@ -185,12 +296,25 @@ consent. An occupied generated tree or an output aimed into the installation
 remains protected. Standalone also returns native compiler diagnostics; the
 optional runtime diagnostics hook belongs only to the game backend.
 
+For several changed/new modules, read `scripts` / `compile-only-authored-modules`
+and call `gore_as_compile` with `overlays: true`. Put only those complete module
+sources (at most 256) at canonical Script-relative paths in `src`; omitted
+originals remain in the pristine cache. Do not export the whole tree first. `only_changes` binds
+the exact allowed set and optional source hashes; it is a scope check, not a
+file filter. Preserve `expect_base` or `expect_base_sha256` guards. Overlay mode
+requires strict standalone and has no deletes or game fallback. A deliberate
+complete-tree workflow remains available with `overlays` omitted/false.
+
 Use the mixed `gore_as` compile routes only when the user knowingly chose
 `game` or `standalone-then-game`; those may fall back to the embedded game
 compiler and legitimately ask for both game-launch and install-write consent.
 If a dedicated standalone call is refused with a claim that it launches the
 game, do not relay that false question: report that the installed GORE MCP
 server is older than this workflow and needs updating.
+
+If a minimal source still fails after readiness passes, retain the matching CLI
+package and diagnostics. Do not try an older EXE, rewrite emitted shipped calls
+or guess default parameters to silence a native binding failure.
 
 Compiler compatibility, one-module authoring feasibility, and default-patch
 qualification are three separate answers. A native diagnostic such as
@@ -201,9 +325,9 @@ incompatible. Do not present a new Diego topic derived from
 `UTopic_Hero__OC_STT_DIEGO` as an isolated `compile-module --op add` recipe.
 Use `gore_dialog new-topic` so the new class is compiled inside the existing
 conversation module, or `new-conversation` inside a qualified loaded settings
-anchor. Do not try an unrelated base class or a game fallback; use full-graph
-compilation only for an explicitly requested cross-module dependency and only
-through its documented selective complete-cache workflow.
+anchor. Coordinated overlay compilation resolves visible cross-module
+dependencies when the requested mod needs them; it does not bypass module
+privacy. A game fallback or an unrelated base class does not fix that error.
 
 ## The consent gate
 
@@ -228,6 +352,27 @@ their own words. The words need no ritual formula: a clear instruction to do the
 displayed operation is enough. The opaque id expires, works once, and is bound
 to the normalized call, so changing any argument or reusing it is refused. Never
 invent either field or fill the words without having asked.
+
+## Forcing after a game update
+
+First distinguish a genuinely unqualified generation from a toolkit failure
+on a known compatible generation. Supported equivalent rows reuse authenticated
+native API evidence; a missing snapshot selection or native-membership refusal
+there needs a toolkit correction, even if the error prints a generic force hint.
+Do not request force approval to work around that defect.
+
+For a genuinely unqualified generation, compile, decompile, `value inspect` or
+`mod build` steps may offer `--force` when the specific check permits it.
+The result then names `"force": true`. Ask the user **once** whether GORE should
+force such steps for this game build, and say plainly that the result may be
+broken. Do not ask again for every command: if they agree, pass
+`"force": true` on every later call that needs it. The server confirms the
+first forced call once and remembers the answer for the session. If they
+decline, stop and point them to the game-updates reference instead of retrying.
+
+Forcing does not replace testing: the warnings the forced command prints are
+the checks it skipped. Tell the user which ones appeared, and put a new-game
+check of the affected change on the in-game checklist.
 
 ## Two things that will cost you a build
 

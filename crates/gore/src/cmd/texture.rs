@@ -73,6 +73,12 @@ pub enum TextureAction {
         /// Output mod dir; rewritten cooked files land under <mod_dir>/G1R/Content/…
         #[arg(long)]
         mod_dir: PathBuf,
+        /// Create a separate Texture2D package at this new /Game path; do not override the source
+        #[arg(long)]
+        as_asset: Option<String>,
+        /// Resample the input atlas to the original top-mip dimensions before encoding (required for differently sized VT input)
+        #[arg(long)]
+        fit_original: bool,
     },
     /// Pack a mod dir of cooked files into a Zen triplet (.utoc/.ucas/.pak)
     Pack {
@@ -141,6 +147,132 @@ fn mount_dir(mod_dir: &std::path::Path, asset: &str) -> Result<PathBuf> {
     // Drop the leaf (file stem); we only want the containing dir.
     let dir_rel = rel.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
     Ok(mod_dir.join(dir_rel))
+}
+
+/// Create a clone destination one component at a time, rejecting directory links
+/// before they can redirect the cooked files outside the requested mod tree.
+fn ensure_plain_clone_output_dir(path: &std::path::Path) -> Result<()> {
+    use std::path::Component;
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut current = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(_) => {
+                current.push(component.as_os_str());
+                continue;
+            }
+            Component::RootDir | Component::Normal(_) => current.push(component.as_os_str()),
+            Component::CurDir => continue,
+            Component::ParentDir => anyhow::bail!(
+                "clone output directory may not contain '..': {}",
+                path.display()
+            ),
+        }
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => ensure_plain_clone_component(&current, &metadata)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::create_dir(&current) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!("creating clone output directory {}", current.display())
+                        })
+                    }
+                }
+                let metadata = std::fs::symlink_metadata(&current)?;
+                ensure_plain_clone_component(&current, &metadata)?;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("checking {}", current.display()))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_plain_clone_component(
+    path: &std::path::Path,
+    metadata: &std::fs::Metadata,
+) -> Result<()> {
+    let linked = metadata.file_type().is_symlink();
+    #[cfg(windows)]
+    let linked = {
+        use std::os::windows::fs::MetadataExt as _;
+        linked || metadata.file_attributes() & 0x400 != 0
+    };
+    anyhow::ensure!(
+        metadata.is_dir() && !linked,
+        "clone output directory must be a plain directory: {}",
+        path.display()
+    );
+    Ok(())
+}
+
+/// Publish a cloned package without replacing files that appeared after the early destination
+/// checks. On failure, report paths this call created: deleting by path could remove another
+/// process's replacement, so the caller must inspect any incomplete output before retrying.
+fn write_clone_outputs(
+    uasset_path: &std::path::Path,
+    uexp_path: &std::path::Path,
+    ubulk_path: &std::path::Path,
+    uasset: &[u8],
+    uexp: &[u8],
+    ubulk: &[u8],
+) -> Result<()> {
+    use std::io::Write;
+
+    let ensure_no_inline_bulk = || -> Result<()> {
+        if ubulk.is_empty() {
+            match std::fs::symlink_metadata(ubulk_path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) => anyhow::bail!("clone output already exists: {}", ubulk_path.display()),
+                Err(error) => {
+                    return Err(error).context(format!("checking {}", ubulk_path.display()))
+                }
+            }
+        }
+        Ok(())
+    };
+    ensure_no_inline_bulk()?;
+    let mut outputs = vec![(uasset_path, uasset), (uexp_path, uexp)];
+    if !ubulk.is_empty() {
+        outputs.push((ubulk_path, ubulk));
+    }
+    let mut created = Vec::new();
+    let published = (|| {
+        for (path, bytes) in outputs {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .with_context(|| format!("creating clone output {}", path.display()))?;
+            created.push(path);
+            file.write_all(bytes)
+                .with_context(|| format!("writing clone output {}", path.display()))?;
+        }
+        ensure_no_inline_bulk()?;
+        Ok(())
+    })();
+    if let Err(error) = published {
+        if !created.is_empty() {
+            let paths = created
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(error).context(format!(
+                "clone output incomplete; paths created by this attempt may remain: {paths}. Inspect them before retrying"
+            ));
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Reject a triplet `--name` that isn't a single filename component. Without
@@ -323,7 +455,11 @@ fn paklist(game: &std::path::Path, filter: Option<&str>, max: usize, json: bool)
     for listing in &listings {
         println!(
             "  {} — mount {} ({} entries)",
-            listing.pak.file_name().unwrap_or_default().to_string_lossy(),
+            listing
+                .pak
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy(),
             listing.mount_point,
             listing.files.len()
         );
@@ -476,6 +612,8 @@ pub fn run(action: TextureAction) -> Result<()> {
             asset,
             image: image_path,
             mod_dir,
+            as_asset,
+            fit_original,
         } => {
             let game = gore_loc::config::game_root(game)?;
             let utoc = gore_tex::paths::main_container(&game)?;
@@ -512,17 +650,51 @@ pub fn run(action: TextureAction) -> Result<()> {
             .with_context(|| format!("decoding original texture {asset}"))?;
             let format = info.format.clone();
 
+            let output_asset = as_asset.as_deref().unwrap_or(&asset);
+            let dir = mount_dir(&mod_dir, output_asset)?;
+            let leaf = output_asset.rsplit('/').next().unwrap_or(output_asset);
+            if let Some(target) = &as_asset {
+                // Validate the package shape/path before encoding or publishing anything.
+                gore_tex::clone_texture::rename_texture_package(&orig_uasset, &asset, target)?;
+                for extension in ["uasset", "uexp", "ubulk"] {
+                    anyhow::ensure!(
+                        !dir.join(format!("{leaf}.{extension}")).try_exists()?,
+                        "clone output already exists: {output_asset}.{extension}"
+                    );
+                }
+                anyhow::ensure!(
+                    !gore_tex::container::mod_tree_package_id_occupied(&mod_dir, target)
+                        .context("checking texture package IDs in the mod tree")?,
+                    "clone destination already exists in the mod tree: {target}"
+                );
+                // UE package IDs ignore case, so exact header-name lookup alone
+                // cannot distinguish a free destination from a case collision.
+                anyhow::ensure!(
+                    !gore_tex::container::installed_package_id_occupied(&utoc, target)
+                        .context("checking new texture package destination")?,
+                    "clone destination already exists in the game: {target}"
+                );
+            }
+
             // 2. Load the replacement PNG -> RGBA8 bytes + dims.
-            let img = image::open(&image_path)
+            let mut img = image::open(&image_path)
                 .with_context(|| format!("opening {}", image_path.display()))?
                 .to_rgba8();
+            if fit_original && img.dimensions() != (info.width, info.height) {
+                img = image::imageops::resize(
+                    &img,
+                    info.width,
+                    info.height,
+                    image::imageops::FilterType::Lanczos3,
+                );
+            }
             let (w, h) = img.dimensions();
             let rgba = img.into_raw();
 
             // 3. Rewrite the cooked files. The unified entry encodes mips (regular
             //    texture) or re-tiles (virtual texture) internally based on the
             //    original's shape, so we always pass the raw RGBA + format.
-            let (new_uasset, new_uexp, new_ubulk) = gore_tex::texdata::replace_texture_image(
+            let (mut new_uasset, new_uexp, new_ubulk) = gore_tex::texdata::replace_texture_image(
                 &orig_uasset,
                 &orig_uexp,
                 &orig_ubulk,
@@ -532,26 +704,58 @@ pub fn run(action: TextureAction) -> Result<()> {
                 &format,
             )
             .with_context(|| format!("rewriting cooked texture {asset}"))?;
+            if let Some(target) = &as_asset {
+                new_uasset =
+                    gore_tex::clone_texture::rename_texture_package(&new_uasset, &asset, target)?;
+                // Renaming must preserve the native texture payload and its VT layout.
+                let readback = gore_tex::decode::parse(
+                    &new_uasset,
+                    &new_uexp,
+                    &new_ubulk,
+                    &std::fs::read(&usmap)?,
+                )?;
+                anyhow::ensure!(
+                    readback.width == w
+                        && readback.height == h
+                        && readback.format == format
+                        && readback.is_virtual == info.is_virtual,
+                    "cloned texture readback differs from the encoded texture"
+                );
+            }
 
             // 4. Write the rewritten triplet under the asset's mount path in mod_dir.
-            let dir = mount_dir(&mod_dir, &asset)?;
-            std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-            let leaf = asset.rsplit('/').next().unwrap_or(&asset);
+            if as_asset.is_some() {
+                ensure_plain_clone_output_dir(&dir)?;
+            } else {
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("creating {}", dir.display()))?;
+            }
             let out_uasset = dir.join(format!("{leaf}.uasset"));
             let out_uexp = dir.join(format!("{leaf}.uexp"));
-            std::fs::write(&out_uasset, &new_uasset)
-                .with_context(|| format!("writing {}", out_uasset.display()))?;
-            std::fs::write(&out_uexp, &new_uexp)
-                .with_context(|| format!("writing {}", out_uexp.display()))?;
             let out_ubulk = dir.join(format!("{leaf}.ubulk"));
-            if !new_ubulk.is_empty() {
-                std::fs::write(&out_ubulk, &new_ubulk)
-                    .with_context(|| format!("writing {}", out_ubulk.display()))?;
+            if as_asset.is_some() {
+                write_clone_outputs(
+                    &out_uasset,
+                    &out_uexp,
+                    &out_ubulk,
+                    &new_uasset,
+                    &new_uexp,
+                    &new_ubulk,
+                )?;
             } else {
-                // New rewrite is inline (no streamed bulk). Remove any stale
-                // `.ubulk` left by a prior replacement into this same mod dir,
-                // else `texture pack` would pair it with the new .uasset/.uexp.
-                let _ = std::fs::remove_file(&out_ubulk);
+                std::fs::write(&out_uasset, &new_uasset)
+                    .with_context(|| format!("writing {}", out_uasset.display()))?;
+                std::fs::write(&out_uexp, &new_uexp)
+                    .with_context(|| format!("writing {}", out_uexp.display()))?;
+                if !new_ubulk.is_empty() {
+                    std::fs::write(&out_ubulk, &new_ubulk)
+                        .with_context(|| format!("writing {}", out_ubulk.display()))?;
+                } else {
+                    // New rewrite is inline (no streamed bulk). Remove any stale
+                    // `.ubulk` left by a prior replacement into this same mod dir,
+                    // else `texture pack` would pair it with the new .uasset/.uexp.
+                    let _ = std::fs::remove_file(&out_ubulk);
+                }
             }
 
             println!(
@@ -798,5 +1002,106 @@ mod tests {
         assert!(!built_new);
         assert!(!built.get());
         assert!(!published.get());
+    }
+
+    #[test]
+    fn clone_output_collision_preserves_existing_bulk_and_reports_partial_outputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let uasset = temp.path().join("T_New.uasset");
+        let uexp = temp.path().join("T_New.uexp");
+        let ubulk = temp.path().join("T_New.ubulk");
+        std::fs::write(&ubulk, b"existing bulk").unwrap();
+
+        let error =
+            write_clone_outputs(&uasset, &uexp, &ubulk, b"asset", b"export", b"bulk").unwrap_err();
+        assert!(error.to_string().contains("clone output incomplete"));
+        assert!(error.to_string().contains(&uasset.display().to_string()));
+        assert!(error.to_string().contains(&uexp.display().to_string()));
+        assert!(format!("{error:#}").contains("creating clone output"));
+        assert_eq!(std::fs::read(&ubulk).unwrap(), b"existing bulk");
+        assert_eq!(std::fs::read(&uasset).unwrap(), b"asset");
+        assert_eq!(std::fs::read(&uexp).unwrap(), b"export");
+
+        std::fs::remove_file(&ubulk).unwrap();
+        std::fs::remove_file(&uasset).unwrap();
+        std::fs::remove_file(&uexp).unwrap();
+        write_clone_outputs(&uasset, &uexp, &ubulk, b"asset", b"export", b"bulk").unwrap();
+        assert_eq!(std::fs::read(&uasset).unwrap(), b"asset");
+        assert_eq!(std::fs::read(&uexp).unwrap(), b"export");
+        assert_eq!(std::fs::read(&ubulk).unwrap(), b"bulk");
+    }
+
+    #[test]
+    fn clone_output_dir_rejects_linked_parent_without_writing_through_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let mod_dir = temp.path().join("mod");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&mod_dir).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let link = mod_dir.join("G1R");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_dir(&outside, &link).is_err() {
+            // Some Windows hosts disallow creating symlinks without Developer Mode.
+            return;
+        }
+
+        let dir = mod_dir.join("G1R/Content/UI");
+        let error = ensure_plain_clone_output_dir(&dir).unwrap_err();
+        assert!(error.to_string().contains("plain directory"));
+        assert!(!outside.join("Content").exists());
+    }
+
+    #[test]
+    fn clone_output_dir_creates_plain_nested_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("mod/G1R/Content/UI");
+        ensure_plain_clone_output_dir(&dir).unwrap();
+        assert!(dir.is_dir());
+    }
+
+    #[test]
+    fn inline_clone_rejects_a_dangling_bulk_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let uasset = temp.path().join("T_New.uasset");
+        let uexp = temp.path().join("T_New.uexp");
+        let ubulk = temp.path().join("T_New.ubulk");
+        let missing_target = temp.path().join("missing");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&missing_target, &ubulk).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&missing_target, &ubulk).is_err() {
+            // Some Windows hosts disallow creating symlinks without Developer Mode.
+            return;
+        }
+
+        let error =
+            write_clone_outputs(&uasset, &uexp, &ubulk, b"asset", b"export", b"").unwrap_err();
+        assert!(error.to_string().contains("clone output already exists"));
+        assert!(std::fs::symlink_metadata(&ubulk)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(!missing_target.exists());
+        assert!(!uasset.exists());
+        assert!(!uexp.exists());
+
+        std::fs::remove_file(&ubulk).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&missing_target, &uexp).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&missing_target, &uexp).unwrap();
+        let error =
+            write_clone_outputs(&uasset, &uexp, &ubulk, b"asset", b"export", b"").unwrap_err();
+        assert!(error.to_string().contains("clone output incomplete"));
+        assert!(error.to_string().contains(&uasset.display().to_string()));
+        assert!(format!("{error:#}").contains("creating clone output"));
+        assert!(std::fs::symlink_metadata(&uexp)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(!missing_target.exists());
+        assert_eq!(std::fs::read(&uasset).unwrap(), b"asset");
     }
 }

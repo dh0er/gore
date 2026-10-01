@@ -1,0 +1,18 @@
+{
+  "schema": "gore.npc-batch.field-runtime.v1",
+  "date": "2026-09-13",
+  "bundle": "NpcFieldRolesTest",
+  "version": "0.1.1",
+  "user_results": {
+    "revive": true,
+    "flee": false,
+    "report": "B no longer attacks in the flee test, but does not flee or do anything. Revive test works."
+  },
+  "evidence": "Direct user observation; no fresh result save was available in the live save directory for this follow-up.",
+  "revive_qualification": "The tested same-NPC execution-save revival works after adding Memory.Character.Defeated.Kill. No claim about other death types, arbitrary streaming boundaries or an unseen post-revival reload.",
+  "flee_diagnosis": "Exact cause unresolved. Cached bytecode uses the same temporary-executor destructor pattern as the proven walking/activity routines. The next candidate replaces direct state entry and implicit Other with a routine and explicit player, then uses pathfinding instead of the straight directional nav-ray gate.",
+  "next_test": "0.1.2: only26/27 retreat, with saved entry, target distance, movement attempts, actual moved centimetres and exit diagnostics.",
+  "prior_results": "field-runtime-0.1.0.json",
+  "revive_input_cleanup": "../profile-cleanup-after-revive.json",
+  "correction": "field-fix-0.1.2.json"
+}

@@ -73,6 +73,50 @@ and consecutive actionless menu transition are therefore unsafe, while the
 separate 4→5 edit, placement variants, anchored first conversation and
 action-bearing three-level tree work.
 
+### Invented NPC session evidence
+
+On 2026-09-06, BuildID `24878692`, `dialog new-conversation` recognized the
+combined settings module emitted by `npc new` for `GORE_TEST_A`. The complete
+graph included both invented NPCs, their original world spawns, and A's private
+conversation and quest. The user completed the game campaign, including full
+restarts, and supplied active/completed journal screenshots showing
+`<GORE_TEST_A>` as giver.
+
+Read-only save checks found `Quest_GORE_NPC_SESSION` still `Running` in
+`G1R-023.sav` → `G1R-026.sav` and still `Succeeded` in `G1R-025.sav` →
+`G1R-027.sav`. A retained its own start/completion knowledge and exactly one
+`ActivePersonalRelationshipModifier_Story` targeting Hero with Friend. B, Hero
+and Diego did not own either marker. A/B identities, inventories and attributes
+were unchanged across both reload pairs. The fixture only writes its effects
+in the selected choices, without startup replay.
+
+This qualifies the tested invented identity on this build. Restart evidence
+comes from the user's completed game campaign; save bytes alone cannot prove
+a process restart. [Session results](../../scripts/fixtures/npc-session/RESULTS.md)
+retain the save names, hashes, checks and screenshot scope.
+
+### Invented NPC voice evidence
+
+The subsequent `NpcVoiceProof` campaign on 2026-09-06, BuildID `24878692`, added
+eight repeatable choices to A's existing module. The user reported every game
+step successful, including shipped recordings, new subtitle/recording IDs,
+48 kHz mono, 44.1 kHz mono and 48 kHz stereo Vorbis, and an A → Hero → A
+exchange with distinct synthetic voices. Generic `Address_Call` and
+`DailyRoutine_Mumble` requests used A's Diego Voice05 subset; these exercise
+voice selection separately from `Say` calls with explicit `LocText` IDs.
+
+The user also confirmed repeat playback, skipping a line, silent-subtitle
+continuation to a recorded line, and playback after a full restart. Read-only
+checks of `G1R-029.sav` → `G1R-030.sav` found all eight topics recorded on A,
+the quest still `Succeeded`, and unchanged fixture markers, relationship, A/B
+identities, inventories and attributes. Those saved markers establish recorded
+selection, not audible output; sound and restart evidence is the user's report.
+
+[Voice results](../../scripts/fixtures/npc-voice/RESULTS.md) retain the exact
+case scope and save/report hashes. Lip sync was excluded. The two generic
+requests were deliberately invoked; other native voice profiles and natural
+combat/routine triggers remain outside this evidence.
+
 ### Diagnostic-only evidence
 
 An artificial ambient stress fixture combined automatic opening with a
@@ -385,10 +429,10 @@ runtime. That is a negative runtime result, not an offline uncertainty.
 stages an edit; it does not claim that an arbitrary new module, or a wholly new
 NPC without a runtime-loaded settings anchor, will be discovered.
 
-The remainder of this section documents the separate historical
-`BuildSpec.dialog_topics` insertion adapter. It is retained as a low-level
-bundle surface and evidence record; it is not emitted as a prerequisite for the
-current `gore dialog new-topic` same-module root path.
+The remainder of this section documents the retired
+`BuildSpec.dialog_topics` insertion adapter. `gore mod build` refuses that
+section. It is an evidence record, not a current bundle surface, and it is not
+a prerequisite for the `gore dialog new-topic` same-module root path.
 
 The reviewed fixture rules are now parameterized by `BuildSpec.dialog_topics`;
 there are no Viper or Asghan constants in the generated runtime. During each
@@ -439,20 +483,23 @@ shapes that the current pipeline cannot produce safely.
 - Giving an NPC a first conversation when no exact already-loaded per-NPC
   conversation-settings module exists for it. The separate new-module fixture
   compiled and deployed but was not discovered. In practical content terms,
-  `gore dialog` alone cannot yet give a wholly new NPC its first conversation;
-  another NPC pipeline must first supply a settings module that the game loads.
+  `gore dialog` needs the NPC pipeline to supply a settings module that the game
+  loads. The combined `npc new` module now supplies a recognized anchor, with
+  live evidence from `GORE_TEST_A` above.
 - Generating accurate, line-specific lip sync for a new recording. The generic
   placeholder facial moved for every live voice fixture, including silent Opus,
   while shipped accurate facials live as separate cooked `FA_<text-id>` assets
   in language-specific `G1R_DialogFacials_*` containers. GORE does not yet
   author or package that animation asset path.
-- Packaging a normal deployable mini-cache dialog whose new symbol dependency
-  comes from another script module. The same content works through the proven
-  selective complete-cache path, but not as two small independently composable
-  minis.
-- Deleting an existing module through the complete source tree. Missing base
-  source requests Delete and fails closed because safe tail pruning and proof
-  that retained modules no longer reference it are not available.
+- Supplying new cross-module symbols through separate, independently composed
+  mini-caches. Compile coordinated Add/Edit modules together with
+  `gore as compile <authored-dir> --overlays --backend standalone --mini <path>`
+  and package that single multi-module mini instead. Module-private roots still
+  have to stay in their owning conversation module.
+- Deleting an existing module. In complete-tree mode, a missing base source
+  requests Delete and fails closed because safe tail pruning and proof that
+  retained modules no longer reference it are not available. Overlay mode
+  retains absent original modules; it never requests deletion.
 - Selectively composing a dependency cycle among newly added modules. An
   acyclic provider-to-consumer chain is supported; a cycle cannot be seeded
   safely and is rejected.
@@ -562,13 +609,14 @@ shapes that the current pipeline cannot produce safely.
   the pristine base; neither becomes authority for the other. Full-graph V2
   instead submits the complete sealed base graph and coordinated Add/Edit
   changes to one standalone compile, so visible cross-module references can be
-  resolved together. The raw regenerated cache is retained only as dependency
-  evidence. Publication starts from the exact pristine cache and selectively
-  remaps and composes the declared Add/Edit modules in dependency order;
-  untouched modules and all pre-existing global-tail records remain byte-exact,
-  while records required by new symbols may be appended. Missing base source
-  requests Delete and is rejected until safe tail pruning and retained-reference
-  proof exist. Cyclic dependencies among new modules likewise fail closed.
+  resolved together. `--overlays --backend standalone` supplies only authored
+  modules and reads unchanged dependencies from the pristine cache without
+  exporting or comparing their sources. Publication starts from that exact
+  pristine cache and selectively remaps and composes the declared Add/Edit
+  modules in dependency order; untouched modules and all pre-existing global-tail
+  records remain byte-exact, while records required by new symbols may be appended.
+  A missing base source requests unsupported Delete only in complete-tree mode;
+  overlay mode retains it. Cyclic dependencies among new modules fail closed.
   An earlier raw output had 10,782 semantic deviations, including 81 in Diego.
   Mod Manager nevertheless installed that exact raw cache manually
   (`62A2106966A06910376ABDF956FF7DFA83F0F366A91514EB1B3D51F227800CD9`) and
@@ -584,9 +632,11 @@ shapes that the current pipeline cannot produce safely.
   Its current selective output booted and loaded gameplay, rendered and selected
   the new same-module root, and executed a new provider call across modules from
   an edited shipped automatic topic; the provider line played and control
-  returned. The ordinary bundle composer still consumes independently
-  base-bound module mini-caches, so this complete-cache proof does not become a
-  normal cross-module dialog mini-patch.
+  returned. `--mini <path>` additionally publishes coordinated Add/Edit modules
+  as one multi-module mini-cache that bundles and Manager compose as one unit.
+  This does not make separate dependent minis composable. The complete-cache
+  observations above retain their original evidence scope; see the separate
+  [multi-module mini campaign](../guide/scripts.md#multi-module-mini-caches).
 - A new root appended to Diego's shipped conversation module was discovered,
   rendered and selected natively with no adapter insertion, including one run
   with the UE4SS proxy absent. A same-module sub-topic instead uses authored
@@ -598,8 +648,8 @@ shapes that the current pipeline cannot produce safely.
   when no closing key is known; it skips forced rank `-1`. Sub-topics default to
   rank 0 so equal-rank `Subdialog` slot order remains authoritative. Explicit
   `--priority-rank` values win exactly, including an intentional `-1`.
-  `BuildSpec.dialog_topics` remains only the separate low-level adapter contract
-  documented above.
+  `BuildSpec.dialog_topics` is retired. `gore mod build` refuses it. The notes
+  above are the historical adapter record.
 - Source checking, strict standalone compilation, bundle packaging, deployment
   and runtime observation are separate claims. On BuildID `24878692`, the
   source-identical complete Diego recompile, Caption edit, native root, direct

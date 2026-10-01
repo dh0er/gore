@@ -1,0 +1,184 @@
+{
+  "schema": "gore.npc-batch.quest-event-fix.v1",
+  "date": "2026-09-13T18:46:34.330180+00:00",
+  "bundle": "NpcQuestCallbacksTest",
+  "version": "0.1.1",
+  "previous_failure": "runtime-0.1.0.json",
+  "manager_id": "npcquestcallbackstest-03a9dc64",
+  "manager_status": "in_sync",
+  "manager_status_report_sha256": "3a0682c8117a9eb134183f89ffc2d765435598e5590629d72f9e7795e67c77ca",
+  "build": {
+    "authored_modules": [
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_A.GORE_TEST_A",
+        "operation": "Add",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_A/GORE_TEST_A.as",
+        "source_byte_len": 47192,
+        "source_sha256": "997d9b8ea5c1a5bb73e177cb5d53ebd9d12c7790653188302d7f89f24ff31661"
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.GORE_TEST_B.GORE_TEST_B",
+        "operation": "Add",
+        "relative_path": "AI/AIAgent/Human/Config/GORE_TEST_B/GORE_TEST_B.as",
+        "source_byte_len": 27192,
+        "source_sha256": "af5a3dbfd775e36643033c2b0d91f182c46836b7808bda67a3cd83115e04fcc0"
+      },
+      {
+        "module_name": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+        "operation": "Edit",
+        "relative_path": "AI/AIAgent/Human/Config/OC_STT_Diego/CharacterDefinition_OC_STT_Diego.as",
+        "source_byte_len": 5203,
+        "source_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+      },
+      {
+        "module_name": "LevelScripts.XardasTower_AI",
+        "operation": "Edit",
+        "relative_path": "LevelScripts/XardasTower_AI.as",
+        "source_byte_len": 1814,
+        "source_sha256": "ee74734e29cafb76445abe5000bc662d2c9e79d3cd6b88a989a17f81d42056eb"
+      }
+    ],
+    "elapsed_seconds": 266.1922875,
+    "full_modules": 7319,
+    "full_sha256": "70ff5b45515852379f09ab6b4f6a2bfd47614218d7704deeae572aa3e4c2c383",
+    "game_backend_attempted": false,
+    "mini_compose_upsert": true,
+    "mini_modules": 4,
+    "mini_sha256": "3e291cd91d83c7c5e1d6a1e4c2bb5d5b60b42dce1daf6edf1a9c9b84962e1268",
+    "passed": true,
+    "product_generation_receipt": true,
+    "route": "productive Core FullGraph; frozen-manifest plan",
+    "source_modules_verified": 7319,
+    "target_closing_audit": true,
+    "unselected_pristine_modules_byte_identical": 7315
+  },
+  "build_path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\builds\\quest-v8",
+  "bundle_path": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-batch-tests\\packages-quest-events\\NpcQuestCallbacksTest",
+  "generation_receipt_sha256": "4497875bce182d977afa375252ef4e6c04fba0406992806218ab57dd677e629f",
+  "source_manifest_matches": true,
+  "quest_content_sha256": "52182e466c749fa54467de8aaad79a41bba956c9ee330212847904bfa1c3ffe7",
+  "event_binding_check": {
+    "scope": "15 exact new quest fixture classes; 29 native event bindings; 7 const quest predicates",
+    "full_and_mini_passed": true,
+    "installed_passed": true,
+    "full_and_mini_report_sha256": "ac44aa4a92116dc0bfdae162e3af02456ff2833a9c2b00f72f0cea21fcde2450",
+    "installed_report_sha256": "b6d859e44e63144f8b53a591439842ae8495a69e292a71afff4e0ac8e77d41e8",
+    "installed_cache_sha256": "d59900375ae6f0850e31d1cef3e01d5cdbf0e14a9d8bd2f5c120cf6a8c89de70",
+    "fix": "All29 native names and BlueprintOverride/Event flags; seven const quest predicates. Five shared script CanApply guards preserve visibility/action conditions without unsupported native IsVisible calls."
+  },
+  "original_module_comparison": {
+    "operation": "product module_ranges exact serialized module span comparison",
+    "mini_modules": 4,
+    "full_modules": 7319,
+    "pristine_modules": 7317,
+    "unselected_pristine_modules_byte_identical": 7315,
+    "exact_selected_module_set": true,
+    "diego_bytes_unchanged_from_0_1_11": false,
+    "tower_bytes_unchanged_from_0_1_11": true,
+    "passed": true
+  },
+  "original_module_emission_comparison": {
+    "operation": "product PreparedEmit with exact Binds and class defaults enabled",
+    "modules": [
+      {
+        "module": "AI.AIAgent.Human.Config.OC_STT_Diego.CharacterDefinition_OC_STT_Diego",
+        "exactly_unchanged": true,
+        "prior_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664",
+        "current_emitted_sha256": "7a22b58a00048216b0f790a256b321e6c607789216bca95311752d434b2a3664"
+      },
+      {
+        "module": "LevelScripts.XardasTower_AI",
+        "exactly_unchanged": true,
+        "prior_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f",
+        "current_emitted_sha256": "3e66b9ead53daaee8c876ddd2559dbdb31c616b3751a390bedf769467ec95e4f"
+      }
+    ]
+  },
+  "comparison_note": "Both comparisons use quest-v6 as prior. All7315 unselected pristine module spans and Tower are byte-identical. Diego serialized span differs, but exact Binds/default-aware PreparedEmit output matches prior; no claim of Diego byte identity.",
+  "inspection": {
+    "report_format": 1,
+    "source_kind": "directory",
+    "bundle_format": 1,
+    "mod": {
+      "name": "NpcQuestCallbacksTest",
+      "version": "0.1.1",
+      "author": ""
+    },
+    "component_count": 3,
+    "components": [
+      {
+        "type": "loc_patch",
+        "path": "loc/edits.json",
+        "target_count": 42,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "voice_archive_patch",
+        "path": "voice",
+        "target_count": 5,
+        "footprint_coverage": "exact"
+      },
+      {
+        "type": "angel_script_patch",
+        "path": "scripts",
+        "target_count": 4,
+        "footprint_coverage": "exact"
+      }
+    ],
+    "file_count": 10,
+    "directory_count": 4,
+    "total_file_bytes": 462100,
+    "manifest_sha256": "4d51a2182a6f30c53669147c7b494cac89a00ec9176c8712363792819ceade4b",
+    "tree_sha256": "c3b91c6be7cf13bf946c85c6856a60066a04250e8f690146872e654e4127a444",
+    "evidence": {
+      "verified": [
+        "bounded non-link materialization of the selected directory or ZIP",
+        "root manifest format plus every declared component manifest and referenced payload",
+        "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+        "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree"
+      ],
+      "not_verified": [
+        "compatibility with any particular game installation or game build",
+        "whether named game-side assets, samples, localization ids, or script edit targets exist",
+        "cross-mod conflicts, load order, or deployment readiness",
+        "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect"
+      ]
+    }
+  },
+  "legacy_connector_limit": "Dedicated inspector uses CLI0.3.0 and rejects this qualified four-module mini-cache manifest. Current CLI inspection and Manager Apply accept the exact previously checked bundle.",
+  "preflight": "Only new quest bundle enabled; no recognized conflicts; game closed; no recovery artifact. Expected pending deployment changes resolved by Apply.",
+  "manager_cli_sha256": "28b5d76e1e861476c7882725f056bca7cb65e718550203bd6c6dbd9aa9987fe1",
+  "apply_log_sha256": "15a4ae850ccc70b512be379cd3c7ca23da69c25d73aa6686d9751cda28d19ad4",
+  "product_generator": {
+    "draft_version": 6,
+    "revision3_version": 5,
+    "fix": "Should/Handle callbacks use native BlueprintOverride names; Should predicates are const. Mod Studio gates and fixtures use the same new revision3 version.",
+    "old_contract": "Old revision3 version4 is rejected by the new contract; no migration or existing project rewrite is performed.",
+    "rust_tests_passed": 42,
+    "rust_log_sha256": "8e0aec64c73943ff56df2c051204f1059327ed75eb6751f8762620b84c955c4a",
+    "flutter_tests_passed": 164,
+    "flutter_log_sha256": "3c0b90b1f2cb908e02e87a9330e013f5286e1832fff37dc7a66b83f68f4664c1",
+    "final_old_contract_rejection_tests_passed": 1,
+    "rejection_log_sha256": "a4f7f9420b845f3357f33a487529541641e425fa6e2dd39c290b286a2775b920",
+    "deployment_boundary": "Repository generator and Studio sources/tests updated; deployment CLI binary was not replaced."
+  },
+  "start": {
+    "displayed_profile": 4,
+    "slot": "G1R-071",
+    "title": "NPC 05 Quest - START",
+    "clock": "12:00:00",
+    "sha256": "aee18515288dc09ebc1f4687fc3da21cccdec946596b2744f2028ccdfaf68db5",
+    "bytes": 1018879,
+    "NPC": "Proviantmeister A, already opposite Hero; no setup required",
+    "daylight_report": "../daylight-starts.json",
+    "unchanged": true
+  },
+  "save_changes": false,
+  "game_launched_by_agent": false,
+  "runtime_verified": false,
+  "game_tests_performed_by": "user",
+  "next_test": "Restart game, reload071 and begin Q1; then repeat FIELD-TEST.md from step1.",
+  "checklist": "FIELD-TEST.md",
+  "apply_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "reset_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v2.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\""
+}

@@ -1,0 +1,39 @@
+{
+  "schema": "gore.npc-head.runtime-result.v1",
+  "package": "NpcHeadProbe",
+  "version": "0.1.5",
+  "tested_by": "user",
+  "date": "2026-09-08",
+  "appearance": "failed: severe vertical head geometry stretching, varies while turning",
+  "restore_15": "passed, user confirmed",
+  "full_restart": "not established",
+  "duplicate_prevention": "not established",
+  "save": {
+    "slot": 43,
+    "name": "npc kopf - wechsel",
+    "sha256": "a6adba146e4bfb4d044969f0ea3c3a4d84abb737bc5302177e39c48ef99dc9cb",
+    "bytes": 1094794
+  },
+  "diagnostics": {
+    "mode": 1,
+    "loaded": 1,
+    "bones": 1,
+    "matched": 31,
+    "hidden": 6,
+    "status": 4
+  },
+  "screenshots": [
+    {
+      "file": "codex-clipboard-61c0559c-a74b-49d6-ac06-48743a673c7c.png",
+      "sha256": "d8355cee634b80641948b79cccd39e1967a80b8e3e6f6a4a7ee48b33d2bc735f",
+      "bytes": 1747857
+    },
+    {
+      "file": "codex-clipboard-1fa59a70-8994-4fd3-94d9-8ff48832dd9c.png",
+      "sha256": "dd67cc523623d81101022fdfa0dcced076503277cfefb263adb9e5c0070385dc",
+      "bytes": 3544663
+    }
+  ],
+  "original_save_unchanged": true,
+  "game_launched_by_agent": false
+}

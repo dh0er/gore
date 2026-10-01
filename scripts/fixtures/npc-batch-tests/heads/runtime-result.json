@@ -1,0 +1,92 @@
+{
+  "schema": "gore.npc-palette.runtime.v1",
+  "date": "2026-09-11",
+  "tested_by": "user",
+  "bundle": "NpcHeadPaletteTest",
+  "version": "0.1.0",
+  "user_report": "alles funktioniert bis auf bart: heldenkopf hat immer bart, flexkopf immer kein bart. egal ob an oder aus.",
+  "passed": [
+    "Flex/Hero head switching and neck",
+    "hair visibility",
+    "Flex hair color and original-color restore",
+    "save/load and full restart except visible beard removal",
+    "restoration without crash",
+    "repeated head application without duplicates"
+  ],
+  "failed": [
+    "H5/H6: visible beard does not change"
+  ],
+  "saves": [
+    {
+      "slot": 3,
+      "save": {
+        "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-003.sav",
+        "sha256": "a4855eec3ca1952c8179288453c1be8e530c43cff02718092e3fe2769c6ad851",
+        "bytes": 1049126
+      },
+      "name": "npc koepfe - rote haare",
+      "diagnostics": {
+        "gore_palette_hero_hair_matches": "gore_palette_hero_hair_matches → 8",
+        "gore_palette_hero_beard_matches": "gore_palette_hero_beard_matches → 5",
+        "gore_palette_hair_hidden": "gore_palette_hair_hidden → 0",
+        "gore_palette_hair_red": "gore_palette_hair_red → 1",
+        "gore_palette_flex_hair_matches": "gore_palette_flex_hair_matches → 2",
+        "gore_palette_tint_materials": "gore_palette_tint_materials → 1"
+      }
+    },
+    {
+      "slot": 22,
+      "save": {
+        "path": "C:\\Users\\Daniel\\AppData\\Local\\G1R\\Saved\\SaveGames\\G1R-022.sav",
+        "sha256": "23cd272e722c28791f9bd3d5c352d1a39b350358bc24e2d2dd3505842085f5a2",
+        "bytes": 1057067
+      },
+      "name": "npc koepfe - haare und bart aus",
+      "diagnostics": {
+        "gore_palette_hair_red": "gore_palette_hair_red → 0",
+        "gore_palette_flex_hair_matches": "gore_palette_flex_hair_matches → 2",
+        "gore_palette_tint_materials": "gore_palette_tint_materials → 1",
+        "gore_palette_hair_hidden": "gore_palette_hair_hidden → 1",
+        "gore_palette_beard_hidden": "gore_palette_beard_hidden → 1",
+        "gore_palette_hero_hair_matches": "gore_palette_hero_hair_matches → 8",
+        "gore_palette_hero_beard_matches": "gore_palette_hero_beard_matches → 5"
+      }
+    }
+  ],
+  "source_evidence": [
+    {
+      "name": "MI_NH_Beard",
+      "extraction_receipt": "work\\npc-batch-tests\\heads-beard-v2\\materials\\MI_NH_Beard\\gore-asset-extract.json",
+      "receipt_sha256": "55835acc7e72d1dbdc5132d3766830211aeb82b023f5809ff42521a819fe7588",
+      "asset_sha256": "caeeab91d6a9416eda7427dfa412af0cb0be11d891d78816d70eccaca456c528"
+    },
+    {
+      "name": "MI_NH_Head_G21",
+      "extraction_receipt": "work\\npc-batch-tests\\heads-beard-v2\\materials\\MI_NH_Head_G21\\gore-asset-extract.json",
+      "receipt_sha256": "5349373dfa32aef5c67d2c85030be6795401bf67145b08c613c7f0570a523e5b",
+      "asset_sha256": "9bab2f3ede5c2c8760efde10def9ebe7435f1a4aa6266d928af4bf49f3d53ff6"
+    },
+    {
+      "name": "M_Hair_G1R",
+      "extraction_receipt": "work\\npc-batch-tests\\heads-beard-v2\\materials\\M_Hair_G1R\\gore-asset-extract.json",
+      "receipt_sha256": "4df5bb915976f74a79da65e3eb71c89f89223aee12be7c98bd4f382d165bd0cc",
+      "asset_sha256": "66ebf6d88819030ada2300bd6de0e62bdffc0883895ac66df8ac6d22ba06347c"
+    },
+    {
+      "name": "M_Base_Skin_G21",
+      "extraction_receipt": "work\\npc-batch-tests\\heads-beard-v2\\materials\\M_Base_Skin_G21\\gore-asset-extract.json",
+      "receipt_sha256": "1f7e42b36568afd19e64ca4f12b011c3cf476ca534450cef958cfb6cf028c724",
+      "asset_sha256": "d466328cab160bb2090e1c8aeb9a0808456ad035c55c4fcbd96f39699baf1ee9"
+    }
+  ],
+  "face_albedo": {
+    "asset": "/Game/Assets/Characters/Humans/TierA/NH/Textures/T_NH_Head_D",
+    "local_png": "work\\npc-batch-tests\\heads-beard-v2\\materials\\T_NH_Head_D.png",
+    "png_sha256": "7f1864cb404316df0adccb05964475acc25f6a8e927aafae52fa4a0cb89c177c",
+    "visually_inspected": true,
+    "finding": "Moustache, cheek and chin beard are painted into the face albedo."
+  },
+  "conclusion": "H5/H6 target extra MI_NH_Beard geometry; they cannot erase the face albedo beard. Saved hidden flag and five matches are not proof of visual beard removal. Flex has no separate beard material. No verified face-beard disable parameter found.",
+  "follow_up": "Hide misleading H5/H6 menu choices; retain saved class/field compatibility. Real per-NPC clean-shaven/bearded face textures remain open.",
+  "daylight": "H0 corrected from 08:00 to 12:00; all eight START saves set to noon separately."
+}

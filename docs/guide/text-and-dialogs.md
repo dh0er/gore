@@ -67,7 +67,7 @@ backs the original up to `*.gore-bak` on deploy.
 | `-o, --out <PATH>` | `export`, `import` | Output file. On `import`, defaults to overwriting the cache it read. |
 | `--edits <PATH>` | `import` | The `{id:{language:value}}` edit JSON. |
 | `--keep-empty` | `export` | Keep ids with no text instead of dropping them. |
-| `--add-missing` | `import` | Accept ids that are not in the original cache. |
+| `--add-missing` | `import` | Add missing ids or missing pairs for languages already present in the cache header. Unknown languages remain errors. |
 | `-y, --yes` | `extract` | Skip the confirmation prompt. |
 
 ## Which language key to write
@@ -245,9 +245,8 @@ create a selectable conversation topic in the dialog UI. A new topic needs a
 compiled AngelScript class. The current `gore dialog new-topic` path places
 that class in the shipped conversation module and stages a script-only
 `--op edit --allow-new-symbols` bundle: roots use native script discovery and
-direct sub-topics use authored `Subdialog` wiring. It does not automatically
-generate a UE4SS/`dialog_topics` adapter. The separate low-level legacy adapter
-remains available for hand-authored bundle specs; see
+direct sub-topics use authored `Subdialog` wiring. `dialog_topics` is retired
+and `gore mod build` refuses it. See
 [AngelScript dialog authoring](dialog-authoring.md).
 
 For an NPC with no root topics, `gore dialog new-conversation` instead keeps

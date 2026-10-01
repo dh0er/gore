@@ -34,6 +34,10 @@ const _v5ExecutableSha256 =
     'dafd816b62230087cdb65ad504f4d8d003cd6013dba1b2b5b4f51457d78f729a';
 const _v5ShippingSha256 =
     'b913264a50327da30b48c3b35f431e90197f3eafdebe431501a90ffd2d793d54';
+const _v6ExecutableSha256 =
+    '7394f840702df3ddb94d1a45a43c2a81ff36d7d65325047c698dfb65337b99b5';
+const _v6ShippingSha256 =
+    '6c1e1fbb9de3bc92064bd472905d6d3708261fb1323dc21321fbe10579ab4c24';
 
 void main() {
   late AuthoringStoryCatalogGeneration generation;
@@ -262,6 +266,16 @@ void main() {
     expect(_create(v3).target.executableSha256, _v3ExecutableSha256);
     expect(_create(v4).target.executableSha256, _v4ExecutableSha256);
     expect(_create(v5).target.executableSha256, _v5ExecutableSha256);
+
+    final unsnapshotted = await _trustedGeneration(
+      executableByteLength: 171798528,
+      executableSha256: _v6ExecutableSha256,
+      shippingCacheByteLength: 124459998,
+      shippingCacheSha256: _v6ShippingSha256,
+      bindsCacheByteLength: 5908985,
+      bindsCacheSha256: _v4BindsSha256,
+    );
+    expect(() => _create(unsnapshotted), throwsFormatException);
 
     final hybrids = <AuthoringStoryCatalogGeneration>[
       await _trustedGeneration(executableByteLength: 171698176),

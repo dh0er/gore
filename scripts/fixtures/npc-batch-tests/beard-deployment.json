@@ -1,0 +1,68 @@
+{
+  "schema": "gore.npc-batch.beard-deployment.v1",
+  "recorded_at": "2026-09-11T15:38:54.263870+00:00",
+  "active": "NpcHeadPaletteTest",
+  "version": "0.1.2",
+  "id": "npcheadpalettetest-18c1e3f6",
+  "state": "in_sync",
+  "cli": "C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v1.exe",
+  "cli_sha256": "14dcd61ed8a1b5a3fe52f77526bf3e5da4a7fab8f288a0f5db8e6af37eba5097",
+  "apply_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v1.exe\" mgr apply --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "reset_command": "& \"C:\\Users\\Daniel\\.codex\\worktrees\\0157\\goresave\\work\\npc-continuation\\runtime\\gore-beard-v1.exe\" mgr reset --game \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\"",
+  "previous_voice_disabled": "npcnaturalvoicetest-cca814e3",
+  "source_bundle": "work/npc-batch-tests/packages-beard/NpcHeadPaletteTest",
+  "tree_sha256": "c28f3341ee4ba2ab5bd41b7281f6014a55b46a26b66b20c6eaf07462394b2a07",
+  "preflight": "Dedicated gore_mgr_preflight passed install, selected loadout and closed-game/recovery checks. Pending switch was expected. Current product analyzer found no conflicts.",
+  "original_backup_sha256": "7a18f954e32af30fc24ae3a66ea35d3b5cb98560c8f5083c7846fc9ce1d77511",
+  "status": {
+    "loadout": [
+      {
+        "enabled": true,
+        "id": "npcheadpalettetest-18c1e3f6"
+      }
+    ],
+    "manager_owned": {
+      "additive": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\Paks\\~mods\\zzz_gm000_npcheadpalettetest-18c1e3f6_a1a75891_0_files_1_P.pak"
+        ],
+        "total": 1,
+        "truncated": false
+      },
+      "backups": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache.gore-bak",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip.gore-bak"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "live": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Script\\PrecompiledScript_Shipping.Cache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\Cache\\AlkimiaLocalization_00000000.lcache",
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\G1R\\Story\\VoiceOver\\german_new.zip"
+        ],
+        "total": 3,
+        "truncated": false
+      },
+      "recovery": {
+        "items": [
+          "\\\\?\\C:\\Program Files (x86)\\Steam\\steamapps\\common\\Gothic 1 Remake\\gore-mod.deployed.json"
+        ],
+        "total": 1,
+        "truncated": false
+      },
+      "ue4ss": {
+        "items": [],
+        "total": 0,
+        "truncated": false
+      }
+    },
+    "state": "in_sync"
+  },
+  "apply_log_sha256": "1ff979d2f291e8599c139e00929c81040572c52ee1b72121ac811725f0f77a04",
+  "saves_modified": false,
+  "runtime_tested": false
+}

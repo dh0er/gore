@@ -91,7 +91,7 @@ const _maxAuthoringRevision3NpcRequestJsonBytes = 32 * 1024;
 const _maxAuthoringRevision3QuestCollisionArtifactBytes = 24 * 1024 * 1024;
 const _authoringRevision3QuestGeneratorId =
     'gore-authoring.draft-quest-skeleton';
-const _authoringRevision3QuestGeneratorVersion = 4;
+const _authoringRevision3QuestGeneratorVersion = 6;
 const _maxAuthoringRevision3QuestObjectives = 8;
 const _maxAuthoringRevision3QuestObjectiveTitleBytes = 128;
 const _maxAuthoringRevision3QuestObjectiveTitlesBytes =

@@ -6751,7 +6751,6 @@ mod tests {
         build_bundle, write_bundle, AudioReplacement, BuildSpec, LooseFileReplacement, ModMeta,
         ScriptModule, TextureReplacement, VoiceArchiveEdit, VoicePatchOp,
     };
-    use gore_modgen::gen::{OverrideValue, SingleOverride};
     use std::fs;
 
     fn read_library_sidecar(library: &Path, id: &str) -> LibrarySidecar {
@@ -6909,12 +6908,7 @@ mod tests {
                 author: "tester".into(),
             },
             delay_ms: 0,
-            overrides: vec![SingleOverride {
-                class: "ItFo_Apple".into(),
-                field: "m_Value".into(),
-                module: "Angelscript".into(),
-                value: OverrideValue::Int(500),
-            }],
+            overrides: vec![],
             loc_edits: loc,
             audio: vec![],
             texture: vec![],
@@ -6926,6 +6920,7 @@ mod tests {
                 mini_cache: mini.display().to_string(),
             }],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "German.zip".into(),
                 op: VoicePatchOp::Replace,
@@ -6937,6 +6932,27 @@ mod tests {
         let bundle = build_bundle(&spec).unwrap();
         let bdir = root.join("Target Probe");
         write_bundle(&bdir, &bundle).unwrap();
+        bdir
+    }
+
+    /// Import tests for external UE4SS components need an explicit Lua payload;
+    /// the GORE authoring builder no longer generates one from overrides.
+    fn mk_goremod_bundle_with_lua(root: &Path) -> PathBuf {
+        let bdir = mk_goremod_bundle(root);
+        let manifest_path = bdir.join("gore-mod.json");
+        let mut manifest: ModManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest.components.push(Component::Ue4ssLua {
+            name: "Target Probe".into(),
+            path: "ue4ss/Target Probe".into(),
+            targets: vec!["ItFo_Apple.m_Value".into()],
+            opaque: false,
+        });
+        let lua_dir = bdir.join("ue4ss/Target Probe");
+        fs::create_dir_all(lua_dir.join("Scripts")).unwrap();
+        fs::write(lua_dir.join("Scripts/main.lua"), b"return {}\n").unwrap();
+        fs::write(lua_dir.join("enabled.txt"), b"").unwrap();
+        fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
         bdir
     }
 
@@ -6956,6 +6972,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         }
     }
@@ -7034,14 +7051,29 @@ mod tests {
     #[test]
     fn bundle_inspector_requires_a_ue4ss_main_script() {
         let temp = tempfile::tempdir().unwrap();
-        let mut spec = empty_build_spec("InspectLua");
-        spec.overrides.push(SingleOverride {
-            class: "ItFo_Apple".into(),
-            field: "m_Value".into(),
-            module: "Angelscript".into(),
-            value: OverrideValue::Int(500),
-        });
-        let bundle = write_spec_bundle(temp.path(), &spec);
+        let bundle = temp.path().join("InspectLua");
+        fs::create_dir_all(bundle.join("ue4ss/InspectLua/Scripts")).unwrap();
+        fs::write(bundle.join("ue4ss/InspectLua/enabled.txt"), b"").unwrap();
+        fs::write(bundle.join("ue4ss/InspectLua/Scripts/main.lua"), b"print(1)\n").unwrap();
+        let manifest = ModManifest {
+            format: 1,
+            mod_meta: ModMeta {
+                name: "InspectLua".into(),
+                version: String::new(),
+                author: String::new(),
+            },
+            components: vec![Component::Ue4ssLua {
+                name: "InspectLua".into(),
+                path: "ue4ss/InspectLua".into(),
+                targets: Vec::new(),
+                opaque: false,
+            }],
+        };
+        fs::write(
+            bundle.join("gore-mod.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
         inspect_gore_bundle(&bundle).unwrap();
 
         fs::remove_file(bundle.join("ue4ss/InspectLua/Scripts/main.lua")).unwrap();
@@ -7079,6 +7111,7 @@ mod tests {
             }],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bdir = root.join(name);
@@ -7170,6 +7203,7 @@ mod tests {
             pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
+            values: vec![],
             voice: vec![],
         };
         let bdir = tmp.path().join("LooseProbe");
@@ -7900,7 +7934,7 @@ mod tests {
     fn import_goremod_bundle_dir_extracts_targets() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
-        let bdir = mk_goremod_bundle(tmp.path());
+        let bdir = mk_goremod_bundle_with_lua(tmp.path());
 
         let meta = import(&lib, &bdir).unwrap();
         assert_eq!(meta.kind, ModKind::Goremod);
@@ -7963,7 +7997,7 @@ mod tests {
     fn import_roundtrips_explicit_opaque_with_known_targets() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
-        let bundle = mk_goremod_bundle(tmp.path());
+        let bundle = mk_goremod_bundle_with_lua(tmp.path());
         let manifest_path = bundle.join("gore-mod.json");
         let mut manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
@@ -8007,7 +8041,7 @@ mod tests {
     fn import_preserves_explicit_precise_targetless_lua() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
-        let bundle = mk_goremod_bundle(tmp.path());
+        let bundle = mk_goremod_bundle_with_lua(tmp.path());
         let manifest_path = bundle.join("gore-mod.json");
         let mut manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
@@ -8049,7 +8083,7 @@ mod tests {
     fn import_legacy_targetless_lua_stays_conservatively_opaque() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
-        let bundle = mk_goremod_bundle(tmp.path());
+        let bundle = mk_goremod_bundle_with_lua(tmp.path());
         let manifest_path = bundle.join("gore-mod.json");
         let mut manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
@@ -8203,7 +8237,7 @@ mod tests {
     fn import_zip_nested_bundle_reroots() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
-        let bdir = mk_goremod_bundle(tmp.path());
+        let bdir = mk_goremod_bundle_with_lua(tmp.path());
         let zp = tmp.path().join("nested.zip");
         zip_dir_with_prefix(&bdir, "Wrap/Sub", &zp);
 

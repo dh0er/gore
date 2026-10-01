@@ -1,0 +1,47 @@
+{
+  "schema": "gore.npc-head.runtime-result.v1",
+  "package": "NpcHeadRigidFix",
+  "version": "0.1.7",
+  "tested_by": "user",
+  "date": "2026-09-08",
+  "head_shape": "passed, user confirmed",
+  "neck_join": "failed: visible open gap separating head/neck from body, including while moving",
+  "restore_15": "passed, user confirmed",
+  "apply_14_twice": "passed, user confirmed",
+  "full_restart": "not established",
+  "save": {
+    "slot": 45,
+    "name": "npc kopf - grundpose",
+    "sha256": "750d634f9ef5928b7e5d1bd568e4391438e49bd9d90f9ca1d8e6f0357701ec22",
+    "bytes": 1094097
+  },
+  "diagnostics": {
+    "gore_head_v1_mode": 1.0,
+    "gore_head_v1_loaded": 1.0,
+    "gore_head_v1_bones": 1.0,
+    "gore_head_v3_rigid": 1.0,
+    "gore_head_v1_matched": 31.0,
+    "gore_head_v1_hidden": 186.0,
+    "gore_head_v2_expected": 186.0,
+    "gore_head_v1_status": 4.0
+  },
+  "screenshots": [
+    {
+      "file": "codex-clipboard-ab4f1d2c-0038-4f14-858e-c62fc042f430.png",
+      "bytes": 1427961,
+      "sha256": "258d1dc666870246f17f55fdd45f04a5f5ee9a4a62b377d0875fdf20731bd4fc"
+    },
+    {
+      "file": "codex-clipboard-4d029dc8-728a-40af-919e-eb68fc95dc6c.png",
+      "bytes": 990815,
+      "sha256": "3be5d9ece4b72b389066de3322ce9b88192ff998ac5762e0d8eda51a61945342"
+    },
+    {
+      "file": "codex-clipboard-19bb3457-4c16-4729-9a4d-74a3f282f5cd.png",
+      "bytes": 1406483,
+      "sha256": "4d2cfbb913ef9feafb8bd119ef183f589d0757b064490a6bb876fa411ff293ae"
+    }
+  ],
+  "original_save_unchanged": true,
+  "game_launched_by_agent": false
+}

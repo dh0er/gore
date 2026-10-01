@@ -97,6 +97,12 @@ pub fn server_info(server_version: &str) -> Value {
 pub fn instructions(opts: &Options, policy: Policy) -> String {
     let mut text = String::from(PRIMER);
 
+    if let Some(diagnostics) = &opts.startup_diagnostics {
+        text.push_str("\nCOMPILER READINESS AT SERVER START (read-only snapshot)\n");
+        text.push_str(diagnostics);
+        text.push_str("\nCheck both compiler compatibility and native_api authority before script export/build; ready admits only audited declarations. Resolve reported problems; native references already present in the pristine cache may still work without extended authority. Use gore_doctor for a different game or after inputs change.\n");
+    }
+
     text.push_str("\nWHAT THIS SERVER MAY DO\n");
     text.push_str(&format!(
         "Reading anything is unremarkable, and so is writing to a path that is free and outside \
@@ -124,8 +130,12 @@ pub fn instructions(opts: &Options, policy: Policy) -> String {
          `work_dir/tree` and outputs outside the installation they need no consent. The mixed \
          `gore_as` tool does the same with explicit `backend: standalone`. \
          A `game` or `standalone-then-game` backend, including the omitted default, may open a real \
-         game window and stage sources in the installation: {}.\n",
-        will_be(&LAUNCHES, opts, policy)
+         game window and stage sources in the installation: {}. A compile/decompile refusal that \
+         suggests --force (typical after a game update) is lifted with `\"force\": true` on any \
+         tool: ask the user once whether to force, saying the result may be broken, never per \
+         command. Forced calls are {}.\n",
+        will_be(&LAUNCHES, opts, policy),
+        force_will_be(opts, policy)
     ));
     text.push_str(match policy {
         Policy::Ask => CONSENT_ASK,
@@ -139,7 +149,6 @@ pub fn instructions(opts: &Options, policy: Policy) -> String {
         "\nMany commands sidestep the question entirely by writing somewhere new: passing an \
          output argument turns an in-place rewrite into a new file. Prefer that.\n",
     );
-
     text.push_str(HOW_IT_BEHAVES);
     text
 }
@@ -179,10 +188,12 @@ fn always_gated() -> Vec<String> {
 const WRITES: Needs = Needs {
     write: true,
     game_launch: false,
+    force: false,
 };
 const LAUNCHES: Needs = Needs {
     write: true,
     game_launch: true,
+    force: false,
 };
 
 /// What becomes of a call in one tier, in one phrase.
@@ -199,6 +210,29 @@ fn will_be(needs: &Needs, opts: &Options, policy: Policy) -> String {
         Policy::CannotAsk | Policy::NeverAsk => format!(
             "REFUSED; only the user can change that, by restarting this server with {}",
             needs.flags()
+        ),
+    }
+}
+
+fn force_will_be(opts: &Options, policy: Policy) -> String {
+    const FORCE: Needs = Needs {
+        write: false,
+        game_launch: false,
+        force: true,
+    };
+    if opts.pre_approves(&FORCE) {
+        return "PRE-APPROVED, so they run without asking".into();
+    }
+    match policy {
+        Policy::Ask => "confirmed with the user on the first one; after that the session \
+                        remembers the answer"
+            .into(),
+        Policy::CannotAsk => "REFUSED on the first one until you relay the user's answer as the \
+                              refusal describes; after that the session remembers it"
+            .into(),
+        Policy::NeverAsk => format!(
+            "REFUSED; only the user can change that, by restarting this server with {}",
+            FORCE.flags()
         ),
     }
 }
@@ -237,21 +271,20 @@ restart it with; you cannot enable it.\n";
 /// rather than documentation. The documentation is the guide, one `gore_guide` call away. The one
 /// thing it must accomplish is that a model knows the guide exists and reaches for it before
 /// running something it has not run before.
-const PRIMER: &str = r#"GORE is a modding toolkit for Gothic 1 Remake (Unreal Engine 5). This
-server exposes the whole `gore` command line tool: every tool call runs a real `gore` subcommand as
-a child process and returns its output, with the exact command line shown first so a user can
-reproduce it in a shell.
+const PRIMER: &str = r#"GORE mods Gothic 1 Remake (Unreal Engine 5). Each tool runs a real CLI
+subcommand and returns its output with the exact command line for reproduction.
 
 TOOLS
   gore_guide     Search and read the modding guide and the technical reference. Start here.
   gore_help      The CLI's own `--help` for any command: exact flags, always current.
   gore_config    The shared configuration, above all where the game is installed.
-  gore_doctor    One read-only pass over the setup. Run it when a mod deployed and nothing changed.
+  gore_doctor    Read-only setup and compiler readiness. Run once at the start of an authoring session.
   gore_find      Look an id, a class name or a display name up across every offline catalog.
   gore_catalog   Regenerate reflection models and item/NPC/knowledge catalogs from a game dump.
   gore_location  Check a waypoint or spot name before a script uses it. Offline, no install.
   gore_dialog    Read and safely author bounded same-module dialog edits: complete defaults, bodies, topics, and new conversations.
-  gore_project   Scaffold, compile and package a UE4SS Lua mod; install the shared Lua SDK.
+  gore_npc       Read the game's characters, and author new ones: class chain, spawn sites, workspace.
+  gore_value     Inspect one class's recovered defaults from the Shipping script cache.
   gore_loc       Localized text: decrypt the .lcache to JSON, edit it, re-encrypt.
   gore_audio     FMOD sound banks: list samples, extract to WAV, inject replacements, ship patches.
   gore_voice     Voice-over archives. Strictly copy-on-write; recorded audio is never overwritten.
@@ -261,42 +294,34 @@ TOOLS
   gore_mod_inspect  Read-only bundle validation; pass the directory or ZIP directly on this tool.
   gore_mgr       Manage a loadout end to end: import, order, preflight, recover, apply, status, reset.
   gore_mgr_preflight  Read-only Manager readiness check; arguments go directly on this tool.
-  gore_as_compile  Strict standalone full-tree compilation. No game launch; a fresh work tree needs no consent.
+  gore_as_compile  Strict standalone compilation of a full source tree or a sparse overlay on the pristine base. No game launch; a fresh work tree needs no consent.
   gore_as_compile_module  Strict standalone one-module compilation. No game launch; a fresh work tree and outside-install outputs need no consent.
   gore_as        AngelScript cache: inspect, decompile, patch defaults, recompile modules.
 `gore_doctor`, `gore_find`, `gore_mod_inspect`, `gore_mgr_preflight`, `gore_as_compile`, and
-`gore_as_compile_module` each select one command
-already: pass their typed arguments directly, with no redundant `subcommand`. The other CLI tools
-wrap command families: choose a `subcommand` and put that command's arguments in `args`.
+`gore_as_compile_module` take typed arguments directly, without `subcommand`.
+Other tools take a `subcommand` and that command's arguments in `args`.
 
 BEFORE YOU ACT
-Read the guide page for whatever you are about to touch. These commands have sharp edges that a
-flag list does not convey — receipts that must match, caches that must be regenerated first, steps
-whose order matters. Call gore_guide with action "search"; it ranks individual sections, so the
-follow-up read stays small. A page too long for one result comes back in numbered parts, each
-naming what the others hold: ask for the next `part` rather than reading the page again.
-
-gore_guide covers two bodies and labels every hit. The guide says which command to reach for; the
-reference records what a receipt seals and why a command refuses something, so read a reference
-page when a command fails in a way the guide does not explain. Both are also resources, at
+Run gore_doctor once before authoring; resolve standalone_compiler problems before script export/build.
+Read the task's guide: gore_guide action "search" ranks sections; paginated reads take the next `part`.
+For NPCs, use npc-authoring and gore_npc. Mod Studio's unfinished planned GUI does not limit CLI/MCP.
+Fixtures demonstrate building blocks, not a combination allowlist. Combine supported APIs, then validate.
+The guide covers workflow; the reference explains contracts/refusals. Resources:
 gore://guide/<page> and gore://reference/<page>.
 
 WHERE THE GAME IS
-Most commands locate the game themselves: an explicit `game` argument wins, then the configured
-path, then Steam auto-detection. If something fails because it cannot find the game, set it once
-with gore_config (subcommand "set", key "game-path") instead of passing `game` every time. That
-one needs no flag even though it rewrites an existing file: it stores a preference, not content,
-and it is what clears the most common setup failure.
+An explicit `game` wins, then config, then Steam auto-detection. To configure once, use
+gore_config (subcommand "set", key "game-path"); this preference needs no write flag.
 "#;
 
 const HOW_IT_BEHAVES: &str = r#"
 HOW IT BEHAVES
-- One command runs at a time and a call blocks until it finishes. Some walk the whole installation
-  and take minutes.
+- One command runs at a time; some take minutes.
 - Every command has a wall-clock limit and is killed if it exceeds it.
+- A client-side timeout may happen sooner and does not prove that the server's child stopped.
+  Check the running command before retrying; never rename a directory an export is still writing.
 - Output is capped. A truncated result says so and suggests how to narrow the query.
-- A command that fails comes back as an ordinary result with isError set, carrying the CLI's own
-  error text. Read it: it is usually precise about what was wrong.
+- Failed commands return isError with the CLI's diagnostic text.
 "#;
 
 #[cfg(test)]
@@ -464,6 +489,7 @@ mod tests {
             let gate_stays_silent = opts.pre_approves(&Needs {
                 write: required.write,
                 game_launch: required.game_launch,
+                force: false,
             });
             let claims_unattended =
                 instructions(&opts, Policy::Ask).contains("installation: PRE-APPROVED");
@@ -501,6 +527,47 @@ mod tests {
     }
 
     #[test]
+    fn session_start_exposes_native_authority_and_recovery_before_a_tool_call() {
+        for (verdict, native_api, recovery) in [
+            ("ok", "ready; only audited declarations", ""),
+            (
+                "problem",
+                "missing; existing pristine-cache references may still work",
+                "\nNext: update the complete GORE toolkit",
+            ),
+        ] {
+            let mut opts = options(false, false);
+            let diagnostics = format!(
+                "Game: doctor-fixture\nstandalone_compiler: {verdict}\nnative_api: {native_api}{recovery}"
+            );
+            opts.startup_diagnostics = Some(diagnostics.clone());
+            let text = instructions(&opts, Policy::Ask);
+            assert!(text.contains(&diagnostics), "{text}");
+            assert!(
+                text.find(&diagnostics).unwrap() < text.find("WHAT THIS SERVER MAY DO").unwrap()
+            );
+            assert!(
+                text.contains("both compiler compatibility and native_api authority"),
+                "{text}"
+            );
+            assert!(text.contains("only audited declarations"), "{text}");
+            assert!(
+                text.contains("may still work without extended authority"),
+                "{text}"
+            );
+        }
+        let text = asking(false, false);
+        let compile = text
+            .lines()
+            .find(|line| line.starts_with("  gore_as_compile "))
+            .unwrap();
+        assert!(
+            compile.contains("full source tree or a sparse overlay on the pristine base"),
+            "{compile}"
+        );
+    }
+
+    #[test]
     fn the_primer_names_every_tool_the_server_advertises() {
         // The primer is the model's index of this server. A tool missing from it is a tool the
         // model has to stumble onto.
@@ -515,9 +582,14 @@ mod tests {
     fn the_primer_stays_short_enough_to_carry_in_every_context() {
         // It is loaded into every conversation with this server, so length is a standing cost.
         // This is a budget, not a target: if it needs to grow, move the content into the guide.
-        let text = instructions(&options(true, true), Policy::Ask);
+        //
+        // The one thing that may move it is the tool index, which carries a line per tool and is
+        // required to name every one of them by the test above. Prose does not get that licence.
+        let mut opts = options(true, true);
+        opts.startup_diagnostics = Some("Game: C:\\Gothic\nstandalone_compiler: problem\nGORE 0.4.0: C:\\Tools\\gore.exe\npristine cache: C:\\Gothic\\original.Cache\nNext: repair the complete package".into());
+        let text = instructions(&opts, Policy::Ask);
         assert!(
-            text.lines().count() < 70,
+            text.lines().count() < 71,
             "the primer has grown to {} lines; move detail into the guide",
             text.lines().count()
         );

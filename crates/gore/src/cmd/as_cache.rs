@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -286,14 +287,17 @@ pub enum AsCmd {
         #[arg(long)]
         game: Option<PathBuf>,
     },
-    /// Resolve one complete AngelScript source tree as a coordinated graph, then publish a new
+    /// Resolve AngelScript sources as a coordinated graph, then publish a new
     /// full cache that preserves untouched pristine modules and selectively composes authored
     /// additions and edits. The output is never installed implicitly.
     Compile {
-        /// Complete `.as` tree emitted from the target cache and then edited. Added or changed
-        /// modules become authored additions or edits; missing base modules request an unsupported
-        /// delete and are rejected.
+        /// Complete `.as` tree, or with --overlays only the authored Add/Edit files at their
+        /// canonical Script-relative paths. Without --overlays, missing base modules are rejected.
         src: PathBuf,
+        /// Read only authored Add/Edit modules and retain absent base modules from the pristine
+        /// cache, without exporting or comparing the full source tree. Requires --backend standalone.
+        #[arg(long)]
+        overlays: bool,
         /// Publish the complete cache here with atomic no-clobber semantics. Must be outside the
         /// game installation.
         #[arg(short, long)]
@@ -303,6 +307,12 @@ pub enum AsCmd {
         /// `scripts[].mini_cache` should point at when a mod spans several modules.
         #[arg(long, value_name = "PATH")]
         mini: Option<PathBuf>,
+        /// Restrict this compile to exactly these cache-relative changes. Repeat as
+        /// `--only-change add:Module.Name:Path/To/Module.as` or `edit:...`.
+        /// Append `:SHA256` to bind an allowed change to its exact source bytes.
+        /// Checks all supplied sources; with --overlays, no original-source comparison is needed.
+        #[arg(long = "only-change", value_name = "OP:MODULE:PATH[:SHA256]")]
+        only_changes: Vec<String>,
         /// Existing private workspace outside the game installation. GORE recreates only its
         /// fixed `tree` child and uses this root for isolated standalone scratch directories.
         #[arg(long, value_name = "DIR")]
@@ -339,9 +349,9 @@ pub enum AsCmd {
         #[command(flatten)]
         compiler: AsProductCompilerBackendArgsV1,
     },
-    /// Compile one authored module into a deployable 1-module mini-cache. This wraps the complete
-    /// Studio pipeline: emit the pristine source tree, overlay one `.as` file, compile standalone
-    /// first with a visible game fallback, extract the module, and remap it to the pristine cache.
+    /// Compile one authored module into a deployable 1-module mini-cache. Standalone reads
+    /// unchanged dependencies from the pristine cache; a game fallback emits the full source
+    /// tree. The compiled module is extracted and remapped to the pristine cache.
     CompileModule {
         /// `add` for a new module or `edit` for an existing module.
         #[arg(long, value_parser = ["add", "edit"])]
@@ -378,6 +388,9 @@ pub enum AsCmd {
         /// (64 hex digits, `sha256:` prefix optional). Never selects the base.
         #[arg(long, value_name = "HEX")]
         expect_base_sha256: Option<String>,
+        /// Refuse to compile if the authored source differs from this SHA-256.
+        #[arg(long, value_name = "HEX")]
+        expect_source_sha256: Option<String>,
         /// Disable the optional runtime compiler-diagnostic hook and use the normal generator.
         #[arg(long, conflicts_with = "diagnostics_hook")]
         no_diagnostics: bool,
@@ -975,11 +988,11 @@ fn load_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds
 }
 
 /// A parsed `Binds.Cache` together with the measurements a refusal has to be able to quote.
-struct LoadedBinds {
-    native: gore_as::cache::binds::NativeApi,
+pub(super) struct LoadedBinds {
+    pub(super) native: gore_as::cache::binds::NativeApi,
     proof: EvidenceFileProofJson,
     len: usize,
-    sha256: [u8; 32],
+    pub(super) sha256: [u8; 32],
 }
 
 fn native_api_path(cache_file: &Path) -> Option<PathBuf> {
@@ -989,7 +1002,26 @@ fn native_api_path(cache_file: &Path) -> Option<PathBuf> {
     })
 }
 
-fn load_native_api_with_proof(cache_file: &Path) -> Option<LoadedBinds> {
+// Standalone splice/remap commands do not select a compiler backend. Find the exact Binds.Cache
+// for this pristine base instead of admitting native declarations from the cache GUID alone.
+fn qualified_native_binds_for_base(cache_file: &Path, base: &[u8]) -> Option<Vec<u8>> {
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("GORE_AS_BINDS") {
+        candidates.push(PathBuf::from(path));
+    }
+    if let Some(parent) = cache_file.parent() {
+        candidates.push(parent.join("Binds.Cache"));
+    }
+    if let Ok(game) = gore_loc::config::game_root(None) {
+        candidates.push(compiler_binds_path(&game));
+    }
+    candidates.into_iter().find_map(|path| {
+        let bytes = read_regular_bounded(&path, DEFAULT_BINDS_MAX_BYTES, "AS_NATIVE_BINDS").ok()?;
+        gore_as::cache::remap::qualified_native_api_binds_match(base, &bytes).then_some(bytes)
+    })
+}
+
+pub(super) fn load_native_api_with_proof(cache_file: &Path) -> Option<LoadedBinds> {
     let path = native_api_path(cache_file)?;
     let bytes = match read_regular_bounded(&path, DEFAULT_BINDS_MAX_BYTES, "AS_DEFAULT_BINDS") {
         Ok(bytes) => bytes,
@@ -1119,7 +1151,7 @@ fn read_tag_map_cache(path: &Path) -> Result<Vec<u8>> {
     read_validated_cache(path, "AS_TAG_MAP_INPUT")
 }
 
-fn read_regular_bounded(path: &Path, limit: u64, label: &'static str) -> Result<Vec<u8>> {
+pub(super) fn read_regular_bounded(path: &Path, limit: u64, label: &'static str) -> Result<Vec<u8>> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("{label}: opening {}", path.display()))?;
     let metadata = file
@@ -1175,7 +1207,7 @@ fn read_validated_cache(path: &Path, label: &'static str) -> Result<Vec<u8>> {
 
 /// Read a module cache and prove its outer header. The single entry point for every subcommand that
 /// walks the `Modules` TMap or the seven global tail tables.
-fn read_module_cache(path: &Path) -> Result<Vec<u8>> {
+pub(super) fn read_module_cache(path: &Path) -> Result<Vec<u8>> {
     read_validated_cache(path, "AS_CACHE_INPUT")
 }
 
@@ -2140,11 +2172,121 @@ impl gore_as::compile::StandaloneCompilerRunnerV1 for CompileModuleStandaloneRun
     }
 }
 
+/// A staged workflow can name its complete intended diff. The full-graph planner derives the
+/// actual diff from the sealed cache, so a modified source tree and a rewritten local stamp
+/// cannot silently add another module to the resulting mini-cache.
+fn verify_only_changes(
+    allowed: &[String],
+    changes: &[gore_as::compile::FullGraphCompileChangeV1],
+) -> Result<()> {
+    use gore_as::compile::FullGraphCompileOperationV1;
+
+    if allowed.is_empty() {
+        return Ok(());
+    }
+    let mut expected = BTreeSet::new();
+    let mut expected_digests = BTreeMap::new();
+    for item in allowed {
+        let mut parts = item.split(':');
+        let (Some(op), Some(module), Some(path)) = (parts.next(), parts.next(), parts.next())
+        else {
+            bail!("invalid --only-change {item:?}; expected add:Module:Path or edit:Module:Path");
+        };
+        let digest = parts.next();
+        if !matches!(op, "add" | "edit")
+            || module.is_empty()
+            || path.is_empty()
+            || parts.next().is_some()
+        {
+            bail!("invalid --only-change {item:?}; expected add:Module:Path or edit:Module:Path");
+        }
+        let key = (op.to_owned(), module.to_owned(), path.to_owned());
+        if !expected.insert(key.clone()) {
+            bail!("duplicate --only-change {item:?}");
+        }
+        if let Some(digest) = digest {
+            let parsed = gore_as::compiler_profile::manifest::Sha256Digest::from_hex(digest)
+                .with_context(|| format!("invalid --only-change source SHA-256 in {item:?}"))?;
+            expected_digests.insert(key, parsed);
+        }
+    }
+    let actual: BTreeSet<_> = changes
+        .iter()
+        .map(|change| {
+            let op = match change.operation {
+                FullGraphCompileOperationV1::Add => "add",
+                FullGraphCompileOperationV1::Edit => "edit",
+                FullGraphCompileOperationV1::Delete => "delete",
+            };
+            (
+                op.to_owned(),
+                change.module_name.clone(),
+                change.relative_path.clone(),
+            )
+        })
+        .collect();
+    let unexpected: Vec<_> = actual.difference(&expected).collect();
+    let missing: Vec<_> = expected.difference(&actual).collect();
+    if !unexpected.is_empty() || !missing.is_empty() {
+        bail!(
+            "the source tree differs from --only-change scope (unexpected: {unexpected:?}; missing: {missing:?}); no cache was compiled"
+        );
+    }
+    for change in changes {
+        let op = match change.operation {
+            FullGraphCompileOperationV1::Add => "add",
+            FullGraphCompileOperationV1::Edit => "edit",
+            FullGraphCompileOperationV1::Delete => "delete",
+        };
+        let key = (op.to_owned(), change.module_name.clone(), change.relative_path.clone());
+        if let Some(expected_digest) = expected_digests.get(&key) {
+            let source = change.source.as_deref().with_context(|| {
+                format!("the planned change {} has no source bytes", change.module_name)
+            })?;
+            if Sha256::digest(source).as_slice() != expected_digest.as_bytes() {
+                bail!(
+                    "the source for {} differs from the staged --only-change SHA-256; no cache was compiled",
+                    change.module_name
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Overlay input must survive the workspace reset and every publication. Resolve aliases before
+/// comparing, but do not create anything; the planner separately pins and validates source files.
+fn validate_overlay_source_layout(
+    source: &Path,
+    work: &Path,
+    output: &Path,
+    mini: Option<&Path>,
+    receipt: Option<&Path>,
+) -> Result<()> {
+    use gore_as::compile::{resolve_projected_output_path_v1, resolved_path_is_within_v1};
+    let source = resolve_projected_output_path_v1(source, "overlay source root")?;
+    let work = resolve_projected_output_path_v1(work, "overlay workspace")?;
+    if resolved_path_is_within_v1(&source, &work) || resolved_path_is_within_v1(&work, &source) {
+        bail!("overlay source root and compiler workspace must be disjoint; the workspace resets its tree child");
+    }
+    for (label, path) in [("compiled cache", Some(output)), ("mini-cache", mini), ("receipt", receipt)] {
+        if let Some(path) = path {
+            let path = resolve_projected_output_path_v1(path, label)?;
+            if resolved_path_is_within_v1(&path, &source) || resolved_path_is_within_v1(&source, &path) {
+                bail!("overlay source root and {label} destination must be disjoint");
+            }
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compile_full_graph_command(
     src: PathBuf,
+    overlays: bool,
     out: PathBuf,
     mini: Option<PathBuf>,
+    only_changes: Vec<String>,
     work_dir: PathBuf,
     game: Option<PathBuf>,
     expected_base: Option<ExpectedBase>,
@@ -2160,8 +2302,18 @@ fn compile_full_graph_command(
     };
     use gore_as::standalone_package_resolver::ProductStandaloneCompilerPackageResolutionV1;
 
+    let requested_mode: CompilerBackendModeV1 = compiler.backend.into();
+    let qualification_requested = std::env::var("GORE_AS_COMPLETE_QUALIFICATION")
+        .is_ok_and(|value| value == "1");
+    // Refuse incompatible policies before output preflight or any install-mutation authority.
+    if overlays && requested_mode != CompilerBackendModeV1::Standalone {
+        bail!("--overlays requires --backend standalone; game and fallback policies require a complete source tree");
+    }
+    if overlays && qualification_requested {
+        bail!("--overlays cannot be combined with GORE_AS_COMPLETE_QUALIFICATION=1; complete qualification requires a full tree");
+    }
     let game = gore_loc::config::game_root(game).context("resolving game path")?;
-    let src = absolute_cli_path(src, "complete AngelScript source root")?;
+    let src = absolute_cli_path(src, "AngelScript source root")?;
     let out = absolute_cli_path(out, "full-graph output")?;
     let work_dir = absolute_cli_path(work_dir, "full-graph workspace")?;
     validate_compiler_work_dir(&work_dir, &game)?;
@@ -2175,6 +2327,9 @@ fn compile_full_graph_command(
     let mini_path = mini
         .map(|path| absolute_cli_path(path, "multi-module mini-cache"))
         .transpose()?;
+    if overlays {
+        validate_overlay_source_layout(&src, &work_dir, &out, mini_path.as_deref(), receipt_path.as_deref())?;
+    }
     // Two side outputs may name the same file, or nest inside one another, through different
     // spellings of the same directory. Compare the projected paths before ANY preflight below,
     // because those create the output parents: an accepted nesting would otherwise leave a
@@ -2241,7 +2396,6 @@ fn compile_full_graph_command(
         },
     );
 
-    let requested_mode: CompilerBackendModeV1 = compiler.backend.into();
     let (effective_mode, game_fallback_note) =
         effective_compile_mode(requested_mode, &shipping_source)?;
     if let Some(note) = game_fallback_note.as_deref() {
@@ -2279,7 +2433,7 @@ fn compile_full_graph_command(
             }
         }
         ProductStandaloneCompilerPackageResolutionV1::BundleAbsent => {
-            package_unavailable = Some("embedded standalone compiler bundle is absent".to_owned());
+            package_unavailable = Some("this GORE executable has no embedded standalone compiler catalog; reinstall the complete CLI package or build it with python build.py gore-cli dist (copying a compiler folder alone is insufficient)".to_owned());
         }
         ProductStandaloneCompilerPackageResolutionV1::Unavailable(reason) => {
             package_unavailable = Some(format!("{:?}: {}", reason.kind(), reason.detail()));
@@ -2362,10 +2516,13 @@ fn compile_full_graph_command(
     // is what a byte-faithfulness measurement diffs against the shipped cache. The selective
     // publication would hand back pristine bytes for every module whose text equals the
     // emitter's own output, and say nothing about them.
-    let complete_qualification = std::env::var("GORE_AS_COMPLETE_QUALIFICATION")
-        .is_ok_and(|value| value == "1")
+    let complete_qualification = qualification_requested
         && requested_mode == CompilerBackendModeV1::Standalone;
-    let planned = if complete_qualification {
+    let planning_started = std::time::Instant::now();
+    eprintln!("planning {} against the pristine cache", if overlays { "authored overlays (no full-tree emission)" } else { "complete source tree" });
+    let planned = if overlays {
+        gore_as::full_graph_plan::plan_source_overlays_v1(&base_cache, &src)
+    } else if complete_qualification {
         gore_as::full_graph_plan::plan_complete_source_tree_v1(&base_cache, &src)
     } else {
         gore_as::full_graph_plan::plan_complete_source_tree_with_emitted_base_v1(
@@ -2377,7 +2534,7 @@ fn compile_full_graph_command(
     let plan = match planned {
         Ok(plan) => plan,
         Err(error) => {
-            let error = anyhow::Error::new(error).context("planning the complete source graph");
+            let error = anyhow::Error::new(error).context("planning the source graph");
             return match guard.take() {
                 Some(guard) => Err(release_compile_guard_after_error(guard, error)),
                 None => Err(error),
@@ -2385,6 +2542,13 @@ fn compile_full_graph_command(
         }
     };
     let (changes, final_manifest) = plan.into_parts();
+    eprintln!("planned {} authored change(s), {} final modules in {:.2}s", changes.len(), final_manifest.len(), planning_started.elapsed().as_secs_f64());
+    if let Err(error) = verify_only_changes(&only_changes, &changes) {
+        return match guard.take() {
+            Some(guard) => Err(release_compile_guard_after_error(guard, error)),
+            None => Err(error),
+        };
+    }
     if mini_path.is_some()
         && !changes.iter().any(|change| {
             change.operation != gore_as::compile::FullGraphCompileOperationV1::Delete
@@ -2525,6 +2689,7 @@ fn compile_full_graph_command(
         Some(mini_path) => match publish_full_graph_mini(
             &artifact,
             &opts.base_cache,
+            &opts.binds_cache,
             &game,
             &work_dir,
             mini_path,
@@ -2594,7 +2759,8 @@ fn compile_full_graph_command(
         );
     }
     println!(
-        "compiled complete graph with {} -> {} ({} modules, {} bytes, sha256 {})",
+        "published {} authored change(s) with {} -> {} (final cache: {} modules, {} bytes, sha256 {})",
+        artifact.changes().len(),
         used_backend,
         artifact.path().display(),
         artifact.module_count(),
@@ -2630,6 +2796,7 @@ impl PublishedMini {
 fn publish_full_graph_mini(
     artifact: &gore_as::compile::FullGraphCompileArtifactV1,
     base_cache: &[u8],
+    binds_cache: &[u8],
     game: &Path,
     work_dir: &Path,
     mini_path: &Path,
@@ -2653,16 +2820,18 @@ fn publish_full_graph_mini(
     let names: Vec<&str> = authored.iter().map(|(name, _)| *name).collect();
     let extracted = gore_as::cache::splice::extract_modules(&composed, &names)
         .context("extracting the authored modules from the composed cache")?;
-    let (mini, _counts) = gore_as::cache::remap::remap_module_to_base_with_options(
+    let (mini, _counts) = gore_as::cache::remap::remap_module_to_base_with_options_and_binds(
         &extracted,
         base_cache,
+        binds_cache,
         gore_as::cache::remap::RemapOptions {
             allow_new_symbols: true,
         },
     )
     .context("remapping the authored modules to the pristine cache")?;
     // Prove the mini composes back onto the sealed base before publishing it.
-    let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(base_cache)
+    let mut guard =
+        gore_as::cache::splice::SequentialMiniGuard::new_with_binds(base_cache, binds_cache)
         .context("validating the pristine base for the mini-cache self-check")?;
     guard
         .compose_upsert(base_cache, &mini)
@@ -2878,13 +3047,13 @@ fn audit_full_graph_inputs(
 }
 
 #[cfg(windows)]
-fn metadata_is_reparse_cli(metadata: &std::fs::Metadata) -> bool {
+pub(super) fn metadata_is_reparse_cli(metadata: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
     metadata.file_attributes() & 0x400 != 0
 }
 
 #[cfg(not(windows))]
-fn metadata_is_reparse_cli(_: &std::fs::Metadata) -> bool {
+pub(super) fn metadata_is_reparse_cli(_: &std::fs::Metadata) -> bool {
     false
 }
 
@@ -3618,8 +3787,10 @@ pub fn run(cmd: AsCmd) -> Result<()> {
         }
         AsCmd::Compile {
             src,
+            overlays,
             out,
             mini,
+            only_changes,
             work_dir,
             game,
             expect_base,
@@ -3631,8 +3802,10 @@ pub fn run(cmd: AsCmd) -> Result<()> {
         } => {
             compile_full_graph_command(
                 src,
+                overlays,
                 out,
                 mini,
+                only_changes,
                 work_dir,
                 game,
                 expected_base_from_args(expect_base, expect_base_sha256)?,
@@ -3653,6 +3826,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             game,
             expect_base,
             expect_base_sha256,
+            expect_source_sha256,
             no_diagnostics,
             diagnostics_hook,
             diagnostics_inject_delay_ms,
@@ -3666,6 +3840,13 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 gore_as::generation_receipt::MAX_GENERATION_SOURCE_FILE_BYTES_V1 as u64,
                 "AS_COMPILE_SOURCE",
             )?;
+            if let Some(expected) = expect_source_sha256 {
+                let digest = gore_as::compiler_profile::manifest::Sha256Digest::from_hex(&expected)
+                    .context("invalid --expect-source-sha256")?;
+                if Sha256::digest(&source_bytes).as_slice() != digest.as_bytes() {
+                    bail!("authored source differs from --expect-source-sha256; no cache was compiled");
+                }
+            }
             let executable_path = compiler_executable_path(&game);
             let shipping_source = compiler_shipping_source(&game)?;
             announce_compiler_shipping_source(&shipping_source);
@@ -3753,7 +3934,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     }
                     ProductStandaloneCompilerPackageResolutionV1::BundleAbsent => {
                         package_unavailable =
-                            Some("embedded standalone compiler bundle is absent".to_owned());
+                            Some("this GORE executable has no embedded standalone compiler catalog; reinstall the complete CLI package or build it with python build.py gore-cli dist (copying a compiler folder alone is insufficient)".to_owned());
                     }
                     ProductStandaloneCompilerPackageResolutionV1::Unavailable(reason) => {
                         package_unavailable =
@@ -4100,7 +4281,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let base_b = read_module_cache(&base)?;
             let mini_b = read_module_cache(&mini)?;
             let n = module_count(&base_b);
-            let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(&base_b)
+            let binds = qualified_native_binds_for_base(&base, &base_b);
+            let mut guard = gore_as::cache::splice::SequentialMiniGuard::new_with_binds(
+                &base_b,
+                binds.as_deref().unwrap_or(&[]),
+            )
                 .context("validating replace base")?;
             let res = guard
                 .compose_edit(&base_b, &mini_b, &target)
@@ -4124,7 +4309,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let base_b = read_module_cache(&base)?;
             let mini_b = read_module_cache(&mini)?;
             let before = module_count(&base_b);
-            let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(&base_b)
+            let binds = qualified_native_binds_for_base(&base, &base_b);
+            let mut guard = gore_as::cache::splice::SequentialMiniGuard::new_with_binds(
+                &base_b,
+                binds.as_deref().unwrap_or(&[]),
+            )
                 .context("validating splice base")?;
             let spliced = if upsert {
                 guard
@@ -4169,12 +4358,15 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let n = module_count(&regen_b);
             let mini =
                 gore_as::cache::splice::extract_module(&regen_b, &module).context("extract")?;
-            let (remapped, counts) = gore_as::cache::remap::remap_module_to_base_with_options(
-                &mini,
-                &base_b,
-                gore_as::cache::remap::RemapOptions { allow_new_symbols },
-            )
-            .context("remap")?;
+            let binds = qualified_native_binds_for_base(&base_cache, &base_b);
+            let (remapped, counts) =
+                gore_as::cache::remap::remap_module_to_base_with_options_and_binds(
+                    &mini,
+                    &base_b,
+                    binds.as_deref().unwrap_or(&[]),
+                    gore_as::cache::remap::RemapOptions { allow_new_symbols },
+                )
+                .context("remap")?;
             std::fs::write(&out, &remapped)
                 .with_context(|| format!("writing {}", out.display()))?;
             println!(
@@ -6260,6 +6452,59 @@ mod default_cli_tests {
     use super::*;
 
     #[test]
+    fn scoped_full_graph_compile_rejects_changes_outside_the_npc_manifest() {
+        use gore_as::compile::{FullGraphCompileChangeV1, FullGraphCompileOperationV1 as Op};
+
+        let allowed = vec![
+            "add:AI.Config.Test:AI/Config/Test.as".to_owned(),
+            "edit:LevelScripts.Test:LevelScripts/Test.as".to_owned(),
+        ];
+        let change = |operation, module_name: &str, relative_path: &str| FullGraphCompileChangeV1 {
+            operation,
+            module_name: module_name.to_owned(),
+            relative_path: relative_path.to_owned(),
+            source: (operation != Op::Delete).then_some(b"class Test {}".to_vec()),
+        };
+        let intended = vec![
+            change(Op::Add, "AI.Config.Test", "AI/Config/Test.as"),
+            change(Op::Edit, "LevelScripts.Test", "LevelScripts/Test.as"),
+        ];
+        verify_only_changes(&allowed, &intended).unwrap();
+
+        for extra in [
+            change(Op::Edit, "Other.Script", "Other/Script.as"),
+            change(Op::Add, "Other.New", "Other/New.as"),
+            change(Op::Delete, "Other.Gone", "Other/Gone.as"),
+        ] {
+            let mut tampered = intended.clone();
+            tampered.push(extra);
+            let error = verify_only_changes(&allowed, &tampered).unwrap_err();
+            assert!(error.to_string().contains("unexpected"));
+            assert!(error.to_string().contains("Other."));
+        }
+        assert!(verify_only_changes(&allowed, &intended[..1])
+            .unwrap_err()
+            .to_string()
+            .contains("missing"));
+
+        let digest = format!("{:x}", Sha256::digest(b"class Test {}"));
+        let bound = vec![format!(
+            "add:AI.Config.Test:AI/Config/Test.as:{digest}"
+        )];
+        verify_only_changes(&bound, &intended[..1]).unwrap();
+        let mut edited = intended[0].clone();
+        edited.source = Some(b"class Changed {}".to_vec());
+        assert!(verify_only_changes(&bound, &[edited])
+            .unwrap_err()
+            .to_string()
+            .contains("differs from the staged"));
+        assert!(verify_only_changes(&["add:AI.Config.Test:AI/Config/Test.as:bad".into()], &intended[..1])
+            .unwrap_err()
+            .to_string()
+            .contains("invalid --only-change source SHA-256"));
+    }
+
+    #[test]
     fn compile_module_work_dir_is_resolved_after_validation() {
         let root = tempfile::tempdir().unwrap();
         let game = root.path().join("game");
@@ -6310,6 +6555,7 @@ mod default_cli_tests {
             methods: Vec::new(),
             ctors: Vec::new(),
             flags: 0,
+            is_abstract: false,
         };
         let module = Module {
             name: "QualificationFixture".to_owned(),

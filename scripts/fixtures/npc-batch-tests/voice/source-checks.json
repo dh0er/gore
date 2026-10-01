@@ -1,0 +1,139 @@
+{
+  "schema": "gore.npc-batch.natural-voice.v1",
+  "runtime_status": "awaiting user test",
+  "base": "NpcWarningRecovery 0.1.12",
+  "required_baseline_slot": "G1R-030",
+  "fresh_c_required": true,
+  "hidden_old_choices": [
+    "UChoiceGoreNpcSessionBegin",
+    "UChoiceGoreNpcSessionComplete",
+    "UChoiceGoreNpcSessionRemembered",
+    "UChoiceGoreNpcVoiceOriginal",
+    "UChoiceGoreNpcVoiceGreeting",
+    "UChoiceGoreNpcVoiceMono48",
+    "UChoiceGoreNpcVoiceMono44",
+    "UChoiceGoreNpcVoiceStereo48",
+    "UChoiceGoreNpcVoiceExchange",
+    "UChoiceGoreNpcVoiceMissing",
+    "UChoiceGoreNpcVoiceMumble",
+    "UChoiceGoreAppearanceSetup",
+    "UChoiceGoreRoutineNoon",
+    "UChoiceGoreRoutineEvening",
+    "UChoiceGoreRoutineMorning",
+    "UChoiceGoreSetupPrepared",
+    "UChoiceGoreSetupIncomplete",
+    "UChoiceGoreHeadApply",
+    "UChoiceGoreHeadRestore",
+    "UChoiceGoreObjectsSetup",
+    "UChoiceGoreObjectsNoon",
+    "UChoiceGoreObjectsEvening",
+    "UChoiceGoreObjectsMorning",
+    "UChoiceGoreObjectsIncomplete",
+    "UChoiceGoreSeatGuardSetup",
+    "UChoiceGoreSeatGuardNoon",
+    "UChoiceGoreSeatGuardEvening",
+    "UChoiceGoreSeatGuardMorning",
+    "UChoiceGoreSeatGuardIncomplete"
+  ],
+  "natural_voice_direct_requests": 0,
+  "source_sha256": {
+    "GORE_TEST_A.as": "a5a10c338dd01dff1906d4064088ac444a79319e56b92256b4fcd3e53db97721",
+    "GORE_TEST_B.as": "d7a22bd5cf36ed60d2d3776208a3c38fbf83162cec4ac42654a02e92e6b9a783"
+  },
+  "archive_members": [
+    {
+      "profile": "VoiceType_G1R_Voice05_Diego",
+      "tag": "Sound_Voice_Address_Greeting_Friendly",
+      "text_id": "GVL_G1R_VOICE05_DIEGO_ADDRESSGREETINGFRIENDLY_0",
+      "member": "german_new/_Voicetypes/G1R_Voice05_Diego/GVL_G1R_VOICE05_DIEGO_ADDRESSGREETINGFRIENDLY_0.ogg",
+      "bytes": 10588,
+      "sha256": "b8733bf54ca234f24320509f2f5141c6c98f0c658462a3786246d88dc98c358e"
+    },
+    {
+      "profile": "VoiceType_G1R_Voice05_Diego",
+      "tag": "Sound_Voice_Address_Greeting_OC",
+      "text_id": "GVL_G1R_VOICE05_DIEGO_ADDRESSGREETINGOC_0",
+      "member": "german_new/_Voicetypes/G1R_Voice05_Diego/GVL_G1R_VOICE05_DIEGO_ADDRESSGREETINGOC_0.ogg",
+      "bytes": 12230,
+      "sha256": "d7ba6c42509632775bc2b29fe6b9e779b6bf51bc55e77698850fba2936bc2ee7"
+    },
+    {
+      "profile": "VoiceType_G1R_Voice05_Diego",
+      "tag": "Sound_Voice_Conversation_DailyRoutine_Mumble",
+      "text_id": "GVL_G1R_VOICE05_DIEGO_CONVERSATIONDAILYROUTINEMUMBLE_0",
+      "member": "german_new/_Voicetypes/G1R_Voice05_Diego/GVL_G1R_VOICE05_DIEGO_CONVERSATIONDAILYROUTINEMUMBLE_0.ogg",
+      "bytes": 13960,
+      "sha256": "bac37c17530533ba3bdf0bceff384f97eb2c2b214df71444d3cf02d8f3cffb2a"
+    },
+    {
+      "profile": "VoiceType_G1R_Voice05_Diego",
+      "tag": "Sound_Voice_Conversation_DailyRoutine_Mumble",
+      "text_id": "GVL_G1R_VOICE05_DIEGO_CONVERSATIONDAILYROUTINEMUMBLE_1",
+      "member": "german_new/_Voicetypes/G1R_Voice05_Diego/GVL_G1R_VOICE05_DIEGO_CONVERSATIONDAILYROUTINEMUMBLE_1.ogg",
+      "bytes": 13967,
+      "sha256": "87935149061064fc8782052c210ff95350aa8637e5ab76bfed35866c1b7d9945"
+    },
+    {
+      "profile": "VoiceType_G1R_Voice05_Diego",
+      "tag": "Sound_Voice_Conversation_DailyRoutine_Mumble",
+      "text_id": "GVL_G1R_VOICE05_DIEGO_CONVERSATIONDAILYROUTINEMUMBLE_2",
+      "member": "german_new/_Voicetypes/G1R_Voice05_Diego/GVL_G1R_VOICE05_DIEGO_CONVERSATIONDAILYROUTINEMUMBLE_2.ogg",
+      "bytes": 15428,
+      "sha256": "967b356dd858b01693d25e39fc0cfbe69e5a62bf9a96edecd8424b26456f4428"
+    },
+    {
+      "profile": "VoiceType_G1R_Voice05_Diego",
+      "tag": "Sound_Voice_Conversation_DailyRoutine_Mumble",
+      "text_id": "GVL_G1R_VOICE05_DIEGO_CONVERSATIONDAILYROUTINEMUMBLE_3",
+      "member": "german_new/_Voicetypes/G1R_Voice05_Diego/GVL_G1R_VOICE05_DIEGO_CONVERSATIONDAILYROUTINEMUMBLE_3.ogg",
+      "bytes": 19649,
+      "sha256": "e5a7c90f30db3ac347b488efcc5efa30c5a9a22d705c8e83e4d8eba280f2008e"
+    },
+    {
+      "profile": "VoiceType_G1R_Voice08_Lares",
+      "tag": "Sound_Voice_Address_Greeting_Friendly",
+      "text_id": "GVL_G1R_VOICE08_LARES_ADDRESSGREETINGFRIENDLY_0",
+      "member": "german_new/_Voicetypes/G1R_Voice08_Lares/GVL_G1R_VOICE08_LARES_ADDRESSGREETINGFRIENDLY_0.ogg",
+      "bytes": 9364,
+      "sha256": "60db0e1a88e3d4ee5a8a68a94952ead8c4cbf5139bae7373db794e9e4afdc2bc"
+    },
+    {
+      "profile": "VoiceType_G1R_Voice08_Lares",
+      "tag": "Sound_Voice_Conversation_DailyRoutine_Mumble",
+      "text_id": "GVL_G1R_VOICE08_LARES_CONVERSATIONDAILYROUTINEMUMBLE_0",
+      "member": "german_new/_Voicetypes/G1R_Voice08_Lares/GVL_G1R_VOICE08_LARES_CONVERSATIONDAILYROUTINEMUMBLE_0.ogg",
+      "bytes": 19361,
+      "sha256": "ac31975c43ccbaeb7e7f00b87fdf0aaf3a21c3f6679ea243c4c4567491a0b2cc"
+    },
+    {
+      "profile": "VoiceType_G1R_Voice08_Lares",
+      "tag": "Sound_Voice_Conversation_DailyRoutine_Mumble",
+      "text_id": "GVL_G1R_VOICE08_LARES_CONVERSATIONDAILYROUTINEMUMBLE_1",
+      "member": "german_new/_Voicetypes/G1R_Voice08_Lares/GVL_G1R_VOICE08_LARES_CONVERSATIONDAILYROUTINEMUMBLE_1.ogg",
+      "bytes": 11873,
+      "sha256": "f76ffa1a629861f335e8a7cb47f060545713f0bb388421eec86764843edf6c34"
+    },
+    {
+      "profile": "VoiceType_G1R_Voice08_Lares",
+      "tag": "Sound_Voice_Conversation_DailyRoutine_Mumble",
+      "text_id": "GVL_G1R_VOICE08_LARES_CONVERSATIONDAILYROUTINEMUMBLE_5",
+      "member": "german_new/_Voicetypes/G1R_Voice08_Lares/GVL_G1R_VOICE08_LARES_CONVERSATIONDAILYROUTINEMUMBLE_5.ogg",
+      "bytes": 15970,
+      "sha256": "09557e17362830592fd87285a944273d52c2bf0938314586b96728f51082888a"
+    }
+  ],
+  "original_classes_preserved": {
+    "GORE_TEST_A.as": 37,
+    "GORE_TEST_B.as": 24
+  },
+  "warning_recovery_source_unchanged": true,
+  "baseline030": {
+    "sha256": "93fac2808953b9c184bcd8e5817e601fd6f02ef1407d38c400fa04e47510bfbf",
+    "gore_actor_names": [
+      "GORE_TEST_A",
+      "GORE_TEST_B"
+    ],
+    "c_absent": true,
+    "source": "hash-verified pre-cleanup archive"
+  }
+}
