@@ -28,7 +28,7 @@ fn absolute_path(path: &Path) -> PathBuf {
     }
 }
 
-fn canonical_destination(path: &Path) -> Result<PathBuf> {
+pub(super) fn canonical_destination(path: &Path) -> Result<PathBuf> {
     let absolute = absolute_path(path);
     for ancestor in absolute.ancestors() {
         match std::fs::canonicalize(ancestor) {

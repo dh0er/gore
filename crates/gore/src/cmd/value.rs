@@ -20,8 +20,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use super::as_cache::{
-    load_native_api_with_proof, read_module_cache, AsCmd, AsCompilerBackendArgsV1,
-    AsCompilerBackendV1,
+    load_native_api_with_proof, metadata_is_reparse_cli, read_module_cache, AsCmd,
+    AsCompilerBackendArgsV1, AsCompilerBackendV1,
 };
 use super::npc::defaults::{self, EmittedClass};
 
@@ -203,6 +203,66 @@ fn inspected_defaults(class: &EmittedClass) -> Vec<InspectedDefault> {
 /// build instead of launching the game.
 const VALUE_COMPILE_BACKEND: AsCompilerBackendV1 = AsCompilerBackendV1::Standalone;
 
+/// Refuse unsafe staging paths without creating their missing suffixes or reading the cache.
+fn preflight_value_compile_directories(
+    game: &Path,
+    work_dir: &Path,
+    out_dir: &Path,
+) -> Result<(PathBuf, PathBuf)> {
+    use gore_as::compile::{resolve_projected_output_path_v1, resolved_path_is_within_v1};
+
+    let game_real = game
+        .canonicalize()
+        .with_context(|| format!("resolving game root {}", game.display()))?;
+    let check_real_ancestors = |path: &Path, label: &str| -> Result<()> {
+        for ancestor in path.ancestors() {
+            match std::fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if !metadata.is_dir()
+                        || metadata.file_type().is_symlink()
+                        || metadata_is_reparse_cli(&metadata)
+                    {
+                        bail!(
+                            "{label} must use a real, non-reparse directory: {}",
+                            ancestor.display()
+                        );
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("inspecting {label} ancestor {}", ancestor.display())
+                    });
+                }
+            }
+        }
+        Ok(())
+    };
+    let resolve = |path: &Path, label: &str| -> Result<PathBuf> {
+        let requested = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .context("resolving current directory for value compilation")?
+                .join(path)
+        };
+        // Check before canonicalization so existing links/junctions cannot disappear into their
+        // targets. Check again after normalizing a missing suffix such as `missing/../work`.
+        check_real_ancestors(&requested, label)?;
+        let projected = super::modcmd::canonical_destination(&requested)?;
+        check_real_ancestors(&projected, label)?;
+        let resolved = resolve_projected_output_path_v1(&projected, label)?;
+        if resolved_path_is_within_v1(&resolved, &game_real) {
+            bail!("{label} must be outside the game installation");
+        }
+        Ok(resolved)
+    };
+    Ok((
+        resolve(work_dir, "compiler workspace")?,
+        resolve(out_dir, "value mini-cache directory")?,
+    ))
+}
+
 /// Compile every `values` edit into `op = "edit"` script modules and append them to `scripts`.
 ///
 /// `occupied_modules` are script entries already in the spec. An overlap is refused before any
@@ -225,6 +285,7 @@ pub fn compile_values_into_scripts(
         return Ok((Vec::new(), String::new(), Vec::new()));
     }
     refuse_duplicate_value_targets(edits)?;
+    let (work_dir, out_dir) = preflight_value_compile_directories(game, work_dir, out_dir)?;
     with_prepared(cache, |modules, prepared, bytes, _binds| {
         let mut by_module: BTreeMap<usize, Vec<&ValueEdit>> = BTreeMap::new();
         for edit in edits {
@@ -265,8 +326,13 @@ pub fn compile_values_into_scripts(
             return Ok((Vec::new(), cache_sha, Vec::new()));
         }
         let invocation = invocation_id();
-        let work_root = work_dir.join(&invocation);
-        let mini_root = out_dir.join(&invocation);
+        // Use normalized roots so `create_dir_all` cannot create incidental directories from a
+        // missing `..` prefix. Recheck the actual invocation paths after lengthy source planning.
+        let (work_root, mini_root) = preflight_value_compile_directories(
+            game,
+            &work_dir.join(&invocation),
+            &out_dir.join(&invocation),
+        )?;
         std::fs::create_dir_all(&work_root)
             .with_context(|| format!("creating {}", work_root.display()))?;
         std::fs::create_dir_all(&mini_root)
@@ -841,6 +907,266 @@ class UItMw_1H_Sword_Old_01 : USword1H {
             field: field.into(),
             tag: tag.map(str::to_string),
             value,
+        }
+    }
+
+    fn value_preflight_fixture() -> (tempfile::TempDir, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let script = game.join("G1R/Script");
+        std::fs::create_dir_all(&script).unwrap();
+        std::fs::write(script.join("keep.as"), b"do not change").unwrap();
+        (root, game)
+    }
+
+    fn fixture_snapshot(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+        fn visit(root: &Path, path: &Path, entries: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
+            let metadata = std::fs::symlink_metadata(path).unwrap();
+            let linked = metadata.file_type().is_symlink() || metadata_is_reparse_cli(&metadata);
+            let bytes = if metadata.is_file() && !linked {
+                Some(std::fs::read(path).unwrap())
+            } else {
+                None
+            };
+            entries.insert(path.strip_prefix(root).unwrap().to_path_buf(), bytes);
+            if metadata.is_dir() && !linked {
+                for entry in std::fs::read_dir(path).unwrap() {
+                    visit(root, &entry.unwrap().path(), entries);
+                }
+            }
+        }
+        let mut entries = BTreeMap::new();
+        visit(root, root, &mut entries);
+        entries
+    }
+
+    fn assert_value_preflight_error(
+        root: &Path,
+        game: &Path,
+        work: &Path,
+        out: &Path,
+        expected: &str,
+    ) {
+        let requested = edit("UItFo_Apple", "m_Value", None, ValueLiteral::Int(500));
+        assert_ne!(apply_edits(SOURCE, &[&requested]).unwrap(), SOURCE);
+        let before = fixture_snapshot(root);
+        // An absent cache makes this independent of shipped data and proves preflight order.
+        let error = compile_values_into_scripts(
+            game,
+            work,
+            &root.join("absent.cache"),
+            &[requested],
+            out,
+            &[],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains(expected),
+            "expected {expected:?}, got {error}"
+        );
+        assert_eq!(
+            fixture_snapshot(root),
+            before,
+            "preflight changed the fixture"
+        );
+    }
+
+    #[test]
+    fn compile_values_refuses_game_scratch_before_cache_or_writes() {
+        let (root, game) = value_preflight_fixture();
+        for work in [
+            game.clone(),
+            game.join("G1R/Script"),
+            game.join("G1R/Script/missing/nested"),
+        ] {
+            assert_value_preflight_error(
+                root.path(),
+                &game,
+                &work,
+                &root.path().join("out/.value-minis"),
+                "compiler workspace must be outside the game installation",
+            );
+        }
+    }
+
+    #[test]
+    fn compile_values_refuses_game_output_before_cache_or_writes() {
+        let (root, game) = value_preflight_fixture();
+        for out in [
+            game.clone(),
+            game.join("G1R/Script"),
+            game.join("out/.value-minis"),
+        ] {
+            assert_value_preflight_error(
+                root.path(),
+                &game,
+                &root.path().join("missing-work/nested"),
+                &out,
+                "value mini-cache directory must be outside the game installation",
+            );
+        }
+    }
+
+    #[test]
+    fn compile_values_accepts_existing_and_missing_external_directories() {
+        let (root, game) = value_preflight_fixture();
+        let existing = root.path().join("existing");
+        std::fs::create_dir(&existing).unwrap();
+        for work in [
+            existing.clone(),
+            existing.join("missing/nested"),
+            root.path().join("new/work"),
+            root.path().to_path_buf(),
+        ] {
+            for out in [
+                existing.clone(),
+                existing.join("out/.value-minis"),
+                root.path().join("new-out/minis"),
+                root.path().to_path_buf(),
+            ] {
+                assert_value_preflight_error(root.path(), &game, &work, &out, "AS_CACHE_INPUT");
+            }
+        }
+    }
+
+    #[test]
+    fn compile_values_refuses_non_directory_ancestors() {
+        let (root, game) = value_preflight_fixture();
+        let file = root.path().join("file");
+        std::fs::write(&file, b"keep").unwrap();
+        let safe = root.path().join("safe");
+        for (work, out) in [(&file, &safe), (&safe, &file)] {
+            assert_value_preflight_error(root.path(), &game, work, out, "non-reparse directory");
+        }
+    }
+
+    #[test]
+    fn compile_values_refuses_dot_and_parent_game_aliases() {
+        let (root, game) = value_preflight_fixture();
+        let existing = root.path().join("existing");
+        std::fs::create_dir(&existing).unwrap();
+        for alias in [
+            existing.join("../game"),
+            root.path().join("missing/../game"),
+            root.path().join("./game"),
+            game.join("missing/.."),
+        ] {
+            let safe = root.path().join("safe");
+            for (work, out) in [(&alias, &safe), (&safe, &alias)] {
+                assert_value_preflight_error(
+                    root.path(),
+                    &game,
+                    work,
+                    out,
+                    "outside the game installation",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compile_values_normalizes_harmless_dot_and_parent_spellings() {
+        let (root, game) = value_preflight_fixture();
+        let existing = root.path().join("existing");
+        std::fs::create_dir(&existing).unwrap();
+        let root_real = root.path().canonicalize().unwrap();
+        for (path, expected) in [
+            (existing.join("."), root_real.join("existing")),
+            (existing.join("../work"), root_real.join("work")),
+            (root.path().join("missing/../work"), root_real.join("work")),
+            (
+                root.path().join("missing/../existing"),
+                root_real.join("existing"),
+            ),
+            (
+                root.path().join("./missing/../out/minis"),
+                root_real.join("out/minis"),
+            ),
+        ] {
+            let (work, out) = preflight_value_compile_directories(&game, &path, &path).unwrap();
+            assert_eq!(work, expected);
+            assert_eq!(out, expected);
+            assert_value_preflight_error(root.path(), &game, &path, &path, "AS_CACHE_INPUT");
+        }
+        // Relative caller spellings remain accepted without changing process-wide cwd.
+        for path in [Path::new("."), Path::new("../work")] {
+            let before = fixture_snapshot(root.path());
+            let (work, out) = preflight_value_compile_directories(&game, path, path).unwrap();
+            assert_eq!(
+                work,
+                super::super::modcmd::canonical_destination(path).unwrap()
+            );
+            assert_eq!(out, work);
+            assert_eq!(fixture_snapshot(root.path()), before);
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn compile_values_refuses_existing_and_nested_directory_aliases() {
+        let (root, game) = value_preflight_fixture();
+        let external = root.path().join("external");
+        std::fs::create_dir_all(external.join("existing")).unwrap();
+        for (name, target) in [("game-alias", &game), ("external-alias", &external)] {
+            let alias = root.path().join(name);
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, &alias).unwrap();
+            #[cfg(windows)]
+            {
+                let output = std::process::Command::new("cmd")
+                    .args(["/c", "mklink", "/J"])
+                    .arg(&alias)
+                    .arg(target)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "creating junction fixture: {output:?}"
+                );
+            }
+            let existing_child = if target == &game {
+                "G1R/Script"
+            } else {
+                "existing"
+            };
+            for path in [
+                alias.clone(),
+                alias.join(existing_child),
+                alias.join("missing/nested"),
+                root.path().join("missing/..").join(name),
+                root.path().join("missing/..").join(name).join(existing_child),
+            ] {
+                let safe = root.path().join("safe");
+                for (work, out) in [(&path, &safe), (&safe, &path)] {
+                    assert_value_preflight_error(
+                        root.path(),
+                        &game,
+                        work,
+                        out,
+                        "non-reparse directory",
+                    );
+                }
+            }
+            #[cfg(unix)]
+            std::fs::remove_file(&alias).unwrap();
+            #[cfg(windows)]
+            std::fs::remove_dir(&alias).unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn compile_values_refuses_case_and_verbatim_game_aliases() {
+        let (root, game) = value_preflight_fixture();
+        for alias in [root.path().join("GAME"), game.canonicalize().unwrap()] {
+            assert_value_preflight_error(
+                root.path(),
+                &game,
+                &alias.join("missing/nested"),
+                &root.path().join("out"),
+                "compiler workspace must be outside the game installation",
+            );
         }
     }
 

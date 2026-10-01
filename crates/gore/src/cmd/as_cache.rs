@@ -3047,13 +3047,13 @@ fn audit_full_graph_inputs(
 }
 
 #[cfg(windows)]
-fn metadata_is_reparse_cli(metadata: &std::fs::Metadata) -> bool {
+pub(super) fn metadata_is_reparse_cli(metadata: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
     metadata.file_attributes() & 0x400 != 0
 }
 
 #[cfg(not(windows))]
-fn metadata_is_reparse_cli(_: &std::fs::Metadata) -> bool {
+pub(super) fn metadata_is_reparse_cli(_: &std::fs::Metadata) -> bool {
     false
 }
 
