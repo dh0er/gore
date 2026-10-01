@@ -501,6 +501,34 @@ mod tests {
     }
 
     #[test]
+    fn sparse_compile_is_an_optional_boolean_in_direct_and_legacy_schemas() {
+        let definition = tool("gore_as_compile");
+        let schema = &definition["inputSchema"];
+        let direct = &schema["properties"]["overlays"];
+        let legacy = &schema["properties"]["args"]["properties"]["overlays"];
+        assert_eq!(direct["type"], "boolean");
+        assert_eq!(direct, legacy);
+        assert!(!schema["anyOf"][0]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("overlays")));
+        assert!(!schema["properties"]["args"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("overlays")));
+
+        // Mixed namespaces advertise per-command arguments in their descriptions and validate
+        // them through argv rather than presenting client-dependent conditional schemas.
+        let mixed = tool("gore_as");
+        let description = mixed["description"].as_str().unwrap();
+        assert!(description.contains("overlays <boolean>"));
+        assert!(description.contains("explicitly select standalone"));
+        assert!(tool("gore_as_compile_module")["inputSchema"]["properties"]
+            .get("overlays")
+            .is_none());
+    }
+
+    #[test]
     fn the_schema_offers_an_approval_field_and_binds_how_it_may_be_used() {
         // The field is the only route past the gate in a client whose dialog reaches nobody, so it
         // has to be reachable — `additionalProperties: false` would otherwise reject it — and its

@@ -13853,7 +13853,16 @@ mod tests {
     fn full_graph_publishes_only_validated_add_edit_changes_on_the_sealed_base() {
         let root = unique_test_root("full-graph-retained");
         std::fs::create_dir_all(root.join("game")).unwrap();
-        let opts = full_graph_opts(&root);
+        let mut opts = full_graph_opts(&root);
+        let overlays = root.join("overlays");
+        std::fs::create_dir(&overlays).unwrap();
+        for change in &opts.changes {
+            std::fs::write(overlays.join(&change.relative_path), change.source.as_ref().unwrap()).unwrap();
+        }
+        let planned = crate::full_graph_plan::plan_source_overlays_v1(&opts.base_cache, &overlays).unwrap();
+        (opts.changes, opts.final_manifest) = planned.into_parts();
+        // The public planner owns an immutable snapshot; the backend must not reopen the inputs.
+        std::fs::remove_dir_all(&overlays).unwrap();
         let mut expected_output = cache_with_empty_modules(&[
             ("Keep", "Keep.as"),
             ("EditMe", "EditMe.as"),

@@ -491,13 +491,15 @@ shapes that the current pipeline cannot produce safely.
   while shipped accurate facials live as separate cooked `FA_<text-id>` assets
   in language-specific `G1R_DialogFacials_*` containers. GORE does not yet
   author or package that animation asset path.
-- Packaging a normal deployable mini-cache dialog whose new symbol dependency
-  comes from another script module. The same content works through the proven
-  selective complete-cache path, but not as two small independently composable
-  minis.
-- Deleting an existing module through the complete source tree. Missing base
-  source requests Delete and fails closed because safe tail pruning and proof
-  that retained modules no longer reference it are not available.
+- Supplying new cross-module symbols through separate, independently composed
+  mini-caches. Compile coordinated Add/Edit modules together with
+  `gore as compile <authored-dir> --overlays --backend standalone --mini <path>`
+  and package that single multi-module mini instead. Module-private roots still
+  have to stay in their owning conversation module.
+- Deleting an existing module. In complete-tree mode, a missing base source
+  requests Delete and fails closed because safe tail pruning and proof that
+  retained modules no longer reference it are not available. Overlay mode
+  retains absent original modules; it never requests deletion.
 - Selectively composing a dependency cycle among newly added modules. An
   acyclic provider-to-consumer chain is supported; a cycle cannot be seeded
   safely and is rejected.
@@ -607,13 +609,14 @@ shapes that the current pipeline cannot produce safely.
   the pristine base; neither becomes authority for the other. Full-graph V2
   instead submits the complete sealed base graph and coordinated Add/Edit
   changes to one standalone compile, so visible cross-module references can be
-  resolved together. The raw regenerated cache is retained only as dependency
-  evidence. Publication starts from the exact pristine cache and selectively
-  remaps and composes the declared Add/Edit modules in dependency order;
-  untouched modules and all pre-existing global-tail records remain byte-exact,
-  while records required by new symbols may be appended. Missing base source
-  requests Delete and is rejected until safe tail pruning and retained-reference
-  proof exist. Cyclic dependencies among new modules likewise fail closed.
+  resolved together. `--overlays --backend standalone` supplies only authored
+  modules and reads unchanged dependencies from the pristine cache without
+  exporting or comparing their sources. Publication starts from that exact
+  pristine cache and selectively remaps and composes the declared Add/Edit
+  modules in dependency order; untouched modules and all pre-existing global-tail
+  records remain byte-exact, while records required by new symbols may be appended.
+  A missing base source requests unsupported Delete only in complete-tree mode;
+  overlay mode retains it. Cyclic dependencies among new modules fail closed.
   An earlier raw output had 10,782 semantic deviations, including 81 in Diego.
   Mod Manager nevertheless installed that exact raw cache manually
   (`62A2106966A06910376ABDF956FF7DFA83F0F366A91514EB1B3D51F227800CD9`) and
@@ -629,9 +632,11 @@ shapes that the current pipeline cannot produce safely.
   Its current selective output booted and loaded gameplay, rendered and selected
   the new same-module root, and executed a new provider call across modules from
   an edited shipped automatic topic; the provider line played and control
-  returned. The ordinary bundle composer still consumes independently
-  base-bound module mini-caches, so this complete-cache proof does not become a
-  normal cross-module dialog mini-patch.
+  returned. `--mini <path>` additionally publishes coordinated Add/Edit modules
+  as one multi-module mini-cache that bundles and Manager compose as one unit.
+  This does not make separate dependent minis composable. The complete-cache
+  observations above retain their original evidence scope; see the separate
+  [multi-module mini campaign](../guide/scripts.md#multi-module-mini-caches).
 - A new root appended to Diego's shipped conversation module was discovered,
   rendered and selected natively with no adapter insertion, including one run
   with the UE4SS proxy absent. A same-module sub-topic instead uses authored

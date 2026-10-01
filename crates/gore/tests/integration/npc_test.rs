@@ -263,6 +263,89 @@ fn sites_refuses_a_game_path_that_holds_no_script_cache() {
 }
 
 #[test]
+fn stage_rejects_obsolete_tree_argument_before_reading_or_writing_a_workspace() {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("workspace");
+    let tree = tmp.path().join("existing-tree");
+    std::fs::create_dir(&tree).unwrap();
+    std::fs::write(tree.join("Keep.as"), "hand-authored source").unwrap();
+    gore()
+        .args(["npc", "stage"])
+        .arg(&workspace)
+        .arg("--tree")
+        .arg(&tree)
+        .assert()
+        .failure()
+        .stderr(contains("--tree is obsolete"))
+        .stderr(contains("omit it"));
+    assert!(!workspace.exists());
+    assert_eq!(std::fs::read_dir(&tree).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read_to_string(tree.join("Keep.as")).unwrap(),
+        "hand-authored source"
+    );
+}
+
+#[test]
+fn new_npc_stage_without_a_tree_reaches_cache_guards_without_publishing_artifacts() {
+    use sha2::{Digest, Sha256};
+    let tmp = TempDir::new().unwrap();
+    let game = tmp.path().join("game");
+    let cache = gore_mod::resolve_game_paths(&game).script_cache;
+    std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    let invalid_cache = b"not an AngelScript module cache";
+    std::fs::write(&cache, invalid_cache).unwrap();
+    let dir = tmp.path().join("workspace");
+    std::fs::create_dir_all(dir.join("pristine")).unwrap();
+    std::fs::write(
+        dir.join("MINE.as"),
+        "class UCharacterDefinition_Human_MINE {}\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("Test.as"), "class UWP_TEST {}\n").unwrap();
+    std::fs::write(dir.join("pristine/Test.as"), "class UWP_TEST {}\n").unwrap();
+    let mut manifest = serde_json::json!({
+        "operation": "new", "npc_id": "MINE", "derived_from": "OC_STT_Diego",
+        "modules": [
+            {"module": "AI.AIAgent.Human.Config.MINE.MINE",
+             "relative_path": "AI/AIAgent/Human/Config/MINE/MINE.as",
+             "source_file": "MINE.as", "pristine_file": null, "op": "add"},
+            {"module": "LevelScripts.Test", "relative_path": "LevelScripts/Test.as",
+             "source_file": "Test.as", "pristine_file": "pristine/Test.as", "op": "edit"}
+        ],
+        "world_points": ["UWP_TEST"], "level_module": "LevelScripts.Test",
+        "cache_sha256": "a".repeat(64), "modular_visuals": false
+    });
+    let command = || {
+        let mut cmd = gore();
+        cmd.args(["npc", "stage"])
+            .arg(&dir)
+            .arg("--game")
+            .arg(&game)
+            .env("GORE_DISABLE_GAME_AUTODETECT", "1");
+        cmd
+    };
+    for (digest, error) in [
+        ("a".repeat(64), "not the cache"),
+        (
+            format!("{:x}", Sha256::digest(invalid_cache)),
+            "not an AngelScript module cache",
+        ),
+    ] {
+        manifest["cache_sha256"] = digest.into();
+        std::fs::write(
+            dir.join("gore-npc-edit.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        command().assert().failure().stderr(contains(error));
+        assert!(!dir.join("spec.json").exists());
+        assert!(!tmp.path().join("workspace.work").exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 4);
+    }
+}
+
+#[test]
 fn stage_refuses_mismatched_or_unparseable_cache_before_writing_commands() {
     let tmp = TempDir::new().unwrap();
     let game = tmp.path().join("game");

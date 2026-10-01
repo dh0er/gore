@@ -34,12 +34,18 @@ use super::super::model::parse_modules;
 use super::super::refs::RefResolver;
 use super::graph::DialogError;
 
-/// Native parents admitted for a completely authored conversation module.
+/// Native parents admitted for conversation topics and their quest journal segments.
 ///
 /// These are intentionally not treated as general cache types. The verifier admits them only as
 /// the direct parent of a newly declared class, and only when the target cache itself contains a
-/// shipped class with that exact direct parent. Every other native parent remains fail-closed.
-const NATIVE_CONVERSATION_BASES: [&str; 2] = ["UConversationCharacterSettings", "UG1RDialogTopic"];
+/// shipped class with that exact direct parent. `UDocumentSegment` is the native parent used by
+/// the documented quest journal recipe; its document and quest parents are already script types
+/// in the cache. Every other native parent remains fail-closed.
+const NATIVE_CONVERSATION_BASES: [&str; 3] = [
+    "UConversationCharacterSettings",
+    "UG1RDialogTopic",
+    "UDocumentSegment",
+];
 
 /// One shipped module, taken out for editing.
 #[derive(Debug, Clone, PartialEq)]
@@ -926,8 +932,10 @@ impl Violation {
                 "the authored source declares free function `{declaration}` {found} times; at most {expected} occurrence(s) are allowed by the pristine module"
             ),
             Violation::UnknownType { name } => format!(
-                "{name} is neither a type from the base cache nor a class declared by this \
-                 overlay, so the compiler cannot resolve it"
+                "{name} is not recognized by the bounded dialog overlay checker: it is not a \
+                 known base-cache type, an admitted native parent, or a class declared by this \
+                 overlay. This checker does not cover every native Binds type; use the script \
+                 authoring route and compiler diagnostics to establish whether it resolves"
             ),
             Violation::ExistingTypeCollision { name, existing } => format!(
                 "new class {name} collides with existing cache type {existing} under \
@@ -2035,6 +2043,104 @@ class UChoiceTestChild : UTopic_Hero__TEST_NPC
         );
         assert_eq!(report.new_strings, ["TEST_CHILD", "TEST_START"]);
         assert!(report.requires_new_symbols());
+    }
+
+    #[test]
+    fn a_new_topic_can_author_quest_journal_document_segments_in_its_module() {
+        let edited = format!(
+            r#"{PRISTINE}
+class UChoiceJournalQuest : UTopic_Hero__NPC
+{{
+    default Caption = LocText("QUEST_PROMPT");
+    UFUNCTION(BlueprintOverride)
+    void Act()
+    {{
+        this.EndConversation();
+    }}
+}}
+namespace G1R::Document
+{{
+class UDocument_JournalQuest : UQuestLogDocument {{}}
+class UDocumentSegment_JournalQuestStart : UDocumentSegment
+{{
+    default InDocument = UDocument_JournalQuest;
+    UFUNCTION(BlueprintOverride)
+    void BuildSegment(const AGothicCharacterState Reader)
+    {{
+        this.AddParagraph(LocText("QUEST_START"));
+    }}
+}}
+class UDocumentSegment_JournalQuestComplete : UDocumentSegment
+{{
+    default InDocument = UDocument_JournalQuest;
+    UFUNCTION(BlueprintOverride)
+    void BuildSegment(const AGothicCharacterState Reader)
+    {{
+        this.AddParagraph(LocText("QUEST_COMPLETE"));
+    }}
+}}
+}}
+"#
+        );
+        let mut names = known();
+        names.types.insert("UQuestLogDocument".to_owned());
+        let report = verify(&checkout(PRISTINE), &edited, &names);
+        assert!(report.is_carryable(), "{:?}", report.violations);
+        assert_eq!(
+            report.added_classes,
+            [
+                "UChoiceJournalQuest",
+                "UDocumentSegment_JournalQuestComplete",
+                "UDocumentSegment_JournalQuestStart",
+                "UDocument_JournalQuest",
+            ]
+        );
+        assert_eq!(
+            report.new_strings,
+            ["QUEST_COMPLETE", "QUEST_PROMPT", "QUEST_START"]
+        );
+        assert!(report.requires_new_symbols());
+        assert!(report.changed_defaults.is_empty());
+
+        names.native_conversation_bases.remove("UDocumentSegment");
+        let unproven = verify(&checkout(PRISTINE), &edited, &names);
+        assert!(!unproven.is_carryable());
+        assert!(unproven.violations.contains(&Violation::UnknownType {
+            name: "UDocumentSegment".to_owned(),
+        }));
+    }
+
+    #[test]
+    fn document_segment_admission_does_not_allow_structs_static_uses_or_collisions() {
+        let names = known();
+        for source in [
+            "struct UFakeSegment : UDocumentSegment {}",
+            "class UFakeSegment : ::UDocumentSegment {}",
+            "class UFakeSegment : G1R::UDocumentSegment {}",
+            "class UFakeSegment : UChoiceOne { void Act() { UDocumentSegment::StaticClass(); } }",
+        ] {
+            let edited = format!("{PRISTINE}\n{source}");
+            let report = verify(&checkout(PRISTINE), &edited, &names);
+            assert!(!report.is_carryable(), "accepted {source}");
+            assert!(
+                report.violations.iter().any(|violation| matches!(
+                    violation,
+                    Violation::UnknownType { name } if name.ends_with("UDocumentSegment")
+                )),
+                "{source}: {:?}",
+                report.violations
+            );
+        }
+
+        let edited = format!("{PRISTINE}\nclass udocumentsegment : UChoiceOne {{}}");
+        let report = verify(&checkout(PRISTINE), &edited, &names);
+        assert!(!report.is_carryable());
+        assert!(report
+            .violations
+            .contains(&Violation::ExistingTypeCollision {
+                name: "udocumentsegment".to_owned(),
+                existing: "UDocumentSegment".to_owned(),
+            }));
     }
 
     #[test]

@@ -115,13 +115,14 @@ fn serve_resolved(flags: ServeOptions) -> Result<()> {
         );
     }
 
-    let mut opts = gore_mcp::Options::new(resolve_self()?, env!("CARGO_PKG_VERSION"));
+    let mut opts = gore_mcp::Options::new(resolve_self()?, crate::product_build::VERSION);
     opts.allow_write = flags.allow_write;
     opts.allow_game_launch = flags.allow_game_launch;
     opts.allow_force = flags.allow_force;
     opts.never_ask = flags.no_consent_prompts;
     opts.timeout_override_secs = flags.timeout_secs;
     opts.max_stdout_bytes = stdout_cap_bytes(flags.max_output_kib);
+    opts.startup_diagnostics = Some(super::doctor::compiler_startup_summary());
 
     let stdin = io::stdin();
     let stdout = io::stdout();

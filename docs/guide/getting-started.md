@@ -14,8 +14,11 @@ Two ways to get `gore.exe`:
 
 **Download a release.** Grab a `gore-cli-v*` asset from the
 [releases page](https://github.com/dh0er/gore/releases). The zip contains
-`gore.exe` and this whole guide under `docs\` — so the
-documentation is available offline, right next to the binary.
+`gore.exe`, its required `compiler\` tree, and this whole guide under
+`docs\` — so the compiler and documentation are available offline, right next
+to the binary. Unpack the complete zip into a stable directory such as
+`C:\Tools\gore-cli`, add that directory to `PATH`, and keep all companion files
+together when installing or updating.
 
 To read it offline, open `docs\guide.html`: one browsable file with every page,
 a collapsible sidebar and a filter box. The `docs\*.md` files next to it are the
@@ -24,15 +27,24 @@ too, but from a copy compiled into `gore.exe` rather than from these files —
 editing them changes what you read, not what an assistant is told. You can
 regenerate the HTML at any time with `gore guide html`.
 
-**Build it yourself.** Requires a stable Rust toolchain:
+**Build it yourself.** Requires Python 3, a stable Rust toolchain, and the
+Visual Studio C++ tools; see [Building](../development.md) for the full
+toolchain requirements. From the repository root:
 
 ```powershell
-cargo build --release -p gore
-# → target\release\gore.exe
+python build.py gore-cli dist             # recommended installable zip → dist\gore-cli\
+python build.py gore-cli build --release  # CLI + compiler → target\release\
 ```
 
-See [Building](../development.md) for the full toolchain requirements and the
-`build.py` orchestrator that also builds the GUI apps.
+For installation, unpack the complete zip as described above; `dist` includes
+the compiler and offline guide. Keep the complete output together, including
+`compiler\` and `docs\`, rather than copying only `gore.exe`.
+
+Normal CLI builds require a nonempty embedded compiler catalog prepared by
+`build.py`. Raw `cargo build -p gore` without it fails. The explicit debug-only
+`development-cli` feature is for development and tests; see
+[Building](../development.md#the-rust-workspace). It cannot bypass the catalog
+requirement in release builds.
 
 GORE is Windows-only. Every example in this documentation is PowerShell, assumes
 `gore` is on your `PATH`, and uses the variable `$GAME` for your install root —
@@ -112,7 +124,11 @@ counts.
 Nothing here writes, creates or removes anything. The `deployment` check hashes
 the files the deploy record claims, exactly as `gore mgr status` does. The
 standalone-compiler check separately authenticates its package and verifies that
-the installed compiler inputs match a qualified cache/API.
+the installed compiler inputs match a qualified cache/API. It also reports
+`native_api: ready` or `native_api: missing` for extended native reference
+authority. Missing authority is an actionable problem even when the compiler
+itself is compatible; ordinary references already present in the pristine
+cache may still work.
 
 What each check reads — and therefore what it can and cannot prove — is in the
 [CLI reference](cli-reference.md#doctor).
@@ -190,16 +206,18 @@ gore npc new GORE_OC_WIESEL --from OC_STT_Diego --guild OldCamp_Shadow `
   --at <POINT_FROM_THE_LIST> --waypoint FP_OC_SMALLTALK_33 -o work/wiesel
 gore npc text GORE_OC_WIESEL --name "Wiesel" -o work/wiesel-name.json
 gore npc check work/wiesel
-gore npc stage work/wiesel --tree work/npc-tree
+gore npc stage work/wiesel
 ```
 
 `levels` lists the available level-script modules. `--at` must be a world point
 `npc sites` printed. An unknown name is refused.
 The listing shows 50 points by default; increase `--max` to see more. `--free`
 avoids placing Wiesel on top of an existing character. `FP_OC_SMALLTALK_33` is
-only the daily spot, not the spawn. `stage` needs a source tree for a new NPC;
-the first run creates it and prints the compile command. Run that, then the
-bundle commands it prints. The name file is a separate localization edit; add
+only the daily spot, not the spawn. `stage` snapshots only the checked NPC and
+level modules and prints a `compile --overlays --backend standalone` command
+with base and source hash guards. Run it, then the printed bundle command.
+No full-tree export is needed; the obsolete `--tree` option is rejected.
+The name file is a separate localization edit; add
 it to the bundle's `loc_edits` if you want Wiesel's name displayed. To inspect
 Diego's own sites, use `gore npc show OC_STT_Diego` or
 `gore npc sites --npc OC_STT_Diego`. The character guide has the contract:

@@ -172,6 +172,10 @@ fn initialize_negotiates_and_identifies_the_server() {
         "serverInfo.version should report the gore CLI version"
     );
     assert!(result["capabilities"].get("tools").is_some());
+    let instructions = result["instructions"].as_str().unwrap();
+    assert!(instructions.contains("COMPILER READINESS AT SERVER START"));
+    assert!(instructions.contains("standalone_compiler: skipped"), "{instructions}");
+    assert!(instructions.contains("no game could be resolved"), "{instructions}");
     assert!(
         result["instructions"]
             .as_str()

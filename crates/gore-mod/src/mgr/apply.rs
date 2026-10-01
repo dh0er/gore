@@ -1439,10 +1439,18 @@ fn apply_loadout_with_limits(
                 None => read_pristine_for_patch(&gp.script_cache, prior, limits, &mut budget)?,
             };
         plan.bind_backup_identity(&gp.script_cache, pristine_source.basis)?;
+        // Authenticate the actual selected base, including any raw replacement, once. Reuse this
+        // exact evidence across all passes so a changed or unknown base gains no native authority.
+        let binds = crate::qualified_native_binds_for_base(&gp.script_cache, &base);
         // Pass 1 inventories the complete loadout while retaining only one source mini at a time.
         // Canonical assignments therefore depend on the portable-identity union, never mod order.
-        let mut loadout_builder = gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new(&base)
-            .map_err(|e| ModError::Other(format!("prepare script composition: {e}")))?;
+        let mut loadout_builder = match binds.as_deref() {
+            Some(binds) => {
+                gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new_with_binds(&base, binds)
+            }
+            None => gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new(&base),
+        }
+        .map_err(|e| ModError::Other(format!("prepare script composition: {e}")))?;
         for (_, module, mini_payload) in &scripts {
             let mini = read_pending_payload(
                 mini_payload,
@@ -1497,7 +1505,6 @@ fn apply_loadout_with_limits(
 
         // Pass 3 builds the guard only after the plan's large base context is gone. Reopen, verify,
         // and compose each tempfile in loadout order; consuming it cleans disk incrementally.
-        let binds = crate::qualified_native_binds_for_base(&gp.script_cache, &base);
         let mut merge_guard = gore_as::cache::splice::SequentialMiniGuard::new_with_binds(
             &base,
             binds.as_deref().unwrap_or(&[]),

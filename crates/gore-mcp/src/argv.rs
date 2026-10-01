@@ -2406,6 +2406,87 @@ mod tests {
     }
 
     #[test]
+    fn sparse_compile_forwards_the_switch_and_scope_guards_on_both_routes() {
+        let base_hash = format!("sha256:{}", "a".repeat(64));
+        let edit = format!("edit:Story.Dialog:Story/Dialog.as:{}", "b".repeat(64));
+        let add = format!("add:MyMod.Provider:MyMod/Provider.as:{}", "c".repeat(64));
+        for tool in ["gore_as", "gore_as_compile"] {
+            let mut args = json!({
+                "src": "authored-overlays",
+                "overlays": true,
+                "out": "fresh-full.Cache",
+                "mini": "fresh-mod.mini.Cache",
+                "work_dir": "compiler-work-overlays",
+                "game": "G",
+                "expect_base_sha256": base_hash,
+                "only_changes": [edit, add],
+            });
+            if tool == "gore_as" {
+                args["backend"] = json!("standalone");
+            }
+            let invocation = build_with(tool, "compile", args, &options()).unwrap();
+            assert!(invocation.consent.is_none(), "{tool} asked for consent");
+            assert!(!invocation.may_launch_game);
+            let argv: Vec<_> = invocation
+                .argv
+                .iter()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(argv.iter().filter(|arg| *arg == "--overlays").count(), 1);
+            assert_eq!(argv.iter().filter(|arg| *arg == "--backend").count(), 1);
+            for pair in [
+                ["--backend", "standalone"],
+                ["--mini", "fresh-mod.mini.Cache"],
+                ["--expect-base-sha256", base_hash.as_str()],
+                ["--only-change", edit.as_str()],
+                ["--only-change", add.as_str()],
+                ["--", "authored-overlays"],
+            ] {
+                assert!(argv.windows(2).any(|actual| actual == pair), "{argv:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn compile_keeps_complete_tree_behavior_unless_overlays_is_true() {
+        for tool in ["gore_as", "gore_as_compile"] {
+            for overlays in [None, Some(json!(false))] {
+                let mut args = compile_args();
+                if let Some(overlays) = overlays {
+                    args["overlays"] = overlays;
+                }
+                if tool == "gore_as" {
+                    args["backend"] = json!("standalone");
+                }
+                let invocation = build_with(tool, "compile", args, &options()).unwrap();
+                assert!(!invocation.argv.iter().any(|arg| arg == "--overlays"));
+            }
+            let mut args = compile_args();
+            args["overlays"] = json!("true");
+            assert!(matches!(
+                build_with(tool, "compile", args, &options()),
+                Err(BuildError::WrongType {
+                    name: "overlays",
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn dedicated_sparse_compile_does_not_accept_a_game_backend_override() {
+        for backend in ["game", "standalone-then-game"] {
+            let mut args = compile_args();
+            args["overlays"] = json!(true);
+            args["backend"] = json!(backend);
+            assert!(matches!(
+                build_with("gore_as_compile", "compile", args, &permissive()),
+                Err(BuildError::UnknownArgument { given, .. }) if given == "backend"
+            ));
+        }
+    }
+
+    #[test]
     fn standalone_module_outputs_inside_the_game_keep_install_consent() {
         let mixed = json!({
             "op": "add",
@@ -2787,20 +2868,55 @@ mod tests {
     }
 
     #[test]
-    fn npc_stage_treats_the_emitted_tree_as_an_installation_output() {
+    fn npc_stage_forwards_obsolete_tree_without_claiming_it_as_an_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let game = temp.path().join("G1R");
+        let work = temp.path().join("npc-work");
+        let obsolete_tree = game.join("npc-tree");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&work).unwrap();
+        let args = json!({
+            "dir": work.to_string_lossy(),
+            "tree": obsolete_tree.to_string_lossy(),
+            "game": game.to_string_lossy()
+        });
+        let invocation = build_with("gore_npc", "stage", args, &options()).unwrap();
+        // The CLI refuses --tree before writing. Keep the argument so that rejection reaches
+        // old clients, but do not ask permission for a tree that stage never writes anymore.
+        assert!(invocation.consent.is_none());
+        assert!(!invocation.may_launch_game);
+        assert!(invocation
+            .argv
+            .windows(2)
+            .any(|pair| pair[0] == "--tree" && pair[1] == obsolete_tree.as_os_str()));
+    }
+
+    #[test]
+    fn npc_stage_protects_its_workspace_outputs_without_a_tree_argument() {
         let temp = tempfile::tempdir().unwrap();
         let game = temp.path().join("G1R");
         let work = temp.path().join("npc-work");
         std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&work).unwrap();
         let args = json!({
             "dir": work.to_string_lossy(),
-            "tree": game.join("npc-tree").to_string_lossy(),
             "game": game.to_string_lossy()
         });
+        assert!(question("gore_npc", "stage", args.clone(), &options()).is_none());
+        std::fs::write(work.join("spec.json"), b"existing spec").unwrap();
         assert!(asks_about_a_write(question(
             "gore_npc",
             "stage",
             args,
+            &options()
+        )));
+        assert!(asks_about_a_write(question(
+            "gore_npc",
+            "stage",
+            json!({
+                "dir": game.join("npc-work").to_string_lossy(),
+                "game": game.to_string_lossy()
+            }),
             &options()
         )));
     }
@@ -2823,7 +2939,6 @@ mod tests {
         ] {
             let args = json!({
                 "dir": dir,
-                "tree": outside.join("tree").to_string_lossy(),
                 "game": game.to_string_lossy()
             });
             assert!(asks_about_a_write(question(

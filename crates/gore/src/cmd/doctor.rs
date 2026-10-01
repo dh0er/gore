@@ -228,6 +228,39 @@ pub fn run(game: Option<PathBuf>, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Read-only compiler readiness included in the MCP initialize response, before any tool call.
+/// Keep this to the compile inputs; opening a connection need not scan unrelated mods/catalogs.
+pub(super) fn compiler_startup_summary() -> String {
+    let root = match gore_loc::config::game_root(None) {
+        Ok(root) => root,
+        Err(error) => {
+            return format!(
+                "standalone_compiler: skipped; no game could be resolved: {error}. Run gore_doctor before script authoring."
+            );
+        }
+    };
+    let check = check_standalone_compiler(&gore_mod::resolve_game_paths(&root));
+    compiler_startup_summary_for_check(&root, &check)
+}
+
+fn compiler_startup_summary_for_check(root: &Path, check: &Check) -> String {
+    let mut summary = format!(
+        "Game: {}\nstandalone_compiler: {} — {}",
+        root.display(),
+        check.verdict.label(),
+        check.detail
+    );
+    for item in &check.items {
+        summary.push('\n');
+        summary.push_str(item);
+    }
+    if let Some(fix) = &check.fix {
+        summary.push_str("\nNext: ");
+        summary.push_str(fix);
+    }
+    summary
+}
+
 /// Run every check. Ordered the way somebody debugs: where is the game, is it the right game, can
 /// anything run a mod at all, what is deployed, what is left over, what is in the way.
 fn collect(explicit: Option<&Path>) -> Report {
@@ -672,17 +705,18 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
         }
         Err(error) => return unreadable(error),
     };
-    let mods_present =
-        match occupant(mods, Wanted::Folder) {
-            Ok(Occupant::Wanted) => true,
-            Ok(Occupant::Absent) => false,
-            Ok(Occupant::Obstruction) => return obstructed(
+    let mods_present = match occupant(mods, Wanted::Folder) {
+        Ok(Occupant::Wanted) => true,
+        Ok(Occupant::Absent) => false,
+        Ok(Occupant::Obstruction) => {
+            return obstructed(
                 mods,
                 Wanted::Folder,
                 "'gore mod deploy' creates that folder, and it",
-            ),
-            Err(error) => return unreadable(error),
-        };
+            )
+        }
+        Err(error) => return unreadable(error),
+    };
     // UE4SS.dll is the payload; something has to load it. The game imports a proxy DLL, and the one
     // this toolkit knows is `dwmapi.dll` beside the executable — `gore-as` moves that exact file
     // aside for a regen, so its name is not a guess. Without it the payload sits there unloaded and
@@ -1912,13 +1946,9 @@ fn check_game_process(probe: &InstallCompileStateProbe) -> Check {
 /// beside this executable and matches the physical EXE/Shipping/Binds inputs by compiler
 /// compatibility rather than by a whole game-executable checksum. It does not launch the sidecar,
 /// create a work directory, take the install-mutation lock, or modify the installation.
+/// Native reference admission has a separate exact authority check over the resolver's already
+/// validated pristine cache and Binds bytes; compiler compatibility alone does not establish it.
 fn check_standalone_compiler(gp: &GamePaths) -> Check {
-    use gore_as::compiler_target::CompilerTargetInputPathsV1;
-    use gore_as::standalone_package_resolver::{
-        resolve_embedded_product_standalone_compiler_package_for_inputs_v1,
-        ProductStandaloneCompilerPackageResolutionV1,
-    };
-
     let host = match std::env::current_exe() {
         Ok(host) => host,
         Err(error) => {
@@ -1928,18 +1958,58 @@ fn check_standalone_compiler(gp: &GamePaths) -> Check {
             });
         }
     };
+    check_standalone_compiler_at_host(gp, &host)
+}
+
+fn check_standalone_compiler_at_host(gp: &GamePaths, host: &Path) -> Check {
+    use gore_as::compiler_target::CompilerTargetInputPathsV1;
+    use gore_as::standalone_package_resolver::{
+        resolve_embedded_product_standalone_compiler_package_for_inputs_v1,
+        ProductStandaloneCompilerPackageResolutionV1,
+    };
+
+    let mut items = vec![format!(
+        "GORE {}: {}",
+        crate::product_build::VERSION,
+        host.display()
+    )];
+    // Use the compile route's deployment-aware original, not a currently deployed mod's cache.
+    let source = match gore_mod::pristine_script_cache_source(&gp.root) {
+        Ok(source) => source,
+        Err(error) => {
+            return Check::new(
+                "standalone_compiler",
+                "AS standalone",
+                Verdict::Problem,
+                format!("could not select the pristine compiler base: {error}"),
+            )
+            .with_items(items)
+            .with_fix("resolve the cache/deployment problem reported above, then run gore doctor again; do not substitute an unverified backup");
+        }
+    };
+    items.push(format!(
+        "pristine cache: {} ({})",
+        source.path.display(),
+        source.identity
+    ));
     let binds = gp.root.join("G1R").join("Script").join("Binds.Cache");
     let resolution = resolve_embedded_product_standalone_compiler_package_for_inputs_v1(
-        &host,
+        host,
         CompilerTargetInputPathsV1 {
             executable: &gp.executable,
-            shipping_cache: &gp.script_cache,
+            shipping_cache: &source.path,
             binds_cache: &binds,
         },
     );
     let readiness = match resolution {
-        ProductStandaloneCompilerPackageResolutionV1::Available(_) => {
-            StandaloneCompilerReadiness::Available
+        ProductStandaloneCompilerPackageResolutionV1::Available(package) => {
+            let inputs = package.target_inputs();
+            StandaloneCompilerReadiness::Available {
+                native_api_ready: gore_as::cache::remap::qualified_native_api_binds_match(
+                    inputs.shipping_cache(),
+                    inputs.binds_cache(),
+                ),
+            }
         }
         ProductStandaloneCompilerPackageResolutionV1::BundleAbsent => {
             StandaloneCompilerReadiness::BundleAbsent
@@ -1951,33 +2021,56 @@ fn check_standalone_compiler(gp: &GamePaths) -> Check {
             }
         }
     };
-    standalone_compiler_check(readiness)
+    let mut check = standalone_compiler_check(readiness);
+    items.append(&mut check.items);
+    check.with_items(items)
 }
 
 enum StandaloneCompilerReadiness {
-    Available,
+    Available { native_api_ready: bool },
     BundleAbsent,
     Unavailable { kind: String, detail: String },
 }
 
 fn standalone_compiler_check(readiness: StandaloneCompilerReadiness) -> Check {
     match readiness {
-        StandaloneCompilerReadiness::Available => Check::new(
+        StandaloneCompilerReadiness::Available { native_api_ready: true } => Check::new(
             "standalone_compiler",
             "AS standalone",
             Verdict::Ok,
             "authenticated standalone compiler is compatible with this cache/API; native \
              diagnostics are available without a game launch",
+        )
+        .with_items(vec![
+            "native_api: ready — extended native reference authority authenticates for this pristine cache/Binds; only audited declarations are admitted, and each script still needs compile/composition validation".into(),
+        ]),
+        StandaloneCompilerReadiness::Available { native_api_ready: false } => Check::new(
+            "standalone_compiler",
+            "AS standalone",
+            Verdict::Problem,
+            "authenticated standalone compiler is compatible with this cache/API, but extended \
+             native reference authority is missing; compilation can succeed while composition fails",
+        )
+        .with_items(vec![
+            "native_api: missing — extended native declarations are refused; native references already present in the pristine cache may still compose".into(),
+        ])
+        .with_fix(
+            "update the complete GORE toolkit to a version with sealed native API authority for \
+             this exact pristine cache and unchanged Binds/profile. Unknown or changed generations \
+             remain refused; rerun gore doctor after updating before building scripts that add \
+             native references",
         ),
         StandaloneCompilerReadiness::BundleAbsent => Check::new(
             "standalone_compiler",
             "AS standalone",
             Verdict::Problem,
-            "the standalone compiler component is not bundled beside this GORE executable",
+            "this GORE executable was built without an embedded standalone compiler catalog",
         )
         .with_fix(
-            "repair or reinstall the complete GORE CLI package, including its compiler folder; \
-             explicit game-backed compilation remains a separate fallback and requires consent",
+            "replace the executable and compiler folder together from a complete GORE CLI package; \
+             for a source build use python build.py gore-cli dist, not a plain cargo build. \
+             Copying a compiler folder alone cannot add the missing embedded catalog. \
+             Explicit game-backed compilation remains a separate fallback and requires consent",
         ),
         StandaloneCompilerReadiness::Unavailable { kind, detail } => Check::new(
             "standalone_compiler",
@@ -1985,11 +2078,16 @@ fn standalone_compiler_check(readiness: StandaloneCompilerReadiness) -> Check {
             Verdict::Problem,
             format!("standalone compiler is not ready ({kind}): {detail}"),
         )
-        .with_fix(
+        .with_fix(if kind == "TargetInputsUnavailable" {
+            "inspect the EXE/ScriptCache/Binds input named in the error for missing files, \
+             hardlinks or reparse points. Sandbox inputs must be independent regular copies; \
+             renaming a hardlink does not detach it from the original. Repair the named input \
+             before retrying; replacing the compiler does not fix an input-file problem"
+        } else {
             "update or repair GORE so it contains an authenticated profile compatible with this \
              game's ScriptCache and Binds; explicit game-backed compilation remains a separate \
-             fallback and requires consent",
-        ),
+             fallback and requires consent"
+        }),
     }
 }
 
@@ -3674,7 +3772,9 @@ mod tests {
 
     #[test]
     fn standalone_readiness_explains_offline_success_and_bounded_fallback() {
-        let ready = standalone_compiler_check(StandaloneCompilerReadiness::Available);
+        let ready = standalone_compiler_check(StandaloneCompilerReadiness::Available {
+            native_api_ready: true,
+        });
         assert_eq!(ready.verdict, Verdict::Ok);
         assert!(ready.detail.contains("cache/API"), "{}", ready.detail);
         assert!(
@@ -3692,12 +3792,20 @@ mod tests {
             "{}",
             ready.detail
         );
-        assert!(ready.items.is_empty());
+        assert!(ready
+            .items
+            .iter()
+            .any(|item| item.contains("native_api: ready")
+                && item.contains("only audited declarations")));
 
         let absent = standalone_compiler_check(StandaloneCompilerReadiness::BundleAbsent);
         assert_eq!(absent.verdict, Verdict::Problem);
+        assert!(absent
+            .detail
+            .contains("embedded standalone compiler catalog"));
         let fix = absent.fix.unwrap();
         assert!(fix.contains("compiler folder"), "{fix}");
+        assert!(fix.contains("python build.py gore-cli dist"), "{fix}");
         assert!(fix.contains("requires consent"), "{fix}");
 
         let incompatible = standalone_compiler_check(StandaloneCompilerReadiness::Unavailable {
@@ -3706,6 +3814,138 @@ mod tests {
         });
         assert_eq!(incompatible.verdict, Verdict::Problem);
         assert!(incompatible.detail.contains("cache/API did not match"));
+
+        let unsafe_input = standalone_compiler_check(StandaloneCompilerReadiness::Unavailable {
+            kind: "TargetInputsUnavailable".into(),
+            detail: "compiler target executable is not a single regular non-reparse file".into(),
+        });
+        assert!(unsafe_input.fix.unwrap().contains("renaming a hardlink does not detach"));
+    }
+
+    #[test]
+    fn native_authority_readiness_reaches_json_and_session_start_with_bounded_claims() {
+        let root = Path::new("doctor-fixture");
+        let ready = standalone_compiler_check(StandaloneCompilerReadiness::Available {
+            native_api_ready: true,
+        });
+        let summary = compiler_startup_summary_for_check(root, &ready);
+        assert!(summary.contains("standalone_compiler: ok"), "{summary}");
+        assert!(summary.contains("native_api: ready"), "{summary}");
+        assert!(summary.contains("only audited declarations"), "{summary}");
+        assert!(
+            summary.contains("compile/composition validation"),
+            "{summary}"
+        );
+        assert!(!summary.contains("Next:"), "{summary}");
+        let report = serde_json::to_value(Report::new(Some(root), "config", vec![ready])).unwrap();
+        assert_eq!(report["ok"], 1);
+        assert_eq!(report["problem"], 0);
+        assert_eq!(report["checks"][0]["id"], "standalone_compiler");
+        assert_eq!(report["checks"][0]["verdict"], "ok");
+        assert!(report["checks"][0]["fix"].is_null());
+        assert!(report["checks"][0]["items"][0]
+            .as_str()
+            .unwrap()
+            .contains("native_api: ready"));
+    }
+
+    #[test]
+    fn compatible_compiler_without_native_authority_is_an_actionable_startup_problem() {
+        // UserRun#4: catalog readiness must not conceal a later native-reference composition
+        // refusal. Ordinary references already authenticated by the pristine base remain usable.
+        let root = Path::new("doctor-fixture");
+        let check = standalone_compiler_check(StandaloneCompilerReadiness::Available {
+            native_api_ready: false,
+        });
+        let summary = compiler_startup_summary_for_check(root, &check);
+        assert!(
+            summary.contains("standalone_compiler: problem"),
+            "{summary}"
+        );
+        assert!(summary.contains("compiler is compatible"), "{summary}");
+        assert!(summary.contains("composition fails"), "{summary}");
+        assert!(summary.contains("native_api: missing"), "{summary}");
+        assert!(
+            summary.contains("pristine cache may still compose"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("Next: update the complete GORE toolkit"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("Unknown or changed generations remain refused"),
+            "{summary}"
+        );
+        let report = serde_json::to_value(Report::new(Some(root), "config", vec![check])).unwrap();
+        assert_eq!(report["ok"], 0);
+        assert_eq!(report["problem"], 1);
+        assert_eq!(report["checks"][0]["id"], "standalone_compiler");
+        assert_eq!(report["checks"][0]["verdict"], "problem");
+        assert!(report["checks"][0]["items"][0]
+            .as_str()
+            .unwrap()
+            .contains("native_api: missing"));
+    }
+
+    #[test]
+    fn standalone_readiness_reports_the_owned_pristine_backup_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        make_install(dir.path());
+        let gp = paths(dir.path());
+        let backup = gp.script_cache.with_extension("Cache.gore-bak");
+        let pristine = b"original script cache";
+        let deployed = b"deployed script mod";
+        std::fs::write(&gp.script_cache, deployed).unwrap();
+        std::fs::write(&backup, pristine).unwrap();
+        let identity = |bytes: &[u8]| format!("sha256:{}", gore_loc::loc_store::sha256_hex(bytes));
+        let live_name = gp.script_cache.display().to_string();
+        let backup_name = backup.display().to_string();
+        write_deploy_record(dir.path(), &gore_mod::DeployRecord {
+            mod_name: "doctor-test".into(),
+            backups: vec![(live_name.clone(), backup_name.clone(), true)],
+            deployed_hashes: [(live_name, identity(deployed))].into(),
+            backup_hashes: [(backup_name.clone(), identity(pristine))].into(),
+            ..Default::default()
+        });
+        // Synthetic inputs may fail package authentication, but the reported base must still be
+        // the owned original, exactly as compile selects it. Never inspect the deployed bytes as base.
+        let check = check_standalone_compiler_at_host(&gp, &dir.path().join("gore.exe"));
+        assert!(check.items.iter().any(|item| item.contains(&backup_name)
+            && item.contains(&identity(pristine))), "{} {:?}", check.detail, check.items);
+        assert_eq!(std::fs::read(&gp.script_cache).unwrap(), deployed);
+        assert_eq!(std::fs::read(&backup).unwrap(), pristine);
+        assert!(!dir.path().join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn standalone_readiness_does_not_ignore_deployment_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        make_install(dir.path());
+        let record = gore_mod::DeployRecord {
+            phase: gore_mod::DeployPhase::RecoveryRequired,
+            ..Default::default()
+        };
+        write_deploy_record(dir.path(), &record);
+        let before = std::fs::read(gore_mod::deploy_record_path(dir.path())).unwrap();
+        let check =
+            check_standalone_compiler_at_host(&paths(dir.path()), &dir.path().join("gore.exe"));
+        assert_eq!(check.verdict, Verdict::Problem);
+        assert!(
+            check.detail.contains("pristine compiler base"),
+            "{}",
+            check.detail
+        );
+        assert!(
+            check.detail.contains("RECOVERY_REQUIRED"),
+            "{}",
+            check.detail
+        );
+        assert_eq!(
+            before,
+            std::fs::read(gore_mod::deploy_record_path(dir.path())).unwrap()
+        );
+        assert!(!dir.path().join(".gore-install-mutation.lock").exists());
     }
 
     /// `extracted_at` comes from the source file rather than staying at zero, because that is

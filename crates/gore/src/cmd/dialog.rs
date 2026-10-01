@@ -347,6 +347,27 @@ fn read_cache(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<(PathBuf,
     Ok((path, bytes))
 }
 
+/// Authoring and its checks use the same pristine base as NPC authoring and compilation.
+fn authoring_cache_path(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(cache) = cache {
+        return Ok(cache);
+    }
+    let root = gore_loc::config::game_root(game).context("resolving the game path")?;
+    cache_path(None, Some(root.clone()))?;
+    Ok(gore_mod::pristine_script_cache_source(&root)
+        .context("selecting the pristine dialog base cache")?
+        .path)
+}
+
+fn read_authoring_cache(
+    cache: Option<PathBuf>,
+    game: Option<PathBuf>,
+) -> Result<(PathBuf, Vec<u8>)> {
+    let path = authoring_cache_path(cache, game)?;
+    let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    Ok((path, bytes))
+}
+
 fn read_graph(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<DialogGraph> {
     let (path, bytes) = read_cache(cache, game)?;
     dialog::build(&bytes).with_context(|| format!("reading dialog from {}", path.display()))
@@ -396,21 +417,37 @@ fn prefer_rooted_conversations<'a>(selected: Vec<&'a Conversation>) -> Vec<&'a C
         .collect()
 }
 
-/// Prefer exact participant/module matches when resolving one conversation, then fall back to
-/// the broad substring lookup used by read commands.
+/// Exact modules remain directly addressable. An exact NPC alias prefers its own rooted
+/// conversation over group appearances, then falls back to participant and substring matches.
 fn matching<'a>(graph: &'a DialogGraph, needle: &str) -> Vec<&'a Conversation> {
-    let folded = needle.to_lowercase();
+    let modules = graph
+        .conversations
+        .iter()
+        .filter(|conversation| conversation.module.eq_ignore_ascii_case(needle))
+        .collect::<Vec<_>>();
+    if !modules.is_empty() {
+        return modules;
+    }
     let exact: Vec<&Conversation> = graph
         .conversations
         .iter()
         .filter(|conversation| {
             conversation
                 .npc_participants()
-                .any(|participant| participant.to_lowercase() == folded)
-                || conversation.module.to_lowercase() == folded
+                .any(|participant| participant.eq_ignore_ascii_case(needle))
         })
         .collect();
     if !exact.is_empty() {
+        let own = exact
+            .iter()
+            .copied()
+            .filter(|conversation| {
+                conversation.root_class.is_some() && conversation.npc_participants().count() == 1
+            })
+            .collect::<Vec<_>>();
+        if !own.is_empty() {
+            return own;
+        }
         return prefer_rooted_conversations(exact);
     }
     prefer_rooted_conversations(containing(graph, needle))
@@ -614,7 +651,13 @@ fn resolve_one<'a>(graph: &'a DialogGraph, npc: &str) -> Result<&'a Conversation
         _ => {
             let names: Vec<String> = selected
                 .iter()
-                .map(|conversation| participant_label(conversation))
+                .map(|conversation| {
+                    format!(
+                        "{} ({})",
+                        participant_label(conversation),
+                        conversation.module
+                    )
+                })
                 .collect();
             bail!(
                 "{npc:?} matched {} conversations: {}. Name one exactly",
@@ -2557,7 +2600,7 @@ fn native_api(cache_path: &std::path::Path) -> Option<gore_as::cache::binds::Nat
 
 fn checkout(npc: &str, out: &PathBuf, cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
     ensure_empty_dialog_workspace(out)?;
-    let (path, bytes) = read_cache(cache, game)?;
+    let (path, bytes) = read_authoring_cache(cache, game)?;
     let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
     let conversation = resolve_one(&graph, npc)?;
 
@@ -2817,7 +2860,7 @@ fn open_edit(
         .with_context(|| format!("validating {}", manifest_path.display()))?;
     let source_path = dialog_workspace_source(dir, &manifest.source_file)?;
 
-    let (path, bytes) = read_cache(cache, game)?;
+    let (path, bytes) = read_authoring_cache(cache, game)?;
     let digest = digest_of(&bytes);
     if digest != manifest.cache_sha256 {
         bail!(
@@ -3112,10 +3155,12 @@ fn stage(
 }
 
 /// `compile-module` targets a resolved game installation, not an arbitrary cache file. Bind the
-/// printed command to an installation whose current script cache is exactly the checkout base.
+/// printed command to an installation whose pristine script cache is exactly the checkout base.
 fn compiler_game_for(manifest: &EditManifest, game: Option<PathBuf>) -> Result<PathBuf> {
     let root = gore_loc::config::game_root(game).context("resolving compiler game path")?;
-    let script_cache = gore_mod::resolve_game_paths(&root).script_cache;
+    let script_cache = gore_mod::pristine_script_cache_source(&root)
+        .context("selecting the pristine compiler base cache")?
+        .path;
     let bytes = fs::read(&script_cache).with_context(|| {
         format!(
             "reading compiler base cache {}. `compile-module` cannot target an arbitrary --cache file",
@@ -3195,17 +3240,46 @@ pub struct NewConversationRequest {
     pub game: Option<PathBuf>,
 }
 
+/// Quote an FString without the FName preprocessor's comparison-key restrictions. AngelScript
+/// accepts JSON's escapes except `\b` and `\f`; spell those as Unicode escapes instead.
+fn dialog_string_literal(text: &str) -> Result<String> {
+    if text.contains('\0') {
+        bail!(
+            "dialog strings cannot contain NUL characters: the script cache cannot preserve them"
+        );
+    }
+    let quoted = serde_json::to_string(text)?;
+    let mut literal = String::with_capacity(quoted.len());
+    let mut characters = quoted.chars();
+    while let Some(character) = characters.next() {
+        literal.push(character);
+        if character == '\\' {
+            match characters.next() {
+                Some('b') => literal.push_str("u0008"),
+                Some('f') => literal.push_str("u000c"),
+                Some(escape) => literal.push(escape),
+                None => bail!("unterminated dialog string escape"),
+            }
+        }
+    }
+    if serde_json::from_str::<String>(&literal)? != text {
+        bail!("dialog string literal does not preserve its input text");
+    }
+    Ok(literal)
+}
+
 fn caption_default_line(caption: Option<&str>, caption_key: Option<&str>) -> Result<String> {
     match (caption, caption_key) {
-        (Some(text), _) => Ok(format!(
-            "    default Caption = FText::FromString(n{}.ToString());",
-            serde_json::to_string(text)?
+        (Some(_), Some(_)) => bail!("--caption and --caption-key cannot be used together"),
+        (Some(text), None) => Ok(format!(
+            "    default Caption = FText::FromString({});",
+            dialog_string_literal(text)?
         )),
-        (_, Some(key)) => Ok(format!(
+        (None, Some(key)) => Ok(format!(
             "    default Caption = LocText({});",
-            serde_json::to_string(key)?
+            dialog_string_literal(key)?
         )),
-        _ => bail!("pass --caption or --caption-key"),
+        (None, None) => bail!("pass --caption or --caption-key"),
     }
 }
 
@@ -4509,7 +4583,7 @@ fn new_conversation(request: NewConversationRequest) -> Result<()> {
     gore_mod::validate_mod_name(&request.mod_name).context("invalid --mod-name")?;
     let participant_input = request.npc.trim();
     let (_new_module, _new_relative_path) = new_conversation_module_names(participant_input)?;
-    let (cache_path, bytes) = read_cache(request.cache, request.game)?;
+    let (cache_path, bytes) = read_authoring_cache(request.cache, request.game)?;
     let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
     let selected = exact_npc_matches(&graph, participant_input);
     match selected.as_slice() {
@@ -4731,7 +4805,7 @@ fn new_topic(request: NewTopicRequest) -> Result<()> {
             );
         }
     }
-    let (cache_path, bytes) = read_cache(request.cache, request.game)?;
+    let (cache_path, bytes) = read_authoring_cache(request.cache, request.game)?;
     let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
     let conversation = resolve_one(&graph, &request.npc)?;
 
@@ -5139,6 +5213,54 @@ mod tests {
         assert_eq!(containing(&graph, "DiEgO").len(), 3);
         assert_eq!(matching(&graph, "DiEgO").len(), 1);
         assert_eq!(matching(&graph, "DiEgO")[0].module, "Story.Exact");
+    }
+
+    #[test]
+    fn npc_alias_resolves_its_own_dialog_before_group_appearances_case_insensitively() {
+        let mut own = empty_conversation(
+            "Story.G1R.Conversation.Conversation_OC_STT_DIEGO",
+            "OC_STT_DIEGO",
+        );
+        own.root_class = Some("UTopic_Hero__OC_STT_DIEGO".to_owned());
+        let mut drax = own.clone();
+        drax.module = "Story.G1R.Conversation.Conversation_DIEGO_DRAX".to_owned();
+        drax.participants.push("NC_ORG_DRAX_819".to_owned());
+        let mut orry = own.clone();
+        orry.module = "Story.G1R.Conversation.Conversation_DIEGO_ORRY".to_owned();
+        orry.participants.push("OC_GRD_ORRY_254".to_owned());
+        let graph = DialogGraph {
+            conversations: vec![drax.clone(), orry, own.clone()],
+        };
+
+        for alias in ["OC_STT_Diego", "OC_STT_DIEGO", "oc_stt_diego"] {
+            assert_eq!(resolve_one(&graph, alias).unwrap(), &own);
+            assert_eq!(containing(&graph, alias).len(), 3);
+        }
+        assert_eq!(
+            resolve_one(&graph, &drax.module.to_ascii_lowercase()).unwrap(),
+            &drax,
+            "an exact group module remains addressable"
+        );
+        assert!(resolve_one(&graph, "DIEGO").is_err());
+
+        let groups_only = DialogGraph {
+            conversations: graph.conversations[..2].to_vec(),
+        };
+        let error = resolve_one(&groups_only, "OC_STT_Diego").unwrap_err();
+        assert!(error.to_string().contains(&drax.module), "{error}");
+        assert_eq!(matching(&groups_only, "OC_STT_Diego").len(), 2);
+        let one_group = DialogGraph {
+            conversations: vec![drax.clone()],
+        };
+        assert_eq!(resolve_one(&one_group, "OC_STT_Diego").unwrap(), &drax);
+
+        let mut duplicate = own.clone();
+        duplicate.module = "Story.OtherDiegoConversation".to_owned();
+        let ambiguous = DialogGraph {
+            conversations: vec![own, duplicate],
+        };
+        assert!(resolve_one(&ambiguous, "OC_STT_Diego").is_err());
+        assert!(resolve_one(&ambiguous, "NO_SUCH_NPC").is_err());
     }
 
     #[test]
@@ -5570,7 +5692,7 @@ mod tests {
         assert_eq!(
             new_topic_caption_line(request.caption.as_deref(), request.caption_key.as_deref())
                 .unwrap(),
-            r#"    default Caption = FText::FromString(n"Sag \"Los\\geht's\"\nJetzt".ToString());"#
+            r#"    default Caption = FText::FromString("Sag \"Los\\geht's\"\nJetzt");"#
         );
     }
 
@@ -5594,8 +5716,74 @@ mod tests {
                 request.caption_key.as_deref(),
             )
             .unwrap(),
-            r#"    default Caption = FText::FromString(n"Neue Unterhaltung".ToString());"#
+            r#"    default Caption = FText::FromString("Neue Unterhaltung");"#
         );
+    }
+
+    #[test]
+    fn plain_captions_preserve_unicode_and_compiler_supported_string_escapes() {
+        let taken = dialog::Checkout {
+            module: "Dialog.CaptionTest".to_owned(),
+            relative_path: "Dialog/CaptionTest.as".to_owned(),
+            source: "class UCaptionTest : UTopic { default Caption = LocText(\"OLD\"); }\n"
+                .to_owned(),
+            default_classes: BTreeSet::from(["UCaptionTest".to_owned()]),
+            unsupported_generated_methods: Vec::new(),
+        };
+        let known = dialog::KnownNames {
+            types: BTreeSet::from(["UCaptionTest".to_owned(), "UTopic".to_owned()]),
+            native_conversation_bases: BTreeSet::new(),
+            strings: BTreeSet::from(["OLD".to_owned()]),
+            static_names: BTreeSet::new(),
+        };
+        for text in [
+            "Wer ist der Typ da drüben?",
+            "Straße: ÄÖÜ äöü ß — 東京 🙂",
+            "\"quoted\" \\path\\b\\f\n\r\t\u{0008}\u{000c}\u{001f}",
+            "\"); } class UInjected : UObject { /*",
+        ] {
+            let literal = dialog_string_literal(text).unwrap();
+            assert_eq!(serde_json::from_str::<String>(&literal).unwrap(), text);
+            for line in [
+                new_topic_caption_line(Some(text), None).unwrap(),
+                new_conversation_caption_line(Some(text), None).unwrap(),
+            ] {
+                assert_eq!(
+                    line,
+                    format!("    default Caption = FText::FromString({literal});")
+                );
+                let source = format!("class UCaptionTest : UTopic {{\n{line}\n}}\n");
+                let outline = dialog::read_outline(&source).unwrap();
+                assert_eq!(outline.classes.len(), 1);
+                assert_eq!(outline.classes[0].defaults.len(), 1);
+                let report = dialog::verify(&taken, &source, &known);
+                assert!(report.is_carryable(), "{:?}", report.violations);
+                assert!(report.new_static_names.is_empty());
+                assert_eq!(report.new_strings, [text]);
+            }
+        }
+        assert_eq!(
+            dialog_string_literal("\u{0008}\u{000c}\\b\\f").unwrap(),
+            r#""\u0008\u000c\\b\\f""#
+        );
+    }
+
+    #[test]
+    fn explicit_caption_keys_remain_localized_and_caption_arguments_are_exclusive() {
+        for line in [
+            new_topic_caption_line(None, Some("GORE_DIALOG_CAPTION_KEY")).unwrap(),
+            new_conversation_caption_line(None, Some("GORE_DIALOG_CAPTION_KEY")).unwrap(),
+        ] {
+            assert_eq!(
+                line,
+                r#"    default Caption = LocText("GORE_DIALOG_CAPTION_KEY");"#
+            );
+        }
+        assert!(caption_default_line(None, None).is_err());
+        assert!(caption_default_line(Some("literal"), Some("KEY")).is_err());
+        assert!(new_topic_caption_line(Some("caption\0tail"), None).is_err());
+        assert!(new_conversation_caption_line(Some("caption\0tail"), None).is_err());
+        assert!(caption_default_line(None, Some("KEY\0TAIL")).is_err());
     }
 
     #[test]
@@ -7470,6 +7658,66 @@ class UFirst : UTopic_Hero__NEW_NPC { }
         assert!(error.to_string().contains("not the cache"), "{error}");
     }
 
+    #[test]
+    fn dialog_authoring_and_staging_select_the_owned_pristine_cache_without_writing() {
+        let temp = tempfile::tempdir().unwrap();
+        let game = fs::canonicalize(temp.path()).unwrap();
+        let live = gore_mod::resolve_game_paths(&game).script_cache;
+        let backup = live.with_extension("Cache.gore-bak");
+        fs::create_dir_all(live.parent().unwrap()).unwrap();
+        let pristine = b"original dialog cache";
+        let deployed = b"installed dialog mod";
+        fs::write(&live, deployed).unwrap();
+        fs::write(&backup, pristine).unwrap();
+        let identity = |bytes: &[u8]| format!("sha256:{}", digest_of(bytes));
+        let mut record = gore_mod::DeployRecord {
+            mod_name: "DialogStageFixture".into(),
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: [(live.display().to_string(), identity(deployed))].into(),
+            backup_hashes: [(backup.display().to_string(), identity(pristine))].into(),
+            ..Default::default()
+        };
+        let record_path = gore_mod::deploy_record_path(&game);
+        let record_bytes = serde_json::to_vec(&record).unwrap();
+        fs::write(&record_path, &record_bytes).unwrap();
+
+        assert_eq!(cache_path(None, Some(game.clone())).unwrap(), live);
+        assert_eq!(
+            read_authoring_cache(None, Some(game.clone())).unwrap(),
+            (backup.clone(), pristine.to_vec())
+        );
+        assert_eq!(
+            read_authoring_cache(Some(live.clone()), Some(game.clone())).unwrap(),
+            (live.clone(), deployed.to_vec()),
+            "an explicit --cache remains authoritative"
+        );
+        let mut manifest = command_manifest();
+        manifest.cache_sha256 = digest_of(pristine);
+        assert_eq!(
+            compiler_game_for(&manifest, Some(game.clone())).unwrap(),
+            game
+        );
+        manifest.cache_sha256 = digest_of(deployed);
+        assert!(compiler_game_for(&manifest, Some(game.clone())).is_err());
+        assert_eq!(fs::read(&live).unwrap(), deployed);
+        assert_eq!(fs::read(&backup).unwrap(), pristine);
+        assert_eq!(fs::read(&record_path).unwrap(), record_bytes);
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+
+        record.phase = gore_mod::DeployPhase::RecoveryRequired;
+        fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+        assert!(authoring_cache_path(None, Some(game.clone())).is_err());
+        assert!(compiler_game_for(&manifest, Some(game.clone())).is_err());
+        assert_eq!(
+            authoring_cache_path(Some(live.clone()), Some(game)).unwrap(),
+            live
+        );
+    }
+
     /// End-to-end command oracle for the native same-module root shape. A synthetic cache cannot
     /// exercise dialog checkout faithfully, so opt in with the same real-cache fixture used by
     /// `gore-as`'s dialog agreement tests. The temporary game tree contains only a hard link (or
@@ -7492,10 +7740,12 @@ class UFirst : UTopic_Hero__NEW_NPC { }
 
         let out = temp.path().join("native-root");
         let class = "UChoiceGoreNativeRootOracle";
-        let npc = "Story.G1R.Conversation.Conversation_OC_STT_DIEGO";
+        let npc = "OC_STT_Diego";
+        let expected_module = "Story.G1R.Conversation.Conversation_OC_STT_DIEGO";
         let bytes = fs::read(&cache).unwrap();
         let graph = dialog::build(&bytes).unwrap();
         let conversation = resolve_one(&graph, npc).unwrap();
+        assert_eq!(conversation.module, expected_module);
         let expected_root_priority = automatic_root_priority_rank(conversation).unwrap();
         assert_ne!(expected_root_priority, -1);
         new_topic(NewTopicRequest {
@@ -7516,6 +7766,7 @@ class UFirst : UTopic_Hero__NEW_NPC { }
         let manifest_path = out.join(MANIFEST_NAME);
         let manifest_text = fs::read_to_string(&manifest_path).unwrap();
         let mut manifest: EditManifest = serde_json::from_str(&manifest_text).unwrap();
+        assert_eq!(manifest.module, expected_module);
         assert!(manifest.dialog_topics.is_empty());
         assert!(
             !manifest_text.contains("dialog_topics"),

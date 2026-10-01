@@ -23,7 +23,7 @@ use super::splice::{
 };
 use super::walk_modules::{module_names, module_ranges};
 
-const MAX_SELECTIVE_FULLGRAPH_CHANGES: usize = 256;
+pub(crate) const MAX_SELECTIVE_FULLGRAPH_CHANGES: usize = 256;
 const MAX_MODULE_NAME_BYTES: usize = 4_096;
 
 /// Compiler-derived preservation state for one existing module.

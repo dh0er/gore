@@ -287,14 +287,17 @@ pub enum AsCmd {
         #[arg(long)]
         game: Option<PathBuf>,
     },
-    /// Resolve one complete AngelScript source tree as a coordinated graph, then publish a new
+    /// Resolve AngelScript sources as a coordinated graph, then publish a new
     /// full cache that preserves untouched pristine modules and selectively composes authored
     /// additions and edits. The output is never installed implicitly.
     Compile {
-        /// Complete `.as` tree emitted from the target cache and then edited. Added or changed
-        /// modules become authored additions or edits; missing base modules request an unsupported
-        /// delete and are rejected.
+        /// Complete `.as` tree, or with --overlays only the authored Add/Edit files at their
+        /// canonical Script-relative paths. Without --overlays, missing base modules are rejected.
         src: PathBuf,
+        /// Read only authored Add/Edit modules and retain absent base modules from the pristine
+        /// cache, without exporting or comparing the full source tree. Requires --backend standalone.
+        #[arg(long)]
+        overlays: bool,
         /// Publish the complete cache here with atomic no-clobber semantics. Must be outside the
         /// game installation.
         #[arg(short, long)]
@@ -307,7 +310,7 @@ pub enum AsCmd {
         /// Restrict this compile to exactly these cache-relative changes. Repeat as
         /// `--only-change add:Module.Name:Path/To/Module.as` or `edit:...`.
         /// Append `:SHA256` to bind an allowed change to its exact source bytes.
-        /// The planner checks the entire tree against the sealed game cache before compiling.
+        /// Checks all supplied sources; with --overlays, no original-source comparison is needed.
         #[arg(long = "only-change", value_name = "OP:MODULE:PATH[:SHA256]")]
         only_changes: Vec<String>,
         /// Existing private workspace outside the game installation. GORE recreates only its
@@ -346,9 +349,9 @@ pub enum AsCmd {
         #[command(flatten)]
         compiler: AsProductCompilerBackendArgsV1,
     },
-    /// Compile one authored module into a deployable 1-module mini-cache. This wraps the complete
-    /// Studio pipeline: emit the pristine source tree, overlay one `.as` file, compile standalone
-    /// first with a visible game fallback, extract the module, and remap it to the pristine cache.
+    /// Compile one authored module into a deployable 1-module mini-cache. Standalone reads
+    /// unchanged dependencies from the pristine cache; a game fallback emits the full source
+    /// tree. The compiled module is extracted and remapped to the pristine cache.
     CompileModule {
         /// `add` for a new module or `edit` for an existing module.
         #[arg(long, value_parser = ["add", "edit"])]
@@ -2251,9 +2254,36 @@ fn verify_only_changes(
     Ok(())
 }
 
+/// Overlay input must survive the workspace reset and every publication. Resolve aliases before
+/// comparing, but do not create anything; the planner separately pins and validates source files.
+fn validate_overlay_source_layout(
+    source: &Path,
+    work: &Path,
+    output: &Path,
+    mini: Option<&Path>,
+    receipt: Option<&Path>,
+) -> Result<()> {
+    use gore_as::compile::{resolve_projected_output_path_v1, resolved_path_is_within_v1};
+    let source = resolve_projected_output_path_v1(source, "overlay source root")?;
+    let work = resolve_projected_output_path_v1(work, "overlay workspace")?;
+    if resolved_path_is_within_v1(&source, &work) || resolved_path_is_within_v1(&work, &source) {
+        bail!("overlay source root and compiler workspace must be disjoint; the workspace resets its tree child");
+    }
+    for (label, path) in [("compiled cache", Some(output)), ("mini-cache", mini), ("receipt", receipt)] {
+        if let Some(path) = path {
+            let path = resolve_projected_output_path_v1(path, label)?;
+            if resolved_path_is_within_v1(&path, &source) || resolved_path_is_within_v1(&source, &path) {
+                bail!("overlay source root and {label} destination must be disjoint");
+            }
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compile_full_graph_command(
     src: PathBuf,
+    overlays: bool,
     out: PathBuf,
     mini: Option<PathBuf>,
     only_changes: Vec<String>,
@@ -2272,8 +2302,18 @@ fn compile_full_graph_command(
     };
     use gore_as::standalone_package_resolver::ProductStandaloneCompilerPackageResolutionV1;
 
+    let requested_mode: CompilerBackendModeV1 = compiler.backend.into();
+    let qualification_requested = std::env::var("GORE_AS_COMPLETE_QUALIFICATION")
+        .is_ok_and(|value| value == "1");
+    // Refuse incompatible policies before output preflight or any install-mutation authority.
+    if overlays && requested_mode != CompilerBackendModeV1::Standalone {
+        bail!("--overlays requires --backend standalone; game and fallback policies require a complete source tree");
+    }
+    if overlays && qualification_requested {
+        bail!("--overlays cannot be combined with GORE_AS_COMPLETE_QUALIFICATION=1; complete qualification requires a full tree");
+    }
     let game = gore_loc::config::game_root(game).context("resolving game path")?;
-    let src = absolute_cli_path(src, "complete AngelScript source root")?;
+    let src = absolute_cli_path(src, "AngelScript source root")?;
     let out = absolute_cli_path(out, "full-graph output")?;
     let work_dir = absolute_cli_path(work_dir, "full-graph workspace")?;
     validate_compiler_work_dir(&work_dir, &game)?;
@@ -2287,6 +2327,9 @@ fn compile_full_graph_command(
     let mini_path = mini
         .map(|path| absolute_cli_path(path, "multi-module mini-cache"))
         .transpose()?;
+    if overlays {
+        validate_overlay_source_layout(&src, &work_dir, &out, mini_path.as_deref(), receipt_path.as_deref())?;
+    }
     // Two side outputs may name the same file, or nest inside one another, through different
     // spellings of the same directory. Compare the projected paths before ANY preflight below,
     // because those create the output parents: an accepted nesting would otherwise leave a
@@ -2353,7 +2396,6 @@ fn compile_full_graph_command(
         },
     );
 
-    let requested_mode: CompilerBackendModeV1 = compiler.backend.into();
     let (effective_mode, game_fallback_note) =
         effective_compile_mode(requested_mode, &shipping_source)?;
     if let Some(note) = game_fallback_note.as_deref() {
@@ -2391,7 +2433,7 @@ fn compile_full_graph_command(
             }
         }
         ProductStandaloneCompilerPackageResolutionV1::BundleAbsent => {
-            package_unavailable = Some("embedded standalone compiler bundle is absent".to_owned());
+            package_unavailable = Some("this GORE executable has no embedded standalone compiler catalog; reinstall the complete CLI package or build it with python build.py gore-cli dist (copying a compiler folder alone is insufficient)".to_owned());
         }
         ProductStandaloneCompilerPackageResolutionV1::Unavailable(reason) => {
             package_unavailable = Some(format!("{:?}: {}", reason.kind(), reason.detail()));
@@ -2474,10 +2516,13 @@ fn compile_full_graph_command(
     // is what a byte-faithfulness measurement diffs against the shipped cache. The selective
     // publication would hand back pristine bytes for every module whose text equals the
     // emitter's own output, and say nothing about them.
-    let complete_qualification = std::env::var("GORE_AS_COMPLETE_QUALIFICATION")
-        .is_ok_and(|value| value == "1")
+    let complete_qualification = qualification_requested
         && requested_mode == CompilerBackendModeV1::Standalone;
-    let planned = if complete_qualification {
+    let planning_started = std::time::Instant::now();
+    eprintln!("planning {} against the pristine cache", if overlays { "authored overlays (no full-tree emission)" } else { "complete source tree" });
+    let planned = if overlays {
+        gore_as::full_graph_plan::plan_source_overlays_v1(&base_cache, &src)
+    } else if complete_qualification {
         gore_as::full_graph_plan::plan_complete_source_tree_v1(&base_cache, &src)
     } else {
         gore_as::full_graph_plan::plan_complete_source_tree_with_emitted_base_v1(
@@ -2489,7 +2534,7 @@ fn compile_full_graph_command(
     let plan = match planned {
         Ok(plan) => plan,
         Err(error) => {
-            let error = anyhow::Error::new(error).context("planning the complete source graph");
+            let error = anyhow::Error::new(error).context("planning the source graph");
             return match guard.take() {
                 Some(guard) => Err(release_compile_guard_after_error(guard, error)),
                 None => Err(error),
@@ -2497,6 +2542,7 @@ fn compile_full_graph_command(
         }
     };
     let (changes, final_manifest) = plan.into_parts();
+    eprintln!("planned {} authored change(s), {} final modules in {:.2}s", changes.len(), final_manifest.len(), planning_started.elapsed().as_secs_f64());
     if let Err(error) = verify_only_changes(&only_changes, &changes) {
         return match guard.take() {
             Some(guard) => Err(release_compile_guard_after_error(guard, error)),
@@ -2713,7 +2759,8 @@ fn compile_full_graph_command(
         );
     }
     println!(
-        "compiled complete graph with {} -> {} ({} modules, {} bytes, sha256 {})",
+        "published {} authored change(s) with {} -> {} (final cache: {} modules, {} bytes, sha256 {})",
+        artifact.changes().len(),
         used_backend,
         artifact.path().display(),
         artifact.module_count(),
@@ -3740,6 +3787,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
         }
         AsCmd::Compile {
             src,
+            overlays,
             out,
             mini,
             only_changes,
@@ -3754,6 +3802,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
         } => {
             compile_full_graph_command(
                 src,
+                overlays,
                 out,
                 mini,
                 only_changes,
@@ -3885,7 +3934,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     }
                     ProductStandaloneCompilerPackageResolutionV1::BundleAbsent => {
                         package_unavailable =
-                            Some("embedded standalone compiler bundle is absent".to_owned());
+                            Some("this GORE executable has no embedded standalone compiler catalog; reinstall the complete CLI package or build it with python build.py gore-cli dist (copying a compiler folder alone is insufficient)".to_owned());
                     }
                     ProductStandaloneCompilerPackageResolutionV1::Unavailable(reason) => {
                         package_unavailable =

@@ -2,9 +2,10 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod cmd;
+mod product_build;
 
 #[derive(Parser)]
-#[command(name = "gore", about = "GORE Command Line Tools", version)]
+#[command(name = "gore", about = product_build::ABOUT, version = product_build::VERSION)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

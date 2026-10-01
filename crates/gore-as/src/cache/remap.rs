@@ -2432,8 +2432,9 @@ struct PristinePropertyIdentity {
     member_offset: i32,
 }
 
-// Build-specific qualification artifact: exact identities audited against the sealed native
-// registrar/Binds evidence. Extending it requires repeating the audit and updating this seal.
+// Exact native identities audited against sealed registrar/Binds evidence. New declarations
+// require a new audit; an independently qualified generation with unchanged native API/layout
+// may reuse these declarations without qualifying every asset or mod combination again.
 const NATIVE_API_SNAPSHOT_BYTES: &[u8] = include_bytes!("../../data/npc-head-native-api-v1.json");
 const NATIVE_API_SNAPSHOT_SHA256: &str =
     "e1c3b72c4641b9e0fa5df8ca8d67b91266f13ab68ebae94a30a40dbf6c1a5c78";
@@ -2449,20 +2450,20 @@ const NATIVE_API_SNAPSHOTS: &[(&[u8], &str)] = &[
     ),
 ];
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NativeApiTypeSnapshot {
     full_identity: String,
     object_kind: u32,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NativeApiFunctionSnapshot {
     full_identity: String,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NativeApiPropertySnapshot {
     owner_full_identity: String,
@@ -2474,7 +2475,7 @@ struct NativeApiPropertySnapshot {
     value_type_full_identity: String,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NativeApiSnapshot {
     format: String,
@@ -2638,13 +2639,71 @@ fn select_native_api_snapshot(
     base: &[u8],
     snapshots: &[Arc<NativeApiSnapshot>],
 ) -> Option<Arc<NativeApiSnapshot>> {
-    snapshots
+    select_native_api_snapshot_with_generations(base, snapshots, &gore_generation::GENERATION_ROWS)
+}
+
+fn native_api_generations_are_equivalent(
+    source: &gore_generation::GenerationRow,
+    target: &gore_generation::GenerationRow,
+) -> bool {
+    // Derived ancestry IDs include the cache/executable generation and necessarily move on a
+    // script-only update. Compare the independently measured API/layout inputs instead.
+    source.edition == target.edition
+        && source.binds_cache == target.binds_cache
+        && source.binds_field_map_sha256 == target.binds_field_map_sha256
+        && source.binds_class_path_map_sha256 == target.binds_class_path_map_sha256
+        && source.usmap_class_graph_sha256 == target.usmap_class_graph_sha256
+        && source.resolved_class_profile_sha256 == target.resolved_class_profile_sha256
+        && source.gameplay_tag_float32_map_profile_sha256
+            == target.gameplay_tag_float32_map_profile_sha256
+}
+
+fn select_native_api_snapshot_with_generations(
+    base: &[u8],
+    snapshots: &[Arc<NativeApiSnapshot>],
+    generations: &[gore_generation::GenerationRow],
+) -> Option<Arc<NativeApiSnapshot>> {
+    if let Some(snapshot) = snapshots
         .iter()
         .find(|snapshot| {
             // Reject other generations before hashing the complete pristine cache.
             snapshot.matches_generation(base) && snapshot.matches_base(base)
         })
-        .cloned()
+    {
+        return Some(Arc::clone(snapshot));
+    }
+
+    let header = CacheHeader::parse(base).ok()?;
+    let target = generations.iter().find(|row| {
+        row.script_cache_guid == header.hash && row.shipping_cache.byte_len == base.len() as u64
+    })?;
+    let base_sha256: [u8; 32] = Sha256::digest(base).into();
+    if base_sha256 != target.shipping_cache.sha256 {
+        return None;
+    }
+    let snapshot = snapshots.iter().rev().find(|snapshot| {
+        snapshot.qualified
+            && generations.iter().any(|source| {
+                snapshot.pristine_cache_sha256.as_deref()
+                    == Some(hex_identity(&source.shipping_cache.sha256).as_str())
+                    && snapshot.pristine_cache_guid_hex.as_deref()
+                        == Some(hex_identity(&source.script_cache_guid).as_str())
+                    && snapshot.binds_cache_sha256.as_deref()
+                        == Some(hex_identity(&source.binds_cache.sha256).as_str())
+                    && native_api_generations_are_equivalent(source, target)
+            })
+    })?;
+    // Bind the unchanged audited declarations to this exact qualified pristine cache. Later
+    // FullGraph composition still retains authority from pristine bytes and checks its GUID;
+    // modified caches, unknown generations and changed Binds cannot mint new authority.
+    let mut rebound = snapshot.as_ref().clone();
+    rebound.pristine_cache_sha256 = Some(hex_identity(&base_sha256));
+    rebound.pristine_cache_guid_hex = Some(hex_identity(&header.hash));
+    Some(Arc::new(rebound))
+}
+
+fn hex_identity(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Native declarations authenticated against the original cache, retained while FullGraph folds
@@ -9795,16 +9854,38 @@ impl LoadoutScriptIdPlanBuilder {
         )
     }
 
+    pub(super) fn new_with_binds(pristine_base: &[u8], binds: &[u8]) -> Result<Self, RemapError> {
+        let authority = PristineNativeApiAuthority::from_pristine(pristine_base, binds);
+        Self::new_with_config_and_native_authority(
+            pristine_base,
+            PRODUCTION_LOADOUT_PLAN_LIMITS,
+            PRODUCTION_ALLOCATION_DOMAINS,
+            Some(&authority),
+        )
+    }
+
     fn new_with_config(
         pristine_base: &[u8],
         limits: LoadoutPlanLimits,
         domains: CanonicalAllocationDomains,
     ) -> Result<Self, RemapError> {
+        Self::new_with_config_and_native_authority(pristine_base, limits, domains, None)
+    }
+
+    fn new_with_config_and_native_authority(
+        pristine_base: &[u8],
+        limits: LoadoutPlanLimits,
+        domains: CanonicalAllocationDomains,
+        native_authority: Option<&PristineNativeApiAuthority>,
+    ) -> Result<Self, RemapError> {
         let header = loadout_cache_header(pristine_base, "pristine base")?;
         preflight_cache_module_work(pristine_base)?;
         let mut pristine_header = [0u8; 0x14];
         pristine_header.copy_from_slice(&pristine_base[..0x14]);
-        let base = Arc::new(build_allow_new_base_context(pristine_base)?);
+        let base = Arc::new(build_allow_new_base_context_with_native_authority(
+            pristine_base,
+            native_authority,
+        )?);
         let effective_base = Arc::new(EffectiveReferenceBase::from_allow_new_base(Arc::clone(
             &base,
         ))?);
@@ -10656,6 +10737,144 @@ mod native_api_snapshot_tests {
         assert!(retained.for_running_generation(&changed).is_some());
         assert!(retained.for_running_generation(&old).is_none());
         assert!(retained.for_running_generation(&unknown).is_none());
+    }
+
+    #[test]
+    fn equivalent_generation_reuses_exact_native_authority_and_rejects_drift() {
+        let source_cache = empty_cache();
+        let mut target_cache = source_cache.clone();
+        target_cache[..16].fill(2);
+        let binds = b"audited synthetic Binds.Cache";
+        let output = cache_with_native_api(0);
+        let syms = SymTables::build(&output).unwrap();
+        let mut document = qualified_document(&source_cache);
+        document["binds_cache_sha256"] = serde_json::json!(hex_identity(&Sha256::digest(binds)));
+        document["types"][0]["full_identity"] = serde_json::json!(syms.type_id_of_ptr[&0x100]);
+        document["functions"][0]["full_identity"] = serde_json::json!(syms.func_id_of_ptr[&0x200]);
+        document["properties"][0]["owner_full_identity"] =
+            serde_json::json!(syms.type_id_of_ptr[&0x100]);
+        document["properties"][0]["name"] = serde_json::json!("Parent");
+        let snapshots = [Arc::new(parse_document(&document).unwrap())];
+        let mut source = gore_generation::ROW_G1R_25168047;
+        source.shipping_cache = gore_generation::FileSeal {
+            byte_len: source_cache.len() as u64,
+            sha256: Sha256::digest(&source_cache).into(),
+        };
+        source.script_cache_guid = [1; 16];
+        source.binds_cache = gore_generation::FileSeal {
+            byte_len: binds.len() as u64,
+            sha256: Sha256::digest(binds).into(),
+        };
+        let mut target = source;
+        target.id = "synthetic compatible update";
+        target.shipping_cache.sha256 = Sha256::digest(&target_cache).into();
+        target.script_cache_guid = [2; 16];
+        let rows = [source, target];
+        let selected =
+            select_native_api_snapshot_with_generations(&target_cache, &snapshots, &rows).unwrap();
+        assert!(selected.matches_base(&target_cache));
+        assert!(!selected.matches_base(&source_cache));
+        assert!(selected.matches_binds(binds));
+        assert_eq!(
+            selected.functions[0].full_identity,
+            snapshots[0].functions[0].full_identity
+        );
+        assert_eq!(
+            selected.properties[0].member_offset,
+            snapshots[0].properties[0].member_offset
+        );
+
+        let authority = PristineNativeApiAuthority::from_selected(Some(selected), binds);
+        let base =
+            build_allow_new_base_context_with_native_authority(&target_cache, Some(&authority))
+                .unwrap();
+        validate_native_admission(&output, &base).unwrap();
+        validate_composed_module_records_with_pristine(&output, Some(&base.declarations)).unwrap();
+        let mut composed = output.clone();
+        composed[..16].fill(2);
+        assert!(authority.for_running_generation(&composed).is_some());
+        assert!(!authority.matches_pristine(&composed));
+        let mut changed_property = output.clone();
+        let meta = TailMetadata::build(&output).unwrap();
+        let off = meta.properties[0].start;
+        changed_property[off..off + 8]
+            .copy_from_slice(&property_key(0x0400_000c, 17).to_le_bytes());
+        assert!(validate_native_admission(&changed_property, &base).is_err());
+
+        let mut changed_cache = target_cache.clone();
+        *changed_cache.last_mut().unwrap() = 1;
+        assert!(
+            select_native_api_snapshot_with_generations(&changed_cache, &snapshots, &rows)
+                .is_none()
+        );
+        let mut unknown = target_cache.clone();
+        unknown[..16].fill(3);
+        assert!(select_native_api_snapshot_with_generations(&unknown, &snapshots, &rows).is_none());
+        assert!(
+            PristineNativeApiAuthority::from_selected(
+                select_native_api_snapshot_with_generations(&target_cache, &snapshots, &rows),
+                b"changed Binds.Cache",
+            )
+            .snapshot
+            .is_none()
+        );
+
+        for field in 0..7 {
+            let mut drifted = target;
+            match field {
+                0 => drifted.edition = "different edition",
+                1 => drifted.binds_cache.sha256[0] ^= 1,
+                2 => drifted.binds_field_map_sha256[0] ^= 1,
+                3 => drifted.binds_class_path_map_sha256[0] ^= 1,
+                4 => drifted.usmap_class_graph_sha256[0] ^= 1,
+                5 => drifted.resolved_class_profile_sha256[0] ^= 1,
+                6 => drifted.gameplay_tag_float32_map_profile_sha256[0] ^= 1,
+                _ => unreachable!(),
+            }
+            assert!(
+                select_native_api_snapshot_with_generations(
+                    &target_cache,
+                    &snapshots,
+                    &[source, drifted],
+                )
+                .is_none(),
+                "changed native evidence field {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn current_qualified_generation_shares_the_sealed_head_api_layout() {
+        let source = gore_generation::ROW_G1R_25168047;
+        let target = gore_generation::ROW_G1R_25414091;
+        assert!(native_api_generations_are_equivalent(&source, &target));
+        assert!(!native_api_generations_are_equivalent(
+            &gore_generation::ROW_G1R_1_0_3,
+            &target,
+        ));
+        let snapshot = NativeApiSnapshot::from_sealed_bytes(
+            NATIVE_API_SNAPSHOT_25168047_BYTES,
+            NATIVE_API_SNAPSHOT_25168047_SHA256,
+        )
+        .unwrap();
+        assert_eq!(
+            snapshot.pristine_cache_sha256.as_deref(),
+            Some(hex_identity(&source.shipping_cache.sha256).as_str())
+        );
+        assert_eq!(
+            snapshot.pristine_cache_guid_hex.as_deref(),
+            Some(hex_identity(&source.script_cache_guid).as_str())
+        );
+        assert_eq!(
+            snapshot.binds_cache_sha256.as_deref(),
+            Some(hex_identity(&target.binds_cache.sha256).as_str())
+        );
+        assert!(
+            snapshot
+                .types
+                .iter()
+                .any(|row| row.full_identity == "0:0:22:UPoseableMeshComponent1:00:")
+        );
     }
 
     fn cache_with_quest_availability_property(include_property: bool) -> Vec<u8> {
