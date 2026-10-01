@@ -67,7 +67,7 @@ backs the original up to `*.gore-bak` on deploy.
 | `-o, --out <PATH>` | `export`, `import` | Output file. On `import`, defaults to overwriting the cache it read. |
 | `--edits <PATH>` | `import` | The `{id:{language:value}}` edit JSON. |
 | `--keep-empty` | `export` | Keep ids with no text instead of dropping them. |
-| `--add-missing` | `import` | Accept ids that are not in the original cache. |
+| `--add-missing` | `import` | Add missing ids or missing pairs for languages already present in the cache header. Unknown languages remain errors. |
 | `-y, --yes` | `extract` | Skip the confirmation prompt. |
 
 ## Which language key to write

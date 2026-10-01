@@ -1853,7 +1853,8 @@ where
     let mut standalone_attempt = standalone.as_deref_mut().map(|runner| {
         || {
             let retained_output = std::cell::RefCell::new(None);
-            let result = compile_module_with_source_tree(opts, false, |_, source_tree| {
+            let backend = CompilerBackendNameV1::Standalone;
+            let result = compile_module_with_source_tree(opts, backend, |_, source_tree| {
                 standalone_runner_called.set(true);
                 let operation = match opts.op.as_str() {
                     "add" => StandaloneCompilerOverlayOperationV1::Add,
@@ -8212,23 +8213,46 @@ fn validate_opened_compiled_artifact(file: std::fs::File) -> Result<std::fs::Fil
     Ok(file)
 }
 
+fn compile_module_admission_binds<'a>(
+    backend: CompilerBackendNameV1,
+    base_path: &Path,
+    selected: Option<&'a [u8]>,
+) -> &'a [u8] {
+    let Some(selected) = selected else {
+        return &[];
+    };
+    if backend == CompilerBackendNameV1::Standalone {
+        return selected;
+    }
+    let installed_matches = base_path
+        .parent()
+        .and_then(|parent| std::fs::read(parent.join("Binds.Cache")).ok())
+        .is_some_and(|installed| installed == selected);
+    if installed_matches {
+        selected
+    } else {
+        &[]
+    }
+}
+
 /// `run_regen(game_dir, src_dir) -> regen cache path`. Injected so the orchestration is testable
 /// offline; the FFI passes [`game_run_regen`].
 pub fn compile_module<R>(opts: &CompileOpts, run_regen: R) -> Result<CompileOutput, CompileError>
 where
     R: FnOnce(&Path, &Path) -> Result<PathBuf, String>,
 {
-    compile_module_with_source_tree(opts, true, run_regen)
+    compile_module_with_source_tree(opts, CompilerBackendNameV1::Game, run_regen)
 }
 
 fn compile_module_with_source_tree<R>(
     opts: &CompileOpts,
-    emit_base_tree: bool,
+    backend: CompilerBackendNameV1,
     run_regen: R,
 ) -> Result<CompileOutput, CompileError>
 where
     R: FnOnce(&Path, &Path) -> Result<PathBuf, String>,
 {
+    let emit_base_tree = backend == CompilerBackendNameV1::Game;
     if opts.op != "add" && opts.op != "edit" {
         return Err(CompileError::Other(format!(
             "invalid script op {:?} for module {:?} (want \"add\" or \"edit\")",
@@ -8440,12 +8464,15 @@ where
     // may help source recovery, but it cannot authorize native property types unless its
     // bytes still match the game's own file after regeneration. Use the same evidence during
     // composed default-target verification below.
-    let installed_binds = base_path
-        .parent()
-        .and_then(|parent| std::fs::read(parent.join("Binds.Cache")).ok());
-    let admission_binds = binds_bytes
-        .filter(|selected| installed_binds.as_deref() == Some(*selected))
-        .unwrap_or(&[]);
+    // Standalone runners consume sealed inputs rather than the live install;
+    // their admission evidence must remain the same snapshot after regeneration.
+    let selected_admission_binds = if backend == CompilerBackendNameV1::Standalone {
+        opts.binds_override.as_deref()
+    } else {
+        binds_bytes
+    };
+    let admission_binds =
+        compile_module_admission_binds(backend, &base_path, selected_admission_binds);
     let mut mini = {
         let out = splice::extract_module(&regen, &target)
             .map_err(|e| CompileError::Other(format!("extract: {e}")))?;
@@ -18048,6 +18075,57 @@ mod tests {
             report.install_restore_disposition(),
             InstallRestoreDisposition::NotStarted
         );
+    }
+
+    #[test]
+    fn native_admission_keeps_sealed_standalone_inputs_and_rechecks_game_inputs() {
+        let root = unique_test_root("backend-native-admission");
+        std::fs::create_dir_all(&root).unwrap();
+        let base_path = root.join("PrecompiledScript_Shipping.Cache");
+        let live_binds = root.join("Binds.Cache");
+        let sealed = b"caller sealed native API snapshot";
+        // The same snapshot remains authoritative for the standalone runner
+        // when the install disappears or changes after the snapshot was taken.
+        for installed in [
+            Some(sealed.as_slice()),
+            Some(b"changed live inputs".as_slice()),
+            None,
+        ] {
+            if let Some(bytes) = installed {
+                std::fs::write(&live_binds, bytes).unwrap();
+            } else {
+                std::fs::remove_file(&live_binds).unwrap();
+            }
+            assert_eq!(
+                compile_module_admission_binds(
+                    CompilerBackendNameV1::Standalone,
+                    &base_path,
+                    Some(sealed),
+                ),
+                sealed
+            );
+            let game_evidence = compile_module_admission_binds(
+                CompilerBackendNameV1::Game,
+                &base_path,
+                Some(sealed),
+            );
+            assert_eq!(
+                game_evidence,
+                if installed == Some(sealed.as_slice()) {
+                    sealed.as_slice()
+                } else {
+                    &[]
+                },
+            );
+        }
+        assert!(compile_module_admission_binds(
+            CompilerBackendNameV1::Standalone,
+            &base_path,
+            None,
+        )
+        .is_empty());
+        assert!(!live_binds.exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

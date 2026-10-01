@@ -124,6 +124,12 @@ pub enum BuildError {
         given: Vec<String>,
         exactly_one: bool,
     },
+    RequiresValue {
+        sub: &'static str,
+        name: &'static str,
+        required_name: &'static str,
+        required_value: &'static str,
+    },
 }
 
 impl fmt::Display for BuildError {
@@ -273,6 +279,15 @@ impl fmt::Display for BuildError {
                     )
                 }
             }
+            BuildError::RequiresValue {
+                sub,
+                name,
+                required_name,
+                required_value,
+            } => write!(
+                f,
+                "`{sub}` with `{name}=true` requires `{required_name}={required_value}`."
+            ),
         }
     }
 }
@@ -309,6 +324,7 @@ pub fn build(
 
     reject_unknown_arguments(command, &args)?;
     check_argument_sets(command, &args)?;
+    check_compile_overlays(group, command, &args)?;
     check_derived_sources(command, &args)?;
     let may_launch_game = command.safety.requirements(&args).game_launch;
     // Dropped rather than never computed, so that turning a flag on cannot change which arm the
@@ -429,6 +445,32 @@ pub fn with_force(mut invocation: Invocation, opts: &Options) -> Invocation {
         consent.command_line = invocation.display.clone();
     }
     invocation
+}
+
+/// Sparse source input is only supported by the strict standalone compiler. Check before any
+/// safety calculation; the dedicated route supplies the backend through its forced arguments.
+fn check_compile_overlays(
+    group: &GroupSpec,
+    command: &CommandSpec,
+    args: &Map<String, Value>,
+) -> Result<(), BuildError> {
+    if group.cli == "as"
+        && command.sub == "compile"
+        && args.get("overlays").and_then(Value::as_bool) == Some(true)
+        && args.get("backend").and_then(Value::as_str) != Some("standalone")
+        && !command
+            .forced_argv
+            .windows(2)
+            .any(|pair| pair == ["--backend", "standalone"])
+    {
+        return Err(BuildError::RequiresValue {
+            sub: command.sub,
+            name: "overlays",
+            required_name: "backend",
+            required_value: "standalone",
+        });
+    }
+    Ok(())
 }
 
 fn reject_unknown_arguments(
@@ -2443,6 +2485,33 @@ mod tests {
                 ["--", "authored-overlays"],
             ] {
                 assert!(argv.windows(2).any(|actual| actual == pair), "{argv:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_compile_rejects_game_capable_backends_before_safety_even_when_preapproved() {
+        for opts in [options(), permissive()] {
+            for backend in [None, Some("game"), Some("standalone-then-game")] {
+                let mut args = compile_args();
+                args["overlays"] = json!(true);
+                if let Some(backend) = backend {
+                    args["backend"] = json!(backend);
+                }
+                let error = build_with("gore_as", "compile", args, &opts).unwrap_err();
+                assert_eq!(
+                    error,
+                    BuildError::RequiresValue {
+                        sub: "compile",
+                        name: "overlays",
+                        required_name: "backend",
+                        required_value: "standalone",
+                    }
+                );
+                assert_eq!(
+                    error.to_string(),
+                    "`compile` with `overlays=true` requires `backend=standalone`."
+                );
             }
         }
     }

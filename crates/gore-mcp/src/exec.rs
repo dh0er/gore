@@ -378,7 +378,7 @@ pub fn append_note(result: &mut Value, note: String) {
 /// Whether the command refused with the CLI's `--force` hint (see `gore_as::force`).
 pub fn offers_force(outcome: &Outcome) -> bool {
     const HINT: &str = "rerun with --force";
-    outcome.stderr.contains(HINT) || outcome.stdout.contains(HINT)
+    !outcome.succeeded() && (outcome.stderr.contains(HINT) || outcome.stdout.contains(HINT))
 }
 
 /// A tool error that never reached a child process — a bad argument or a refusal.

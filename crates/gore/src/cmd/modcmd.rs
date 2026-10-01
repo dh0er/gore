@@ -2,6 +2,7 @@
 //! Thin CLI over the `gore-mod` crate; same engine the mod-studio GUI uses via FFI.
 
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use std::path::{Component, Path, PathBuf};
 
 /// `gore mod build --spec spec.json --out DIR` → write the bundle dir.
@@ -92,6 +93,66 @@ fn checked_against_model<'a>(
     )
 }
 
+/// Inspect every module carried by a script mini before values claim a module. Keep the
+/// declared target too: single-module replacements use that target at deployment.
+fn inspect_value_script_inputs(
+    scripts: &[gore_mod::ScriptModule],
+    base: &Path,
+) -> Result<(Vec<String>, Vec<[u8; 32]>)> {
+    let mut occupied = std::collections::BTreeSet::new();
+    let mut seals = Vec::with_capacity(scripts.len());
+    for script in scripts {
+        let path = base.join(&script.mini_cache);
+        // Match the deploy engine's per-mini bound; do not allocate an unbounded source file.
+        let bytes = super::as_cache::read_regular_bounded(
+            &path,
+            512 * 1024 * 1024,
+            "VALUE_SCRIPT_INPUT",
+        )?;
+        super::as_cache::validate_module_cache(&path, &bytes, "VALUE_SCRIPT_INPUT")?;
+        occupied.insert(script.module_name.clone());
+        let carried = gore_as::cache::walk_modules::module_names(&bytes)
+            .with_context(|| format!("reading modules in {}", path.display()))?;
+        // A single-module edit may be retargeted by its manifest name. Multi-module edits
+        // upsert every carried module; additions retain the mini's own module names.
+        if carried.len() != 1 || script.op == "add" {
+            occupied.extend(carried);
+        }
+        seals.push(Sha256::digest(&bytes).into());
+    }
+    Ok((occupied.into_iter().collect(), seals))
+}
+
+/// The bundle must retain the exact minis inspected before value compilation, even when
+/// another build changes a supplied file while the standalone compiler is running.
+fn verify_value_script_inputs(bundle: &gore_mod::Bundle, seals: &[[u8; 32]]) -> Result<()> {
+    if seals.is_empty() {
+        return Ok(());
+    }
+    let manifest = bundle
+        .files
+        .get("scripts/manifest.json")
+        .context("script manifest missing after value build")?;
+    let entries: Vec<gore_mod::ScriptEntry> = serde_json::from_slice(manifest)?;
+    anyhow::ensure!(
+        entries.len() >= seals.len(),
+        "script inputs missing after value build"
+    );
+    for (entry, expected) in entries.iter().zip(seals) {
+        let mini = bundle
+            .files
+            .get(&entry.mini)
+            .with_context(|| format!("script mini {} missing after value build", entry.mini))?;
+        let actual: [u8; 32] = Sha256::digest(mini).into();
+        anyhow::ensure!(
+            actual == *expected,
+            "script mini for {} changed during value compilation; rebuild with stable script inputs",
+            entry.module
+        );
+    }
+    Ok(())
+}
+
 pub fn build(
     spec_path: PathBuf,
     out: PathBuf,
@@ -118,7 +179,14 @@ pub fn build(
              a UE4SS registration adapter."
         );
     }
+    // Every relative asset input belongs to the spec's directory, including the minis inspected
+    // before compilation; it must resolve the same way when the bundle is assembled below.
+    let base = spec_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     let mut value_invocation_dirs = Vec::new();
+    let mut script_input_seals = Vec::new();
     let value_generation = if spec.values.is_empty() {
         None
     } else {
@@ -129,11 +197,8 @@ pub fn build(
         reject_work_dir_inside_bundle(&work_dir, &out, &spec.meta.name)?;
         let source = gore_mod::pristine_script_cache_source(&game)?;
         let mini_dir = absolute_path(&out).join(".value-minis");
-        let occupied: Vec<String> = spec
-            .scripts
-            .iter()
-            .map(|existing| existing.module_name.clone())
-            .collect();
+        let (occupied, seals) = inspect_value_script_inputs(&spec.scripts, base)?;
+        script_input_seals = seals;
         let (scripts, cache_sha, invocation_dirs) = crate::cmd::value::compile_values_into_scripts(
             &game,
             &work_dir,
@@ -170,13 +235,10 @@ pub fn build(
     // `gore audio replace --map`. A path written next to the spec has to mean the file next to the
     // spec: an agent or GUI that runs this command chooses neither the working directory nor,
     // usually, knows what it is.
-    let base = spec_path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
     let mut bundle = gore_mod::build_bundle_relative_to(&spec, base)
         .map_err(|e| anyhow::anyhow!("{e}"))
         .with_context(|| format!("building bundle from spec '{}'", spec_path.display()))?;
+    verify_value_script_inputs(&bundle, &script_input_seals)?;
     if let Some(generation) = value_generation {
         bundle.files.insert(
             "scripts/value-generation.json".into(),
@@ -315,6 +377,81 @@ pub fn undeploy(game: Option<PathBuf>) -> Result<()> {
 mod validation_message_tests {
     use super::checked_against_model;
     use std::path::Path;
+
+    fn empty_script_mini(names: &[&str]) -> Vec<u8> {
+        fn string(value: &str, fstring: bool) -> Vec<u8> {
+            let length = value.len() as i32 + i32::from(fstring);
+            let mut bytes = length.to_le_bytes().to_vec();
+            if !value.is_empty() || fstring {
+                bytes.extend_from_slice(value.as_bytes());
+                bytes.push(0);
+            }
+            bytes
+        }
+        let mut bytes = vec![0; 16];
+        bytes.extend_from_slice(&gore_as::cache::header::CACHE_MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&(names.len() as u32).to_le_bytes());
+        for name in names {
+            bytes.extend(string(name, true));
+            bytes.extend(string(name, false));
+            bytes.extend_from_slice(&[0; 32]); // functions/classes/enums/globals/imports/code hash/modules
+            bytes.extend(string("", false));
+            bytes.extend_from_slice(&[0; 8]); // events/delegates
+            bytes.extend(string(&format!("{name}.as"), false));
+            bytes.extend_from_slice(&[0; 4]); // post-init functions
+        }
+        bytes.extend(vec![0; 4 * gore_as::cache::tables::N_TABLES]);
+        bytes
+    }
+
+    fn script_spec(path: &str, target: &str, op: &str) -> gore_mod::BuildSpec {
+        serde_json::from_value(serde_json::json!({
+            "meta": {"name":"M"},
+            "scripts": [{"op":op,"module_name":target,"mini_cache":path}],
+        })).unwrap()
+    }
+
+    #[test]
+    fn values_reserve_secondary_mini_modules_and_resolve_relative_spec_inputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let nested = temp.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("multi.cache"), empty_script_mini(&["A", "B"])).unwrap();
+        let spec = script_spec("nested/multi.cache", "A", "edit");
+        let (occupied, _) = super::inspect_value_script_inputs(&spec.scripts, temp.path()).unwrap();
+        assert_eq!(occupied, ["A", "B"]);
+        // Single-module replacement targets come from the manifest rather than a copied name.
+        std::fs::write(nested.join("multi.cache"), empty_script_mini(&["A"])).unwrap();
+        let spec = script_spec("nested/multi.cache", "B", "edit");
+        let (occupied, _) = super::inspect_value_script_inputs(&spec.scripts, temp.path()).unwrap();
+        assert_eq!(occupied, ["B"]);
+        let spec = script_spec("nested/multi.cache", "B", "add");
+        let (occupied, _) = super::inspect_value_script_inputs(&spec.scripts, temp.path()).unwrap();
+        assert_eq!(occupied, ["A", "B"]);
+    }
+
+    #[test]
+    fn values_refuse_script_input_drift_before_bundle_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("multi.cache");
+        std::fs::write(&path, empty_script_mini(&["A", "B"])).unwrap();
+        let spec = script_spec("multi.cache", "A", "edit");
+        let (_, seals) = super::inspect_value_script_inputs(&spec.scripts, temp.path()).unwrap();
+        let bundle = gore_mod::build_bundle_relative_to(&spec, temp.path()).unwrap();
+        super::verify_value_script_inputs(&bundle, &seals).unwrap();
+        std::fs::write(&path, empty_script_mini(&["A", "C"])).unwrap();
+        let changed = gore_mod::build_bundle_relative_to(&spec, temp.path()).unwrap();
+        assert!(super::verify_value_script_inputs(&changed, &seals)
+            .unwrap_err().to_string().contains("changed during value compilation"));
+    }
+
+    #[test]
+    fn values_refuse_a_script_input_that_is_not_a_module_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("wrong.cache"), b"Binds.Cache, not a mini").unwrap();
+        let spec = script_spec("wrong.cache", "A", "edit");
+        assert!(super::inspect_value_script_inputs(&spec.scripts, temp.path()).is_err());
+    }
 
     #[test]
     fn the_message_says_what_was_not_checked_and_names_the_modules() {

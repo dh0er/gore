@@ -229,6 +229,7 @@ pub fn export(lcache: Option<PathBuf>, out: PathBuf, keep_empty: bool) -> Result
     Ok(())
 }
 
+/// Apply edits, permitting missing ids and header-declared language pairs only with `add_missing`.
 pub fn import(
     lcache: Option<PathBuf>,
     edits: PathBuf,
@@ -267,8 +268,12 @@ pub fn import(
             continue;
         }
         for (lang, text) in &langs {
-            lc.set_value(key, lang, text)
-                .with_context(|| format!("editing {key}/{lang}"))?;
+            if add_missing {
+                lc.set_or_add_value(key, lang, text)
+            } else {
+                lc.set_value(key, lang, text)
+            }
+            .with_context(|| format!("editing {key}/{lang}"))?;
             applied += 1;
         }
     }
@@ -303,13 +308,18 @@ mod tests {
     }
 
     fn empty_lcache() -> Vec<u8> {
+        empty_lcache_with_languages(&["german", "english"])
+    }
+
+    fn empty_lcache_with_languages(languages: &[&str]) -> Vec<u8> {
         let mut plain = Vec::new();
         plain.push(0);
         plain.extend_from_slice(&(b"LCACHE".len() as i32).to_le_bytes());
         plain.extend_from_slice(b"LCACHE");
-        plain.extend_from_slice(&2i32.to_le_bytes());
-        plain.extend_from_slice(&fstring("german"));
-        plain.extend_from_slice(&fstring("english"));
+        plain.extend_from_slice(&(languages.len() as i32).to_le_bytes());
+        for language in languages {
+            plain.extend_from_slice(&fstring(language));
+        }
         plain.extend_from_slice(&0i32.to_le_bytes());
         let pad = (16 - plain.len() % 16) % 16;
         plain.extend(std::iter::repeat_n(0u8, pad));
@@ -449,5 +459,162 @@ mod tests {
         );
         assert_eq!(matches[0].1["german"], "Zweite Zeile");
         assert_eq!(matches[0].1["english"], "English line");
+    }
+
+    fn german_only_lcache() -> Vec<u8> {
+        // Put german_new first so a missing pair must be inserted before the existing pair,
+        // even though edits are traversed in alphabetical order.
+        let mut lc = Lcache::decode(&empty_lcache_with_languages(&[
+            "german_new",
+            "german",
+            "english",
+        ]))
+        .unwrap();
+        lc.add_key(
+            "goremod_existing_id",
+            &BTreeMap::from([("german".to_string(), "Alt".to_string())]),
+        )
+        .unwrap();
+        lc.encode().unwrap()
+    }
+
+    #[test]
+    fn import_add_missing_updates_existing_id_and_inserts_known_language_pair() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("base.lcache");
+        let edits = dir.path().join("edits.json");
+        let output = dir.path().join("edited.lcache");
+        let original = german_only_lcache();
+        fs::write(&input, &original).unwrap();
+        fs::write(
+            &edits,
+            br#"{
+                "GOREMOD_EXISTING_ID": {"German": "Erste Zeile", "German_New": "Erste neue Zeile"},
+                "goremod_existing_id": {"german": "Zweite Zeile", "german_new": "Zweite neue Zeile"}
+            }"#,
+        )
+        .unwrap();
+
+        super::import(
+            Some(input.clone()),
+            edits.clone(),
+            Some(output.clone()),
+            true,
+        )
+        .unwrap();
+
+        let published = fs::read(&output).unwrap();
+        let decoded = Lcache::decode(&published).unwrap();
+        assert_eq!(decoded.key_count(), 1, "id aliases must update one group");
+        assert_eq!(decoded.languages(), ["german_new", "german", "english"]);
+        assert_eq!(
+            decoded.languages_for("goremod_existing_id"),
+            ["german_new", "german"]
+        );
+        assert_eq!(
+            decoded.export(false)["goremod_existing_id"],
+            BTreeMap::from([
+                ("german".to_string(), "Zweite Zeile".to_string()),
+                ("german_new".to_string(), "Zweite neue Zeile".to_string()),
+            ])
+        );
+        assert_eq!(fs::read(&input).unwrap(), original);
+
+        // Reapplying the same aliases must keep both pair order and encrypted bytes stable.
+        super::import(Some(output.clone()), edits, None, true).unwrap();
+        assert_eq!(fs::read(output).unwrap(), published);
+    }
+
+    fn assert_import_refused_before_publication(
+        input: &Path,
+        edits: &Path,
+        add_missing: bool,
+        expected: &str,
+    ) {
+        let original = fs::read(input).unwrap();
+        let new_output = input.with_file_name("new-output.lcache");
+        let existing_output = input.with_file_name("existing-output.lcache");
+        fs::write(&existing_output, b"previous output").unwrap();
+        for output in [
+            Some(new_output.clone()),
+            Some(existing_output.clone()),
+            None,
+        ] {
+            let target = output.as_deref().unwrap_or(input).to_path_buf();
+            let error = super::import(
+                Some(input.to_path_buf()),
+                edits.to_path_buf(),
+                output,
+                add_missing,
+            )
+            .unwrap_err();
+            let message = format!("{error:#}");
+            assert!(message.contains(expected), "{message}");
+            assert_eq!(fs::read(input).unwrap(), original);
+            assert_eq!(fs::read(&existing_output).unwrap(), b"previous output");
+            assert!(!new_output.exists(), "a refusal must not create output");
+            assert!(
+                !target.with_extension("tmp").exists(),
+                "validation must precede staging"
+            );
+        }
+    }
+
+    #[test]
+    fn import_without_add_missing_rejects_missing_pairs_and_ids_before_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("base.lcache");
+        let edits = dir.path().join("edits.json");
+        fs::write(&input, german_only_lcache()).unwrap();
+        fs::write(
+            &edits,
+            br#"{"GOREMOD_EXISTING_ID":{"German":"Neu","German_New":"Neue Zeile"}}"#,
+        )
+        .unwrap();
+        assert_import_refused_before_publication(
+            &input,
+            &edits,
+            false,
+            "language 'German_New' not found for key 'GOREMOD_EXISTING_ID'",
+        );
+
+        fs::write(
+            &edits,
+            br#"{"goremod_existing_id":{"german":"Neu"},"goremod_new_id":{"german":"Neu"}}"#,
+        )
+        .unwrap();
+        assert_import_refused_before_publication(
+            &input,
+            &edits,
+            false,
+            "key 'goremod_new_id' not found",
+        );
+    }
+
+    #[test]
+    fn import_add_missing_rejects_unknown_languages_before_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("base.lcache");
+        let edits = dir.path().join("edits.json");
+        fs::write(&input, german_only_lcache()).unwrap();
+        for id in ["goremod_existing_id", "goremod_new_id"] {
+            // Valid edits sort before the unknown language, exercising refusal after in-memory
+            // updates and, for an existing id, insertion of the known german_new pair.
+            let mut values: LocMap = serde_json::from_str(
+                r#"{"goremod_existing_id":{"german":"Neu","german_new":"Neue Zeile"}}"#,
+            )
+            .unwrap();
+            values.entry(id.to_string()).or_default().extend([
+                ("german".to_string(), "Neu".to_string()),
+                ("zzz_unknown".to_string(), "Unknown".to_string()),
+            ]);
+            fs::write(&edits, serde_json::to_vec(&values).unwrap()).unwrap();
+            assert_import_refused_before_publication(
+                &input,
+                &edits,
+                true,
+                "language 'zzz_unknown' is not declared in the lcache header",
+            );
+        }
     }
 }

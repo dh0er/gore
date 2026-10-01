@@ -2129,7 +2129,8 @@ mod tests {
 
     #[test]
     fn a_refusal_offering_force_tells_the_model_to_ask_once() {
-        let (mut session, _spawn) = faked(exec::Outcome::success(
+        let (mut session, _spawn) = faked(exec::Outcome::failure(
+            1,
             "error: refusing structure preservation\nhint: rerun with --force to proceed anyway.\n",
         ));
         let result = session
@@ -2146,9 +2147,45 @@ mod tests {
             .iter()
             .filter_map(|block| block["text"].as_str())
             .collect();
+        assert_eq!(result["isError"], json!(true));
+        assert!(
+            notes.iter().any(|text| text.contains("rerun with --force")),
+            "{notes:?}"
+        );
         assert!(
             notes.iter().any(|text| text.contains("\"force\": true")
                 && text.contains("Do not ask them per command")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn successful_output_mentioning_force_does_not_offer_force_consent() {
+        let mut outcome = exec::Outcome::success(
+            "documentation: on failure, rerun with --force to proceed anyway.\n",
+        );
+        outcome.stderr = "warning: do not rerun with --force unless a command fails.\n".to_owned();
+        outcome.stderr_total = outcome.stderr.len();
+        let (mut session, _spawn) = faked(outcome);
+
+        let result = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({ "name": "gore_config", "arguments": { "subcommand": "path" } }),
+            ))
+            .expect("answered")
+            .result
+            .unwrap();
+        let notes: Vec<&str> = result["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|block| block["text"].as_str())
+            .collect();
+
+        assert_eq!(result["isError"], json!(false));
+        assert!(
+            !notes.iter().any(|text| text.contains("\"force\": true")),
             "{notes:?}"
         );
     }
@@ -2538,6 +2575,132 @@ mod tests {
             json!(false)
         );
         assert_eq!(spawn.calls().len(), 1);
+    }
+
+    #[test]
+    fn invalid_compile_overlays_fail_before_consent_or_spawn() {
+        for (tool, direct) in [
+            ("gore_as", false),
+            ("gore_as_compile", true),
+            ("gore_as_compile", false),
+        ] {
+            for backend in [None, Some("game"), Some("standalone-then-game")] {
+                if tool == "gore_as_compile" && backend.is_none() {
+                    continue; // This route forces standalone, so an omitted backend is valid.
+                }
+                let mut args = json!({
+                    "src": "scripts", "out": "fresh.Cache", "work_dir": "compiler-work",
+                    "overlays": true,
+                });
+                if let Some(backend) = backend {
+                    args["backend"] = json!(backend);
+                }
+                let (mut session, spawn) = faked(exec::Outcome::success("compiled\n"));
+                initialize_with(&mut session, json!({ "elicitation": {} }));
+                let mut peer = Canned::allowing();
+                let result = session
+                    .handle(&compile_call(tool, args, direct), &mut peer)
+                    .expect("answered")
+                    .result
+                    .unwrap();
+
+                assert_eq!(result["isError"], json!(true), "{tool}: {result}");
+                let message = result["content"][0]["text"].as_str().unwrap();
+                assert!(message.contains("backend"), "{message}");
+                if tool == "gore_as" {
+                    assert!(message.contains("overlays=true"), "{message}");
+                    assert!(message.contains("backend=standalone"), "{message}");
+                }
+                assert_eq!(peer.asked, 0, "{tool}: invalid arguments must not prompt");
+                assert!(
+                    spawn.calls().is_empty(),
+                    "{tool}: invalid arguments must not run"
+                );
+            }
+        }
+    }
+
+    fn compile_call(tool: &str, args: Value, direct: bool) -> Request {
+        let arguments = if direct {
+            args
+        } else {
+            json!({ "subcommand": "compile", "args": args })
+        };
+        request(
+            "tools/call",
+            json!({ "name": tool, "arguments": arguments }),
+        )
+    }
+
+    #[test]
+    fn valid_compile_overlays_run_standalone_without_prompting() {
+        for (tool, direct) in [
+            ("gore_as", false),
+            ("gore_as_compile", true),
+            ("gore_as_compile", false),
+        ] {
+            let mut args = json!({
+                "src": "scripts", "out": "fresh.Cache", "work_dir": "compiler-work",
+                "overlays": true,
+            });
+            if tool == "gore_as" {
+                args["backend"] = json!("standalone");
+            }
+            let (mut session, spawn) = faked(exec::Outcome::success("compiled\n"));
+            initialize_with(&mut session, json!({ "elicitation": {} }));
+            let result = session
+                .handle_unasked(&compile_call(tool, args, direct))
+                .expect("answered")
+                .result
+                .unwrap();
+
+            assert_eq!(result["isError"], json!(false), "{tool}: {result}");
+            let calls = spawn.calls();
+            assert_eq!(calls.len(), 1, "{tool}");
+            assert!(!calls[0].may_launch_game, "{tool}");
+            assert!(calls[0].consent.is_none(), "{tool}");
+            assert!(calls[0].argv.iter().any(|arg| arg == "--overlays"));
+            assert!(calls[0]
+                .argv
+                .windows(2)
+                .any(|pair| pair[0] == "--backend" && pair[1] == "standalone"));
+        }
+    }
+
+    #[test]
+    fn complete_tree_compile_keeps_launch_consent_with_false_or_omitted_overlays() {
+        for overlays in [None, Some(false)] {
+            for backend in [None, Some("game"), Some("standalone-then-game")] {
+                let mut args = json!({
+                    "src": "scripts", "out": "fresh.Cache", "work_dir": "compiler-work",
+                });
+                if let Some(overlays) = overlays {
+                    args["overlays"] = json!(overlays);
+                }
+                if let Some(backend) = backend {
+                    args["backend"] = json!(backend);
+                }
+                let (mut session, spawn) = faked(exec::Outcome::success("compiled\n"));
+                initialize_with(&mut session, json!({ "elicitation": {} }));
+                let mut peer = Canned::declining();
+                let result = session
+                    .handle(&compile_call("gore_as", args, false), &mut peer)
+                    .expect("answered")
+                    .result
+                    .unwrap();
+
+                assert_eq!(result["isError"], json!(true));
+                assert_eq!(peer.asked, 1, "overlays={overlays:?}, backend={backend:?}");
+                assert!(
+                    spawn.calls().is_empty(),
+                    "declining must prevent the launch"
+                );
+                assert!(result["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("launches the game executable"));
+            }
+        }
     }
 
     #[test]

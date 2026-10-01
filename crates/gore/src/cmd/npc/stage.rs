@@ -48,6 +48,12 @@ pub fn compiler_game_for(
     game: Option<PathBuf>,
 ) -> Result<PathBuf> {
     let root = gore_loc::config::game_root(game).context("resolving compiler game path")?;
+    let root = fs::canonicalize(&root).with_context(|| {
+        format!(
+            "canonicalizing resolved compiler game path {}",
+            root.display()
+        )
+    })?;
     let script_cache = gore_mod::pristine_script_cache_source(&root)
         .context("selecting the pristine compiler base cache")?;
     for path in [cache, script_cache.path.as_path()] {
@@ -138,12 +144,18 @@ pub fn build_commands(
                 .iter()
                 .map(|edit| {
                     let source = checked_sources.get(&edit.source_file).with_context(|| {
-                        format!("the validated NPC source snapshot is missing {}", edit.source_file)
+                        format!(
+                            "the validated NPC source snapshot is missing {}",
+                            edit.source_file
+                        )
                     })?;
                     let digest = format!("{:x}", Sha256::digest(source.as_bytes()));
                     Ok::<_, anyhow::Error>(format!(
                         " --only-change {}",
-                        shell_quote(&format!("{}:{}:{}:{digest}", edit.op, edit.module, edit.relative_path))
+                        shell_quote(&format!(
+                            "{}:{}:{}:{digest}",
+                            edit.op, edit.module, edit.relative_path
+                        ))
                     ))
                 })
                 .collect::<Result<Vec<_>>>()?
@@ -160,13 +172,21 @@ pub fn build_commands(
                 .level_edit()
                 .expect("a checkout or suppression always edits a shipped module");
             let source = checked_sources.get(&edit.source_file).with_context(|| {
-                format!("the validated NPC source snapshot is missing {}", edit.source_file)
+                format!(
+                    "the validated NPC source snapshot is missing {}",
+                    edit.source_file
+                )
             })?;
             let source_digest = shell_quote(&format!("{:x}", Sha256::digest(source.as_bytes())));
+            let allow_new_symbols = if manifest.operation == super::workspace::Operation::Checkout {
+                " --allow-new-symbols"
+            } else {
+                ""
+            };
             out.push(format!(
                 "gore as compile-module --backend standalone --op edit \
                  --module {} --rel-path {} --source {} \
-                 --work-dir {work_arg} -o {mini_arg} --expect-base-sha256 {base_arg} \
+                 --work-dir {work_arg}{allow_new_symbols} -o {mini_arg} --expect-base-sha256 {base_arg} \
                  --expect-source-sha256 {source_digest}{game_arg}",
                 shell_quote(&edit.module),
                 shell_quote(&edit.relative_path),
@@ -269,7 +289,15 @@ mod tests {
         assert_eq!(route_of(&manifest), Route::SingleModule);
         let commands = build_commands(&manifest, "work/diego", "unused", "ToughDiego", None);
         assert!(commands[0].contains("compile-module --backend standalone --op edit"));
+        assert!(commands[0].contains(" --allow-new-symbols "));
         assert!(!commands[0].contains("unused"));
+    }
+
+    #[test]
+    fn a_suppression_keeps_strict_single_module_symbol_remapping() {
+        let commands = build_commands(&suppression(), "work/diego", "unused", "NoDiego", None);
+        assert!(commands[0].contains("compile-module --backend standalone --op edit"));
+        assert!(!commands[0].contains("--allow-new-symbols"));
     }
 
     #[test]
@@ -296,7 +324,9 @@ mod tests {
         )));
         assert!(commands[0].contains("--backend standalone"));
         assert!(commands[0].contains("--only-change 'add:AI.AIAgent.Human.Config.MINE.MINE:AI/AIAgent/Human/Config/MINE/MINE.as:"));
-        assert!(commands[0].contains("--only-change 'edit:LevelScripts.XardasTower_AI:LevelScripts/XardasTower_AI.as:"));
+        assert!(commands[0].contains(
+            "--only-change 'edit:LevelScripts.XardasTower_AI:LevelScripts/XardasTower_AI.as:"
+        ));
         let digest = format!("{:x}", Sha256::digest(b"class Test {}"));
         assert_eq!(commands[0].matches(&format!(":{digest}'")).count(), 2);
         assert!(commands[0].contains("--game 'G'"));
@@ -313,9 +343,7 @@ mod tests {
             quoted_child("ws", STAGED_SOURCE_NAME)
         )));
         let digest = format!("{:x}", Sha256::digest(b"class Test {}"));
-        assert!(commands[0].contains(&format!(
-            "--expect-source-sha256 '{digest}'"
-        )));
+        assert!(commands[0].contains(&format!("--expect-source-sha256 '{digest}'")));
         assert!(!commands[0].contains("--game"));
     }
 
@@ -324,10 +352,50 @@ mod tests {
         for mut manifest in [authored(), suppression()] {
             manifest.cache_sha256 = "a".repeat(64);
             let commands = build_commands(&manifest, "ws", "tree", "MyMod", None);
-            assert!(commands[0].contains(&format!(
-                "--expect-base-sha256 '{}'", manifest.cache_sha256
-            )));
+            assert!(
+                commands[0].contains(&format!("--expect-base-sha256 '{}'", manifest.cache_sha256))
+            );
         }
+    }
+
+    #[test]
+    fn compiler_game_is_canonical_and_checks_selected_and_install_base_hashes() {
+        let current = std::env::current_dir().unwrap();
+        let temp = tempfile::Builder::new()
+            .prefix("npc-stage-game-")
+            .tempdir_in(&current)
+            .unwrap();
+        let relative_game = temp.path().strip_prefix(&current).unwrap().to_owned();
+        let live_cache = gore_mod::resolve_game_paths(temp.path()).script_cache;
+        fs::create_dir_all(live_cache.parent().unwrap()).unwrap();
+        fs::write(&live_cache, b"authored base").unwrap();
+        let selected_cache = temp.path().join("explicit.Cache");
+        fs::write(&selected_cache, b"authored base").unwrap();
+
+        let mut manifest = suppression();
+        manifest.cache_sha256 = faithfulness::cache_seal(b"authored base")
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            compiler_game_for(&manifest, &selected_cache, Some(relative_game.clone())).unwrap(),
+            fs::canonicalize(temp.path()).unwrap()
+        );
+
+        fs::write(&selected_cache, b"wrong explicit base").unwrap();
+        let error =
+            compiler_game_for(&manifest, &selected_cache, Some(relative_game.clone())).unwrap_err();
+        assert!(error.to_string().contains("explicit.Cache"), "{error:#}");
+
+        fs::write(&selected_cache, b"authored base").unwrap();
+        fs::write(&live_cache, b"wrong installed base").unwrap();
+        let error = compiler_game_for(&manifest, &selected_cache, Some(relative_game)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&live_cache.display().to_string()),
+            "{error:#}"
+        );
     }
 
     #[test]
@@ -410,10 +478,7 @@ mod tests {
                 "--work-dir {}",
                 shell_quote(&work_dir(Path::new(dir)).display().to_string())
             )));
-            assert!(commands[1].contains(&format!(
-                "--spec {}",
-                quoted_child(dir, "spec.json")
-            )));
+            assert!(commands[1].contains(&format!("--spec {}", quoted_child(dir, "spec.json"))));
         }
         let commands = build_commands(&authored(), dir, tree, "MyMod", Some(dir));
         assert!(commands[0].contains(&shell_quote(tree)));

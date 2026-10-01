@@ -5422,10 +5422,13 @@ fn read_public_int_property(payload: &[u8], name: &str) -> Result<Option<i32>, C
 
 /// Refresh only the selected cached row, including when it was registered by an
 /// older importer. Keep the map's order and all unrelated entry bytes intact.
+/// An existing row owns its load time: loading a save updates the catalog after
+/// the save's embedded public payload was written.
 fn refresh_persistent_slot_metadata(
     data: &mut Vec<u8>,
     slot: &str,
     public_payload: &[u8],
+    preserve_load_time: bool,
 ) -> Result<(), CoreError> {
     let incoming = incoming_public_metadata(public_payload)?;
     if incoming.is_empty() {
@@ -5468,6 +5471,9 @@ fn refresh_persistent_slot_metadata(
     let mut fields = raw_public_properties(data, props, property_start)?;
     for field in incoming {
         if let Some(existing) = fields.iter_mut().find(|(name, _)| name == &field.0) {
+            if preserve_load_time && field.0 == "m_TimeLoaded" {
+                continue;
+            }
             *existing = field;
         } else {
             fields.push(field);
@@ -5741,6 +5747,7 @@ where
         &mut persistent_edited,
         slot,
         split_gsav(&save_edited)?.public_payload,
+        registered,
     )?;
     for (field, member) in [("m_QuickSave", quick_member), ("m_AutoSave", auto_member)] {
         let _ = patch_persistent_slot_scalar_if_present(
@@ -18599,6 +18606,15 @@ mod tests {
     }
 
     fn assert_cached_public_metadata(data: &[u8], slot: &str, payload: &[u8]) {
+        assert_cached_public_metadata_with_load_time(data, slot, payload, None);
+    }
+
+    fn assert_cached_public_metadata_with_load_time(
+        data: &[u8],
+        slot: &str,
+        payload: &[u8],
+        cached_load_time: Option<f64>,
+    ) {
         let root = parse_profile_file(data).unwrap();
         for field in [
             "m_SlotName",
@@ -18618,9 +18634,15 @@ mod tests {
             let path = persistent_slot_property_path(&root, slot, field)
                 .unwrap()
                 .unwrap();
+            let expected = if field == "m_TimeLoaded" {
+                cached_load_time.map(properties::PropertyValue::Double)
+            } else {
+                None
+            }
+            .unwrap_or_else(|| public_branch_field(payload, "SaveGamePublicData", field));
             assert_eq!(
                 properties::resolve(&root.properties, &path).unwrap().value,
-                public_branch_field(payload, "SaveGamePublicData", field),
+                expected,
                 "{field}"
             );
         }
@@ -18661,14 +18683,72 @@ mod tests {
     }
 
     #[test]
+    fn assign_registered_save_profile_preserves_catalog_load_time() {
+        for (profile_id, instanced) in [(0, false), (1, false), (0, true), (1, true)] {
+            let dir = tempdir().unwrap();
+            let slot = "G1R-007";
+            let save_path = dir.path().join(format!("{slot}.sav"));
+            let persistent_path = dir.path().join("PersistentDataList.sav");
+            let payload = dual_public_payload(slot, "Registered save", 0);
+            assert_eq!(
+                public_branch_field(&payload, "SaveGamePublicData", "m_TimeLoaded"),
+                properties::PropertyValue::Double(0.0)
+            );
+            fs::write(
+                &save_path,
+                build_gsav(2, &payload, &minimal_stream(), &[1, 2, 3, 4]),
+            )
+            .unwrap();
+            fs::write(
+                &persistent_path,
+                assignment_persistent_data_list_with_public_shape(
+                    slot,
+                    Some(0),
+                    &[slot],
+                    &[],
+                    instanced,
+                ),
+            )
+            .unwrap();
+
+            assign_save_profile(&save_path, None, &persistent_path, profile_id, false).unwrap();
+
+            let written = fs::read(&save_path).unwrap();
+            let parts = split_gsav(&written).unwrap();
+            assert_cached_public_metadata_with_load_time(
+                &fs::read(&persistent_path).unwrap(),
+                slot,
+                parts.public_payload,
+                Some(1710.3161790370941),
+            );
+            assert_eq!(parts.compressed_stream, minimal_stream());
+            assert_eq!(parts.trailer, &[1, 2, 3, 4]);
+            let again = assign_save_profile(&save_path, None, &persistent_path, profile_id, false)
+                .unwrap();
+            assert_eq!(again["bytesChanged"], false);
+        }
+    }
+
+    #[test]
     fn assign_save_profile_import_copies_incoming_public_metadata() {
         let dir = tempdir().unwrap();
         let source = dir.path().join("detached.sav");
         let target = dir.path().join("G1R-007.sav");
         let persistent_path = dir.path().join("PersistentDataList.sav");
+        let mut payload = dual_public_payload("G1R-054", "Imported", 0);
+        let root = properties::parse_property_list_root_at(&payload, 0).unwrap();
+        let path = public_field_paths(&root, "m_TimeLoaded").remove(0);
+        let property = properties::resolve(&root.properties, &properties::parse_path(&path).unwrap())
+            .unwrap();
+        properties::patch_scalar(
+            &mut payload,
+            property,
+            properties::ScalarValue::Double(2500.5),
+        )
+        .unwrap();
         let original = build_gsav(
             2,
-            &dual_public_payload("G1R-054", "Imported", 0),
+            &payload,
             &minimal_stream(),
             &[1, 2, 3, 4],
         );
@@ -19128,10 +19208,11 @@ mod tests {
                 properties::PropertyValue::Int(1)
             );
         }
-        assert_cached_public_metadata(
+        assert_cached_public_metadata_with_load_time(
             &fs::read(&persistent_path).unwrap(),
             "G1R-007",
             parts.public_payload,
+            Some(1710.3161790370941),
         );
         assert_eq!(
             global_save_slots(&fs::read(&persistent_path).unwrap()),

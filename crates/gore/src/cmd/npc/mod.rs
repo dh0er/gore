@@ -425,6 +425,64 @@ fn authoring_cache_path(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result
         .path)
 }
 
+/// Resolve the current pristine input while retaining explicit selections for later commands.
+struct AuthoringInputs {
+    cache: PathBuf,
+    explicit_cache: bool,
+    game: Option<PathBuf>,
+}
+
+impl AuthoringInputs {
+    fn resolve(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<Self> {
+        let explicit_cache = cache.is_some();
+        // An explicit cache remains usable offline without consulting another installation.
+        let game = if game.is_some() || cache.is_none() {
+            let root = gore_loc::config::game_root(game).context("resolving the NPC game path")?;
+            Some(
+                fs::canonicalize(&root)
+                    .with_context(|| format!("resolving NPC game directory {}", root.display()))?,
+            )
+        } else {
+            None
+        };
+        let cache = authoring_cache_path(cache, game.clone())?;
+        let cache = fs::canonicalize(&cache)
+            .with_context(|| format!("resolving NPC script cache {}", cache.display()))?;
+        Ok(Self {
+            cache,
+            explicit_cache,
+            game,
+        })
+    }
+
+    fn command(&self, action: &str, dir: &Path) -> String {
+        // A game-selected pristine cache may be an owned backup removed by undeploy. Keep the
+        // installation selection so the next command finds its then-current pristine source.
+        let cache = if self.explicit_cache {
+            format!(
+                " --cache {}",
+                stage::shell_quote(&self.cache.display().to_string())
+            )
+        } else {
+            String::new()
+        };
+        let game = self
+            .game
+            .as_ref()
+            .map(|path| {
+                format!(
+                    " --game {}",
+                    stage::shell_quote(&path.display().to_string())
+                )
+            })
+            .unwrap_or_default();
+        format!(
+            "gore npc {action} {}{cache}{game}",
+            stage::shell_quote(&dir.display().to_string()),
+        )
+    }
+}
+
 /// Namensraum der Levelskripte. Nur diese 29 Module tragen Spawn-Stellen.
 const LEVEL_SCRIPT_PREFIX: &str = "LevelScripts.";
 
@@ -1049,7 +1107,8 @@ fn author(
         routine_plan::validate_name_literal(waypoint, "waypoint")?;
     }
 
-    let path = authoring_cache_path(cache, game)?;
+    let inputs = AuthoringInputs::resolve(cache, game)?;
+    let path = inputs.cache.clone();
     let template_spawn = generate::spawn_class(&request.from);
     let emitted = emit_index(Some(path.clone()), None, Some(&template_spawn))?;
     let modules = model::parse_modules(&read_module_cache(&path)?)
@@ -1273,15 +1332,15 @@ fn author(
             "  NOTE: --modular-visuals has no shipped precedent; check the comment in {module_leaf}"
         );
     }
-    println!("next: gore npc check {}", out.display());
+    println!("next: {}", inputs.command("check", out));
     Ok(())
 }
 
 /// `gore npc delete` — eine ausgelieferte Figur nicht mehr setzen lassen.
 fn suppress(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, out: &Path) -> Result<()> {
     let spawn_class = generate::spawn_class(npc);
-    let path = authoring_cache_path(cache, game)?;
-    let emitted = emit_index(Some(path), None, Some(&spawn_class))?;
+    let inputs = AuthoringInputs::resolve(cache, game)?;
+    let emitted = emit_index(Some(inputs.cache.clone()), None, Some(&spawn_class))?;
     if !emitted.classes.contains_key(&spawn_class) {
         bail!(
             "no character {npc} in this cache — {spawn_class} is not declared. \
@@ -1347,7 +1406,7 @@ fn suppress(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, out: &Path
         "  NOTE: this only stops future placement. A save that already spawned {npc} still \
          carries that body"
     );
-    println!("next: gore npc check {}", out.display());
+    println!("next: {}", inputs.command("check", out));
     Ok(())
 }
 
@@ -1449,9 +1508,10 @@ fn validate_manifest_modules(manifest: &workspace::Manifest) -> Result<()> {
 fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
     let manifest = read_manifest(dir)?;
     validate_manifest_modules(&manifest)?;
-    routine::check_managed(dir, &manifest, game.clone())?;
+    let inputs = AuthoringInputs::resolve(cache, game)?;
+    routine::check_managed(dir, &manifest, inputs.game.clone())?;
     let spawn_class = generate::spawn_class(&manifest.npc_id);
-    let path = authoring_cache_path(cache, game)?;
+    let path = inputs.cache.clone();
     let emitted = emit_index(Some(path.clone()), None, Some(&spawn_class))?;
 
     let mut findings: Vec<check::Finding> = Vec::new();
@@ -1481,7 +1541,7 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
             "offline-checked only: that this character appears, keeps its routine and survives a \
              save is not proven in game"
         );
-        println!("next: gore npc stage {}", dir.display());
+        println!("next: {}", inputs.command("stage", dir));
         return Ok(());
     }
 
@@ -1500,7 +1560,7 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
         bail!("{blocking} blocking problem(s) in {}", dir.display());
     }
     println!("{} warning(s), nothing blocking", findings.len());
-    println!("next: gore npc stage {}", dir.display());
+    println!("next: {}", inputs.command("stage", dir));
     Ok(())
 }
 
@@ -1679,19 +1739,71 @@ fn validate_stage_output_target(path: &Path, kind: &str) -> Result<()> {
     Ok(())
 }
 
-fn prepare_stage_work_dir(path: &Path) -> Result<()> {
-    match fs::create_dir(path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error).with_context(|| format!("creating {}", path.display())),
-    }
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("reading NPC compiler work directory {}", path.display()))?;
+const STAGE_WORK_OWNER: &str = ".gore-npc-work-owner";
+
+fn stage_work_owner_bytes(path: &Path) -> Result<Vec<u8>> {
+    let root = fs::canonicalize(path.parent().context("NPC work directory has no parent")?)?;
+    let work = root.join(path.file_name().context("NPC work directory has no name")?);
+    Ok(format!("GORE NPC compiler scratch v1\n{}\n", work.display()).into_bytes())
+}
+
+/// Inspect before any stage writes: the compiler will recursively replace this scratch's tree.
+/// Only an empty directory can be claimed; populated scratch must already carry our marker.
+fn validate_stage_work_dir(path: &Path) -> Result<bool> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).context("reading NPC compiler work directory"),
+    };
     ensure!(
         metadata.is_dir() && !stage_path_is_link_or_reparse(&metadata),
         "NPC compiler work directory is not a real directory: {}",
         path.display()
     );
+    let owner = path.join(STAGE_WORK_OWNER);
+    match fs::symlink_metadata(&owner) {
+        Ok(metadata) => {
+            let expected = stage_work_owner_bytes(path)?;
+            ensure!(
+                metadata.is_file()
+                    && !stage_path_is_link_or_reparse(&metadata)
+                    && metadata.len() == expected.len() as u64
+                    && fs::read(&owner)? == expected,
+                "NPC compiler work directory has an invalid ownership marker: {}",
+                path.display()
+            );
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ensure!(
+                fs::read_dir(path)?.next().transpose()?.is_none(),
+                "refusing unowned nonempty NPC compiler work directory: {}. Choose a different \
+                 workspace or move that directory aside; its contents have been preserved",
+                path.display()
+            );
+            Ok(false)
+        }
+        Err(error) => Err(error).context("reading NPC compiler work ownership"),
+    }
+}
+
+fn prepare_stage_work_dir(path: &Path) -> Result<()> {
+    validate_stage_work_dir(path)?;
+    match fs::create_dir(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error).with_context(|| format!("creating {}", path.display())),
+    }
+    if !validate_stage_work_dir(path)? {
+        let owner = path.join(STAGE_WORK_OWNER);
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&owner)
+            .with_context(|| format!("claiming NPC compiler scratch {}", path.display()))?;
+        file.write_all(&stage_work_owner_bytes(path)?)?;
+        file.sync_all()?;
+    }
     Ok(())
 }
 
@@ -1803,11 +1915,17 @@ fn stage_workspace(
     validate_stage_directory(dir)?;
     let spec_path = dir.join("spec.json");
     validate_stage_output_target(&spec_path, "spec")?;
+    // Keep the suffix used by both printed commands and MCP's derived write classification.
+    let command_dir = fs::canonicalize(dir)
+        .with_context(|| format!("resolving NPC stage workspace {}", dir.display()))?;
+    let work = stage::work_dir(&command_dir);
+    validate_stage_work_dir(&work)?;
     let manifest = read_manifest(dir)?;
     validate_manifest_modules(&manifest)?;
-    routine::check_managed(dir, &manifest, game.clone())?;
-    let path = authoring_cache_path(cache, game.clone())?;
-    let game = Some(stage::compiler_game_for(&manifest, &path, game)?);
+    let inputs = AuthoringInputs::resolve(cache, game)?;
+    routine::check_managed(dir, &manifest, inputs.game.clone())?;
+    let path = &inputs.cache;
+    let game = Some(stage::compiler_game_for(&manifest, path, inputs.game)?);
     let inspection = workspace_source_findings(dir, &manifest, &path)?;
     let blocking: Vec<_> = inspection
         .findings
@@ -1821,6 +1939,7 @@ fn stage_workspace(
         bail!("workspace source failed the NPC guards; run `gore npc check` for details");
     }
     let route = stage::route_of(&manifest);
+    prepare_stage_work_dir(&work)?;
 
     let staged_overlay = match route {
         stage::Route::Overlays => Some(stage_sparse_snapshot(
@@ -1849,16 +1968,6 @@ fn stage_workspace(
         .as_ref()
         .map(|snapshot| snapshot.path().display().to_string())
         .unwrap_or_default();
-
-    // Der Compiler verlangt einen **vorhandenen** privaten Arbeitsordner und bricht sonst mit
-    // "reading compiler workspace metadata" ab. Ihn hier anzulegen erspart dem Nutzer ein
-    // Kommando, das aussieht, als sei es vollständig, und dann scheitert.
-    // The printed paths and the work directory must share one canonical workspace root.
-    // For `stage .`, suffixing the literal `.` would otherwise create `..work` inside it.
-    let command_dir = fs::canonicalize(dir)
-        .with_context(|| format!("resolving NPC stage workspace {}", dir.display()))?;
-    let work = stage::work_dir(&command_dir);
-    prepare_stage_work_dir(&work)?;
 
     let spec = stage::spec_json(&manifest, mod_name);
     write_stage_output_atomic(
@@ -1953,11 +2062,29 @@ fn write_display_name(id: &str, name: &str, english: Option<&str>, out: &Path) -
     writeln!(file, "{content}").with_context(|| format!("writing {}", out.display()))?;
     println!("wrote {}", out.display());
     println!("  {} -> {name:?} in both German columns", id.to_lowercase());
-    println!(
-        "next: gore loc import --edits {} --add-missing",
-        stage::shell_quote(&out.display().to_string())
-    );
+    println!("next: {}", display_name_import_command(out));
     Ok(())
+}
+
+fn display_name_import_command(out: &Path) -> String {
+    // This helper has no selected installation. Require a deliberate input and write a sibling
+    // artifact instead of falling back to an in-place import into the configured game.
+    let mut artifact = out.with_extension("lcache");
+    if out
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("lcache"))
+    {
+        let mut name = out.as_os_str().to_os_string();
+        name.push(".patched.lcache");
+        artifact = PathBuf::from(name);
+    }
+    format!(
+        "gore loc import --lcache {} --out {} --edits {} --add-missing",
+        stage::shell_quote("<path/to/chosen-input.lcache>"),
+        stage::shell_quote(&artifact.display().to_string()),
+        stage::shell_quote(&out.display().to_string()),
+    )
 }
 
 /// `gore npc checkout` — das eigene Modul einer ausgelieferten Figur zum Bearbeiten herausnehmen.
@@ -1969,7 +2096,8 @@ fn write_display_name(id: &str, name: &str, english: Option<&str>, out: &Path) -
 /// ersetzen, um eine einzige zu aendern.
 fn checkout(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, out: &Path) -> Result<()> {
     let spawn_class = generate::spawn_class(npc);
-    let path = authoring_cache_path(cache, game)?;
+    let inputs = AuthoringInputs::resolve(cache, game)?;
+    let path = inputs.cache.clone();
     let emitted = emit_index(Some(path.clone()), None, Some(&spawn_class))?;
     if !emitted.classes.contains_key(&spawn_class) {
         bail!(
@@ -2029,7 +2157,7 @@ fn checkout(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, out: &Path
     println!("  {leaf}  {class_count} classes from {module_name}");
     println!("  {}", render::translation_line(&emitted, &module_name));
     println!("  edit the values; keep every existing default target, class name and parent");
-    println!("next: gore npc check {}", out.display());
+    println!("next: {}", inputs.command("check", out));
     Ok(())
 }
 
@@ -2410,6 +2538,180 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn npc_handoffs_keep_the_resolved_install_and_explicit_cache_selection() {
+        use sha2::{Digest, Sha256};
+        let temp = tempfile::tempdir().unwrap();
+        let selected_game = temp.path().join("chosen game 'one'");
+        let other_game = temp.path().join("other game");
+        let selected_cache = temp.path().join("selected cache 'copy'.Cache");
+        let bytes = b"same cache in different installations";
+        for game in [&selected_game, &other_game] {
+            let live = gore_mod::resolve_game_paths(game).script_cache;
+            fs::create_dir_all(live.parent().unwrap()).unwrap();
+            fs::write(&live, bytes).unwrap();
+        }
+        fs::write(&selected_cache, bytes).unwrap();
+        // Isolate configuration in a child process; never redirect this test runner's settings.
+        if std::env::var_os("GORE_NPC_HANDOFF_TEST_CHILD").is_none() {
+            let settings = temp.path().join("settings");
+            gore_loc::config::save_to(
+                &settings.join("gore/config.json"),
+                &gore_loc::config::Config {
+                    game_path: Some(other_game.display().to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "cmd::npc::tests::npc_handoffs_keep_the_resolved_install_and_explicit_cache_selection",
+                    "--nocapture",
+                ])
+                .env("GORE_NPC_HANDOFF_TEST_CHILD", "1")
+                .env("XDG_DATA_HOME", &settings)
+                .env("LOCALAPPDATA", &settings)
+                .env("APPDATA", &settings)
+                .env("GORE_DISABLE_GAME_AUTODETECT", "1")
+                .output()
+                .unwrap();
+            assert!(
+                child.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr)
+            );
+            return;
+        }
+        let configured_game = gore_loc::config::game_root(None).unwrap();
+        assert_eq!(
+            fs::read(gore_mod::resolve_game_paths(&configured_game).script_cache).unwrap(),
+            bytes
+        );
+        let inputs = AuthoringInputs::resolve(
+            Some(selected_cache.clone()),
+            Some(selected_game.join("G1R/Script")),
+        )
+        .unwrap();
+        assert_eq!(inputs.cache, fs::canonicalize(&selected_cache).unwrap());
+        assert_eq!(inputs.game, Some(fs::canonicalize(&selected_game).unwrap()));
+        assert_ne!(
+            inputs.game,
+            Some(fs::canonicalize(&configured_game).unwrap())
+        );
+        let (mut manifest, _) = sparse_stage_fixture();
+        manifest.cache_sha256 = faithfulness::cache_seal(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            stage::compiler_game_for(&manifest, &inputs.cache, inputs.game.clone()).unwrap(),
+            fs::canonicalize(&selected_game).unwrap()
+        );
+        let workspace = temp.path().join("my NPC 'workspace'");
+        for action in ["check", "stage"] {
+            let command = inputs.command(action, &workspace);
+            assert!(command.starts_with(&format!(
+                "gore npc {action} {} --cache {}",
+                stage::shell_quote(&workspace.display().to_string()),
+                stage::shell_quote(&inputs.cache.display().to_string()),
+            )));
+            assert!(command.ends_with(&format!(
+                " --game {}",
+                stage::shell_quote(&inputs.game.as_ref().unwrap().display().to_string())
+            )));
+            assert!(!command.contains(&other_game.display().to_string()));
+            assert!(!command.contains(&configured_game.display().to_string()));
+        }
+        assert_eq!(fs::read(&selected_cache).unwrap(), bytes);
+        for game in [&selected_game, &other_game] {
+            assert_eq!(
+                fs::read(gore_mod::resolve_game_paths(game).script_cache).unwrap(),
+                bytes
+            );
+            assert!(!game.join(".gore-install-mutation.lock").exists());
+        }
+
+        let default_inputs = AuthoringInputs::resolve(None, None).unwrap();
+        assert_eq!(
+            default_inputs.game,
+            Some(fs::canonicalize(&configured_game).unwrap())
+        );
+        for action in ["check", "stage"] {
+            let command = default_inputs.command(action, &workspace);
+            assert!(!command.contains(" --cache "));
+            assert!(command.ends_with(&format!(
+                " --game {}",
+                stage::shell_quote(&default_inputs.game.as_ref().unwrap().display().to_string())
+            )));
+        }
+
+        // Model an owned deployed cache and its pristine backup in this synthetic installation.
+        let game = inputs.game.as_ref().unwrap();
+        let live = gore_mod::resolve_game_paths(game).script_cache;
+        let backup = live.with_extension("Cache.gore-bak");
+        let deployed = b"installed NPC mod";
+        fs::write(&live, deployed).unwrap();
+        fs::write(&backup, bytes).unwrap();
+        let identity = |bytes: &[u8]| format!("sha256:{:x}", Sha256::digest(bytes));
+        let record = gore_mod::DeployRecord {
+            mod_name: "NpcHandoffFixture".into(),
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: [(live.display().to_string(), identity(deployed))].into(),
+            backup_hashes: [(backup.display().to_string(), identity(bytes))].into(),
+            ..Default::default()
+        };
+        let record_path = gore_mod::deploy_record_path(game);
+        fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+
+        let game_only = AuthoringInputs::resolve(None, inputs.game.clone()).unwrap();
+        assert_eq!(game_only.cache, fs::canonicalize(&backup).unwrap());
+        let commands: Vec<_> = ["check", "stage"]
+            .map(|action| game_only.command(action, &workspace))
+            .into();
+        for command in &commands {
+            assert!(!command.contains(" --cache "));
+            assert!(!command.contains(".gore-bak"));
+            assert!(command.ends_with(&format!(
+                " --game {}",
+                stage::shell_quote(&game.display().to_string())
+            )));
+        }
+        assert_eq!(
+            stage::compiler_game_for(&manifest, &game_only.cache, game_only.game.clone()).unwrap(),
+            *game
+        );
+
+        // Restore the synthetic install and remove ownership just as undeploy does. Following
+        // either game-only hint now reselects the live pristine cache with the same base seal.
+        fs::write(&live, fs::read(&backup).unwrap()).unwrap();
+        fs::remove_file(&backup).unwrap();
+        fs::remove_file(&record_path).unwrap();
+        let resumed = AuthoringInputs::resolve(None, game_only.game.clone()).unwrap();
+        assert_eq!(resumed.cache, fs::canonicalize(&live).unwrap());
+        for (action, command) in ["check", "stage"].into_iter().zip(commands) {
+            assert_eq!(resumed.command(action, &workspace), command);
+        }
+        assert_eq!(
+            stage::compiler_game_for(&manifest, &resumed.cache, resumed.game.clone()).unwrap(),
+            *game
+        );
+        assert_eq!(fs::read(&live).unwrap(), bytes);
+        assert_eq!(fs::read(&selected_cache).unwrap(), bytes);
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+
+        let offline = AuthoringInputs::resolve(Some(selected_cache), None).unwrap();
+        assert!(offline.game.is_none());
+        assert!(!offline.command("check", &workspace).contains(" --game "));
+        assert!(offline.command("stage", &workspace).contains(" --cache "));
+    }
+
+    #[test]
     fn sparse_staging_copies_only_validated_sources_and_binds_their_hashes() {
         use sha2::{Digest, Sha256};
         let temp = tempfile::tempdir().unwrap();
@@ -2616,6 +2918,110 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
             "{error:#}"
         );
         assert!(outside.is_dir());
+    }
+
+    #[test]
+    fn stage_rejects_unowned_scratch_before_touching_snapshots_or_specs() {
+        let temp = tempfile::tempdir().unwrap();
+        for operation in [workspace::Operation::New, workspace::Operation::Checkout] {
+            let workspace = temp.path().join(format!("{operation:?}"));
+            fs::create_dir(&workspace).unwrap();
+            let work = stage::work_dir(&workspace);
+            fs::create_dir_all(work.join("tree")).unwrap();
+            let sentinel = work.join("tree/hand-authored.as");
+            let sentinel_bytes = b"\x00unowned scratch\r\n\xff";
+            fs::write(&sentinel, sentinel_bytes).unwrap();
+            let spec = workspace.join("spec.json");
+            fs::write(&spec, b"existing spec bytes").unwrap();
+            let snapshot = workspace.join(stage::STAGED_SOURCE_NAME);
+            fs::write(&snapshot, b"existing staged source").unwrap();
+            let (mut manifest, _) = sparse_stage_fixture();
+            manifest.operation = operation;
+            if operation == workspace::Operation::Checkout {
+                manifest.modules.remove(0);
+            }
+            write_manifest(&workspace, &manifest).unwrap();
+            let count = fs::read_dir(&workspace).unwrap().count();
+            let error = stage_workspace(&workspace, None, "TestMod", None, None).unwrap_err();
+            assert!(error.to_string().contains("unowned nonempty"), "{error:#}");
+            assert!(prepare_stage_work_dir(&work).is_err());
+            assert_eq!(fs::read(&sentinel).unwrap(), sentinel_bytes);
+            assert_eq!(fs::read(&spec).unwrap(), b"existing spec bytes");
+            assert_eq!(fs::read(&snapshot).unwrap(), b"existing staged source");
+            assert_eq!(fs::read_dir(&workspace).unwrap().count(), count);
+            assert_eq!(fs::read_dir(&work).unwrap().count(), 1);
+            assert!(!work.join(STAGE_WORK_OWNER).exists());
+        }
+    }
+
+    #[test]
+    fn stage_claims_empty_scratch_and_reuses_only_its_owned_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        for preexisting in [false, true] {
+            let work = temp.path().join(format!("workspace-{preexisting}.work"));
+            if preexisting {
+                fs::create_dir(&work).unwrap();
+            }
+            prepare_stage_work_dir(&work).unwrap();
+            let owner = work.join(STAGE_WORK_OWNER);
+            let owner_bytes = fs::read(&owner).unwrap();
+            fs::create_dir(work.join("tree")).unwrap();
+            let compiled = work.join("tree/compiled.as");
+            fs::write(&compiled, b"previous compilation").unwrap();
+            prepare_stage_work_dir(&work).unwrap();
+            assert_eq!(fs::read(&compiled).unwrap(), b"previous compilation");
+            assert_eq!(fs::read(&owner).unwrap(), owner_bytes);
+
+            // A copied marker or corrupt claim cannot authorize another scratch tree.
+            let unowned = temp.path().join(format!("other-{preexisting}.work"));
+            fs::create_dir_all(unowned.join("tree")).unwrap();
+            fs::write(unowned.join(STAGE_WORK_OWNER), &owner_bytes).unwrap();
+            fs::write(unowned.join("tree/keep.as"), b"unowned bytes").unwrap();
+            let error = prepare_stage_work_dir(&unowned).unwrap_err();
+            assert!(error.to_string().contains("invalid ownership marker"));
+            assert_eq!(
+                fs::read(unowned.join("tree/keep.as")).unwrap(),
+                b"unowned bytes"
+            );
+            fs::remove_file(&owner).unwrap();
+            assert!(prepare_stage_work_dir(&work).is_err());
+            assert!(!owner.exists());
+            assert_eq!(fs::read(&compiled).unwrap(), b"previous compilation");
+        }
+    }
+
+    #[test]
+    fn npc_text_hint_requires_a_chosen_input_and_a_separate_quoted_artifact() {
+        for edits in [
+            "npc files/name 'edits'.json",
+            "npc files/name 'edits'.lcache",
+            "npc files/name 'edits'.LCACHE",
+        ] {
+            let edits = Path::new(edits);
+            let command = display_name_import_command(edits);
+            let output = if edits
+                .extension()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .eq_ignore_ascii_case("lcache")
+            {
+                PathBuf::from(format!("{}.patched.lcache", edits.display()))
+            } else {
+                edits.with_extension("lcache")
+            };
+            assert_ne!(output, edits);
+            assert_eq!(output.parent(), edits.parent());
+            assert_eq!(
+                command,
+                format!(
+                    "gore loc import --lcache {} --out {} --edits {} --add-missing",
+                    stage::shell_quote("<path/to/chosen-input.lcache>"),
+                    stage::shell_quote(&output.display().to_string()),
+                    stage::shell_quote(&edits.display().to_string()),
+                )
+            );
+        }
     }
 
     fn entry(domain: &'static str, id: &str, category: &str, class: Option<&str>) -> CatalogEntry {

@@ -1151,7 +1151,7 @@ fn read_tag_map_cache(path: &Path) -> Result<Vec<u8>> {
     read_validated_cache(path, "AS_TAG_MAP_INPUT")
 }
 
-fn read_regular_bounded(path: &Path, limit: u64, label: &'static str) -> Result<Vec<u8>> {
+pub(super) fn read_regular_bounded(path: &Path, limit: u64, label: &'static str) -> Result<Vec<u8>> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("{label}: opening {}", path.display()))?;
     let metadata = file

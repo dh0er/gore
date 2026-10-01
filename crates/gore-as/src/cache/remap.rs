@@ -2411,6 +2411,30 @@ fn unqualified_native_row(
     ))
 }
 
+/// Methods resolve through their T1 owner, ignoring their own Module field. Imports and
+/// unresolved owners cannot use the engine/native force override.
+fn is_native_function_row(
+    row: &FuncRowMeta,
+    meta: &TailMetadata,
+    pristine: &PristineDeclarationAuthority,
+) -> bool {
+    if row.is_imported {
+        return false;
+    }
+    if !row.is_method {
+        return row.module.is_empty();
+    }
+    meta.type_row(row.owner_dep.1)
+        .map(|owner| type_declaration_descriptor(owner).kind)
+        .or_else(|| {
+            pristine
+                .types_by_ptr
+                .get(&row.owner_dep.1)
+                .map(|owner| owner.kind)
+        })
+        .is_some_and(|kind| kind != TypeDeclarationKind::ScriptLeaf)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TypeDeclarationKind {
     ScriptLeaf,
@@ -3282,14 +3306,15 @@ fn validate_novel_declaration_membership(
                 && !exact_pristine
                 && !qualified_native
             {
-                unqualified_native_row(
-                    2,
-                    row.key,
-                    format!(
-                        "method/native function {}::{} in module {:?} has neither an exact current/pristine function record nor an exact pristine FunctionReferences identity: {identity:?}",
-                        row.namespace, row.name, row.module
-                    ),
-                )?;
+                let detail = format!(
+                    "method/native function {}::{} in module {:?} has neither an exact current/pristine function record nor an exact pristine FunctionReferences identity: {identity:?}",
+                    row.namespace, row.name, row.module
+                );
+                if is_native_function_row(row, meta, pristine) {
+                    unqualified_native_row(2, row.key, detail)?;
+                } else {
+                    return Err(missing_declaration_membership(2, row.key, detail));
+                }
             }
         } else {
             if !has_authority(&row.module) {
@@ -5844,7 +5869,11 @@ impl FinalDeclarationQueries {
                     "final module output has no exact function record for runtime signature {}",
                     identity.display
                 );
-                if declaration_match == FunctionDeclarationMatch::Missing {
+                if declaration_match == FunctionDeclarationMatch::Missing
+                    && meta
+                        .func_row(row_key)
+                        .is_some_and(|row| is_native_function_row(row, meta, pristine))
+                {
                     unqualified_native_row(2, row_key, detail)?;
                     continue;
                 }
@@ -10599,6 +10628,220 @@ mod native_api_snapshot_tests {
             |_| true,
             &mut budget,
         )
+    }
+
+    fn replace_row_module(bytes: &mut Vec<u8>, start: usize, module: &str) {
+        let mut cursor = Cursor::at(bytes, start + 8);
+        cursor.read_sia().unwrap(); // row name
+        let module_start = cursor.pos();
+        cursor.read_sia().unwrap();
+        let module_end = cursor.pos();
+        let mut encoded_module = Vec::new();
+        append_canonical_sia(&mut encoded_module, module).unwrap();
+        bytes.splice(module_start..module_end, encoded_module);
+    }
+
+    fn cache_with_function_scope(module: &str, is_method: bool, is_imported: bool) -> Vec<u8> {
+        let mut bytes = cache_with_native_api(0);
+        let meta = TailMetadata::build(&bytes).unwrap();
+        replace_row_module(&mut bytes, meta.funcs[0].start, module);
+
+        let meta = TailMetadata::build(&bytes).unwrap();
+        let owner_offset = meta.funcs[0].owner_dep.0;
+        for (index, flag) in [is_method, is_imported, is_method].into_iter().enumerate() {
+            let offset = owner_offset - 12 + index * 4; // const, imported, method
+            bytes[offset..offset + 4].copy_from_slice(&i32::from(flag).to_le_bytes());
+        }
+        if !is_method {
+            bytes[owner_offset..owner_offset + 8].copy_from_slice(&0_i64.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn cache_with_missing_script_method(method_module: &str) -> Vec<u8> {
+        let mut bytes = cache_with_function_scope(method_module, true, false);
+        let meta = TailMetadata::build(&bytes).unwrap();
+        // The script class has neither properties nor methods; only its T1/T2 are declared.
+        bytes.truncate(meta.properties[0].start - 4);
+        bytes.extend_from_slice(&0_i32.to_le_bytes()); // T7
+        replace_row_module(&mut bytes, meta.types[0].start, "Authored");
+        let meta = TailMetadata::build(&bytes).unwrap();
+        let type_id = meta.type_ids[0].start;
+        bytes[type_id..type_id + 4].copy_from_slice(&0x0800_000c_i32.to_le_bytes());
+
+        let mut module = Vec::new();
+        module.extend_from_slice(&9_i32.to_le_bytes()); // outer FString including NUL
+        module.extend_from_slice(b"Authored\0");
+        append_canonical_sia(&mut module, "Authored").unwrap();
+        module.extend_from_slice(&0_i32.to_le_bytes()); // global functions
+        module.extend_from_slice(&1_i32.to_le_bytes()); // classes
+        append_canonical_sia(&mut module, "NativeOwner").unwrap();
+        append_canonical_sia(&mut module, "").unwrap(); // class namespace
+        module.extend_from_slice(&[0; 16]); // flags, properties, methods, method table
+        module.extend_from_slice(&[0; 16]); // derived-from and shadow pointers
+        module.extend_from_slice(&[0; 8]); // constructors and factory refs
+        module.extend_from_slice(&7_i32.to_le_bytes()); // behavior refs
+        module.extend_from_slice(&[0; 56]); // null behavior refs
+        module.extend_from_slice(&[0; 12]); // behavior functions/types and Unreal metadata
+        module.extend_from_slice(&[0; 12]); // enums, globals, imports
+        module.extend_from_slice(&[0; 8]); // code hash
+        module.extend_from_slice(&[0; 4]); // imported modules
+        append_canonical_sia(&mut module, "").unwrap(); // statics class
+        module.extend_from_slice(&[0; 8]); // events and delegates
+        append_canonical_sia(&mut module, "Authored.as").unwrap();
+        module.extend_from_slice(&[0; 4]); // post-init functions
+        bytes[CacheHeader::SIZE - 4..CacheHeader::SIZE].copy_from_slice(&1_i32.to_le_bytes());
+        bytes.splice(CacheHeader::SIZE..CacheHeader::SIZE, module);
+        bytes
+    }
+
+    fn native_owner_base() -> AllowNewBaseContext {
+        let mut pristine = cache_with_native_api(0);
+        let meta = TailMetadata::build(&pristine).unwrap();
+        // Retain the pristine engine owner and property, but no function authority.
+        pristine.splice(meta.funcs[0].start - 4..meta.func_ids[0].end, [0_u8; 8]);
+        build_allow_new_base_context(&pristine).unwrap()
+    }
+
+    fn assert_missing_function_membership(error: &RemapError) {
+        assert!(
+            matches!(
+                error,
+                RemapError::InvalidTailRow {
+                    table: 2,
+                    row_key: 0x200,
+                    kind: "declaration membership",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+    }
+
+    // `force::enable` is process-wide and irreversible. Run each regression in a child so
+    // ordinary parallel tests keep their strict admission and final-validation behavior.
+    fn run_force_scope_child(test_name: &str) -> bool {
+        const CHILD_ENV: &str = "GORE_AS_REMAP_FORCE_SCOPE_CHILD";
+        if std::env::var(CHILD_ENV).ok().as_deref() == Some(test_name) {
+            return true;
+        }
+        let module = module_path!().split_once("::").unwrap().1;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("{module}::{test_name}"), "--nocapture"])
+            .env(CHILD_ENV, test_name)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated force-scope test failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        false
+    }
+
+    #[test]
+    fn force_scope_admission_keeps_missing_script_methods_hard() {
+        if !run_force_scope_child("force_scope_admission_keeps_missing_script_methods_hard") {
+            return;
+        }
+        let base = EffectiveReferenceBase::build(&empty_cache()).unwrap();
+        for forced in [false, true] {
+            if forced {
+                crate::force::enable();
+            }
+            // Runtime method lookup ignores T3.module; both rows have a declared script owner.
+            for method_module in ["", "IgnoredMethodModule"] {
+                let output = cache_with_missing_script_method(method_module);
+                let meta = TailMetadata::build(&output).unwrap();
+                let mut owner_base = output.clone();
+                owner_base.splice(meta.funcs[0].start - 4..meta.func_ids[0].end, [0_u8; 8]);
+                let fallback_base = EffectiveReferenceBase::build(&owner_base).unwrap();
+                let mut mini_without_owner = output.clone();
+                mini_without_owner.splice(meta.types[0].start - 4..meta.type_ids[0].end, [0_u8; 8]);
+                // Cover owners declared in the mini and owners resolved only from pristine T1.
+                for (base, mini) in [(&base, &output), (&fallback_base, &mini_without_owner)] {
+                    let error = base
+                        .validate(&EffectiveReferenceState::default(), mini)
+                        .err()
+                        .expect("a script class cannot gain an undeclared method through --force");
+                    assert_missing_function_membership(&error);
+                    if forced {
+                        assert!(
+                            !error.to_string().contains("hint: rerun with --force"),
+                            "{error}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn force_scope_final_keeps_missing_script_functions_and_imports_hard() {
+        if !run_force_scope_child(
+            "force_scope_final_keeps_missing_script_functions_and_imports_hard",
+        ) {
+            return;
+        }
+        let base = native_owner_base();
+        for forced in [false, true] {
+            if forced {
+                crate::force::enable();
+            }
+            for output in [
+                cache_with_missing_script_method(""),
+                cache_with_missing_script_method("IgnoredMethodModule"),
+                cache_with_function_scope("Authored", false, false),
+                cache_with_function_scope("", false, true),
+            ] {
+                let error = validate_composed_module_records_with_pristine(
+                    &output,
+                    Some(&base.declarations),
+                )
+                .unwrap_err();
+                assert_missing_function_membership(&error);
+                if forced {
+                    assert!(
+                        !error.to_string().contains("hint: rerun with --force"),
+                        "{error}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn force_scope_retains_unqualified_native_methods_and_functions() {
+        if !run_force_scope_child("force_scope_retains_unqualified_native_methods_and_functions") {
+            return;
+        }
+        let base = native_owner_base();
+        for forced in [false, true] {
+            if forced {
+                crate::force::enable();
+            }
+            for (module, is_method) in [("", true), ("IgnoredMethodModule", true), ("", false)] {
+                let output = cache_with_function_scope(module, is_method, false);
+                let admission = validate_native_admission(&output, &base);
+                let final_validation = validate_composed_module_records_with_pristine(
+                    &output,
+                    Some(&base.declarations),
+                );
+                if forced {
+                    admission.unwrap();
+                    final_validation.unwrap();
+                } else {
+                    for error in [admission.unwrap_err(), final_validation.unwrap_err()] {
+                        assert_missing_function_membership(&error);
+                        assert!(
+                            error.to_string().contains("hint: rerun with --force"),
+                            "{error}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

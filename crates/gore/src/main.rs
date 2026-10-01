@@ -453,7 +453,7 @@ enum LocAction {
         /// Output .lcache (defaults to overwriting the cache that was read)
         #[arg(short = 'o', long)]
         out: Option<PathBuf>,
-        /// Add ids absent from the input .lcache (default: reject them)
+        /// Add missing ids and known-language pairs (default: reject them)
         #[arg(long)]
         add_missing: bool,
     },

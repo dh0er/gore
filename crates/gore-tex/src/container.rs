@@ -1685,7 +1685,12 @@ pub fn installed_package_id_occupied(utoc: &Path, asset_path: &str) -> Result<bo
 /// A clone must not introduce a second cooked package with the same IoStore ID
 /// into its own output tree. File existence checks alone miss case variants on
 /// case-sensitive filesystems, while Unreal hashes virtual package names without case.
+/// Repacking uses the cooked header's package name, which survives file moves;
+/// also reserve filename-derived IDs to preserve existing path collision checks.
 pub fn mod_tree_package_id_occupied(mod_dir: &Path, asset_path: &str) -> Result<bool> {
+    use retoc::legacy_asset::FLegacyPackageFileSummary;
+    use retoc::version::EngineVersion;
+
     match std::fs::symlink_metadata(mod_dir) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error.into()),
@@ -1695,6 +1700,33 @@ pub fn mod_tree_package_id_occupied(mod_dir: &Path, asset_path: &str) -> Result<
     let mut assets = Vec::new();
     collect_uassets(mod_dir, mod_dir, 0, &mut assets)?;
     for relative in assets {
+        let uasset = mod_dir.join(&relative);
+        let metadata = std::fs::symlink_metadata(&uasset)?;
+        if metadata_is_reparse(&metadata) || !metadata.is_file() {
+            return Err(anyhow::anyhow!(
+                "legacy component is not a plain file: {}",
+                uasset.display()
+            )
+            .into());
+        }
+        if metadata.len() > MAX_REPACK_COMPONENT_BYTES {
+            return Err(anyhow::anyhow!(
+                "legacy component {} is {} bytes; limit is {MAX_REPACK_COMPONENT_BYTES}",
+                uasset.display(),
+                metadata.len()
+            )
+            .into());
+        }
+        let bytes = read_component_exact(&uasset, metadata.len())?;
+        let summary = FLegacyPackageFileSummary::deserialize(
+            &mut Cursor::new(bytes),
+            Some(EngineVersion::UE5_4.package_file_version()),
+        )
+        .with_context(|| format!("parse cooked package identity: {}", uasset.display()))?;
+        if package_id_from_asset_path(&summary.package_name) == target_id {
+            return Ok(true);
+        }
+
         let cooked = relative.to_string_lossy().replace('\\', "/");
         let lowercase = cooked.to_ascii_lowercase();
         let (mount, prefix) = if lowercase.starts_with("g1r/content/") {
@@ -4571,12 +4603,204 @@ mod tests {
     fn clone_destination_probe_detects_case_collision_in_mod_tree() {
         let base = unique_tmp("clone-mod-tree-case-collision");
         let cooked = base.join("G1R/Content/Texture");
-        std::fs::create_dir_all(&cooked).unwrap();
-        std::fs::write(cooked.join("T_Existing.uasset"), b"package").unwrap();
-        std::fs::write(cooked.join("T_Existing.uexp"), b"exports").unwrap();
+        write_cooked_texture_fixture(
+            &cooked.join("T_Existing.uasset"),
+            "/Game/Texture/T_Existing",
+        );
 
         assert!(mod_tree_package_id_occupied(&base, "/game/texture/t_existing").unwrap());
         assert!(!mod_tree_package_id_occupied(&base, "/Game/Texture/T_Free").unwrap());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    fn write_cooked_texture_fixture(uasset: &Path, package: &str) {
+        use retoc::legacy_asset::{
+            EPackageFlags, FLegacyPackageHeader, FObjectExport, FObjectImport,
+        };
+        use retoc::version::EngineVersion;
+        use retoc::zen::FPackageIndex;
+
+        let mut header = FLegacyPackageHeader::default();
+        header.summary.versioning_info.package_file_version =
+            EngineVersion::UE5_4.package_file_version();
+        header.summary.versioning_info.is_unversioned = true;
+        header.summary.package_name = package.to_owned();
+        header.summary.package_flags = EPackageFlags::Cooked as u32
+            | EPackageFlags::FilterEditorOnly as u32
+            | EPackageFlags::UsesUnversionedProperties as u32;
+        let mut name = |value| header.name_map.store(value);
+        header.imports = vec![
+            FObjectImport {
+                class_package: name("/Script/CoreUObject"),
+                class_name: name("Package"),
+                object_name: name("/Script/Engine"),
+                ..Default::default()
+            },
+            FObjectImport {
+                class_package: name("/Script/CoreUObject"),
+                class_name: name("Class"),
+                object_name: name("Texture2D"),
+                outer_index: FPackageIndex::create_import(0),
+                ..Default::default()
+            },
+        ];
+        header.exports = vec![FObjectExport {
+            class_index: FPackageIndex::create_import(1),
+            object_name: name(package.rsplit('/').next().unwrap()),
+            serial_size: 4,
+            is_asset: true,
+            generate_public_hash: true,
+            ..Default::default()
+        }];
+        let mut output = Cursor::new(Vec::new());
+        header.serialize(&mut output, None, &Log::no_log()).unwrap();
+        std::fs::create_dir_all(uasset.parent().unwrap()).unwrap();
+        std::fs::write(uasset, output.into_inner()).unwrap();
+        std::fs::write(uasset.with_extension("uexp"), [0; 4]).unwrap();
+    }
+
+    #[test]
+    fn clone_destination_probe_detects_moved_cooked_header_identity() {
+        use retoc::version::EngineVersion;
+        use retoc::zen_asset_conversion::build_zen_asset;
+
+        let base = unique_tmp("clone-mod-tree-moved-header");
+        let original = "/Game/Texture/T_Existing";
+        let uasset = base.join("G1R/Content/Texture/T_Existing.uasset");
+        write_cooked_texture_fixture(&uasset, original);
+        assert!(mod_tree_package_id_occupied(&base, original).unwrap());
+        assert!(!mod_tree_package_id_occupied(&base, "/Game/Texture/T_Free").unwrap());
+        let original_bytes = std::fs::read(&uasset).unwrap();
+
+        let moved = base.join("G1R/Content/Elsewhere/T_Moved.uasset");
+        std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
+        std::fs::rename(&uasset, &moved).unwrap();
+        std::fs::rename(uasset.with_extension("uexp"), moved.with_extension("uexp")).unwrap();
+
+        // The same conversion used by repack_to_zen takes its ID from the
+        // unchanged header, even though its supplied cooked path has changed.
+        let version = EngineVersion::UE5_4;
+        let converted = build_zen_asset(
+            read_legacy_bundle_bounded(&moved).unwrap(),
+            &std::collections::HashMap::new(),
+            UEPath::new("../../../G1R/Content/Elsewhere/T_Moved.uasset"),
+            Some(version.package_file_version()),
+            version.container_header_version(),
+            false,
+            None,
+            None,
+            &Log::no_log(),
+        )
+        .unwrap();
+        assert_eq!(converted.package_id, package_id_from_asset_path(original));
+        assert_ne!(
+            converted.package_id,
+            package_id_from_asset_path("/Game/Elsewhere/T_Moved")
+        );
+        assert!(mod_tree_package_id_occupied(&base, original).unwrap());
+        assert!(mod_tree_package_id_occupied(&base, "/game/texture/t_existing").unwrap());
+        assert!(mod_tree_package_id_occupied(&base, "/game/elsewhere/t_moved").unwrap());
+        assert!(!mod_tree_package_id_occupied(&base, "/Game/Texture/T_Free").unwrap());
+        assert_eq!(std::fs::read(&moved).unwrap(), original_bytes);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn clone_destination_probe_checks_header_identity_outside_known_mounts() {
+        let base = unique_tmp("clone-mod-tree-other-mount");
+        write_cooked_texture_fixture(
+            &base.join("Plugin/Content/T_Moved.uasset"),
+            "/Engine/Texture/T_Existing",
+        );
+        assert!(mod_tree_package_id_occupied(&base, "/engine/texture/t_existing").unwrap());
+        assert!(!mod_tree_package_id_occupied(&base, "/Engine/Texture/T_Free").unwrap());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn clone_destination_probe_accepts_untouched_engine_package() {
+        let base = unique_tmp("clone-mod-tree-engine");
+        let uasset = base.join("Engine/Content/Texture/T_Existing.uasset");
+        write_cooked_texture_fixture(&uasset, "/Engine/Texture/T_Existing");
+        let before = std::fs::read(&uasset).unwrap();
+        assert!(mod_tree_package_id_occupied(&base, "/engine/texture/t_existing").unwrap());
+        assert!(!mod_tree_package_id_occupied(&base, "/Engine/Texture/T_Free").unwrap());
+        assert_eq!(std::fs::read(&uasset).unwrap(), before);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn clone_destination_probe_rejects_invalid_and_oversized_headers() {
+        let base = unique_tmp("clone-mod-tree-invalid-header");
+        let uasset = base.join("G1R/Content/Texture/T_Invalid.uasset");
+        std::fs::create_dir_all(uasset.parent().unwrap()).unwrap();
+        std::fs::write(&uasset, b"package").unwrap();
+        std::fs::write(uasset.with_extension("uexp"), b"exports").unwrap();
+        for target in ["/Game/Texture/T_Free", "/game/texture/t_invalid"] {
+            let error = mod_tree_package_id_occupied(&base, target)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("parse cooked package identity"), "{error}");
+        }
+        assert_eq!(std::fs::read(&uasset).unwrap(), b"package");
+        std::fs::File::create(&uasset)
+            .unwrap()
+            .set_len(MAX_REPACK_COMPONENT_BYTES + 1)
+            .unwrap();
+        let error = mod_tree_package_id_occupied(&base, "/Game/Texture/T_Free")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("limit"), "{error}");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn clone_destination_probe_preserves_directory_and_sibling_checks() {
+        let base = unique_tmp("clone-mod-tree-plain-files");
+        let target = "/Game/Texture/T_Free";
+        assert!(!mod_tree_package_id_occupied(&base.join("missing"), target).unwrap());
+        let file = base.join("file");
+        std::fs::write(&file, b"sentinel").unwrap();
+        assert!(mod_tree_package_id_occupied(&file, target).is_err());
+
+        let uasset = base.join("G1R/Content/Texture/T_Existing.uasset");
+        write_cooked_texture_fixture(&uasset, "/Game/Texture/T_Existing");
+        let uexp = uasset.with_extension("uexp");
+        std::fs::remove_file(&uexp).unwrap();
+        assert!(mod_tree_package_id_occupied(&base, target).is_err());
+        std::fs::create_dir(&uexp).unwrap();
+        assert!(mod_tree_package_id_occupied(&base, target).is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), b"sentinel");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clone_destination_probe_rejects_symlink_roots_entries_and_sidecars() {
+        use std::os::unix::fs::symlink;
+
+        let base = unique_tmp("clone-mod-tree-symlinks");
+        let root = base.join("root");
+        let uasset = root.join("G1R/Content/Texture/T_Existing.uasset");
+        write_cooked_texture_fixture(&uasset, "/Game/Texture/T_Existing");
+        let target = "/Game/Texture/T_Free";
+        let link = base.join("link");
+        symlink(&root, &link).unwrap();
+        assert!(mod_tree_package_id_occupied(&link, target).is_err());
+
+        let nested_link = root.join("linked-directory");
+        symlink(uasset.parent().unwrap(), &nested_link).unwrap();
+        assert!(mod_tree_package_id_occupied(&root, target).is_err());
+        std::fs::remove_file(&nested_link).unwrap();
+        for component in [uasset.clone(), uasset.with_extension("uexp")] {
+            let outside = base.join("outside");
+            std::fs::rename(&component, &outside).unwrap();
+            symlink(&outside, &component).unwrap();
+            assert!(mod_tree_package_id_occupied(&root, target).is_err());
+            std::fs::remove_file(&component).unwrap();
+            std::fs::rename(&outside, &component).unwrap();
+        }
+        assert!(!mod_tree_package_id_occupied(&root, target).unwrap());
         let _ = std::fs::remove_dir_all(base);
     }
 
