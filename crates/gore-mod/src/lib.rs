@@ -8296,13 +8296,22 @@ fn prepare(
                 let (pristine, source) =
                     read_pristine_bounded_with_source(&cache_path, prev, MAX_PRISTINE_PATCH_BYTES)?;
                 plan.bind_backup_identity(&cache_path, source.basis)?;
+                // Share one authenticated native authority across inspection, canonicalization,
+                // and composition; rereading Binds.Cache between passes could change that proof.
+                let binds = qualified_native_binds_for_base(&cache_path, &pristine);
                 // Pass 1 inventories portable novel identities without retaining any mini bytes.
                 // The immutable union, rather than package/loadout order, determines every finite-
                 // domain pointer and engine-ID assignment.
                 let mut inspect_bytes = 0u64;
-                let mut loadout_builder =
-                    gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new(&pristine)
-                        .map_err(|err| ModError::Other(format!("prepare script ID plan: {err}")))?;
+                let mut loadout_builder = match binds.as_deref() {
+                    Some(binds) => {
+                        gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new_with_binds(
+                            &pristine, binds,
+                        )
+                    }
+                    None => gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new(&pristine),
+                }
+                .map_err(|err| ModError::Other(format!("prepare script ID plan: {err}")))?;
                 for e in &entries {
                     let mini = read_bundle_script_mini_phase(
                         bundle_dir,
@@ -8357,7 +8366,6 @@ fn prepare(
 
                 // Pass 3 verifies each generated tempfile's length and SHA-256, then composes that
                 // exact Vec. Consuming the candidates releases their disk footprint incrementally.
-                let binds = qualified_native_binds_for_base(&cache_path, &pristine);
                 let mut script_merge_guard =
                     gore_as::cache::splice::SequentialMiniGuard::new_with_binds(
                         &pristine,
@@ -17825,6 +17833,47 @@ mod tests {
             run(true),
             "direct bundle order must not change portable-identity assignments"
         );
+    }
+
+    #[test]
+    #[ignore = "requires GORE_NATIVE_HEAD_GAME and GORE_NATIVE_HEAD_MINI; offline preparation only"]
+    fn real_head_native_minis_survive_direct_preparation_and_reject_changed_binds() {
+        let input = std::path::PathBuf::from(std::env::var_os("GORE_NATIVE_HEAD_GAME").unwrap());
+        let mini = std::path::PathBuf::from(std::env::var_os("GORE_NATIVE_HEAD_MINI").unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let scripts = game.join("G1R/Script");
+        std::fs::create_dir_all(&scripts).unwrap();
+        let cache = scripts.join("PrecompiledScript_Shipping.Cache");
+        let binds = scripts.join("Binds.Cache");
+        std::fs::copy(input.join("G1R/Script/PrecompiledScript_Shipping.Cache"), &cache).unwrap();
+        std::fs::copy(input.join("G1R/Script/Binds.Cache"), &binds).unwrap();
+        let before = std::fs::read(&cache).unwrap();
+        let bundle = dir.path().join("bundle");
+        std::fs::create_dir_all(bundle.join("scripts")).unwrap();
+        std::fs::copy(mini, bundle.join("scripts/head.Cache")).unwrap();
+        std::fs::write(bundle.join("scripts/manifest.json"), serde_json::to_vec(&vec![ScriptEntry {
+            op: "add".into(), module: "GoreHeadApi.Provider".into(), mini: "scripts/head.Cache".into(),
+        }]).unwrap()).unwrap();
+        let manifest = ModManifest {
+            format: 1,
+            mod_meta: ModMeta { name: "HeadApiPreparation".into(), version: "1".into(), author: "offline-test".into() },
+            components: vec![Component::AngelScriptPatch { path: "scripts".into() }],
+        };
+        let plan = prepare(&bundle, &manifest, &resolve_game_paths(&game), None).unwrap();
+        let (_, output) = plan.writes.iter().find(|(path, _)| path == &cache).unwrap();
+        let names = gore_as::cache::walk_modules::module_names(output).unwrap();
+        assert!(names.iter().any(|name| name == "GoreHeadApi.Provider"));
+        assert_eq!(names.len(), gore_as::cache::walk_modules::module_count(&before) as usize + 1);
+        drop(plan);
+        let mut changed = std::fs::read(&binds).unwrap();
+        changed[0] ^= 1;
+        std::fs::write(&binds, changed).unwrap();
+        let error = prepare(&bundle, &manifest, &resolve_game_paths(&game), None).unwrap_err().to_string();
+        assert!(error.contains("UPoseableMeshComponent") && error.contains("declaration membership"), "{error}");
+        assert_eq!(std::fs::read(cache).unwrap(), before);
+        assert!(!bak_path(&scripts.join("PrecompiledScript_Shipping.Cache")).exists());
+        assert!(!record_path(&game).exists());
     }
 
     #[test]

@@ -176,6 +176,11 @@ PROJECTS: dict[str, dict] = {
         # Markdown docs staged beside the exe. Links that point out of the guide
         # tree are rewritten to absolute GitHub URLs (see stage_docs).
         "doc_dirs": [("docs/guide", "docs")],
+        # Source examples accompany the guide so installed agents can inspect
+        # the exact authored building blocks without a source checkout/network.
+        "bundle_dirs": [
+            ("scripts/fixtures/npc-batch-tests", "examples/npc-batch-tests"),
+        ],
         # The same guide, rendered by the freshly built binary into one browsable,
         # self-contained HTML file. The Markdown copies are what `grep` wants (the
         # MCP server has its own, compiled into the exe); this is what a human
@@ -2457,7 +2462,10 @@ def installer_project(project: str, dry: bool) -> Path | None:
 def test_project(project: str, dry: bool) -> None:
     cfg = PROJECTS[project]
     if cfg["kind"] in ("rust-bin", "rust-lib"):
-        run(f"cargo test {project}", [CARGO, "test", "-p", cfg["crate"]], dry=dry)
+        command = [CARGO, "test", "-p", cfg["crate"]]
+        if cfg["crate"] == "gore":
+            command += ["--features", "development-cli"]
+        run(f"cargo test {project}", command, dry=dry)
         return
     # A Flutter app is backed by a native Rust cdylib (core_dll crate); its
     # unit tests live there, so cover them too — analyze/test alone would skip

@@ -11,10 +11,14 @@ The hook-order contract and exact live observations are documented in
 
 ## What is proven, and what is not
 
-Read this before you build on it. Everything below is capability; this table is
-status. The evidence and the exact wording behind each line are in
-[Dialog runtime internals](../reference/dialog-runtime.md) — this is a summary
-of that page, not a second claim.
+The following table records runtime examples of the supported dialog building
+blocks. It is not a whitelist of allowed stories, NPCs or combinations. Compose
+new content with the supported APIs, run the normal source checks, compile and
+build the bundle, then test that mod. An exact historical fixture for the user's
+requested sequence is not an authoring prerequisite. Concrete technical
+constraints are listed under [Practical limits only](#practical-limits-only).
+The detailed observations are in
+[Dialog runtime internals](../reference/dialog-runtime.md).
 
 | | |
 |---|---|
@@ -38,6 +42,15 @@ An artificial ambient stress fixture combined automatic opening with a
 a normal 20-choice submenu each work in separate live fixtures, so this result
 is retained for diagnosis only; it does not define a practical authoring limit.
 
+### Runtime coverage notes
+
+The examples above record their actual builds and audio layouts. They do not
+claim that other builds or layouts were played. For a new mod, use the current
+compiler's game/API compatibility checks and voice validation, then test its
+behavior. Historical coverage is not an additional authoring gate. Vorbis
+playback was observed at 48 kHz mono, 44.1 kHz mono and 48 kHz stereo; other
+layouts are not reported as tested here.
+
 ## Practical limits only
 
 Call `EndConversation()` after all gameplay effects in an `Act`. Treat it as a
@@ -49,18 +62,9 @@ its active context, so place other participants and store needed state first.
 The [corrected setup fixture](../../scripts/fixtures/npc-appearance-routine/README.md)
 records this failure and its focused retest.
 
-This section deliberately leaves out everything that already works. It separates
-possible-but-unproven game behavior from shapes the current GORE pipeline cannot
-produce.
-
-### Potentially possible, but not proven in game
-
-- The same behavior on game builds other than BuildID `24878692`. Historical
-  adapter observations on older builds do not qualify the current native source
-  workflow there.
-- Vorbis playback in layouts other than the live-proven 48 kHz mono, 44.1 kHz
-  mono and 48 kHz stereo cases. Other sample rates and channel layouts remain
-  unproven.
+The following limits describe concrete engine or pipeline behavior. Missing
+runtime coverage for a new combination of supported building blocks is not one
+of these limits.
 
 ### Not technically supported by the current GORE pipeline
 
@@ -89,7 +93,7 @@ produce.
   two-hop shape soft-locks in game; declarations, assignments, empty blocks and
   conditional calls do not satisfy `dialog check`. The new-tree `Subdialog`
   must appear directly in `Act`/`Act_Implementation`; hiding it behind a helper
-  is not a qualified workaround. A module-local free function named `Say` is
+  does not satisfy the source checker. A module-local free function named `Say` is
   likewise rejected so it cannot impersonate the proven dialog separator.
 - Putting more than 20 immediate choices in one submenu, or changing the child
   layout of a vanilla submenu that already uses all 20 slots. A large tree can
@@ -117,15 +121,28 @@ workflow.
 
 ## Source edit: one existing conversation module
 
-Start with `gore dialog tree <npc>`, then checkout the conversation. The emitted
-source contains every reconstructed class-scope `default` statement, including
-caption, priority, rules and flags:
+Use a filtered conversation listing to obtain its exact module, then a shallow
+tree and an exact topic `show` when needed. Run Doctor and reuse its pristine
+cache for checkout and checks; live inspection can include an installed script
+mod. The emitted source contains every reconstructed class-scope `default`
+statement, including caption, priority, rules and flags:
 
 ```powershell
-gore dialog checkout oc_stt_diego -o work
+$GAME = '<game root from gore doctor>'
+$BASE = '<pristine cache path from gore doctor>'
+gore dialog list diego --cache "$BASE" --game "$GAME"
+gore dialog tree Story.G1R.Conversation.Conversation_OC_STT_DIEGO --depth 0 --ids --cache "$BASE" --game "$GAME"
+gore dialog checkout Story.G1R.Conversation.Conversation_OC_STT_DIEGO -o work --cache "$BASE" --game "$GAME"
 # edit work\Conversation_OC_STT_DIEGO.as
-gore dialog check work
+gore dialog check work --cache "$BASE" --game "$GAME"
 ```
+
+For a combined dialog/quest mod, first compile a `dialog new-topic` workspace
+while it contains only the shipped checkout plus scaffolded topic. Run `check`,
+`stage` and the printed strict standalone compile against the same pristine
+base, with a fresh compiler workspace. Add quest/document/content helpers after
+that minimal compile succeeds, then check and compile the assembled source.
+This isolates a failure in reconstructed shipped calls from authored content.
 
 Existing topics may change those default values and their method bodies. The
 authored defaults completely supersede the compiler-generated
@@ -201,6 +218,15 @@ need remapper rows. It still rejects unresolved types and unsafe changes to
 shipped ABI. This is a bounded new-topic path, not a claim that arbitrary
 existing classes, signatures or member layouts can be migrated.
 
+A documented native quest/journal parent such as `UDocumentSegment` must be
+declared in the actual target cache. The dialog checker does not cover every
+native Binds parent. For a remaining coverage finding, use the
+[quest recipe](npc-authoring.md#authored-quest-with-automatic-progression) and
+[script overlay route](scripts.md#compile-only-authored-modules) to establish
+native type and dependency resolution through compiler diagnostics. Keep private
+topic classes in this conversation module and retain source-preservation guards;
+this route does not waive ABI, default-coverage or module-privacy constraints.
+
 ## Localization is a separate payload
 
 `default Caption = LocText("MY_MOD_DIEGO_CAPTION")` makes the script refer to a
@@ -215,20 +241,25 @@ For an untranslated smoke test, `gore dialog new-topic --caption` and
 `new-conversation --caption` emit an inline `FText::FromString(...)` default.
 For a distributable mod, prefer `--caption-key` and real localized rows. Each
 command keeps the topic and its private base in one conversation source module.
+Keep localization IDs and knowledge keys separate from translated display text.
+Prefer stable ASCII IDs and localization rows for accented or other Unicode
+text; `n"..."` declares an `FName` identifier, not a general display-text literal.
 
 ## Strict standalone compilation
 
 After `check`, `gore dialog stage` writes the build spec and prints the exact
 compile command. Dialog workspaces use `--op edit`; a new class or string makes
 it include `--allow-new-symbols`, while a body/default-only edit does not need
-that flag. The
-command includes the resolved `--game` root, and `stage` first proves that this
-installation's current script cache has the checkout hash. An arbitrary
-`--cache` with no matching installation is valid for inspection, but cannot be
-staged into a misleading compile command:
+that flag. Keep the checkout hash aligned with the original reported by Doctor.
+`stage` requires a matching installation before it prints the resolved `--game`
+compile command; an arbitrary `--cache` is valid for inspection but does not
+select a compiler base. If an installed version compares the live deployed
+cache instead of that original, preserve the workspace and report the mismatch
+as described in [Scripts](scripts.md#compiling-while-a-script-mod-is-installed).
+Do not alter manifest hashes or reset an installed mod to make staging pass:
 
 ```powershell
-gore dialog stage work --mod-name MyDialogMod
+gore dialog stage work --mod-name MyDialogMod --cache "$BASE" --game "$GAME"
 gore as compile-module --backend standalone --op edit `
   --module Story.G1R.Conversation.Conversation_OC_STT_DIEGO `
   --rel-path Story/G1R/Conversation/Conversation_OC_STT_DIEGO.as `
@@ -304,16 +335,24 @@ complete first conversation does not need that unsupported arrangement because
 its private root and every topic stay in the NPC's one already-loaded settings
 module.
 
-Full-graph V2 is a different compiler product. It gives one standalone compiler
-request the complete sealed base graph plus all coordinated Add/Edit sources,
-so otherwise-visible cross-module references can resolve together. The raw
-whole-tree regeneration is only dependency evidence and is never the published
-cache. GORE starts from the exact pristine cache, then remaps and composes only
-the source-classified Add/Edit modules in dependency order. Every untouched
-module and every pre-existing global-tail record remain pristine; only records
-required by new symbols are appended. Missing base sources request Delete and
-fail closed because safe tail pruning and retained-reference proof are not
-available; cyclic dependencies among new modules also fail closed.
+For coordinated edits across modules, use
+`gore as compile <authored-dir> --overlays --backend standalone`. Put only the
+complete new or changed `.as` modules in that directory at their canonical
+Script-relative paths. Full-graph V2 resolves all those sources together with
+the sealed base graph, so otherwise-visible cross-module references can bind in
+one run. It does not make a module-private class public. No full-tree export or
+baseline emission is needed; absent original modules remain in the base.
+
+GORE remaps and composes only the authored Add/Edit modules in dependency order.
+Every untouched module and pre-existing global-tail record remain pristine;
+only records required by new symbols are appended. Overlay mode does not delete
+modules and rejects game/fallback policies. The complete-tree route remains
+available without `--overlays`; there, a missing base source requests an
+unsupported Delete. Cyclic dependencies among new modules fail closed in both
+modes. `--only-change` checks the exact allowed Add/Edit set and optional source
+hashes; it does not select files or replace `--overlays`. The base expectation
+guards apply equally to both routes. See
+[compiling only authored modules](scripts.md#compile-only-authored-modules).
 
 This selective publication rule is based on two earlier live findings. A raw
 regeneration with 10,782 semantic deviations, including 81 in Diego, installed
@@ -327,11 +366,12 @@ appeared and was selected, and an edited shipped automatic topic invoked a new
 provider from another module. The provider's line played and the conversation
 returned control.
 
-The normal dialog bundle composer continues to consume independently base-bound
-module minis, so it cannot package the coordinated graph as a normal
-cross-module dialog mini-patch. Keeping the new topic and any `Subdialog`
-rewiring in one conversation module remains the practical mini-bundle path;
-use `gore as compile` when an acyclic cross-module dependency is essential.
+For one conversation module, keep using the `dialog stage` single-module
+command. For coordinated modules, add `--mini out/MyDialogMod.mini.Cache` to
+the overlay compile and reference that one multi-module mini in the bundle
+spec. Bundles and Manager compose its dependent modules together; separate
+single-module minis cannot replace it. See
+[multi-module packaging](scripts.md#multi-module-mini-caches).
 
 ## Root topics use native same-module discovery
 
@@ -419,9 +459,13 @@ normally. For a wholly new NPC, `gore dialog` can only add the conversation once
 some other NPC-authoring path supplies an exact settings module that the game
 actually loads. `npc new` provides the recognized combined form. Pass its
 composed full cache to `new-conversation` and `check`, then put the checked
-source back into the complete NPC source tree. Compile the additions and their
-level-script references together with `gore as compile --backend standalone`;
-do not install an Edit-only mini against a base where that NPC module is absent.
+source into the authored overlay directory at its canonical Script-relative
+path, alongside the NPC and level-script changes. Compile that set together
+with `gore as compile <authored-dir> --overlays --backend standalone --mini <path>`
+against the pristine installation base. The NPC module remains an Add relative
+to that base; do not install an Edit-only mini against a base where it is absent.
+Use scope/source hashes for the final combined sources, not those from an
+earlier NPC-only stage. A complete original source-tree export is unnecessary.
 
 The generated source contains the conversation settings, its private root and
 one direct choice. To author a deeper tree, append every additional topic to
@@ -473,8 +517,10 @@ refuses it, and there is no UE4SS registration component to package.
 
 ## Safe validation order
 
-1. Run `dialog check` and resolve every default-coverage, ABI or new-symbol
-   finding.
+1. Check the workspace against its pristine base and resolve every
+   default-coverage, ABI or new-symbol finding. For native quest/document
+   declarations outside the dialog checker's coverage, use the script overlay
+   route described above and keep its source-preservation guards.
 2. Compile with strict `--backend standalone`; the install should remain
    untouched by definition.
 3. Parse the mini-cache, resolve its tail tables, and disassemble every new

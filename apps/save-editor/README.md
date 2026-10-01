@@ -97,7 +97,8 @@ The local development setup used for this repository is Flutter 3.44.0, Dart
 Dev commands run from this directory (`apps/save-editor/`). `cargo` resolves
 the workspace at the monorepo root automatically.
 
-Run the gore-save test suite:
+Run the Rust workspace tests (with `gore/development-cli` enabled), Flutter
+analysis, and Flutter tests:
 
 ```powershell
 python test.py
@@ -107,9 +108,13 @@ Run the Flutter app (build the native core first so the loader's upward search
 finds `gore_save.dll` under the workspace `target/`):
 
 ```powershell
-cargo build
+cargo build -p gore-save
 flutter run -d windows
 ```
+
+This library-only build needs no CLI compiler bundle or `development-cli`
+feature. Select `gore-save` explicitly: a bare workspace build also includes
+the gated `gore` binary (see [Building](../../docs/development.md)).
 
 Build a Windows release bundle (native DLL + Flutter release + packaged zip)
 via the monorepo build script, from the repository root:

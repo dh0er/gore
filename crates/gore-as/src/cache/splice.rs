@@ -148,6 +148,14 @@ impl LoadoutScriptIdPlanBuilder {
             .map_err(loadout_splice_error)
     }
 
+    /// Retain pristine-bound native evidence during both inspection and canonicalization.
+    /// Missing or changed Binds never authorizes extended native declarations.
+    pub fn new_with_binds(pristine_base: &[u8], binds: &[u8]) -> Result<Self, SpliceError> {
+        super::remap::LoadoutScriptIdPlanBuilder::new_with_binds(pristine_base, binds)
+            .map(Self)
+            .map_err(loadout_splice_error)
+    }
+
     /// Inspect one exact mini atomically without retaining its bytes.
     pub fn inspect(&mut self, mini: &[u8]) -> Result<(), SpliceError> {
         self.0.inspect(mini).map_err(loadout_splice_error)

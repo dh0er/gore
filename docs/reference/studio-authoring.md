@@ -1,20 +1,22 @@
 # Mod Studio NPC and quest authoring internals
 
 This page records implementation contracts, invariants, retained proof, and
-native transaction behavior for Mod Studio's NPC and quest authoring. It is
-not instructions: the user-facing workflows live in
-[Mod Studio](../guide/mod-studio.md).
+native transaction behavior for the current implementation of the planned
+Mod Studio GUI. These contracts describe Studio's managed Draft routes, not
+the capabilities of GORE's CLI or MCP tools. GUI workflows live in
+[Mod Studio](../guide/mod-studio.md); use [NPC authoring](../guide/npc-authoring.md)
+and [Dialog authoring](../guide/dialog-authoring.md) for current mod workflows.
 
 ## NPC authoring
 
-A candidate logical NPC identity can be expressed as a linked AngelScript class
-chain that leaves archetype and visual/actor defaults inherited from an existing
-human parent. Compilation and cache composition of that chain are now proven
-offline. Runtime class residence, effective visuals, spawning, independent
-dialog/quest state, persistence, and save behavior remain separate
-qualification steps.
+The historical logical-clone probe below established offline compilation and
+cache composition for an NPC class chain inheriting an existing human parent.
+Later CLI/MCP work added the complete authoring and spawn path, with in-game
+observations of bodies, independent identity, dialog/quest state, and persistence
+recorded in [NPC authoring](../guide/npc-authoring.md#what-is-proven-and-what-is-not).
+Studio's remaining Draft limitations do not supersede those capabilities.
 
-### Offline-proven logical clone
+### Historical offline logical-clone probe
 
 The bounded `NpcLogicalCloneV1` probe adds exactly one module with three new
 Asghan-derived classes:
@@ -83,13 +85,13 @@ record, compiler lock/journal/backup, loose script, development cache, probe
 UE4SS component, game/compiler process, or spawn edit remained. The probe did
 not start a playable session or perform a save operation.
 
-### What this changes
+### What the probe established
 
 Cooked DataAsset creation is not proven to be a universal prerequisite for a
-new **logical** NPC identity. At the class/default level, the current chain
+new **logical** NPC identity. At the class/default level, the probe's chain
 inherits an existing archetype, actor Blueprint, visuals, AI, routine defaults,
 and other cooked content while changing the identity and class links in
-AngelScript. Effective runtime resolution remains unproven.
+AngelScript. This particular probe did not test runtime resolution.
 
 Cooked asset/package tooling is still required when a mod needs genuinely new
 meshes, materials, animations, character Blueprints, modular visual tokens,
@@ -97,32 +99,27 @@ placed world actors, or another registry/package shape that the chosen content
 path actually uses. The offline class proof does not show that the game accepts
 or spawns the logical clone.
 
-### Remaining runtime gates
+### Scope of the historical probe
 
-The proof does not yet establish:
+The three-class probe checked source and composed cache output only. It did
+not exercise spawning, distinct saved identity, visuals, independent gameplay
+state, save/reload, or removal. Those limits describe the retained experiment,
+not missing capabilities in today's CLI or MCP tools.
 
-- that all three new classes are resident and accepted by native spawn code;
-- a safe placement or spawn hook for a new body;
-- a distinct GlobalId and save record with no vanilla identity collision;
-- independent dialog, quest, knowledge, inventory, or routine state;
-- visuals, AI, streaming-boundary behavior, save/reload, or uninstall behavior;
-- compatibility with another executable or future hotfix.
+For current creation, placement, routines, dialogs, and the linked runtime
+results, follow [NPC authoring](../guide/npc-authoring.md). The tested examples
+are evidence for working techniques, not a prerequisite to prove every new
+combination before authoring. Use the current tools to build and check a mod;
+keep its actual test results distinct from the historical examples.
 
-The next qualification order is:
-
-1. Rebuild and verify the three-class mini-cache offline.
-2. Deploy only the class module and read back the exact class/CDO identities
-   without spawning or mutating gameplay.
-3. Separately compose one conservative, reviewed spawn-site edit.
-4. Spawn only on a disposable save/profile and verify unique identity, visuals,
-   AI, interaction, dialog/quest separation, streaming, and save/reload.
-5. Compare the disposable save semantically, undeploy, and verify the pristine
-   installation before widening the capability claim.
-
-A second call to a vanilla spawn definition only creates another body sharing
-the vanilla identity; it is not a substitute for this new linked class chain.
+An authored character needs its own linked class chain. Calling a vanilla spawn
+definition again alone shares that vanilla identity.
 
 ### Mod Studio boundary
+
+The following generation admission and Draft status contracts belong to the
+current Studio GUI implementation. They do not impose Studio's missing GUI
+features or Draft blockers on the separate CLI/MCP authoring workflow.
 
 The central closed generation registry currently contains exactly six reviewed
 Steam generation triples: the retained Steam 1.0.3 Hotfix 1 seal set, Steam
@@ -337,7 +334,9 @@ This metadata deliberately does **not** create an AngelScript topic, greeting
 condition, player choice, selection effect, Quest relationship, NPC runtime
 registration, build output, deployment, or playable conversation. It writes
 only the managed project and does not touch the game installation or a save.
-Those runtime and lowering mechanisms remain separate research gates.
+Studio does not yet lower this greeting metadata into a playable conversation.
+The separate CLI/MCP path is documented in
+[Dialog authoring](../guide/dialog-authoring.md).
 
 ### Managed revision-3 NPC Draft removal V1
 
@@ -428,7 +427,7 @@ internal implementation detail and is never caller-selected or returned.
 This closes only the selected generated-source compiler check. It still grants
 no production build, cache adoption, deployment, class residence, spawn,
 runtime, publication, or save authority. The remaining production, residence,
-and spawn blockers stay visible after compiler acceptance.
+and spawn blockers for this Studio Draft stay visible after compiler acceptance.
 
 ## Quest authoring
 

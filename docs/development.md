@@ -17,14 +17,48 @@ nothing from here — start with [Getting started](guide/getting-started.md).
 The local development setup used for this repository is Flutter 3.44.0,
 Dart 3.12.0, and Rust 1.96.0.
 
-## The Rust workspace
+## Build the product CLI
 
-The workspace spans every crate:
+Run the top-level orchestrator from the repository root:
 
 ```powershell
-cargo build
-cargo test
-cargo build --release -p gore   # just the CLI → target\release\gore.exe
+python build.py gore-cli dist             # recommended installable zip → dist\gore-cli\
+python build.py gore-cli build --release  # CLI + compiler → target\release\
+```
+
+For installation, unpack the complete zip into a stable directory on `PATH`.
+Keep `gore.exe`, `compiler\`, `docs\`, and the other companion files together.
+The `build --release` command stages the CLI and compiler in `target\release`;
+`dist` also packages the offline documentation.
+
+Normal `gore` binary builds, debug and release alike, require a nonempty
+embedded standalone compiler catalog prepared by `build.py`. The orchestrator
+builds and verifies the compiler, embeds its catalog, and stages the matching
+compiler files. A raw `cargo build -p gore` without that catalog fails at
+compile time; a bare workspace `cargo build` includes `gore` and fails too.
+
+## The Rust workspace
+
+For debug development and tests without the product compiler bundle, opt in
+explicitly:
+
+```powershell
+cargo build -p gore --features development-cli
+cargo test --workspace --features gore/development-cli
+cargo test -p gore --features development-cli  # includes CLI integration tests
+```
+
+The unbundled debug CLI is visibly marked `development-unbundled` and is only
+for development and tests; do not install or distribute it. Adding `--release`
+to `cargo build -p gore --features development-cli` still fails without the
+embedded catalog. The feature cannot bypass the release build requirement.
+
+Library-only Cargo builds and tests remain supported without that feature or
+the product compiler bundle. Select the library package explicitly, for example:
+
+```powershell
+cargo build -p gore-save
+cargo test -p gore-as --lib
 ```
 
 ## Products
@@ -34,17 +68,18 @@ projects are **`gore-cli`**, **`gore-save-editor`**, **`gore-mod-studio`** and
 **`gore-mod-manager`**:
 
 ```powershell
-python build.py <project> build      # debug build
-python build.py <project> run        # build if missing, then launch
-python build.py <project> dist       # release bundle (+ packaged zip)
-python build.py <project> installer  # dist + Windows installer
-python build.py <project> test       # run the project's test suite
+python build.py <project> build --debug  # explicit debug build
+python build.py <project> run            # build if missing, then launch
+python build.py <project> dist           # release bundle (+ packaged zip)
+python build.py <project> installer      # dist + Windows installer
+python build.py <project> test           # run the project's test suite
 ```
 
-`python build.py all test` runs every project's suite — Rust `cargo test`,
-the Python tools, and Flutter `analyze` + `test`. CI runs the equivalent checks
-via [`apps/save-editor/test.py`](../apps/save-editor/test.py) (invoked from
-that directory) plus the mod-studio and mod-manager `analyze` + `test` steps.
+`python build.py all test` runs every project's suite — Rust tests (with
+`development-cli` enabled when they include the CLI), the Python tools, and
+Flutter `analyze` + `test`. CI runs the equivalent checks via
+[`apps/save-editor/test.py`](../apps/save-editor/test.py) (invoked from that
+directory) plus the mod-studio and mod-manager `analyze` + `test` steps.
 
 Per-project build and run details live in each component's own README, e.g.
 [`apps/save-editor/README.md`](../apps/save-editor/README.md).

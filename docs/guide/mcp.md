@@ -98,6 +98,15 @@ that failed to start, and it cannot say why, because nothing on that side knows
 what `gore` was supposed to be. `gore --version` in a terminal is the check. A
 `PATH` change only reaches processes started afterwards, so restart the client.
 
+Keep the complete CLI package at a stable location on `PATH` and update it
+there. The plugin cache contains configuration and skills, not the CLI itself.
+`Get-Command gore` and `gore --version` identify the shell's CLI; every MCP
+command result prints the exact executable used by the server. If they differ,
+check the configured marketplace and plugin source for a pinned old path. The
+[plugin update instructions](../../plugins/gore/README.md#updating-and-repairing-the-plugin)
+cover that repair. Restart the client and use a new session after updating the
+CLI, because running servers retain their embedded guide and tool definitions.
+
 ### Wiring a client up by hand
 
 Any client with a JSON config can register the server directly, without the
@@ -123,7 +132,9 @@ claude mcp add gore -- gore mcp serve
 ```
 
 Both spell the command as `gore`, so they need `PATH` set exactly as above.
-Replace it with the absolute path to `gore.exe` if you would rather not.
+For a manually configured server, an absolute path should name your stable CLI
+installation directory, not a version archive. Keep the shared plugin portable
+with `"command": "gore"`.
 
 What this route does not bring is the skill. The server's own primer reaches
 every client on connect and carries the orientation an agent needs to start
@@ -431,6 +442,36 @@ to the server.
 | `gore_as_compile` | strict standalone `as compile` alias | [scripts](scripts.md) |
 | `gore_as_compile_module` | strict standalone `as compile-module` alias | [scripts](scripts.md) |
 | `gore_as` | `as` | [scripts](scripts.md) |
+
+For a mod spanning several modules, call `gore_as_compile` with `overlays: true`:
+
+```json
+{
+  "src": "authored",
+  "overlays": true,
+  "out": "out/full.Cache",
+  "mini": "out/MyMod.mini.Cache",
+  "work_dir": ".gore-as-work"
+}
+```
+
+The source directory contains 1–256 complete new or changed `.as` modules at
+canonical Script-relative paths. Absent original modules stay in the pristine
+cache; no `emit-all` export or full-tree baseline comparison is performed. The
+dedicated tool forces `--backend standalone` and has no `backend` argument.
+Use `expect_base_sha256` (or `expect_base`) to bind the original and
+`only_changes: ["add:MyMod.Provider:MyMod/Provider.as:SHA256", ...]` for exact
+scope/source guards. `only_changes` checks the whole supplied change set; it
+does not filter files.
+
+The mixed equivalent is `gore_as` with `subcommand: "compile"` and an `args`
+object containing the same arguments plus `backend: "standalone"`. With
+`overlays: true`, game/fallback policies and an omitted mixed-route backend are
+rejected; sparse inputs cannot use the game compiler. Omitting `overlays` or
+setting it to `false` preserves complete-tree compilation, including its
+missing-module rejection and full baseline comparison. Full-cache and optional
+mini-cache publication work the same for both input shapes. See
+[compiling only authored modules](scripts.md#compile-only-authored-modules).
 
 `gore_help` is deliberately different from the namespace tools: it accepts one
 space-separated **CLI** path in `command`. For example, ask for

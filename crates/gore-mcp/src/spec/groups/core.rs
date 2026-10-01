@@ -15,7 +15,7 @@
 use crate::spec::{
     ArgForm::{Long, Positional, PositionalRepeated, Switch},
     ArgKind::{Bool, Enum, Int, Path, Str, StrList},
-    ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST, T_LONG,
+    ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST,
     T_NORMAL,
 };
 
@@ -1280,7 +1280,7 @@ const NPC_STAGE_ARGS: &[ArgSpec] = &[
         "tree",
         Long("tree"),
         Path,
-        "Where to keep the emitted source tree between runs. Required for a new character",
+        "Obsolete; omit this argument. Stage snapshots only the checked authored modules",
         false,
     ),
     ArgSpec::new(
@@ -1486,21 +1486,18 @@ const NPC_COMMANDS: &[CommandSpec] = &[
         T_NORMAL,
     )
     .guide("npc-authoring"),
-    // One build spec inside the directory `new` or `delete` already created — and, for a new
-    // character, the emitted source tree in `--tree` first. That emit is around 19 minutes on the
-    // first run of a game version and is reused afterwards, which is why this leaf carries the long
-    // budget rather than the one its siblings share.
+    // Snapshot only checked authored modules and write the spec; compilation is a separate call.
     CommandSpec::new(
         "stage",
-        "Build the source tree and print the commands that compile an authored character",
+        "Snapshot the authored modules and print guarded standalone compile commands",
         NPC_STAGE_ARGS,
         Safety::write()
             .also_writes(&[
                 ("dir", Derived::Child("spec.json")),
                 ("dir", Derived::Suffix(".work")),
             ])
-            .writes_into(&["dir", "tree"]),
-        T_LONG,
+            .writes_into(&["dir"]),
+        T_NORMAL,
     )
     .guide("npc-authoring"),
     // One edits document at a path the caller picks. Reads nothing at all: the localization id of a

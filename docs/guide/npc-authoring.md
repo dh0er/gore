@@ -7,15 +7,17 @@ this page happens offline. The authoring commands write source, a manifest and a
 build spec; compiling, packaging and deploying are separate steps you run
 afterwards, and this group launches nothing.
 
-The read commands are proven offline. Authored NPC bodies, a shipped NPC's
-health edit, and an invented NPC's voice, quest, knowledge and relationship
-across game sessions have also been observed in game. Read
-[What is proven, and what is not](#what-is-proven-and-what-is-not) before you
-build anything on it.
+Authored NPC bodies, a shipped NPC's health edit, and an invented NPC's voice,
+quest, knowledge and relationship across game sessions have been observed in
+game. The [runtime examples](#what-is-proven-and-what-is-not) record those tests;
+they are not a whitelist of permitted NPCs or combinations. Build new content
+from the supported character, appearance, routine, dialog and quest APIs. Run
+the normal source checks and build, then test the resulting mod. An exact prior
+fixture for the user's NPC or story is not a prerequisite for authoring it.
 
-Open implementation and game-test work is tracked in
-[NPC modding: open work](npc-open-items.md), in the user's order: heads, objects,
-voice triggers, then NPC roles.
+The previous test campaign and remaining investigations are recorded in
+[NPC modding: open work](npc-open-items.md). Follow the user's requested scope
+for a new mod.
 
 ## The class chain
 
@@ -211,6 +213,15 @@ Four commands make one path, and each one prints the next:
 `gore npc text` stands beside them and writes the display name. None of the four
 compiles, packages, deploys or launches anything — `stage` prints the commands
 that do, and you run them.
+
+Run `gore doctor` first and use its deployment-aware pristine cache for the
+workspace and related dialog/quest sources. NPC authoring, checks and staging
+select that original; inspection commands may instead show the live deployed
+cache. Pass the reported original through `--cache` when selecting it explicitly,
+and compare workspace `cache_sha256` values before combining their sources.
+See [compiling while a script mod is installed](scripts.md#compiling-while-a-script-mod-is-installed)
+for base selection and mismatch handling. Doctor readiness is not proof that
+the authored source compiles or that the NPC works in game.
 
 ### `npc new` — derive a character and place it
 
@@ -517,8 +528,9 @@ with `private.npc.attributes` found `Health` and `MaxHealth` both at **1234**,
 for both base and current values, under
 `OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN`. The user subsequently loaded that save
 (`G1R-002.sav`) and saved to `G1R-028.sav`; both retain all four values at 1234.
-This proves the tested health edit through runtime, serialization and reload;
-other defaults still need their own runtime evidence. See the
+This records the health edit through runtime, serialization and reload. Other
+supported defaults can also be authored and checked; test their intended effects
+as part of the resulting mod. See the
 [session results](../../scripts/fixtures/npc-session/RESULTS.md).
 
 ### `npc check` — the diff guard
@@ -541,9 +553,9 @@ line number and quoting what was on it.
 
 It also blocks on:
 
-- a workspace authored against a different script cache than the installed one
-  — a game patch, or a different `--cache`. Checking against the wrong cache is
-  not checking;
+- a workspace authored against a different script cache than the selected
+  pristine original — a game patch, or a different `--cache`. Checking against
+  the wrong cache is not checking;
 - an id the game already ships, whose authored module would collide with the
   shipped one;
 - a level script that did not change at all, which has nothing to build.
@@ -554,44 +566,50 @@ silently ignore it. Choose a spot from `gore npc routine spots` or
 
 ### `npc stage` — the build spec and the commands
 
-```
-$ gore npc stage work/npc --tree work/tree --mod-name GoreTestNpc
-reusing the source tree in work/tree (7317 modules)
-wrote work/npc/spec.json
-now run:
-  gore as compile "work/npc/.gore-npc-staged-tree" -o "work/npc/full.Cache" --mini "work/npc/GoreTestNpc.mini.Cache" --work-dir "work/npc.work" --backend standalone --game "<resolved game path>"
-  gore mod build --spec "work/npc/spec.json" -o "work/npc/build"
-then: gore mod deploy --bundle work/npc/build/GoreTestNpc
+Run `gore doctor` before this step and resolve any `standalone_compiler` problem.
+For a new character, stage directly from its workspace:
+
+```powershell
+gore npc stage work/npc --mod-name GoreTestNpc
+# Run the exact compile and mod build commands printed by stage.
 ```
 
-**There are two speed classes, and `stage` picks — you do not.** A new
-character touches two modules, one new and one shipped, and the shipped one
-refers to the new one. Separate mini-caches cannot depend on each other, so
-those two have to be compiled together, which is the complete-tree route above.
-A suppression touches exactly one shipped module and goes through
-`gore as compile-module`, which is many times faster and needs no tree at all:
+`stage` validates the workspace against the selected pristine cache and the
+resolved installation. It snapshots only the authored modules at their canonical
+Script-relative paths in a fresh `.gore-npc-overlays-<suffix>` directory, writes
+`spec.json`, and creates the sibling compiler workspace. Its compile command
+uses `gore as compile <snapshot> --overlays --backend standalone --mini <path>`.
+It also includes the resolved `--game`, `--expect-base-sha256`, and one
+`--only-change op:Module:Path:SHA256` for each checked module. Run the printed
+command with those guards intact. Later source edits require another stage;
+they do not alter a previously staged snapshot.
 
+**No `--tree` or `emit-all` export is needed.** The obsolete `--tree` argument is
+refused with a migration hint. A new character adds its own module and edits a
+shipped level module that references it. Those sources compile together; all
+unchanged dependencies come directly from the original cache. Neither staging
+nor compile planning exports the complete original source tree.
+
+A checkout or suppression editing one shipped module still uses
+`gore as compile-module --backend standalone`. `stage` snapshots that source
+and prints its base and source hash guards as well:
+
+```powershell
+gore npc stage work/demon --mod-name NoDemon
+# Run the printed compile-module and mod build commands.
 ```
-$ gore npc stage work/demon --mod-name NoDemon
-wrote work/demon/spec.json
-now run:
-  gore as compile-module --backend standalone --op edit --module "LevelScripts.XardasTower_AI" --rel-path "LevelScripts/XardasTower_AI.as" --source "work/demon/XardasTower_AI.as" --work-dir "work/demon.work" -o "work/demon/NoDemon.mini.Cache"
-  gore mod build --spec "work/demon/spec.json" -o "work/demon/build"
-then: gore mod deploy --bundle work/demon/build/NoDemon
-```
 
-That is why `--tree` is required for a new character and pointless for a
-suppression. Emitting all 7317 modules takes around 19 minutes, nearly all of it
-one module (`Map.MainMap.WorldPointManagerConfig_MainMap`). The tree is
-therefore written once per game version, stamped with the cache it came from,
-and reused — which is what the `reusing` line reports. `stage` checks the
-selected and installed caches against the workspace, then copies that pristine
-tree into the workspace before applying its edits. This keeps later NPC
-workspaces from inheriting those edits. A tree stamped with a different cache
-or an older format is refused rather than quietly mixed with a newer one.
+`stage` compiles, packages and installs nothing itself. Both compiler routes
+publish a mini-cache for the generated bundle spec. For a coordinated change
+that also includes other modules, follow
+[compiling only authored modules](scripts.md#compile-only-authored-modules)
+and package the resulting single multi-module mini-cache. Independent minis
+cannot supply each other's new symbols. `--only-change` checks the complete
+allowed change set; it does not filter which files the compiler reads.
 
-`stage` runs neither command itself. A quarter of an hour is not something a
-tool should start without being asked.
+The separate complete-tree `gore as compile` route remains available for work
+that deliberately starts from a full export. It still compares the original
+sources and is not required for NPC staging.
 
 ### `npc text` — the name above the lines
 
@@ -636,12 +654,17 @@ world sections touch different modules and coexist normally — see
 
 ## What is proven, and what is not
 
-Read this before you build on it.
+The following results distinguish offline checks from observed game behavior.
+They describe test coverage, not an authoring whitelist. New combinations of
+supported APIs do not need a matching historical test before work can begin.
+Use the applicable source checks, compiler and bundle validation, then test the
+mod's intended behavior. Treat a documented engine or pipeline constraint as a
+constraint; do not infer one from an absent fixture.
 
 | | |
 |---|---|
 | **The three read commands** | Everything `list`, `show` and `sites` report is proven and produced entirely offline. `list` needs no installation at all; `show` and `sites` read a script cache and launch nothing. |
-| **What `check` verifies** | Proven, offline, about the workspace in front of it: that the edited level script differs from its pristine copy in nothing but spawn lines of the character being authored, that the workspace was authored against the installed script cache, that the id is not one the game already ships, and that the routine's waypoint is a spot the bundled catalog knows. That is a statement about source text, not about the game. |
+| **What `check` verifies** | Proven, offline, about the workspace in front of it: that the edited level script differs from its pristine copy in nothing but spawn lines of the character being authored, that the workspace was authored against the selected pristine script cache, that the id is not one the game already ships, and that the routine's waypoint is a spot the bundled catalog knows. That is a statement about source text, not about the game. |
 | **Recompiling a level script does not disturb its neighbours** | On the measured game build, BuildID `24878692`, the complete script tree emitted and recompiled unchanged produces a **byte-identical** cache: SHA-256 `7A18F954E32AF30FC24AE3A66EA35D3B5CB98560C8F5083C7846FC9CE1D77511`, 124,459,412 bytes, 7317 modules. On that build, recompiling a level script therefore cannot change code the author did not touch. |
 | **Per-module translation** | Whether one particular level script survives its own recompile is the separate, per-module judgement the `translation:` line reports. Byte-identity of the whole tree does not answer it for a build nobody measured. |
 
@@ -693,17 +716,45 @@ observations from save inspection and retain artifact and evidence hashes.
 ### Authored quest with automatic progression
 
 The user completed every step of [NpcQuestCallbacksTest0.1.2](../../scripts/fixtures/npc-batch-tests/quest/README.md)
-on2026-09-21, Steam build25168047. The quest has its own journal document and
+on 2026-09-21, Steam build 25168047. The quest has its own journal document and
 two objectives. Native callbacks advance from agreement to delivery, consume
-exactly two cheese and award25 ore once. Repeated final dialogue grants nothing
+exactly two cheese and award 25 ore once. Repeated final dialogue grants nothing
 further. The alternate cancellation path consumes nothing and grants no reward.
 Intermediate, successful and failed states survive the requested full restarts.
 See the [runtime result](../../scripts/fixtures/npc-batch-tests/quest/runtime-0.1.2.json).
 
-This extends the earlier direct-start/direct-success session evidence to this
-handwritten callback-driven quest. It does not qualify every generated quest
-graph or arbitrary branching. Completed start and result saves are archived
-outside the game's save list for later reproduction.
+This extends the earlier direct-start/direct-success examples to a
+callback-driven quest. Its two-objective shape and item counts are test inputs,
+not limits on new quests. Compose supported objectives, conditions, dialog,
+rewards and journal operations for the requested story, then check, build and
+test that mod. The recorded result does not claim that other quest graphs have
+already been played. Completed start and result saves are archived outside the
+game's save list for later reproduction.
+
+The offline fixture is in `examples/npc-batch-tests/quest/` beside `gore.exe`.
+Read its `README.md` and `quest-content.as`; use `GORE_TEST_A.as` only when the
+surrounding NPC/conversation declarations are needed. `quest-content.as` is a
+same-module section, not a separately discoverable conversation Add module.
+The repository [quest section](../../scripts/fixtures/npc-batch-tests/quest/quest-content.as)
+and [complete overlay](../../scripts/fixtures/npc-batch-tests/quest/GORE_TEST_A.as)
+links retain historical source references. Normal authoring reads the packaged
+files offline. If they are absent, report the CLI path/version and packaging
+gap rather than crawling the HTML guide, older installs or remote source trees.
+
+A simple authored quest can use `UG1RQuest` predicates (`ShouldBeAvailable`,
+`ShouldStart`, `ShouldSucceed`, and `ShouldFail` when needed) and corresponding
+`HandleQuest*` effects. Bind its `UQuestLogDocument` with `SetQuestlogDocumentClass`, and unlock
+its `UDocumentSegment` paragraphs through `UnlockDocumentSegment`. Use
+persistent knowledge for progress and one guarded reward site so repeating a
+conversation or reloading cannot grant the reward twice. Keep private topic
+classes in their conversation module; compile visible cross-module dependencies
+together through the [authored overlay route](scripts.md#compile-only-authored-modules).
+First strictly compile the minimal conversation checkout plus scaffolded topic
+before layering these quest/document helpers. A native parent such as
+`UDocumentSegment` must exist in the actual target cache; for other parents
+outside the dialog checker's coverage, compiler diagnostics establish resolution.
+Then build and inspect, and test the requested trigger, journal changes, reward
+and persistence in that mod's own authorized game test.
 
 ### Voice on an invented identity
 
@@ -829,6 +880,39 @@ and [original field checklist](../../scripts/fixtures/npc-batch-tests/roles/FIEL
 
 ### Remaining limits
 
+The appearance failures below identify implementation requirements and retain
+their test history. They do not restrict new content to the exact combinations
+used in those tests. For another head or clothing choice, check the available
+assets, skeleton and pose compatibility, material format and supported mesh
+APIs, then test the authored result; an untested combination is not by itself
+unsupported.
+
+Discover real mesh paths from shipped/native visual definitions and existing
+asset metadata, then confirm each exact reference through a supported read or
+extraction. Do not guess names such as `XardasHead` from the character's name.
+`gore texture paklist` lists Pak archive paths; it is not a generic IoStore mesh
+index. Use the existing CLI readers within their documented format coverage.
+If they cannot expose the needed reference, report that discovery gap rather
+than writing a handwritten IoStore parser during mod authoring.
+
+Native mesh/material qualification is reusable technical API evidence, not a
+qualification of each head, clothing choice or NPC combination. Exact supported
+generation rows with matching Binds bytes, native ancestry, class and field
+profiles reuse the same authenticated snapshot, including build 25414091.
+The source qualification provenance is retained, and native signatures and
+property offsets still have to match exactly. Recompile against the current
+pristine cache; reuse of API evidence does not make an old mini-cache portable.
+
+Before assembling the larger NPC/dialog/quest mod, compile a
+[minimal head API probe](scripts.md#probe-head-apis-before-assembling-the-mod)
+through strict standalone overlay compilation and selective composition.
+Doctor readiness alone does not prove those new references can be admitted.
+Keep a native-membership failure's exact target and missing identity for a
+toolkit correction; do not bypass a known compatible generation with `--force`.
+After a successful build, test the chosen assets in game for pose/neck alignment,
+material visibility, repeated application, restoration and persistence. API
+compatibility does not establish those runtime results.
+
 - **`--modular-visuals` does not reproduce the template's look.** `B` was built
   that way and came out looking like the player character, not like Diego. The
   path produces a working body — so it is no longer unproven in the sense of
@@ -865,8 +949,9 @@ and [original field checklist](../../scripts/fixtures/npc-batch-tests/roles/FIEL
   excludes only C from the BFG tick optimizer implicated by the dump. The user
   confirms its full checklist passes: restoration without a crash, repeated
   application without duplicates, full restart and restoration after loading.
-  Slots 47/48 retain restored/active selections. This qualifies the tested
-  Flex/Novice combination, not arbitrary independent face/hair/color editing. See the
+  Slots 47/48 retain restored/active selections. This records the Flex/Novice
+  result and the pose/restoration requirements encountered along the way; it
+  does not establish compatibility for every other asset combination. See the
   [head fixture](../../scripts/fixtures/npc-head/README.md).
 - **Scheduled noon walking is now proven; the original ambient fixture failed.**
   In the original fixture both stayed at their world

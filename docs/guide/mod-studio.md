@@ -1,14 +1,16 @@
 # Mod Studio
 
-GORE Mod Studio is the no-code GUI over the same engine as the CLI: wizards and
-workbenches over a managed project instead of commands over files. It is a work
-in progress — authoring, review, and offline builds are real today, while
-deployment and every in-game claim stay deliberately out of its hands (see
-[Current limits](#current-limits)).
+Mod Studio is the planned GUI for GORE's authoring workflows: wizards and
+workbenches over the same engine used by the CLI and MCP tools. Its current
+implementation provides parts of that workflow, including managed-project
+authoring, review, and offline builds. This page describes those GUI surfaces
+and their [current limits](#current-limits); it does not define what the CLI
+or MCP can author, build, or deploy. Use the task-specific guides for those
+workflows, including [NPC authoring](npc-authoring.md).
 
-Three rules hold everywhere. Everything you author lands in your managed
-project, saves are never written, and normal use of a configured Gothic 1
-Remake installation is read-only evidence. The separately invoked,
+Three rules hold throughout the current Studio GUI. Everything you author lands
+in your managed project, saves are never written, and normal use of a configured
+Gothic 1 Remake installation is read-only evidence. The separately invoked,
 evidence-only compiler check authenticates the installed cache/API and uses the
 selected product policy. Strict standalone returns native file, line, column,
 severity, and message diagnostics without starting the game or entering an
@@ -97,26 +99,24 @@ installed game.
 
 ## Spawn and placement
 
-Putting a character into the world has a supported path since 2026-09-05, and
-it is `gore npc` on the command line, not Studio. Two authored characters were
-built, deployed and observed in game: they stand at their world points, animate,
-can be focused and spoken to, and the save records them under their own
-identity. [NPC authoring](npc-authoring.md) is that workflow; Studio's NPC Draft
-is still the offline-only thing described below.
+The CLI and MCP workflow supports new NPC identities and placement through
+level-script spawn hooks. `gore npc new` authors the character and its spawn
+site; check, stage, compile, and bundle steps prepare the mod for deployment.
+[NPC authoring](npc-authoring.md) documents this path and its game-test evidence,
+including bodies, animation, interaction, and distinct saved identities.
 
-Moving a character that is already standing in the world remains a different
-question, and the answer is still the
-[save editor](../../apps/save-editor/README.md).
+Studio's current NPC Draft GUI does not yet expose that complete workflow.
+Its Draft, build-blocked, and runtime-status labels apply to that GUI output;
+they do not restrict CLI or MCP authoring. Existing runtime examples demonstrate
+working techniques, not an exhaustive list of allowed NPC combinations. A new
+combination can be authored and checked without a separate historical game test;
+report any actual compiler, asset, or runtime issue for that mod when it arises.
 
-Calling a *vanilla* spawn definition a second time would still only produce
-another body sharing the vanilla identity — which is why an authored character
-brings its own definition chain
-([the contract](../reference/studio-authoring.md#remaining-runtime-gates)).
-`gore location resolve` confirms that a waypoint name exists, which is not the
-same as being able to send anyone to it. The one thing that does move a
-character is the [save editor](../../apps/save-editor/README.md), which edits a
-position already recorded in an existing save; there is no hook that places
-anybody in a new game.
+An authored NPC uses its own linked class chain. Reusing a vanilla spawn
+definition alone would share the vanilla identity. Choose a suitable world point
+with the NPC tools; `gore location resolve` only confirms a waypoint name exists.
+Editing a position already stored in a save is a separate
+[Save Editor](../../apps/save-editor/README.md) workflow.
 
 ## Quests
 
@@ -272,10 +272,12 @@ asks you to inspect it yourself rather than retrying automatically.
 
 ## Current limits
 
-Mod Studio names what it has not done. **Build blocked** and **Runtime not
-verified** are normal states, and no workflow above claims in-game proof.
+These limits describe the current Studio GUI and its generated Drafts.
+**Build blocked** and **Runtime not verified** are its explicit status labels.
+They are not limits on GORE's CLI or MCP workflows, and do not require every
+new mod combination to have been tested before it can be authored.
 
-NPC and quest Drafts:
+Studio NPC and quest Drafts:
 
 - An NPC Draft is a logical clone of a vanilla archetype. Visuals, faction,
   stats, inventory, routine, dialog topics, quest links, world placement, and
@@ -288,7 +290,7 @@ NPC and quest Drafts:
   can restore a complete backed-up project; general project deletion remains
   unavailable.
 
-The Voice workflow still does not provide:
+The Studio Voice workflow still does not provide:
 
 - managed deployment, undeployment, load-order integration, or an isolated
   playable test profile for the sealed bundle;
@@ -314,8 +316,9 @@ The Voice workflow still does not provide:
   created and removed safely, but that narrow pair is not a general
   relationship editor.
 
-None of this completes the Voice production milestone, vanilla adoption, or
-any runtime dialog workflow.
+These GUI surfaces do not yet complete Studio's Voice production, vanilla
+adoption, or runtime dialog workflow. The CLI and MCP paths are documented in
+[Voice-over](voice.md) and [Dialog authoring](dialog-authoring.md).
 
 Backup and restore: restore is Windows-only, Clone/Save As does not exist yet,
 and recovery tooling for an uncertain restore is future work.

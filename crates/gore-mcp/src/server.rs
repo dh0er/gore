@@ -38,6 +38,9 @@ pub struct Options {
     pub exe: PathBuf,
     /// Version of that binary, reported as `serverInfo.version`.
     pub server_version: String,
+    /// Read-only readiness snapshot supplied by the host, exposed during initialize before tools.
+    /// This is advisory and never grants consent or substitutes for per-command validation.
+    pub startup_diagnostics: Option<String>,
     /// Treat commands that modify the game installation or rewrite files in place as already
     /// approved, so they run without asking. Off by default: they are not forbidden, they are
     /// confirmed with the user (see [`crate::consent`]). Turn it on where nobody is watching —
@@ -83,6 +86,7 @@ impl Options {
         Self {
             exe,
             server_version: server_version.into(),
+            startup_diagnostics: None,
             allow_write: false,
             allow_game_launch: false,
             allow_force: false,
@@ -1054,7 +1058,9 @@ mod tests {
 
     #[test]
     fn initialize_reports_a_version_capabilities_identity_and_instructions() {
-        let mut session = Session::new(options());
+        let mut opts = options();
+        opts.startup_diagnostics = Some("standalone_compiler: problem — missing catalog".into());
+        let mut session = Session::new(opts);
         let response = session
             .handle_unasked(&request(
                 "initialize",
@@ -1067,6 +1073,8 @@ mod tests {
         assert_eq!(result["serverInfo"]["name"], "gore");
         assert_eq!(result["serverInfo"]["version"], "0.1.0");
         assert!(result["capabilities"].get("tools").is_some());
+        assert!(result["instructions"].as_str().unwrap()
+            .contains("standalone_compiler: problem — missing catalog"));
         assert!(
             result["instructions"]
                 .as_str()

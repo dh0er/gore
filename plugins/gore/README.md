@@ -20,6 +20,27 @@ From a checkout, with no marketplace and no install:
 claude --plugin-dir path\to\gore\plugins\gore
 ```
 
+## Codex
+
+Register the checkout you maintain, then install the plugin:
+
+```powershell
+codex plugin marketplace add C:\path\to\gore
+codex plugin add gore@gore
+```
+
+Start a new session after installation so it loads the plugin's skill and tools.
+The bundled GORE server is required in Codex and has a 30-second startup timeout.
+Codex waits for its MCP discovery before building the initial tool catalog;
+startup failure is reported instead of silently omitting the tools.
+
+Codex otherwise gives optional servers a one-second startup grace. GORE's early
+read-only compiler/API checks can take several seconds, so an older optional
+plugin can be absent from the first turn even with a working CLI and a completed
+Codex restart. Update the plugin from the maintained marketplace; a CLI rebuild
+is not needed for this configuration change. See the
+[official MCP startup options](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+
 ## `gore.exe` has to be on PATH
 
 This is the one prerequisite the plugin cannot satisfy for you. Every bundled
@@ -30,14 +51,25 @@ wrong on most of them.
 GORE is a Rust binary, not something a package manager fetches on demand, so
 install it first. Either unpack a `gore-cli-v*`
 [release](https://github.com/dh0er/gore/releases) and put that directory on
-`PATH`, or build it from a checkout:
+`PATH`, or build it from the checkout root:
 
 ```powershell
-cargo build --release -p gore     # → target\release\gore.exe
+python build.py gore-cli dist             # recommended installable zip → dist\gore-cli\
+python build.py gore-cli build --release  # CLI + compiler → target\release\
 ```
 
-and put `target\release` on `PATH`. A `PATH` change only reaches processes
-started afterwards, so restart the client — not just the plugin — once it is set.
+For installation, unpack the complete zip from `dist\gore-cli` into a stable
+directory such as `C:\Tools\gore-cli`, and put that directory on `PATH`. Keep
+`gore.exe`, `compiler\`, `docs\`, and the other companion files together when
+installing or updating. A `PATH` change only reaches processes started
+afterwards, so restart the client once it is set.
+
+Normal CLI builds require the nonempty embedded compiler catalog prepared by
+`build.py`; raw `cargo build -p gore` without it fails. The debug-only
+`development-cli` feature produces a visibly marked `development-unbundled`
+CLI for development and tests, not installation. It cannot bypass the catalog
+requirement in release builds. See [Building](../../docs/development.md) for
+toolchain requirements and development commands.
 
 **If it is missing**, the `gore_*` tools simply will not appear. The client
 reports a server that failed to start; what it says depends on the client, and
@@ -48,8 +80,54 @@ none of them can say "add gore.exe to PATH" because none of them knows what
 gore --version
 ```
 
-No output, or "not recognized as an internal or external command", means PATH —
-not the plugin. Fix that and restart the client.
+A command-not-found error establishes a command-resolution problem. Check the
+client's PATH and restart it after correcting that environment. If the command
+works but tools are missing, check the client's MCP startup status and plugin
+registration instead:
+
+```powershell
+codex plugin list
+codex mcp get gore --json
+```
+
+These commands show configuration, not a completed connection. A pending optional
+server needs startup handling; a disabled server or actual startup error needs
+its reported fix. Offline authoring can still use the working CLI, with Doctor
+and the same consent boundaries.
+
+## Updating and repairing the plugin
+
+Keep the complete CLI package in a stable directory on `PATH`, such as
+`C:\Tools\gore-cli`, and replace that package when updating. Both shipped MCP
+files use `"command": "gore"`. Codex caches the plugin files, but this command
+still resolves the CLI through `PATH` when its server starts; it must not be
+rewritten to a versioned executable path.
+
+Check which CLI and marketplace you are using:
+
+```powershell
+Get-Command gore | Select-Object Source
+gore --version
+codex plugin list
+```
+
+MCP command results print the exact executable they ran. If that path differs
+from the expected `Get-Command gore` result, inspect the source plugin's
+`.mcp.json`. Reinstalling from an old local copy will reproduce its pinned path.
+For a local `gore` marketplace that points at an obsolete copy, replace its
+registration with your maintained checkout:
+
+```powershell
+codex plugin marketplace remove gore
+codex plugin marketplace add C:\path\to\gore
+codex plugin add gore@gore
+```
+
+Restart Codex after a CLI or `PATH` update, then use a new session. A running
+MCP process retains its executable, embedded guides and tool list. Updating
+the CLI does not require changing the plugin's command or its release version.
+Plugin skill/config changes do require reinstalling the plugin from its current
+source. Do not hand-edit the installed cache or keep an old release path there.
 
 ## What it contains
 

@@ -229,7 +229,7 @@ what the cache declares rather than what a given save would show. Full detail in
 | `delete` | `<NPC>` · `--cache` · `--game` · `--out <DIR>` | The same workspace shape for taking a shipped character's spawn line out again. This stops future placement only: a save that already spawned the character still carries that body. A character placed from more than one level script is refused rather than half removed. |
 | `checkout` | `<NPC>` · `--cache` · `--game` · `--out <DIR>` | Take a shipped character's own module out for editing: the one declaring its `CharacterDefinition`, so its level, health, resistances, inventory, guild parent, skills, personality and combat AI. Values may change freely; class names and their parent classes may not, because those are the character's identity in the cache and a rename remaps to nothing. Appearance and the spawn definition are not included — they live in modules hundreds of characters share. `<DIR>` must not exist. |
 | `check` | `<DIR>` · `--cache` · `--game` | Diff the edited level script against its pristine copy and block on every change that is not a spawn line of the character being authored, naming the line. Also blocks on a cache that no longer matches the workspace, an id the game already ships, a script that did not change, and an unknown routine waypoint. Offline; no compile. |
-| `stage` | `<DIR>` · `--tree <DIR>` · `--mod-name <NAME>` · `--cache` · `--game` | Write `spec.json` into the workspace and print the compile and build commands. A new character needs `--tree`: its new module and the shipped level script must compile together, which is the complete-tree `gore as compile --mini` route, and that tree costs about 19 minutes once per game version before it is stamped and reused. A suppression touches one module and gets the far quicker `gore as compile-module`. `stage` runs neither. |
+| `stage` | `<DIR>` · `--mod-name <NAME>` · `--cache` · `--game` | Snapshot validated authored sources, write `spec.json`, and print compile/build commands with base and source hash guards. New characters use `gore as compile --overlays --backend standalone --mini`; checkouts/suppressions editing one module use `compile-module`. No full export is needed; obsolete `--tree <DIR>` is refused. `stage` runs neither command. |
 | `text` | `<ID>` · `--name <NAME>` · `--english <NAME>` · `--out <FILE>` | The character's display name as a `gore loc import --edits` document, keyed by the id in lowercase. Both German columns are written, because `german_new` beats `german` wherever it exists; `--english` fills the three English ones. Reads nothing at all. `<FILE>` must not exist. |
 | `routine set` | `<DIR>` · `--time HH:MM` · `--activity <NAME>` · `--spot <NAME>` · `--game` | Insert or replace one daily phase in an existing new/clone workspace; validate the spot and wire the spawn. Activities: stand/read/drink/sit/sleep/guard/alchemy. |
 | `routine show` | `<DIR>` · `--json` | Show phases, daily wraparound and the explicit script helper for replacing an already-spawned NPC's saved routine. |
@@ -399,7 +399,7 @@ Output directories must not exist and are never placed in the game tree.
 | `patch-tag-map <CACHE>` | `--selector <JSON>` · `--expected-hex` · `--replacement-hex` · `-o, --out` · `--json` |
 | `qualify` | `--game` · `--usmap <FILE>` · `--catalog <JSON>` · `--id <ID>` · `--label <TEXT>` · `--json` |
 | `diagnostics-check` | `--exe <EXE>` · `--game <GAME>` |
-| `compile <SRC>` | `-o, --out` · `--mini <PATH>` · `--work-dir <DIR>` · `--game` · `--expect-base <CACHE>` · `--expect-base-sha256 <HEX>` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · `--no-diagnostics` · `--diagnostics-hook <DLL>` · `--diagnostics-inject-delay-ms <MS>` |
+| `compile <SRC>` | `--overlays` (requires `--backend standalone`) · `-o, --out` · `--mini <PATH>` · repeatable `--only-change <OP:MODULE:PATH[:SHA256]>` · `--work-dir <DIR>` · `--game` · `--expect-base <CACHE>` · `--expect-base-sha256 <HEX>` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · `--no-diagnostics` · `--diagnostics-hook <DLL>` · `--diagnostics-inject-delay-ms <MS>` |
 | `compile-module` | `--op add\|edit` · `--module` · `--rel-path` · `--source` · `--work-dir` · `--allow-new-symbols` · `-o, --out` · `--game` · `--expect-base <CACHE>` · `--expect-base-sha256 <HEX>` · `--backend standalone\|game\|standalone-then-game` (default `standalone-then-game`) · `--generation-receipt <RECEIPT.json>` · diagnostics flags · five `--development-*` compiler-development overrides |
 | `replace <BASE> <MINI> <TARGET>` | `-o, --out` |
 | `splice <BASE> <MINI>` | `--upsert` · `-o, --out` |
@@ -407,13 +407,26 @@ Output directories must not exist and are never placed in the game tree.
 | `extract-remap <REGEN> <MODULE> <BASE>` | `--allow-new-symbols` · `-o, --out` |
 | `bytediff <VANILLA> <REGEN>` | `--module` · `--func` · `--verdict` · `--show-benign` · `--context <N>` · `--norm-slots` · `--no-norm-scope` · `--no-norm-reguard` · `--json <PATH>` · `--fail-on-semantic` |
 
-`compile <SRC>` resolves the complete source graph, but publishes a selective
-complete-cache product: only source-classified Add/Edit modules replace or join
-the exact target cache, while untouched modules and every pre-existing global
-tail record remain pristine; only records required by new symbols are appended.
-Start from a current `emit-all` tree. Missing base sources request
-Delete and are rejected; cyclic dependencies among new modules also fail
-closed. The raw whole-tree compiler regeneration is never the published cache.
+`compile <SRC> --overlays --backend standalone` accepts only the complete new
+or edited modules at canonical Script-relative paths, with at most 256 modules.
+Every supplied `.as` file is an explicit Add/Edit; absent base modules remain
+unchanged. It reads their
+dependencies from the pristine cache without a full export or original-source
+comparison. Overlay mode rejects `game`, fallback, and an omitted backend before
+planning, and never requests module deletion.
+
+Without `--overlays`, `<SRC>` remains a complete current `emit-all` tree.
+Planning compares every source against the original emission; missing base
+sources request unsupported Delete and are rejected. `--only-change` is a
+scope/source-hash check in either mode, not a file filter or acceleration flag.
+The base expectation guards apply to both input modes.
+
+Both modes resolve the coordinated graph and publish the same selective full
+cache: only Add/Edit modules replace or join the exact target cache, while
+untouched modules and every pre-existing global-tail record remain pristine;
+only records required by new symbols are appended. Cyclic dependencies among
+new modules fail closed. Raw whole-tree compiler regeneration is never the
+published cache.
 On BuildID `24878692`, one published selective product booted and loaded
 gameplay, rendered and selected its new same-module root, and executed a new
 provider call across modules from a shipped automatic topic. `--mini <PATH>`

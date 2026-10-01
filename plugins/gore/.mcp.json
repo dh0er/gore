@@ -3,6 +3,8 @@
     "gore": {
       "command": "gore",
       "args": ["mcp", "serve"],
+      "required": true,
+      "startup_timeout_sec": 30,
       "env": {
         "GORE_MCP_ALLOW_WRITE": "${user_config.allow_write}",
         "GORE_MCP_ALLOW_GAME_LAUNCH": "${user_config.allow_game_launch}"

@@ -124,11 +124,11 @@ pub enum NpcAction {
         #[arg(long)]
         game: Option<PathBuf>,
     },
-    /// Build the source tree and print the commands that compile an authored character
+    /// Snapshot the authored modules and print their compile and bundle commands
     Stage {
         /// The workspace directory written by `new` or `delete`
         dir: PathBuf,
-        /// Where to keep the emitted source tree between runs. Required for a new character
+        /// Obsolete: omit this option; staging now snapshots only the authored modules
         #[arg(long)]
         tree: Option<PathBuf>,
         /// Name of the mod being built
@@ -396,7 +396,7 @@ impl Emitted {
     }
 }
 
-/// The script cache to read: the one named, else the one in the resolved install.
+/// The script cache to inspect: the one named, else the live one in the resolved install.
 fn cache_path(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(cache) = cache {
         return Ok(cache);
@@ -410,6 +410,19 @@ fn cache_path(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<PathBuf> 
         );
     }
     Ok(paths.script_cache)
+}
+
+/// Authored work and its checks use the same pristine base as the standalone compiler.
+/// Inspection commands can still show the live installed state.
+fn authoring_cache_path(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(cache) = cache {
+        return Ok(cache);
+    }
+    let root = gore_loc::config::game_root(game).context("resolving the game path")?;
+    cache_path(None, Some(root.clone()))?;
+    Ok(gore_mod::pristine_script_cache_source(&root)
+        .context("selecting the pristine NPC base cache")?
+        .path)
 }
 
 /// Namensraum der Levelskripte. Nur diese 29 Module tragen Spawn-Stellen.
@@ -1036,9 +1049,9 @@ fn author(
         routine_plan::validate_name_literal(waypoint, "waypoint")?;
     }
 
-    let path = cache_path(cache.clone(), game.clone())?;
+    let path = authoring_cache_path(cache, game)?;
     let template_spawn = generate::spawn_class(&request.from);
-    let emitted = emit_index(cache, game, Some(&template_spawn))?;
+    let emitted = emit_index(Some(path.clone()), None, Some(&template_spawn))?;
     let modules = model::parse_modules(&read_module_cache(&path)?)
         .context("parsing modules for NPC class validation")?;
 
@@ -1267,7 +1280,8 @@ fn author(
 /// `gore npc delete` — eine ausgelieferte Figur nicht mehr setzen lassen.
 fn suppress(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, out: &Path) -> Result<()> {
     let spawn_class = generate::spawn_class(npc);
-    let emitted = emit_index(cache, game, Some(&spawn_class))?;
+    let path = authoring_cache_path(cache, game)?;
+    let emitted = emit_index(Some(path), None, Some(&spawn_class))?;
     if !emitted.classes.contains_key(&spawn_class) {
         bail!(
             "no character {npc} in this cache — {spawn_class} is not declared. \
@@ -1368,7 +1382,11 @@ fn validate_manifest_modules(manifest: &workspace::Manifest) -> Result<()> {
     );
     let safe = |value: &str| {
         let path = Path::new(value);
-        path.components().next().is_some()
+        !value.contains(['\\', ':'])
+            && value
+                .split('/')
+                .all(|part| !part.is_empty() && part != "." && part != "..")
+            && path.components().next().is_some()
             && path
                 .components()
                 .all(|part| matches!(part, std::path::Component::Normal(_)))
@@ -1433,8 +1451,8 @@ fn check_workspace(dir: &Path, cache: Option<PathBuf>, game: Option<PathBuf>) ->
     validate_manifest_modules(&manifest)?;
     routine::check_managed(dir, &manifest, game.clone())?;
     let spawn_class = generate::spawn_class(&manifest.npc_id);
-    let path = cache_path(cache.clone(), game.clone())?;
-    let emitted = emit_index(cache, game, Some(&spawn_class))?;
+    let path = authoring_cache_path(cache, game)?;
+    let emitted = emit_index(Some(path.clone()), None, Some(&spawn_class))?;
 
     let mut findings: Vec<check::Finding> = Vec::new();
 
@@ -1631,163 +1649,6 @@ fn routine_waypoint_findings(
         .collect()
 }
 
-/// Den Quellbaum vorhalten: einmal emittieren, danach an der Cache-Kennung wiedererkennen.
-///
-/// Der Lauf kostet rund 19 Minuten, davon das meiste ein einziges Modul
-/// (`Map.MainMap.WorldPointManagerConfig_MainMap`). Ihn bei jedem `stage` zu wiederholen waere
-/// nicht zumutbar, also bekommt der Baum einen Stempel und wird wiederverwendet. Der lokale
-/// Stempel beweist nicht, dass der Baum noch aus dem Cache stammt. Der ausgegebene Compile-Befehl
-/// vergleicht deshalb alle Aenderungen erneut mit dem versiegelten Cache und erlaubt nur die
-/// beiden Module aus dem NPC-Manifest.
-fn ensure_tree(tree: &Path, cache_sha256: &str, path: &Path) -> Result<()> {
-    let stamp_path = tree.join(stage::TREE_STAMP_NAME);
-    if let Ok(text) = fs::read_to_string(&stamp_path) {
-        if let Ok(stamp) = serde_json::from_str::<stage::TreeStamp>(&text) {
-            if stamp.format_version == stage::TREE_STAMP_VERSION
-                && stamp.cache_sha256 == cache_sha256
-                && stamp.tree_sha256 == stage::tree_sha256(tree)?
-            {
-                println!(
-                    "reusing the source tree in {} ({} modules)",
-                    tree.display(),
-                    stamp.modules
-                );
-                return Ok(());
-            }
-        }
-        bail!(
-            "the source tree in {} has an old format or a different script cache. Delete it and \
-             let this command write a fresh, pristine one",
-            tree.display()
-        );
-    }
-    if tree.exists() && fs::read_dir(tree)?.next().is_some() {
-        bail!(
-            "{} is not empty and carries no tree stamp. Point --tree at a fresh directory",
-            tree.display()
-        );
-    }
-
-    println!(
-        "emitting the source tree into {} — this takes around 19 minutes, once per game version",
-        tree.display()
-    );
-    let bytes = read_module_cache(path)?;
-    let mut resolver = RefResolver::build(&bytes).context("building the reference resolver")?;
-    let modules = model::parse_modules(&bytes).context("parsing modules")?;
-    let loaded = load_native_api_with_proof(path);
-    let prepared = PreparedEmit::new(&modules, &mut resolver, loaded.map(|l| l.native))
-        .context("preparing the emitted modules")?
-        .with_class_defaults(true);
-    fs::create_dir_all(tree).with_context(|| format!("creating {}", tree.display()))?;
-    prepared
-        .emit_tree(tree)
-        .with_context(|| format!("emitting the tree into {}", tree.display()))?;
-    let stamp = stage::TreeStamp {
-        format_version: stage::TREE_STAMP_VERSION,
-        cache_sha256: cache_sha256.to_string(),
-        modules: modules.len(),
-        tree_sha256: stage::tree_sha256(tree)?,
-    };
-    fs::write(
-        &stamp_path,
-        format!("{}\n", serde_json::to_string_pretty(&stamp)?),
-    )
-    .with_context(|| format!("writing {}", stamp_path.display()))?;
-    println!("emitted {} modules", modules.len());
-    Ok(())
-}
-
-/// Die verfassten Dateien an ihre Stellen im Baum kopieren.
-fn overlay_authored(
-    tree: &Path,
-    manifest: &workspace::Manifest,
-    module_sources: &BTreeMap<String, String>,
-) -> Result<()> {
-    let root = fs::canonicalize(tree).with_context(|| format!("resolving {}", tree.display()))?;
-    for edit in &manifest.modules {
-        let target = tree.join(&edit.relative_path);
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-            let resolved = fs::canonicalize(parent)?;
-            ensure!(
-                resolved.starts_with(&root),
-                "NPC overlay escapes the staging tree"
-            );
-        }
-        match fs::symlink_metadata(&target) {
-            Ok(metadata) => ensure!(
-                !metadata.file_type().is_symlink(),
-                "NPC overlay target is a link: {}",
-                target.display()
-            ),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-        let source = module_sources.get(&edit.source_file).with_context(|| {
-            format!(
-                "the validated NPC source snapshot is missing {}",
-                edit.source_file
-            )
-        })?;
-        fs::write(&target, source)
-            .with_context(|| format!("writing validated NPC source to {}", target.display()))?;
-    }
-    Ok(())
-}
-
-const STAGED_TREE_DIR: &str = ".gore-npc-staged-tree";
-const STAGED_TREE_MARKER: &str = ".gore-npc-staged-tree.marker";
-
-/// Keep the reusable emitted tree untouched; only the workspace's private copy gets overlays.
-fn copy_tree_contents(source: &Path, target: &Path) -> Result<()> {
-    for entry in fs::read_dir(source).with_context(|| format!("reading {}", source.display()))? {
-        let entry = entry?;
-        // A staged copy must never be accepted later as a pristine --tree.
-        if entry.file_name() == std::ffi::OsStr::new(stage::TREE_STAMP_NAME) {
-            continue;
-        }
-        let kind = entry.file_type()?;
-        let destination = target.join(entry.file_name());
-        if kind.is_dir() {
-            fs::create_dir(&destination)?;
-            copy_tree_contents(&entry.path(), &destination)?;
-        } else if kind.is_file() {
-            fs::copy(entry.path(), &destination)?;
-        } else {
-            bail!(
-                "the source tree contains a link or special file at {}",
-                entry.path().display()
-            );
-        }
-    }
-    Ok(())
-}
-
-fn stage_tree_copy(tree: &Path, dir: &Path) -> Result<PathBuf> {
-    let source = fs::canonicalize(tree).with_context(|| format!("resolving {}", tree.display()))?;
-    let workspace =
-        fs::canonicalize(dir).with_context(|| format!("resolving {}", dir.display()))?;
-    if workspace.starts_with(&source) {
-        bail!("the reusable --tree must not contain the NPC workspace");
-    }
-    let staged = workspace.join(STAGED_TREE_DIR);
-    if source.starts_with(&staged) {
-        bail!("the reusable --tree must not be the NPC staging copy");
-    }
-    if staged.exists() {
-        let kind = fs::symlink_metadata(&staged)?.file_type();
-        if !kind.is_dir() || kind.is_symlink() || !staged.join(STAGED_TREE_MARKER).is_file() {
-            bail!("{} is not a disposable NPC staging tree", staged.display());
-        }
-        fs::remove_dir_all(&staged).with_context(|| format!("clearing {}", staged.display()))?;
-    }
-    fs::create_dir(&staged)?;
-    fs::write(staged.join(STAGED_TREE_MARKER), b"NPC staging copy\n")?;
-    copy_tree_contents(&source, &staged)?;
-    Ok(staged)
-}
-
 fn stage_path_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     let linked = metadata.file_type().is_symlink();
     #[cfg(windows)]
@@ -1862,7 +1723,70 @@ fn write_staged_source(dir: &Path, source: &str) -> Result<()> {
     write_stage_output_atomic(&snapshot, source.as_bytes(), "source")
 }
 
-/// `gore npc stage` — Baum herrichten, Spec schreiben, Bau-Kommandos drucken.
+fn validate_stage_directory(path: &Path) -> Result<()> {
+    for ancestor in path.ancestors().filter(|path| !path.as_os_str().is_empty()) {
+        let metadata = fs::symlink_metadata(ancestor)
+            .with_context(|| format!("reading NPC staging directory {}", ancestor.display()))?;
+        ensure!(
+            metadata.is_dir() && !stage_path_is_link_or_reparse(&metadata),
+            "NPC staging directory is not a real directory: {}",
+            ancestor.display()
+        );
+    }
+    Ok(())
+}
+
+/// Copy only the inspected source bytes into a fresh, private snapshot. Each run owns a
+/// distinct directory; neither prior snapshots nor workspace edits can leak into this one.
+/// The caller publishes its commands only after every source has been written successfully.
+fn stage_sparse_snapshot(
+    dir: &Path,
+    manifest: &workspace::Manifest,
+    module_sources: &BTreeMap<String, String>,
+) -> Result<tempfile::TempDir> {
+    validate_manifest_modules(manifest)?;
+    validate_stage_directory(dir)?;
+    let workspace = fs::canonicalize(dir)
+        .with_context(|| format!("resolving NPC workspace {}", dir.display()))?;
+    let snapshot = tempfile::Builder::new()
+        .prefix(".gore-npc-overlays-")
+        .tempdir_in(&workspace)
+        .context("creating NPC source snapshot")?;
+    for edit in &manifest.modules {
+        let source = module_sources.get(&edit.source_file).with_context(|| {
+            format!(
+                "the validated NPC source snapshot is missing {}",
+                edit.source_file
+            )
+        })?;
+        let target = snapshot.path().join(&edit.relative_path);
+        let mut parent = snapshot.path().to_path_buf();
+        let relative = Path::new(&edit.relative_path);
+        for part in relative.parent().into_iter().flat_map(Path::components) {
+            parent.push(part.as_os_str());
+            match fs::create_dir(&parent) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error).context("creating NPC snapshot directory"),
+            }
+            validate_stage_directory(&parent)?;
+        }
+        validate_stage_directory(&parent)?;
+        // create_new refuses any pre-existing file, symlink, or hard link. The snapshot
+        // never shares source-file identities with the authored workspace or another run.
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .with_context(|| format!("creating NPC snapshot source {}", target.display()))?;
+        file.write_all(source.as_bytes())
+            .with_context(|| format!("writing NPC snapshot source {}", target.display()))?;
+        file.sync_all()?;
+    }
+    Ok(snapshot)
+}
+
+/// `gore npc stage` — Quellen sichern, Spec schreiben, Bau-Kommandos drucken.
 fn stage_workspace(
     dir: &Path,
     tree: Option<&Path>,
@@ -1870,13 +1794,19 @@ fn stage_workspace(
     cache: Option<PathBuf>,
     game: Option<PathBuf>,
 ) -> Result<()> {
+    ensure!(
+        tree.is_none(),
+        "--tree is obsolete for `gore npc stage`; omit it. Staging now snapshots only the \
+         authored modules for `gore as compile --overlays`, without exporting a full tree"
+    );
     gore_mod::validate_mod_name(mod_name).context("invalid --mod-name")?;
+    validate_stage_directory(dir)?;
     let spec_path = dir.join("spec.json");
     validate_stage_output_target(&spec_path, "spec")?;
     let manifest = read_manifest(dir)?;
     validate_manifest_modules(&manifest)?;
     routine::check_managed(dir, &manifest, game.clone())?;
-    let path = cache_path(cache, game.clone())?;
+    let path = authoring_cache_path(cache, game.clone())?;
     let game = Some(stage::compiler_game_for(&manifest, &path, game)?);
     let inspection = workspace_source_findings(dir, &manifest, &path)?;
     let blocking: Vec<_> = inspection
@@ -1892,21 +1822,13 @@ fn stage_workspace(
     }
     let route = stage::route_of(&manifest);
 
-    let tree_display = match (route, tree) {
-        (stage::Route::FullTree, None) => {
-            let why = "a new character brings a module of its own that the level script calls, and the two only compile together";
-            bail!(
-                "this work needs a source tree: pass --tree <dir>. {why}. The tree is emitted \
-                 once per game version and reused after that"
-            )
-        }
-        (stage::Route::FullTree, Some(tree)) => {
-            ensure_tree(tree, &manifest.cache_sha256, &path)?;
-            let staged = stage_tree_copy(tree, dir)?;
-            overlay_authored(&staged, &manifest, &inspection.module_sources)?;
-            staged.display().to_string()
-        }
-        (stage::Route::SingleModule, _) => {
+    let staged_overlay = match route {
+        stage::Route::Overlays => Some(stage_sparse_snapshot(
+            dir,
+            &manifest,
+            &inspection.module_sources,
+        )?),
+        stage::Route::SingleModule => {
             let level = manifest
                 .level_edit()
                 .expect("single-module route has a level edit");
@@ -1920,9 +1842,13 @@ fn stage_workspace(
                     )
                 })?;
             write_staged_source(dir, source)?;
-            "(not needed)".to_string()
+            None
         }
     };
+    let source_root = staged_overlay
+        .as_ref()
+        .map(|snapshot| snapshot.path().display().to_string())
+        .unwrap_or_default();
 
     // Der Compiler verlangt einen **vorhandenen** privaten Arbeitsordner und bricht sonst mit
     // "reading compiler workspace metadata" ab. Ihn hier anzulegen erspart dem Nutzer ein
@@ -1947,11 +1873,19 @@ fn stage_workspace(
         &manifest,
         &inspection.module_sources,
         &command_dir.display().to_string(),
-        &tree_display,
+        &source_root,
         mod_name,
         game_arg.as_deref(),
     )?;
 
+    if let Some(snapshot) = staged_overlay {
+        let path = snapshot.keep();
+        println!(
+            "staged {} authored modules in {} (unchanged modules stay in the base cache)",
+            manifest.modules.len(),
+            path.display()
+        );
+    }
     println!("wrote {}", spec_path.display());
     println!("now run:");
     for command in &commands {
@@ -2027,8 +1961,8 @@ fn write_display_name(id: &str, name: &str, english: Option<&str>, out: &Path) -
 /// ersetzen, um eine einzige zu aendern.
 fn checkout(npc: &str, cache: Option<PathBuf>, game: Option<PathBuf>, out: &Path) -> Result<()> {
     let spawn_class = generate::spawn_class(npc);
-    let path = cache_path(cache.clone(), game.clone())?;
-    let emitted = emit_index(cache, game, Some(&spawn_class))?;
+    let path = authoring_cache_path(cache, game)?;
+    let emitted = emit_index(Some(path.clone()), None, Some(&spawn_class))?;
     if !emitted.classes.contains_key(&spawn_class) {
         bail!(
             "no character {npc} in this cache — {spawn_class} is not declared. \
@@ -2386,46 +2320,7 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
         assert!(finding.message.contains("OTHER"));
     }
 
-    #[test]
-    fn staging_two_workspaces_does_not_carry_the_first_overlay() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let tree = tmp.path().join("base");
-        fs::create_dir(&tree).unwrap();
-        fs::write(tree.join("Level.as"), "pristine").unwrap();
-        fs::write(tree.join(stage::TREE_STAMP_NAME), "base stamp").unwrap();
-        let first = tmp.path().join("first");
-        let second = tmp.path().join("second");
-        fs::create_dir(&first).unwrap();
-        fs::create_dir(&second).unwrap();
-
-        let first_copy = stage_tree_copy(&tree, &first.join(".")).unwrap();
-        assert_eq!(
-            first_copy,
-            fs::canonicalize(&first).unwrap().join(STAGED_TREE_DIR)
-        );
-        fs::write(first_copy.join("Level.as"), "first overlay").unwrap();
-        let second_copy = stage_tree_copy(&tree, &second).unwrap();
-
-        assert_eq!(
-            fs::read_to_string(tree.join("Level.as")).unwrap(),
-            "pristine"
-        );
-        assert_eq!(
-            fs::read_to_string(second_copy.join("Level.as")).unwrap(),
-            "pristine"
-        );
-        assert!(!second_copy.join(stage::TREE_STAMP_NAME).exists());
-        assert!(ensure_tree(&first_copy, "abc", Path::new("missing.Cache")).is_err());
-    }
-
-    #[test]
-    fn overlay_uses_the_validated_snapshots_instead_of_reopening_workspace_files() {
-        let temp = tempfile::tempdir().unwrap();
-        let workspace = temp.path().join("workspace");
-        let staged = temp.path().join("staged");
-        fs::create_dir(&workspace).unwrap();
-        fs::create_dir(&staged).unwrap();
-
+    fn sparse_stage_fixture() -> (workspace::Manifest, BTreeMap<String, String>) {
         let authored = workspace::ModuleEdit {
             module: generate::module_name("MINE"),
             relative_path: generate::relative_path("MINE"),
@@ -2458,19 +2353,183 @@ class UCharacterDefinition_Creature_Molerat : UCharacterDefinition
             ("Test.as".to_string(), "validated level source".to_string()),
         ]);
 
-        // An editor may replace both files while staging spends minutes preparing the tree.
-        fs::write(workspace.join("MINE.as"), "changed after validation").unwrap();
-        fs::write(workspace.join("Test.as"), "changed after validation").unwrap();
-        overlay_authored(&staged, &manifest, &snapshots).unwrap();
+        (manifest, snapshots)
+    }
 
+    #[test]
+    fn npc_authoring_and_staging_use_the_owned_pristine_base_without_writing() {
+        use sha2::{Digest, Sha256};
+        let temp = tempfile::tempdir().unwrap();
+        let game = fs::canonicalize(temp.path()).unwrap();
+        let live = gore_mod::resolve_game_paths(&game).script_cache;
+        let backup = live.with_extension("Cache.gore-bak");
+        fs::create_dir_all(live.parent().unwrap()).unwrap();
+        let pristine = b"original cache";
+        let deployed = b"installed script mod";
+        fs::write(&live, deployed).unwrap();
+        fs::write(&backup, pristine).unwrap();
+        let identity = |bytes: &[u8]| format!("sha256:{:x}", Sha256::digest(bytes));
+        let record = gore_mod::DeployRecord {
+            mod_name: "NpcStageFixture".into(),
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: [(live.display().to_string(), identity(deployed))].into(),
+            backup_hashes: [(backup.display().to_string(), identity(pristine))].into(),
+            ..Default::default()
+        };
+        let record_path = gore_mod::deploy_record_path(&game);
+        let record_bytes = serde_json::to_vec(&record).unwrap();
+        fs::write(&record_path, &record_bytes).unwrap();
+        let (mut manifest, _) = sparse_stage_fixture();
+        manifest.cache_sha256 = format!("{:x}", Sha256::digest(pristine));
+
+        let selected = authoring_cache_path(None, Some(game.clone())).unwrap();
+        assert_eq!(selected, backup);
+        assert_eq!(cache_path(None, Some(game.clone())).unwrap(), live);
         assert_eq!(
-            fs::read_to_string(staged.join(generate::relative_path("MINE"))).unwrap(),
+            stage::compiler_game_for(&manifest, &selected, Some(game.clone())).unwrap(),
+            game
+        );
+        // An explicit selection of the installed mod must still fail the exact base seal.
+        assert!(stage::compiler_game_for(&manifest, &live, Some(game.clone())).is_err());
+        assert_eq!(fs::read(&live).unwrap(), deployed);
+        assert_eq!(fs::read(&backup).unwrap(), pristine);
+        assert_eq!(fs::read(&record_path).unwrap(), record_bytes);
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn sparse_staging_copies_only_validated_sources_and_binds_their_hashes() {
+        use sha2::{Digest, Sha256};
+        let temp = tempfile::tempdir().unwrap();
+        let (manifest, sources) = sparse_stage_fixture();
+        fs::write(temp.path().join("MINE.as"), "changed after validation").unwrap();
+        fs::write(temp.path().join("Test.as"), "changed after validation").unwrap();
+        fs::write(temp.path().join("Unrelated.as"), "not an overlay").unwrap();
+        fs::create_dir(temp.path().join("pristine")).unwrap();
+        fs::write(temp.path().join("pristine/Test.as"), "original source").unwrap();
+
+        let staged = stage_sparse_snapshot(&temp.path().join("."), &manifest, &sources).unwrap();
+        let commands = stage::build_commands(
+            &manifest,
+            &sources,
+            &fs::canonicalize(temp.path()).unwrap().display().to_string(),
+            &staged.path().display().to_string(),
+            "TestMod",
+            None,
+        )
+        .unwrap();
+        assert!(commands[0].contains(" --overlays "));
+        assert!(commands[0].contains(&format!("--expect-base-sha256 '{}'", manifest.cache_sha256)));
+        for edit in &manifest.modules {
+            let actual = fs::read(staged.path().join(&edit.relative_path)).unwrap();
+            assert_eq!(actual, sources[&edit.source_file].as_bytes());
+            let digest = format!("{:x}", Sha256::digest(&actual));
+            assert!(commands[0].contains(&stage::shell_quote(&format!(
+                "{}:{}:{}:{digest}",
+                edit.op, edit.module, edit.relative_path
+            ))));
+        }
+        assert_eq!(fs::read_dir(staged.path()).unwrap().count(), 2);
+        assert!(!staged.path().join("Unrelated.as").exists());
+        assert!(!staged.path().join("pristine").exists());
+        assert!(!staged.path().join(workspace::MANIFEST_NAME).exists());
+    }
+
+    #[test]
+    fn repeated_sparse_staging_never_reuses_or_clobbers_an_existing_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let (manifest, mut sources) = sparse_stage_fixture();
+        let legacy = temp.path().join(".gore-npc-staged-tree");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(legacy.join("keep.as"), "pre-existing work").unwrap();
+        let first = stage_sparse_snapshot(temp.path(), &manifest, &sources)
+            .unwrap()
+            .keep();
+        fs::write(first.join("Unrelated.as"), "old contamination").unwrap();
+        sources.insert("MINE.as".to_string(), "second authored source".to_string());
+        let second = stage_sparse_snapshot(temp.path(), &manifest, &sources).unwrap();
+        assert_ne!(first, second.path());
+        assert_eq!(
+            fs::read_to_string(first.join(generate::relative_path("MINE"))).unwrap(),
             "validated authored source"
         );
         assert_eq!(
-            fs::read_to_string(staged.join("LevelScripts/Test.as")).unwrap(),
-            "validated level source"
+            fs::read_to_string(second.path().join(generate::relative_path("MINE"))).unwrap(),
+            "second authored source"
         );
+        assert!(!second.path().join("Unrelated.as").exists());
+        assert_eq!(
+            fs::read_to_string(legacy.join("keep.as")).unwrap(),
+            "pre-existing work"
+        );
+    }
+
+    #[test]
+    fn separate_workspaces_and_hard_linked_sources_have_independent_snapshots() {
+        let temp = tempfile::tempdir().unwrap();
+        let (manifest, sources) = sparse_stage_fixture();
+        let first_workspace = temp.path().join("first");
+        let second_workspace = temp.path().join("second");
+        fs::create_dir(&first_workspace).unwrap();
+        fs::create_dir(&second_workspace).unwrap();
+        let source = first_workspace.join("MINE.as");
+        fs::write(&source, &sources["MINE.as"]).unwrap();
+        fs::hard_link(&source, second_workspace.join("MINE.as")).unwrap();
+        let first = stage_sparse_snapshot(&first_workspace, &manifest, &sources).unwrap();
+        let second = stage_sparse_snapshot(&second_workspace, &manifest, &sources).unwrap();
+        fs::write(&source, "changed workspace source").unwrap();
+        fs::write(
+            first.path().join(generate::relative_path("MINE")),
+            "changed snapshot",
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(second.path().join(generate::relative_path("MINE"))).unwrap(),
+            "validated authored source"
+        );
+        assert_eq!(
+            fs::read_to_string(second_workspace.join("MINE.as")).unwrap(),
+            "changed workspace source"
+        );
+    }
+
+    #[test]
+    fn incomplete_or_unsafe_sparse_sources_leave_no_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut manifest, mut sources) = sparse_stage_fixture();
+        // The first source was already copied when the absent second source is detected.
+        sources.remove("Test.as");
+        let error = stage_sparse_snapshot(temp.path(), &manifest, &sources).unwrap_err();
+        assert!(error.to_string().contains("missing Test.as"));
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+        manifest.modules[0].relative_path = "../outside.as".to_string();
+        let error = stage_sparse_snapshot(temp.path(), &manifest, &sources).unwrap_err();
+        assert!(error.to_string().contains("unsafe NPC module path"));
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn sparse_staging_rejects_a_linked_workspace_without_touching_its_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let (manifest, sources) = sparse_stage_fixture();
+        let outside = temp.path().join("outside");
+        let link = temp.path().join("link");
+        fs::create_dir(&outside).unwrap();
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&outside, &link);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_dir(&outside, &link);
+        if let Err(error) = link_result {
+            eprintln!("skip: this account cannot create a directory symlink: {error}");
+            return;
+        }
+        let error = stage_sparse_snapshot(&link, &manifest, &sources).unwrap_err();
+        assert!(error.to_string().contains("not a real directory"));
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
     }
 
     #[test]

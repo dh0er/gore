@@ -443,6 +443,77 @@ fn every_conversation_checkout_has_authored_defaults_and_checks_cleanly() {
     );
 }
 
+/// The documented same-module quest recipe may accompany a conversation's appended topics.
+/// Its native journal parent must be witnessed by this cache, without becoming a general type.
+/// The checkout also needs the matching sibling Binds.Cache (or GORE_AS_BINDS), as the CLI does.
+#[test]
+fn a_conversation_accepts_documented_quest_segments_proven_by_the_shipping_cache() {
+    let Some(bytes) = real_cache() else {
+        eprintln!("skip: set GORE_AS_REAL_CACHE");
+        return;
+    };
+    let modules = gore_as::cache::model::parse_modules(&bytes).expect("shipping modules");
+    assert!(
+        modules
+            .iter()
+            .flat_map(|module| &module.classes)
+            .any(|class| { class.super_class.as_deref() == Some("UDocumentSegment") }),
+        "the target cache must prove a direct UDocumentSegment subclass"
+    );
+    let known = dialog::known_names(&bytes).expect("known names");
+    assert!(known.native_conversation_bases.contains("UDocumentSegment"));
+    assert!(!known.types.contains("UDocumentSegment"));
+    assert!(known.types.contains("UQuestLogDocument"));
+    assert!(known.types.contains("UG1RQuest"));
+
+    let binds = std::env::var_os("GORE_AS_BINDS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(std::env::var_os("GORE_AS_REAL_CACHE").unwrap())
+                .parent()
+                .expect("shipping cache parent")
+                .join("Binds.Cache")
+        });
+    let native = gore_as::cache::binds::NativeApi::load(&binds)
+        .expect("the real conversation checkout needs matching Binds.Cache");
+    let taken = dialog::checkout(
+        &bytes,
+        "Story.G1R.Conversation.Conversation_OC_STT_DIEGO",
+        Some(native),
+    )
+    .expect("Diego conversation checkout");
+    let quest = include_str!("../../../scripts/fixtures/npc-batch-tests/quest/quest-content.as")
+        .replace("UTopic_Hero__GORE_TEST_A", "UTopic_Hero__OC_STT_DIEGO");
+    let edited = format!("{}\n{quest}", taken.source);
+    let report = dialog::verify(&taken, &edited, &known);
+    assert!(report.is_carryable(), "{:?}", report.violations);
+    assert!(report.requires_new_symbols());
+    assert!(report.changed_defaults.is_empty());
+    assert!(report
+        .added_classes
+        .iter()
+        .any(|name| name == "UChoiceGoreBatchQuestAccept"));
+    for segment in ["Start", "Agreed", "Complete", "Failed"] {
+        assert!(report
+            .added_classes
+            .contains(&format!("UDocumentSegment_GoreProvisions{segment}")));
+    }
+    assert!(report
+        .added_classes
+        .iter()
+        .any(|name| name == "UQuest_GORE_BATCH_PROVISIONS"));
+
+    let mut unproven = known.clone();
+    unproven
+        .native_conversation_bases
+        .remove("UDocumentSegment");
+    let report = dialog::verify(&taken, &edited, &unproven);
+    assert!(!report.is_carryable());
+    assert!(report.violations.contains(&dialog::Violation::UnknownType {
+        name: "UDocumentSegment".to_owned(),
+    }));
+}
+
 /// Every topic class the tree reports is a class an edited module may name, and every
 /// localization key it prints is a literal such a module may use. Without that, the checker would
 /// refuse edits that only reuse what the conversation already says.

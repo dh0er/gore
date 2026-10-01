@@ -1,9 +1,17 @@
 # NPC modding: open work
 
-Updated 2026-09-22. The user sets this order: **heads, objects, voice triggers,
-NPC roles**. Game tests are performed by the user. Complete each focused change,
-then batch offline checks and provide a short game checklist. An untested behavior
-is not automatically a missing CLI capability.
+Updated 2026-09-22. This page records the NPC test campaign and its remaining
+investigations. Its order was **heads, objects, voice triggers, NPC roles**;
+a new mod follows the user's requested scope. Game tests are performed by the
+user. Complete each focused change, then batch offline checks and provide a
+short game checklist.
+
+These tests are examples and regression evidence, not a whitelist for mod
+creation. Compose new NPCs, appearances, routines, dialogs and quests from the
+supported APIs, run the normal source/build checks, then test the resulting mod.
+An absent test for the exact combination is not a missing capability or a reason
+to refuse authoring. Concrete asset, engine and pipeline constraints still
+apply; the recorded observations do not promise that every new mod is bug-free.
 
 The [remaining-case test batch](../../scripts/fixtures/npc-batch-tests/README.md)
 prepares separate appearance, natural-voice, economy/teacher, field-role and
@@ -30,8 +38,10 @@ recorded with that batch. Preparation does not check off the runtime items.
   Version0.1.3 uses separately cooked VT assets and fresh MIDs with copied
   original overrides. The user confirms the complete 0.1.3 retest passes:
   normal skin, both beard variants, original restoration and full restart.
-  This qualifies these two face variants, not arbitrary beard meshes or every
-  head/material combination. Natural-voice results are recorded below.
+  These are the two observed face variants. Other choices must respect the
+  actual mesh, pose and material requirements, including virtual textures where
+  required; their absence from this test does not make them unsupported.
+  Natural-voice results are recorded below.
   See the [beard checklist](../../scripts/fixtures/npc-batch-tests/heads/README.md)
   and [0.1.3 runtime result](../../scripts/fixtures/npc-batch-tests/heads/beard-runtime-0.1.3.json).
 - [x] Verify animation alignment, save/load, full restart and absence of duplicate
@@ -65,9 +75,10 @@ optimizer's interpolation path. The user now confirms the complete 0.1.9
 checklist passes: correct connection, restoration without a crash, repeated
 application without duplicates, full restart and restoration after loading.
 Slots 47 (`npc kopf - wiederhergestellt`) and 48 (`npc kopf - erneut`) confirm
-saved modes 0 and 1. This qualifies the tested Flex/Novice combination; arbitrary
-independent face, hair, beard and color choices were still open at that stage.
-The later palette result above qualifies the tested hair/color controls only.
+saved modes 0 and 1. This records the Flex/Novice result; independent face,
+hair, beard and color choices had not yet been tested at that stage. The later
+palette result above records the additional hair/color observations. For new
+asset combinations, check their compatibility and test the authored result.
 See the [head test](../../scripts/fixtures/npc-head/README.md) and
 [head investigation](../../scripts/fixtures/npc-appearance-routine/RESULTS.md#heads-and-faces).
 
@@ -232,9 +243,9 @@ The earlier NPC-container readback was not shop-stock proof.
   readback was available in that follow-up; do not extend this to arbitrary
   death types, all streaming conditions or unseen reload cases.
 
-These are focused role tests still to perform, not claims that the corresponding
-engine features or script paths are absent. `npc new --trader` currently creates
-an empty trader configuration; it does not by itself qualify a working shop.
+Open entries are follow-up investigations, not claims that the corresponding
+engine features or script paths are absent. `npc new --trader` creates an empty
+trader configuration; a working shop also needs authored stock and trade access.
 
 ## 5. Quest completion beyond the basic session fixture — tested campaign passed
 
@@ -256,7 +267,8 @@ runtime progression is now confirmed; the earlier failure remains documented:
 The [session campaign](../../scripts/fixtures/npc-session/RESULTS.md) passed
 quest acceptance, active/completed journal presence, direct start/success calls,
 stage-dependent dialogue and persistence across save/load and full restart.
-It did not qualify every generated quest transition or a finished quest journal.
+That earlier test used direct quest calls and did not yet have a finished
+quest journal; the later campaign below covers callbacks and its own journal.
 
 - [x] Own questlog document, objective text and authored journal paragraphs,
   without the unrelated vanilla letter from the earlier session fixture.
@@ -267,9 +279,11 @@ It did not qualify every generated quest transition or a finished quest journal.
 - [x] Success and cancellation branches, with full restarts at intermediate
   and terminal stages. Cancellation grants no reward and consumes no items.
 
-This qualifies the tested handwritten two-objective quest on Steam25168047.
-It does not establish every generated quest graph, arbitrary branching or all
-game versions; broader generated behavior retains its separate qualification.
+This records the two-objective quest played on Steam25168047. Its objective
+count, item amounts and story are examples, not limits on authoring. Use the
+supported quest callbacks, conditions, rewards and journal APIs to build the
+requested quest, validate it and test its behavior. No exact prior fixture is
+required, and the historical result does not claim other graphs were played.
 
 ## Dialog and voice boundaries
 
@@ -279,9 +293,11 @@ speaker changes and new Vorbis recordings have game evidence. The current
 at most20 immediate choices per submenu; a required top-level Say between
 successive new submenu transitions; a loaded settings anchor for first
 conversations; and a complete-cache build for new cross-module dependencies.
-These are authoring constraints, not evidence that ordinary dialogue creation
-is missing. Other game builds and untested audio layouts are not qualified.
-Voice publication uses Vorbis; line-specific lip sync is excluded by the user.
+These are concrete authoring constraints. The recorded game tests cover their
+stated builds and audio layouts; use current compiler compatibility and voice
+validation for new content, then test its behavior. Missing historical coverage
+is not a separate authoring gate. Voice publication uses Vorbis; line-specific
+lip sync is excluded by the user.
 
 ## Follow-up improvements
 

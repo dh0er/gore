@@ -30,6 +30,13 @@ std::int32_t skew_function() { return 0; }
 std::int32_t static_name_identity(const std::int32_t value) { return value; }
 
 std::int32_t cached_initializer_calls = 0;
+std::int32_t default_dialog_tag_calls = 0;
+
+void default_dialog_tag(asIScriptGeneric* generic) {
+    static std::int32_t tag = 0;
+    ++default_dialog_tag_calls;
+    generic->SetReturnAddress(&tag);
+}
 
 void count_cached_initializer(asIScriptGeneric* generic) {
     generic->SetReturnDWord(static_cast<asDWORD>(++cached_initializer_calls));
@@ -91,7 +98,10 @@ bool register_dialog_signature_types(asIScriptEngine& engine) {
            engine.RegisterObjectType("UGameplayAbility_AI", 0, unreal_object) >= 0 &&
            engine.RegisterObjectType("AGothicCharacter", 0, unreal_object) >= 0 &&
            engine.RegisterObjectType("DialogTag", 0, reference_value) >= 0 &&
-           engine.RegisterObjectType("DialogName", 0, reference_value) >= 0;
+           engine.RegisterObjectType("DialogName", 0, reference_value) >= 0 &&
+           engine.RegisterGlobalFunction(
+               "const DialogTag & DefaultDialogTag()",
+               asFUNCTION(default_dialog_tag), asCALL_GENERIC) >= 0;
 }
 
 precompiled::map_string module_key(const char* const name) {
@@ -155,6 +165,33 @@ bool execute_add(
     return execution == asEXECUTION_FINISHED && actual == expected;
 }
 
+bool execute_cached_say(
+    asIScriptEngine& engine,
+    asIScriptModule& module,
+    const char* const name) {
+    asIScriptFunction* const function = module.GetFunctionByName(name);
+    asIScriptContext* const context = engine.CreateContext();
+    std::string text = "dialog";
+    std::int32_t receiver = 0;
+    std::int32_t tag = 0;
+    std::int32_t dialog_name = 0;
+    const bool prepared = function != nullptr && context != nullptr &&
+        context->Prepare(function) >= 0 &&
+        context->SetArgObject(0U, &receiver) >= 0 &&
+        context->SetArgAddress(1U, &text) >= 0 &&
+        context->SetArgAddress(2U, &tag) >= 0 &&
+        context->SetArgAddress(3U, &dialog_name) >= 0;
+    const int execution = prepared ? context->Execute() : asERROR;
+    const asDWORD actual = context == nullptr ? 0U : context->GetReturnDWord();
+    if (context != nullptr) context->Release();
+    if (execution != asEXECUTION_FINISHED || actual != 42U) {
+        std::cerr << name << " returned " << actual
+                  << " with execution state " << execution << '\n';
+        return false;
+    }
+    return true;
+}
+
 standalone::lexical_module_description source_module(
     std::string name,
     std::string path,
@@ -211,7 +248,7 @@ int main() {
         "class UDocument_Glossary_BC_BAN_BRANNOK : UGlossaryOutsidersDocument { int Value; }\n"
         "}\n"
         "struct DialogExecutor { int Value; }\n"
-        "DialogExecutor Say(UGameplayAbility_AI AI, const Text &inout TextValue, const DialogTag &inout Expression, AGothicCharacter TargetCharacter, const bool Unskippable, const DialogName &inout ForceCameraPreset, const DialogName &inout ForceSubtitleLanguage, const DialogTag &inout Posture) { DialogExecutor Result; Result.Value = 42; return Result; }";
+        "DialogExecutor Say(UGameplayAbility_AI AI, const Text &inout TextValue, const DialogTag &inout Expression, AGothicCharacter TargetCharacter, const bool Unskippable, const DialogName &inout ForceCameraPreset, const DialogName &inout ForceSubtitleLanguage, const DialogTag &inout Posture = DefaultDialogTag()) { DialogExecutor Result; Result.Value = 42; return Result; }";
     consumer->ImportModule(provider);
     if (!register_dialog_signature_types(*source_engine) ||
         source_engine->RegisterObjectType(
@@ -274,9 +311,8 @@ int main() {
         }
         if (function.function_name.bytes == "Say" &&
             function.parameter_types.size() == 8U) {
-            // Shipping dialog helpers are cached mixins (MIXIN | FINAL), while
-            // decompiled source calls them as ordinary globals with an explicit
-            // first argument.
+            // Shipping dialog helpers are cached mixins (MIXIN | FINAL). Both
+            // extension calls and globals with an explicit receiver must bind.
             function.function_traits = 0x820;
             for (const std::size_t index : {1U, 2U, 4U, 5U, 6U, 7U}) {
                 function.parameter_types[index].is_object_const = true;
@@ -329,6 +365,9 @@ int main() {
         "}\n"
         "int ReadCachedDialogSymbols() { DialogScope::CachedCaption Caption; Caption.Value = 2; return LocText(\"TEXT_DIALOG_END\") + Caption.Value; }\n"
         "int ExerciseCachedSay(UGameplayAbility_AI AI, const Text &inout TextValue, const DialogTag &inout Tag, const DialogName &inout Name) { DialogExecutor Result = ::Say(AI, TextValue, Tag, nullptr, false, Name, Name, Tag); return Result.Value; }\n"
+        "int ExerciseCachedSayMixin(UGameplayAbility_AI AI, const Text &inout TextValue, const DialogTag &inout Tag, const DialogName &inout Name) { DialogExecutor Result = AI.Say(TextValue, Tag, nullptr, false, Name, Name, Tag); return Result.Value; }\n"
+        "int ExerciseCachedSayDefault(UGameplayAbility_AI AI, const Text &inout TextValue, const DialogTag &inout Tag, const DialogName &inout Name) { DialogExecutor Result = ::Say(AI, TextValue, Tag, nullptr, false, Name, Name); return Result.Value; }\n"
+        "int ExerciseCachedSayMixinDefault(UGameplayAbility_AI AI, const Text &inout TextValue, const DialogTag &inout Tag, const DialogName &inout Name) { DialogExecutor Result = AI.Say(TextValue, Tag, nullptr, false, Name, Name); return Result.Value; }\n"
         "int ReadCachedDocumentClassValue() { return G1R::Document::UDocument_Glossary_BC_BAN_BRANNOK; }\n"
         "namespace G1R::Conversation {\n"
         "int ReadCachedDocument() { G1R::Document::UDocument_Glossary_BC_BAN_BRANNOK Document; Document.Value = 42; return Document.Value; }\n"
@@ -437,7 +476,7 @@ int main() {
         replacement_add == nullptr ||
         replacement_value == nullptr ||
         cached_say == nullptr ||
-        !static_cast<asCScriptFunction*>(cached_say)->IsMixin() ||
+        static_cast<asCScriptFunction*>(cached_say)->traits.traits != 0x820U ||
         cached_document == nullptr ||
         (cached_document->GetTypeId() & asTYPEID_MASK_OBJECT) != asTYPEID_SCRIPTOBJECT ||
         shadow_type == nullptr || shadow_type->GetSize() < 68U ||
@@ -453,6 +492,11 @@ int main() {
         !execute_no_args_decl(
             *target_engine, *built_provider,
             "int ReadCachedDialogSymbols()", 42U) ||
+        !execute_cached_say(*target_engine, *built_provider, "ExerciseCachedSay") ||
+        !execute_cached_say(*target_engine, *built_provider, "ExerciseCachedSayMixin") ||
+        !execute_cached_say(*target_engine, *built_provider, "ExerciseCachedSayDefault") ||
+        !execute_cached_say(*target_engine, *built_provider, "ExerciseCachedSayMixinDefault") ||
+        default_dialog_tag_calls != 2 ||
         !execute_no_args(
             *target_engine, *built_provider,
             "ReadCachedDocumentClassValue", 42U) ||
@@ -496,6 +540,8 @@ int main() {
         decoded.modules[0].second.code_hash != overlays.modules[0].code_hash ||
         decoded.modules[1].second.code_hash !=
             cache.modules[1].second.code_hash ||
+        decoded.modules[1].second.functions.size() !=
+            cache.modules[1].second.functions.size() ||
         decoded.modules[2].second.classes.size() != 1U ||
         decoded.modules[2].second.classes[0].code_super_class.bytes !=
             "/Script/Test.NativeBase" ||

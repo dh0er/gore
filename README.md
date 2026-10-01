@@ -10,14 +10,15 @@
 
 #
 
-**GORE** (Go-thic Re-make) is a modding and save-editing toolkit for Gothic 1 Remake which works 
+**GORE** (Go-thic Re-make) is a modding and save-editing toolkit for Gothic 1 Remake which works
 completely without UE4SS. It comes with a plugin for your agents, so you can easily mod using AI.
 
 In fact, the whole CLI is intended to be used by AI agents only. You can of course use it manually,
 but except for this README, the whole documentation is written by AI and might be incomplete and/or
 hard to understand.
 
-A no-code GUI is planned for future.
+A no-code GUI, Mod Studio, is planned for the future. Its unfinished GUI
+workflows do not limit the CLI, MCP plugin, or Mod Manager.
 
 ## 🧰 Tools
 
@@ -59,12 +60,22 @@ Its compatibility depends on the individual mod and whether its target files, lo
 
 ## 🚀 Quick start
 
-Get `gore.exe` from a `gore-cli-v*`
-[release](https://github.com/dh0er/gore/releases), or build it:
+Download and unpack the complete CLI zip from a `gore-cli-v*`
+[release](https://github.com/dh0er/gore/releases) into a stable directory such as
+`C:\Tools\gore-cli`, and add that directory to `PATH`. Keep its compiler and
+other companion files beside `gore.exe`. Update the package in that same
+directory. Alternatively, build it from the repository root:
 
 ```powershell
-python build.py gore-cli build     # → target\release\gore.exe
+python build.py gore-cli dist             # recommended installable zip → dist\gore-cli\
+python build.py gore-cli build --release  # CLI + compiler → target\release\
 ```
+
+For installation, unpack the complete zip into the directory on `PATH`, keeping
+`compiler\`, `docs\`, and the other companion files together. Normal CLI
+builds require the embedded compiler catalog prepared by `build.py`; plain
+Cargo builds without it fail. See [Building](docs/development.md) for the
+explicit debug-only development and test commands.
 
 Point it at your game once:
 
@@ -103,10 +114,25 @@ claude plugin install gore@gore
 
 ### Codex plugin
 
+Keep the complete CLI package in one stable directory on `PATH` (for example
+`C:\Tools\gore-cli`) and update it there. Register your actual repository
+checkout as the marketplace:
+
 ```powershell
 codex plugin marketplace add C:\path\to\gore
 codex plugin add gore@gore
 ```
+
+The plugin starts `gore mcp serve` through `PATH`; it does not select or copy a
+CLI release. Its required MCP server has a 30-second startup timeout, so Codex
+waits for tool discovery or reports a startup failure. Older optional plugin
+versions can lose the first turn's tools to Codex's one-second startup grace;
+update the plugin from its marketplace. Check `Get-Command gore` and
+`gore --version`. After changing
+`PATH` or updating the CLI, restart Codex and use a new session.
+
+If an older local setup still uses a pinned release, see
+[updating and repairing the plugin](plugins/gore/README.md#updating-and-repairing-the-plugin).
 
 ### Manual installation (all clients)
 
@@ -157,7 +183,7 @@ Everything lives in [`docs/`](docs/README.md).
 | [Running many mods](docs/guide/mod-manager.md) | `gore mgr`: library, load order, conflict evidence, preflight/recovery, Apply and Reset |
 | [CLI reference](docs/guide/cli-reference.md) | Every command, subcommand, and flag |
 | [AI assistants](docs/guide/mcp.md) | Install the plugin, or wire the MCP server up by hand; what gets confirmed with you |
-| [Mod Studio](docs/guide/mod-studio.md) | The no-code GUI: NPCs, quests, voice, project backups |
+| [Mod Studio](docs/guide/mod-studio.md) | Planned GUI and its current implementation; these limits apply only to Studio |
 | [Building](docs/development.md) | Toolchain, `build.py`, repo layout, crates, versioning |
 
 The CLI release zip carries the same guide offline: `docs\guide.html` is one

@@ -131,6 +131,23 @@ def check_mcp(plugin_dir: Path, rel: str, problems: list[str]) -> set[str]:
         used |= config_used
         if servers is not None:
             server_maps[name] = servers
+            gore = servers.get("gore")
+            if isinstance(gore, dict) and (
+                gore.get("command") != "gore" or gore.get("args") != ["mcp", "serve"]
+            ):
+                problems.append(
+                    f"{rel}/{name}: GORE must start as `gore mcp serve` through PATH; "
+                    "do not pin a machine-specific or versioned executable"
+                )
+            if isinstance(gore, dict) and gore.get("required") is not True:
+                problems.append(
+                    f"{rel}/{name}: GORE must be required so Codex waits for MCP discovery "
+                    "instead of omitting a pending optional server"
+                )
+            if isinstance(gore, dict) and gore.get("startup_timeout_sec") != 30:
+                problems.append(
+                    f"{rel}/{name}: GORE must declare the documented 30-second startup timeout"
+                )
 
     if len(server_maps) == len(MCP_CONFIGS):
         first = next(iter(server_maps.values()))

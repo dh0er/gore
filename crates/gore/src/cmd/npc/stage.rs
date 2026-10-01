@@ -1,13 +1,9 @@
 //! Das verfasste Arbeitsverzeichnis für den Compiler herrichten.
 //!
-//! Zwei Geschwindigkeitsklassen, und die Wahl trifft nicht der Nutzer, sondern die Form der
-//! Arbeit. Eine neue Figur berührt zwei Module — ein neues und ein ausgeliefertes — und braucht
-//! deshalb den Voll-Baum-Weg über `gore as compile --mini`. Eine Unterdrückung berührt genau ein
-//! ausgeliefertes Modul und läuft über `gore as compile-module`, das um ein Vielfaches schneller
-//! ist.
-//!
-//! Der Voll-Baum kostet einmal rund 19 Minuten. Er wird deshalb neben dem Arbeitsverzeichnis
-//! vorgehalten und an der Cache-Kennung wiedererkannt, statt bei jedem Lauf neu zu entstehen.
+//! Neue Figuren werden als unabhängiger Snapshot ihrer verfassten Module vorbereitet.
+//! `gore as compile --overlays --mini` übernimmt alle übrigen Module aus der exakten Basis;
+//! ein vollständiger Quellbaum wird weder exportiert noch erneut emittiert.
+//! Checkouts und Unterdrückungen behalten den Einzelmodulweg `gore as compile-module`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -15,92 +11,30 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use gore_as::cache::faithfulness;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::workspace::Manifest;
 
-/// Der Stempel neben einem vorgehaltenen Quellbaum.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TreeStamp {
-    /// Legacy trees may already contain overlays from earlier staging runs.
-    #[serde(default)]
-    pub format_version: u32,
-    /// Die Cache, aus der der Baum emittiert wurde.
-    pub cache_sha256: String,
-    /// Wie viele Dateien geschrieben wurden — eine grobe Vollständigkeitsprobe.
-    pub modules: usize,
-    /// SHA-256 over every relative path and file body except this stamp.
-    #[serde(default)]
-    pub tree_sha256: String,
-}
-
-/// Der Dateiname des Stempels im Baumverzeichnis.
-pub const TREE_STAMP_NAME: &str = ".gore-npc-tree.json";
-pub const TREE_STAMP_VERSION: u32 = 3;
 pub const STAGED_SOURCE_NAME: &str = ".gore-npc-staged-source.as";
-
-/// Detect accidental edits to a reusable tree. This digest and its stamp are both local; the
-/// stage-generated compile command checks the scoped source bytes against the sealed cache.
-pub fn tree_sha256(root: &Path) -> Result<String> {
-    fn collect(root: &Path, dir: &Path, files: &mut Vec<(String, PathBuf)>) -> Result<()> {
-        for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-            let entry = entry?;
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)?;
-            if metadata.file_type().is_symlink() {
-                bail!(
-                    "the reusable source tree contains a link: {}",
-                    path.display()
-                );
-            }
-            if metadata.is_dir() {
-                collect(root, &path, files)?;
-            } else if metadata.is_file()
-                && path.file_name().and_then(|name| name.to_str()) != Some(TREE_STAMP_NAME)
-            {
-                let relative = path
-                    .strip_prefix(root)
-                    .expect("walked path stays under its root")
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                files.push((relative, path));
-            }
-        }
-        Ok(())
-    }
-
-    let mut files = Vec::new();
-    collect(root, root, &mut files)?;
-    files.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut hash = Sha256::new();
-    for (relative, path) in files {
-        let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        hash.update(&(relative.len() as u64).to_le_bytes());
-        hash.update(relative.as_bytes());
-        hash.update(&(bytes.len() as u64).to_le_bytes());
-        hash.update(&bytes);
-    }
-    Ok(format!("{:x}", hash.finalize()))
-}
 
 /// Welchen Weg diese Arbeit nimmt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
-    /// Ein neues und ein ausgeliefertes Modul: Voll-Baum, `gore as compile --mini`.
-    FullTree,
+    /// Neue oder mehrere Module: `gore as compile --overlays --mini`.
+    Overlays,
     /// Nur ein ausgeliefertes Modul: `gore as compile-module`.
     SingleModule,
 }
 
 /// Der Weg, den diese Arbeit verlangt.
 ///
-/// A new character adds a module called by an existing one, requiring the full graph.
+/// A new character adds a module called by an existing one. The sparse input carries both;
+/// the compiler retains every unchanged dependency from the sealed base cache.
 /// Checkouts and suppressions edit one module. Both compiler routes apply the same
 /// default-target preservation proof.
 pub fn route_of(manifest: &Manifest) -> Route {
-    if manifest.authored_module().is_some() {
-        Route::FullTree
+    if manifest.authored_module().is_some() || manifest.modules.len() > 1 {
+        Route::Overlays
     } else {
         Route::SingleModule
     }
@@ -114,8 +48,9 @@ pub fn compiler_game_for(
     game: Option<PathBuf>,
 ) -> Result<PathBuf> {
     let root = gore_loc::config::game_root(game).context("resolving compiler game path")?;
-    let script_cache = gore_mod::resolve_game_paths(&root).script_cache;
-    for path in [cache, script_cache.as_path()] {
+    let script_cache = gore_mod::pristine_script_cache_source(&root)
+        .context("selecting the pristine compiler base cache")?;
+    for path in [cache, script_cache.path.as_path()] {
         let bytes = fs::read(path).with_context(|| {
             format!(
                 "reading compiler base cache {}. Compilation requires a matching game installation",
@@ -170,13 +105,13 @@ pub fn work_dir(dir: &Path) -> PathBuf {
 
 /// Die Kommandos, die diese Arbeit übersetzen und verpacken.
 ///
-/// `stage` führt sie nicht aus. Der Voll-Baum-Lauf dauert eine Viertelstunde, und ein Werkzeug,
-/// das den ungefragt startet, nimmt dem Nutzer die Entscheidung ab, wann er wartet.
+/// `stage` führt sie nicht aus. Jeder Befehl bindet die Basis und die geprüften Quelldateien
+/// über ihre exakten Hashes; spätere Änderungen am Snapshot werden beim Kompilieren abgelehnt.
 pub fn build_commands(
     manifest: &Manifest,
     checked_sources: &BTreeMap<String, String>,
     dir: &str,
-    tree: &str,
+    source_root: &str,
     mod_name: &str,
     game: Option<&str>,
 ) -> Result<Vec<String>> {
@@ -197,7 +132,7 @@ pub fn build_commands(
     let base_arg = shell_quote(&manifest.cache_sha256);
     let mut out = Vec::new();
     match route_of(manifest) {
-        Route::FullTree => {
+        Route::Overlays => {
             let only_changes = manifest
                 .modules
                 .iter()
@@ -214,9 +149,9 @@ pub fn build_commands(
                 .collect::<Result<Vec<_>>>()?
                 .concat();
             out.push(format!(
-                "gore as compile {} -o {} --mini {mini_arg} --work-dir {work_arg} \
+                "gore as compile {} --overlays -o {} --mini {mini_arg} --work-dir {work_arg} \
                  --backend standalone --expect-base-sha256 {base_arg}{only_changes}{game_arg}",
-                shell_quote(tree),
+                shell_quote(source_root),
                 shell_quote(&Path::new(dir).join("full.Cache").display().to_string()),
             ));
         }
@@ -255,7 +190,7 @@ mod tests {
     fn build_commands(
         manifest: &Manifest,
         dir: &str,
-        tree: &str,
+        source_root: &str,
         mod_name: &str,
         game: Option<&str>,
     ) -> Vec<String> {
@@ -264,7 +199,7 @@ mod tests {
             .iter()
             .map(|edit| (edit.source_file.clone(), "class Test {}".to_string()))
             .collect();
-        super::build_commands(manifest, &sources, dir, tree, mod_name, game).unwrap()
+        super::build_commands(manifest, &sources, dir, source_root, mod_name, game).unwrap()
     }
 
     fn quoted_child(dir: &str, name: &str) -> String {
@@ -317,14 +252,13 @@ mod tests {
     }
 
     #[test]
-    fn a_new_character_takes_the_full_tree_route() {
-        assert_eq!(route_of(&authored()), Route::FullTree);
+    fn a_new_character_takes_the_sparse_overlay_route() {
+        assert_eq!(route_of(&authored()), Route::Overlays);
     }
 
     #[test]
     fn a_suppression_takes_the_single_module_route() {
-        // Sie berührt genau ein ausgeliefertes Modul. Sie über den Voll-Baum zu schicken hiesse,
-        // eine Viertelstunde für eine entfernte Zeile zu warten.
+        // Only the existing level module changes.
         assert_eq!(route_of(&suppression()), Route::SingleModule);
     }
 
@@ -353,9 +287,9 @@ mod tests {
     }
 
     #[test]
-    fn the_full_tree_route_asks_for_a_multi_module_mini() {
+    fn the_sparse_route_asks_for_a_multi_module_mini() {
         let commands = build_commands(&authored(), "ws", "tree", "MyMod", Some("G"));
-        assert!(commands[0].starts_with("gore as compile 'tree'"));
+        assert!(commands[0].starts_with("gore as compile 'tree' --overlays"));
         assert!(commands[0].contains(&format!(
             "--mini {}",
             quoted_child("ws", "MyMod.mini.Cache")
@@ -488,32 +422,5 @@ mod tests {
             "--source {}",
             quoted_child(dir, STAGED_SOURCE_NAME)
         )));
-    }
-
-    #[test]
-    fn a_tree_stamp_round_trips() {
-        let stamp = TreeStamp {
-            format_version: TREE_STAMP_VERSION,
-            cache_sha256: "abc".to_string(),
-            modules: 7317,
-            tree_sha256: "def".to_string(),
-        };
-        let json = serde_json::to_string(&stamp).expect("serialize");
-        assert_eq!(
-            serde_json::from_str::<TreeStamp>(&json).expect("deserialize"),
-            stamp
-        );
-    }
-
-    #[test]
-    fn the_tree_digest_changes_with_paths_or_contents_and_ignores_its_stamp() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        fs::create_dir(tmp.path().join("nested")).unwrap();
-        fs::write(tmp.path().join("nested/A.as"), "one").unwrap();
-        let original = tree_sha256(tmp.path()).unwrap();
-        fs::write(tmp.path().join(TREE_STAMP_NAME), "metadata").unwrap();
-        assert_eq!(tree_sha256(tmp.path()).unwrap(), original);
-        fs::write(tmp.path().join("nested/A.as"), "two").unwrap();
-        assert_ne!(tree_sha256(tmp.path()).unwrap(), original);
     }
 }

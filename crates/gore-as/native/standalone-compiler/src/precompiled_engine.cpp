@@ -2813,30 +2813,48 @@ private:
     std::vector<asCModule*> modules_;
 };
 
-// Cached mixin functions are authored by the donor as extension-style declarations, but the
-// decompiler emits their calls as ordinary globals with the receiver made explicit. The source
-// compiler intentionally excludes MIXIN candidates from ordinary global overload resolution.
-// Expose cached global mixins only while source bodies bind, then restore their exact saved traits
-// before the graph can be exported. The guard also restores them on every early-return path.
+// Restored source can call cached mixins either as Receiver.Function(...) or as
+// Function(Receiver, ...). Keep the original MIXIN declaration visible to extension
+// lookup, and publish a lookup-only non-mixin alias for ordinary global lookup.
+// Both candidates use the original ID: overload resolution retrieves the real
+// signature from engine.scriptFunctions, and the bytecode calls the original body.
+// The aliases never enter the module's owned function lists or the exported graph.
 class cached_global_mixin_exposure final {
 public:
     void expose(asCScriptFunction& function) {
         if (!function.IsMixin()) return;
-        functions_.emplace_back(&function, function.traits.traits);
-        function.SetMixin(false);
+        alias_ptr alias(asNEW(asCScriptFunction)(
+            function.engine, function.module, asFUNC_DUMMY));
+        if (alias == nullptr) throw std::bad_alloc();
+        alias->name = function.name;
+        alias->nameSpace = function.nameSpace;
+        alias->id = function.id;
+        alias->traits = function.traits;
+        alias->SetMixin(false);
+        aliases_.push_back(std::move(alias));
+        asCScriptFunction* const published = aliases_.back().get();
+        function.module->globalFunctions.Add(published);
+        function.engine->allScriptGlobalFunctions.Add(published);
     }
 
     void restore() noexcept {
-        for (const auto& [function, traits] : functions_) {
-            function->traits.traits = traits;
+        for (const alias_ptr& alias : aliases_) {
+            alias->module->globalFunctions.Remove(alias.get());
+            alias->engine->allScriptGlobalFunctions.Remove(alias.get());
         }
-        functions_.clear();
+        aliases_.clear();
     }
 
     ~cached_global_mixin_exposure() { restore(); }
 
 private:
-    std::vector<std::pair<asCScriptFunction*, asDWORD>> functions_;
+    struct alias_deleter {
+        void operator()(asCScriptFunction* function) const noexcept {
+            asDELETE(function, asCScriptFunction);
+        }
+    };
+    using alias_ptr = std::unique_ptr<asCScriptFunction, alias_deleter>;
+    std::vector<alias_ptr> aliases_;
 };
 
 struct mixed_module_state {
