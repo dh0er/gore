@@ -1891,15 +1891,20 @@ fn stage_workspace(
     for command in &commands {
         println!("  {command}");
     }
+    let deploy_game_arg = game_arg
+        .as_deref()
+        .map(|path| format!(" --game {}", stage::shell_quote(path)))
+        .unwrap_or_default();
     println!(
-        "then: gore mod deploy --bundle {}",
+        "then: gore mod deploy --bundle {}{}",
         stage::shell_quote(
             &command_dir
                 .join("build")
                 .join(mod_name)
                 .display()
                 .to_string()
-        )
+        ),
+        deploy_game_arg
     );
     println!(
         "offline-prepared only: whether this character appears in game is decided by that run, \
@@ -1948,7 +1953,10 @@ fn write_display_name(id: &str, name: &str, english: Option<&str>, out: &Path) -
     writeln!(file, "{content}").with_context(|| format!("writing {}", out.display()))?;
     println!("wrote {}", out.display());
     println!("  {} -> {name:?} in both German columns", id.to_lowercase());
-    println!("next: gore loc import --edits {}", out.display());
+    println!(
+        "next: gore loc import --edits {} --add-missing",
+        stage::shell_quote(&out.display().to_string())
+    );
     Ok(())
 }
 

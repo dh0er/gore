@@ -1365,6 +1365,7 @@ mod tests {
                 "stage",
                 &[
                     ("dir", Derived::Child("spec.json")),
+                    ("dir", Derived::Child(".gore-npc-staged-source.as")),
                     ("dir", Derived::Suffix(".work")),
                 ],
             ),
