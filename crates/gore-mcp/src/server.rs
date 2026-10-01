@@ -2367,6 +2367,92 @@ mod tests {
     }
 
     #[test]
+    fn npc_stage_with_only_a_snapshot_is_refused_without_consent_prompts() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("npc-work");
+        let game = temp.path().join("custom-game");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&game).unwrap();
+        let snapshot = workspace.join(".gore-npc-staged-source.as");
+        std::fs::write(&snapshot, b"previous checked source").unwrap();
+        assert!(!workspace.join("spec.json").exists());
+        assert!(!temp.path().join("npc-work.work").exists());
+
+        let mut opts = options();
+        opts.never_ask = true;
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("staged\n")));
+        let mut session = Session::with_spawn(opts, Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+        let result = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({
+                    "name": "gore_npc",
+                    "arguments": {
+                        "subcommand": "stage",
+                        "args": {
+                            "dir": workspace.to_string_lossy(),
+                            "game": game.to_string_lossy(),
+                        },
+                    },
+                }),
+            ))
+            .expect("answered")
+            .result
+            .unwrap();
+
+        assert_eq!(result["isError"], json!(true));
+        let text = result["content"][0]["text"].as_str().expect("text");
+        assert!(text.contains(".gore-npc-staged-source.as"), "{text}");
+        assert!(text.contains("--no-consent-prompts"), "{text}");
+        assert!(spawn.calls().is_empty(), "stage must not start before consent");
+        assert_eq!(std::fs::read(&snapshot).unwrap(), b"previous checked source");
+        assert!(!workspace.join("spec.json").exists());
+        assert!(!temp.path().join("npc-work.work").exists());
+    }
+
+    #[test]
+    fn npc_stage_in_a_free_workspace_can_start_without_consent_prompts() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("npc-work");
+        let game = temp.path().join("custom-game");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&game).unwrap();
+        assert_eq!(std::fs::read_dir(&workspace).unwrap().count(), 0);
+        assert!(!temp.path().join("npc-work.work").exists());
+
+        let mut opts = options();
+        opts.never_ask = true;
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("staged\n")));
+        let mut session = Session::with_spawn(opts, Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+        let result = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({
+                    "name": "gore_npc",
+                    "arguments": {
+                        "subcommand": "stage",
+                        "args": {
+                            "dir": workspace.to_string_lossy(),
+                            "game": game.to_string_lossy(),
+                        },
+                    },
+                }),
+            ))
+            .expect("answered")
+            .result
+            .unwrap();
+
+        assert_eq!(result["isError"], json!(false));
+        let calls = spawn.calls();
+        assert_eq!(calls.len(), 1, "a first stage needs no overwrite consent");
+        assert_eq!(calls[0].argv[0], "npc");
+        assert_eq!(calls[0].argv[1], "stage");
+        assert_eq!(calls[0].argv.last().unwrap(), workspace.as_os_str());
+    }
+
+    #[test]
     fn an_approval_that_is_not_words_is_reported_rather_than_believed() {
         // A number, a boolean or an empty string quotes nobody. Reading any of them as agreement
         // would make the emptiest possible claim the cheapest way past the gate.

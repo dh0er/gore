@@ -179,190 +179,75 @@ see [Bundling & deploying](bundles.md).
   (`.gore-install-mutation.lock`) so two GORE processes cannot fight, but the
   game itself does not participate in that lock.
 
-## A first mod: Wiesel's letter
+## A first mod: apple prices
 
-Diego is the first man who talks to you. This mod puts a new shadow, Wiesel,
-in the Old Camp and gives Diego two new lines. The first sends you to Wiesel
-for a tally of ore that never reached the storehouse. The second pays you once
-you bring it back. Start a new game after deploying. A save that already passed
-the opening conversation will not show a topic the game has already left behind.
+Change the default value of an apple with a small native script bundle. This
+uses the same class-default builder as larger value mods and needs no UE4SS.
+The build and inspection steps write only your work and output directories.
 
-Diego himself spawns in the Exchange Zone. In the commands below,
-`--from OC_STT_Diego` copies his character template; `--at` places Wiesel at a
-separate world point in the Old Camp.
-
-Wiesel borrows Diego's appearance. A new id has no baked model of its own; the
-generated visuals keep the template's `m_PreBakedName`. That is enough for a
-first mod. Changing the face is [character authoring](npc-authoring.md).
-
-### 1. Place Wiesel
-
-List free world points in the Old Camp level script and pick one for Wiesel:
+### 1. Inspect the target
 
 ```powershell
-gore npc levels
-gore npc sites --level Map_x2_y1_OldCamp_AI_script --free
-gore npc new GORE_OC_WIESEL --from OC_STT_Diego --guild OldCamp_Shadow `
-  --at <POINT_FROM_THE_LIST> --waypoint FP_OC_SMALLTALK_33 -o work/wiesel
-gore npc text GORE_OC_WIESEL --name "Wiesel" -o work/wiesel-name.json
-gore npc check work/wiesel
-gore npc stage work/wiesel
+gore value inspect --class UItFo_Apple --game "$GAME"
 ```
 
-`levels` lists the available level-script modules. `--at` must be a world point
-`npc sites` printed. An unknown name is refused.
-The listing shows 50 points by default; increase `--max` to see more. `--free`
-avoids placing Wiesel on top of an existing character. `FP_OC_SMALLTALK_33` is
-only the daily spot, not the spawn. `stage` snapshots only the checked NPC and
-level modules and prints a `compile --overlays --backend standalone` command
-with base and source hash guards. Run it, then the printed bundle command.
-No full-tree export is needed; the obsolete `--tree` option is rejected.
-The name file is a separate localization edit; add
-it to the bundle's `loc_edits` if you want Wiesel's name displayed. To inspect
-Diego's own sites, use `gore npc show OC_STT_Diego` or
-`gore npc sites --npc OC_STT_Diego`. The character guide has the contract:
-[Characters](npc-authoring.md).
+Find `m_Value` in the recovered defaults. An unknown class, an unsupported
+field or an incompatible compiler fails with a reason; resolve that before
+building. [Item & stat values](items.md) explains the supported types and how
+class defaults affect existing saves.
 
-### 2. Diego offers the errand
+### 2. Build the bundle
 
-```powershell
-gore dialog new-topic oc_stt_diego --caption "Die Liste aus dem Lager." `
-  --class UChoiceGoreWieselErrand --mod-name GoreWieselLetter -o work/diego
-gore dialog new-topic oc_stt_diego --caption "Hier ist Wiesels Liste." `
-  --class UChoiceGoreWieselReturn --mod-name GoreWieselLetter -o work/diego-return
-```
+Save this as `first-mod.spec.json`:
 
-`new-topic` checks Diego's conversation out and appends one class. Open the
-generated `.as` and give the two topics these bodies. `Remembers` and
-`Remember` are the hero's knowledge flags. `AddItemToInventory` is the same
-call the game uses to put ore into a pocket.
-
-```angelscript
-class UChoiceGoreWieselErrand : UTopic_Hero__OC_STT_DIEGO
+```json
 {
-    default Caption = FText::FromString("Die Liste aus dem Lager.");
-    default PriorityRank = 2;
-
-    UFUNCTION(BlueprintOverride)
-    bool IsVisible() const
-    {
-        AGothicCharacterState Hero = this.GetCharacter(n"Hero");
-        return Hero != nullptr && !Hero.Remembers(n"gore_wiesel_letter_started");
-    }
-
-    UFUNCTION(BlueprintOverride)
-    void Act()
-    {
-        AGothicCharacterState Hero = this.GetCharacter(n"Hero");
-        if (Hero != nullptr)
-            Hero.Remember(n"gore_wiesel_letter_started");
-        this.EndConversation();
-    }
-}
-
-class UChoiceGoreWieselReturn : UTopic_Hero__OC_STT_DIEGO
-{
-    default Caption = FText::FromString("Hier ist Wiesels Liste.");
-    default PriorityRank = 2;
-
-    UFUNCTION(BlueprintOverride)
-    bool IsVisible() const
-    {
-        AGothicCharacterState Hero = this.GetCharacter(n"Hero");
-        return Hero != nullptr
-            && Hero.Remembers(n"gore_wiesel_letter_carried")
-            && !Hero.Remembers(n"gore_wiesel_letter_paid");
-    }
-
-    UFUNCTION(BlueprintOverride)
-    void Act()
-    {
-        AGothicCharacterState Hero = this.GetCharacter(n"Hero");
-        if (Hero != nullptr && !Hero.Remembers(n"gore_wiesel_letter_paid"))
-        {
-            ::AddItemToInventory(Hero, UItMi_Orenugget, 5, EInventoryTypes(1));
-            Hero.Remember(n"gore_wiesel_letter_paid");
-        }
-        this.EndConversation();
-    }
-}
-```
-
-`dialog new-topic` already writes `DebugId`, the base class and `BlueprintOverride`.
-Keep those. Only replace `IsVisible` and `Act`. Then:
-
-```powershell
-gore dialog check work/diego
-gore dialog stage work/diego --mod-name GoreWieselLetter
-```
-
-Run the compile line `stage` prints. Same-module topics do not need a loader
-beside the game. The rules are in [Dialog authoring](dialog-authoring.md).
-
-The two topics are two workspaces because each `new-topic` starts from the
-pristine conversation. Copy the return class into the first workspace's `.as`
-before `check`, so one module carries both classes. `check` refuses a class
-that is not in that file.
-
-### 3. Wiesel hands the tally over
-
-Wiesel has no conversation yet. `new-conversation` adds the first one in the
-module `npc new` already wrote:
-
-```powershell
-gore dialog new-conversation GORE_OC_WIESEL --caption "Die Liste für Diego." `
-  --class UChoiceGoreWieselHandover --mod-name GoreWieselLetter -o work/wiesel-talk
-```
-
-Set his only topic so it shows after Diego's errand and pays the knowledge
-flag the return line is waiting for:
-
-```angelscript
-UFUNCTION(BlueprintOverride)
-bool IsVisible() const
-{
-    AGothicCharacterState Hero = this.GetCharacter(n"Hero");
-    return Hero != nullptr
-        && Hero.Remembers(n"gore_wiesel_letter_started")
-        && !Hero.Remembers(n"gore_wiesel_letter_carried");
-}
-
-UFUNCTION(BlueprintOverride)
-void Act()
-{
-    AGothicCharacterState Hero = this.GetCharacter(n"Hero");
-    if (Hero != nullptr)
-        Hero.Remember(n"gore_wiesel_letter_carried");
-    this.EndConversation();
+  "meta": { "name": "MyFirstMod", "version": "0.1.0", "author": "" },
+  "values": [
+    { "class": "UItFo_Apple", "field": "m_Value", "value": { "int": 500 } }
+  ]
 }
 ```
 
 ```powershell
-gore dialog check work/wiesel-talk
-gore dialog stage work/wiesel-talk --mod-name GoreWieselLetter
+gore mod build --spec first-mod.spec.json --game "$GAME" `
+  --work-dir work/first-mod -o build
+gore mod inspect build\MyFirstMod
 ```
 
-### 4. Build, deploy, play
+The bundle is `build\MyFirstMod`. Keep it outside the game installation;
+`build` compiles the changed module with the standalone compiler and does not
+launch the game.
 
-`stage` writes a build spec whose script mini-cache is the mod. Finish with
-the commands it prints, then:
+### 3. Apply, observe, remove
+
+Close the game, then deploy the inspected bundle:
 
 ```powershell
-gore mod deploy --bundle <the bundle directory stage named>
+gore mod deploy --bundle build\MyFirstMod --game "$GAME"
+gore doctor --game "$GAME"
 ```
 
-Start a new game. Talk to Diego and take "Die Liste aus dem Lager." Find
-Wiesel at the Old Camp point you spawned him on and take "Die Liste für
-Diego." Bring that line back to Diego. He pays five ore nuggets, and neither
-errand line appears again.
+Start the game yourself and compare apple prices at a trader. The class's
+`m_Value` is now 500; buy and sell prices also use the trader's multipliers, so
+they need not display 500. This edit does not change saved inventory counts.
 
-There is no journal page in this first mod. The three knowledge flags are the
-quest. A journal entry is a `UQuest` class, the same shape as the batch
-fixture under `scripts/fixtures/npc-batch-tests/quest/`, and it is more than
-this walkthrough compiles.
+Close the game again and remove the direct deployment:
 
-If nobody new is standing in the camp, run `gore doctor` and `gore npc check`
-before looking at the dialog. A wrong `--at` never reaches the game.
+```powershell
+gore mod undeploy --game "$GAME"
+gore doctor --game "$GAME"
+```
+
+The second check should show no direct deployment and restored original files.
+If you already use a Manager loadout, import the bundle and use that loadout's
+Apply/Reset workflow instead; see [Running many mods](mod-manager.md).
+
+For a new NPC with dialogs or a quest, continue with
+[Characters](npc-authoring.md) and the shipped source examples. A new character's
+private conversation is authored in its source module. `dialog new-conversation`
+reads a pristine cache's already-loaded settings anchor; it does not read an
+uncompiled `npc new` workspace.
 
 ## Next steps
 

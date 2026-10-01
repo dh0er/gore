@@ -1494,6 +1494,7 @@ const NPC_COMMANDS: &[CommandSpec] = &[
         Safety::write()
             .also_writes(&[
                 ("dir", Derived::Child("spec.json")),
+                ("dir", Derived::Child(".gore-npc-staged-source.as")),
                 ("dir", Derived::Suffix(".work")),
             ])
             .writes_into(&["dir"]),

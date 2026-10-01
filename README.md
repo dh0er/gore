@@ -99,7 +99,7 @@ claude plugin install gore@gore
 
 Tell the agent what you want and then let him deploy the mod.
 
-If you want to start manually, follow the section "A first mod: Wiesel's letter" in this guide: [Getting started](docs/guide/getting-started.md).
+If you want to start manually, follow the section "A first mod: apple prices" in this guide: [Getting started](docs/guide/getting-started.md).
 
 ## 🤖 Vibe Modding
 

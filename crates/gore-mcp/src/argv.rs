@@ -2951,6 +2951,47 @@ mod tests {
     }
 
     #[test]
+    fn npc_stage_classifies_its_snapshot_under_an_explicit_game_root() {
+        let temp = tempfile::tempdir().unwrap();
+        // No G1R component: only the explicit game argument can identify this installation.
+        let game = temp.path().join("custom-game");
+        let workspace = temp.path().join("npc-work");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&workspace).unwrap();
+        let target = game.join("absent-source.as");
+        let snapshot = workspace.join(".gore-npc-staged-source.as");
+        if !symlink_file(&target, &snapshot) {
+            eprintln!("skipping: this platform/user cannot create file symlinks");
+            return;
+        }
+        // A dangling snapshot is not caught by occupancy; the derived destination must be
+        // classified independently of the outside workspace, spec and compiler work directory.
+        assert!(!snapshot.exists());
+        assert!(question(
+            "gore_npc",
+            "stage",
+            json!({ "dir": workspace.to_string_lossy() }),
+            &options()
+        )
+        .is_none());
+        let consent = question(
+            "gore_npc",
+            "stage",
+            json!({
+                "dir": workspace.to_string_lossy(),
+                "game": game.to_string_lossy(),
+            }),
+            &options(),
+        )
+        .expect("the derived snapshot destination is inside the explicit game root");
+        assert!(consent.needs.write);
+        assert!(!consent.needs.game_launch);
+        assert!(consent.reason.contains("derives from `dir`"), "{}", consent.reason);
+        assert!(consent.reason.contains("absent-source.as"), "{}", consent.reason);
+        assert!(!target.exists());
+    }
+
+    #[test]
     fn suffix_target_normalizes_a_trailing_separator() {
         let target = derived_target(
             &Map::new(),

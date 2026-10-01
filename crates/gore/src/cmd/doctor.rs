@@ -3899,8 +3899,16 @@ mod tests {
         std::fs::write(&gp.script_cache, deployed).unwrap();
         std::fs::write(&backup, pristine).unwrap();
         let identity = |bytes: &[u8]| format!("sha256:{}", gore_loc::loc_store::sha256_hex(bytes));
-        let live_name = gp.script_cache.display().to_string();
-        let backup_name = backup.display().to_string();
+        // Deploy persists canonical paths. Windows CI's TEMP can contain an 8.3 alias
+        // (RUNNER~1), so this positive fixture must use the same record contract.
+        let live_name = std::fs::canonicalize(&gp.script_cache)
+            .unwrap()
+            .display()
+            .to_string();
+        let backup_name = std::fs::canonicalize(&backup)
+            .unwrap()
+            .display()
+            .to_string();
         write_deploy_record(dir.path(), &gore_mod::DeployRecord {
             mod_name: "doctor-test".into(),
             backups: vec![(live_name.clone(), backup_name.clone(), true)],
@@ -3911,7 +3919,8 @@ mod tests {
         // Synthetic inputs may fail package authentication, but the reported base must still be
         // the owned original, exactly as compile selects it. Never inspect the deployed bytes as base.
         let check = check_standalone_compiler_at_host(&gp, &dir.path().join("gore.exe"));
-        assert!(check.items.iter().any(|item| item.contains(&backup_name)
+        let reported_backup_name = backup.display().to_string();
+        assert!(check.items.iter().any(|item| item.contains(&reported_backup_name)
             && item.contains(&identity(pristine))), "{} {:?}", check.detail, check.items);
         assert_eq!(std::fs::read(&gp.script_cache).unwrap(), deployed);
         assert_eq!(std::fs::read(&backup).unwrap(), pristine);

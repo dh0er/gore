@@ -289,7 +289,10 @@ pub fn compile_values_into_scripts(
                 rel_path: relative,
                 source: source_path,
                 work_dir: module_work,
-                allow_new_symbols: false,
+                // A value may introduce a pooled string that the pristine cache does not contain.
+                // The source proof above still permits only the requested default statements;
+                // compile-module keeps its existing ABI/default preservation checks.
+                allow_new_symbols: true,
                 out: mini_path.clone(),
                 game: Some(game.to_path_buf()),
                 expect_base: None,
