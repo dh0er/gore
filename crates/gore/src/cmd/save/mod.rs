@@ -850,7 +850,23 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 p["actor"] = json!(npc_id(o)?);
             }
             let mut data = call("private.skills.list", p)?;
-            display::filter(&mut data, "skills", o);
+            let mut filter = o.clone();
+            filter.id = o.skill.clone().or(o.id.clone());
+            display::filter(&mut data, "skills", &filter);
+            if v == "show" {
+                let base = filter.id.as_deref().context("--skill or --id required")?;
+                return data["skills"]
+                    .as_array()
+                    .context("no skills")?
+                    .iter()
+                    .find(|row| {
+                        row["base"]
+                            .as_str()
+                            .is_some_and(|id| id.eq_ignore_ascii_case(base))
+                    })
+                    .cloned()
+                    .context("skill was not found");
+            }
             display::paginate(&mut data, "skills", o);
             Ok(data)
         }
@@ -868,7 +884,7 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
         ("time", _) => time(v, o),
         ("difficulty", _) => administration::difficulty(v, o),
         ("quests" | "tutorials" | "glossary", "list") => progression(g, o),
-        ("quests" | "tutorials" | "glossary", "show") => {
+        ("quests" | "tutorials" | "glossary" | "story", "show") => {
             let id =
                 o.id.as_deref()
                     .or(o.entry.as_deref())
@@ -880,6 +896,7 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                     query: Some(id.to_owned()),
                     offset: 0,
                     all: true,
+                    include_unset: o.include_unset || g == "story",
                     ..o.clone()
                 },
             )?;
@@ -934,7 +951,7 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             )],
             json!({}),
         ),
-        ("story", "list" | "show") => progression("story", o),
+        ("story", "list") => progression("story", o),
         ("story", "set" | "unset") => {
             let id = required(&o.id, "id")?;
             let page = progression(
@@ -943,6 +960,7 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                     query: Some(id.into()),
                     include_unset: true,
                     all: true,
+                    offset: 0,
                     ..o.clone()
                 },
             )?;
@@ -985,7 +1003,30 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             )],
             json!({}),
         ),
-        ("events", "list" | "show") => progression("events", o),
+        ("events", "list") => progression("events", o),
+        ("events", "show") => {
+            let index = o.index.context("--index required")?;
+            let data = progression(
+                "events",
+                &Options {
+                    offset: index,
+                    limit: 1,
+                    all: false,
+                    query: None,
+                    ..o.clone()
+                },
+            )?;
+            let mut row = data["events"]
+                .as_array()
+                .context("no events")?
+                .iter()
+                .find(|row| row["index"].as_u64() == Some(index as u64))
+                .cloned()
+                .context("event was not found")?;
+            row["arrayPath"] = data["arrayPath"].clone();
+            row["character"] = data["character"].clone();
+            Ok(row)
+        }
         ("events", "remove" | "duplicate") => {
             let data = progression("events", o)?;
             write(
@@ -1121,8 +1162,12 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
     let mut p = payload(o)?;
     let mut data = if o.actor.eq_ignore_ascii_case("hero") {
         p["query"] = json!("AttributesByGlobalId {Hero}");
+        p["offset"] = json!(0);
+        p["limit"] = json!(1000);
         let mut all = o.clone();
         all.all = true;
+        all.offset = 0;
+        all.limit = 1000;
         paged("search_typed_properties", p, &all)?
     } else {
         p["id"] = json!(npc_id(o)?);
@@ -1247,11 +1292,31 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
 fn inventory(v: &str, o: &Options) -> Result<Value> {
     if matches!(v, "list" | "show" | "check-slots") {
         let mut data = if o.actor.eq_ignore_ascii_case("hero") {
-            call(
+            let mut summary = call(
                 "inspect_save",
                 json!({"path":save(o)?,"includePrivate":true}),
             )?["private"]["inventory"]
-                .clone()
+                .clone();
+            // The scan includes equipped items and upgrades; typed MainContainer
+            // rows additionally provide the stable slot identities used by edits.
+            if let Ok(typed) = call("private.inventory.list", payload(o)?) {
+                let mut scanned = summary["items"].as_array().cloned().unwrap_or_default();
+                let mut items = typed["items"].as_array().cloned().unwrap_or_default();
+                for row in &mut items {
+                    if let Some(index) = scanned.iter().position(|item| {
+                        item["path"] == row["path"] && item["count"] == row["count"]
+                    }) {
+                        let item = scanned.remove(index);
+                        for key in ["equipped", "upgrades"] {
+                            row[key] = item[key].clone();
+                        }
+                    }
+                }
+                items.extend(scanned);
+                summary["itemStackCount"] = json!(items.len());
+                summary["items"] = json!(items);
+            }
+            summary
         } else {
             call(
                 "private.npc.inventory",
@@ -1298,8 +1363,36 @@ fn inventory(v: &str, o: &Options) -> Result<Value> {
     if !o.actor.eq_ignore_ascii_case("hero") {
         data["actorId"] = json!(npc_id(o)?);
     }
-    if let Some(item) = &o.item {
+    if let Some(item) = o.item.as_ref().or(o.id.as_ref()) {
         data["path"] = json!(display::existing_item_path(item)?)
+    } else if matches!(v, "set-count" | "remove") {
+        if o.slot.is_none() && o.container.is_none() {
+            bail!("--item or a container/slot selector required");
+        }
+        let rows = inventory(
+            "list",
+            &Options {
+                all: true,
+                offset: 0,
+                query: None,
+                category: None,
+                state: None,
+                ..o.clone()
+            },
+        )?;
+        let rows = rows["items"]
+            .as_array()
+            .context("inventory is unavailable")?;
+        if rows.len() != 1 {
+            bail!(
+                "container/slot selector must match exactly one stack; provide --container and --slot"
+            );
+        }
+        data["path"] = json!(
+            rows[0]["path"]
+                .as_str()
+                .context("selected stack has no item definition path")?
+        );
     }
     if let Some(count) = o.count {
         data["count"] = json!(count)

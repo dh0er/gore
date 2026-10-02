@@ -531,6 +531,12 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             skills_list_command(&path, &payload, codec_backend)
         }
+        "private.inventory.list" => {
+            let path = required_path(&payload)?;
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let root = decode_private_root_cached(&path, &kraken_backend)?;
+            Ok(actor_inventory_summary(&root, None))
+        }
         "private.npc.list" => {
             let path = required_path(&payload)?;
             let kraken_backend = codec_backend::KrakenBackend::default();
@@ -7350,6 +7356,7 @@ const CACHEABLE_READ_COMMANDS: &[&str] = &[
     "search_typed_properties",
     "query_progression",
     "private.skills.list",
+    "private.inventory.list",
     "private.npc.list",
     "private.characters.list",
     "private.npc.attributes",

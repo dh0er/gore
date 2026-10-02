@@ -199,6 +199,219 @@ fn localization_find_matches_identifiers_regardless_of_case() {
 }
 
 #[test]
+fn skill_story_event_selectors_and_attribute_offsets_select_the_requested_records() {
+    let home = tempfile::tempdir().unwrap();
+    let save = fixture();
+    let save = save.to_str().unwrap();
+    let skills = run(home.path(), &["skills", "list", save, "--all"]);
+    let selected = skills["skills"].as_array().unwrap().last().unwrap();
+    let base = selected["base"].as_str().unwrap();
+    for option in ["--skill", "--id"] {
+        let shown = run(
+            home.path(),
+            &[
+                "skills", "show", save, option, base, "--offset", "100000", "--limit", "1",
+            ],
+        );
+        assert_eq!(shown["base"], selected["base"]);
+        assert_eq!(shown["current"], selected["current"]);
+    }
+    let story = run(
+        home.path(),
+        &["story", "list", save, "--all", "--include-unset"],
+    );
+    let selected = story["entries"].as_array().unwrap().last().unwrap();
+    let shown = run(
+        home.path(),
+        &[
+            "story",
+            "show",
+            save,
+            "--id",
+            selected["id"].as_str().unwrap(),
+            "--offset",
+            "100000",
+            "--limit",
+            "1",
+        ],
+    );
+    assert_eq!(shown["id"], selected["id"]);
+    assert_eq!(shown["stored"], selected["stored"]);
+    assert_eq!(shown["rawValue"], selected["rawValue"]);
+
+    let attributes = run(
+        home.path(),
+        &["attributes", "list", save, "--limit", "1000"],
+    );
+    let rows = attributes["results"].as_array().unwrap();
+    assert!(rows.len() > 12);
+    let page = run(
+        home.path(),
+        &["attributes", "list", save, "--offset", "10", "--limit", "2"],
+    );
+    assert_eq!(page["results"], json!(&rows[10..12]));
+    assert_eq!(page["total"], attributes["total"]);
+
+    let events = run(home.path(), &["events", "list", save, "--all"]);
+    let selected = events["events"].as_array().unwrap().last().unwrap();
+    let shown = run(
+        home.path(),
+        &[
+            "events",
+            "show",
+            save,
+            "--index",
+            &selected["index"].to_string(),
+            "--offset",
+            "100000",
+            "--limit",
+            "1",
+        ],
+    );
+    assert_eq!(shown["index"], selected["index"]);
+    assert_eq!(shown["payload"], selected["payload"]);
+    assert_eq!(shown["arrayPath"], events["arrayPath"]);
+}
+
+#[test]
+fn inventory_container_and_slot_selectors_resolve_the_stack_before_editing() {
+    let home = tempfile::tempdir().unwrap();
+    let save = home.path().join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let save = save.to_str().unwrap();
+    let characters = run(home.path(), &["characters", "list", save, "--all"]);
+    let npc = characters["characters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| {
+            row["uniqueName"]
+                .as_str()
+                .is_some_and(|name| name.contains("Diego"))
+        })
+        .unwrap()["globalId"]
+        .as_str()
+        .unwrap();
+    for actor in ["hero", npc] {
+        let inventory = run(
+            home.path(),
+            &["inventory", "list", save, "--actor", actor, "--all"],
+        );
+        let selected = inventory["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["removable"] == true && row["slotId"].is_i64() && row["count"].is_i64())
+            .unwrap();
+        let slot = selected["slotId"].to_string();
+        let container = selected["containerType"].as_str().unwrap();
+        let next = (selected["count"].as_i64().unwrap() + 1).to_string();
+        let before = fs::read(save).unwrap();
+        run(
+            home.path(),
+            &[
+                "inventory",
+                "set-count",
+                save,
+                "--actor",
+                actor,
+                "--container",
+                container,
+                "--slot",
+                &slot,
+                "--count",
+                &next,
+                "--dry-run",
+            ],
+        );
+        assert_eq!(fs::read(save).unwrap(), before);
+        run(
+            home.path(),
+            &[
+                "inventory",
+                "set-count",
+                save,
+                "--actor",
+                actor,
+                "--container",
+                container,
+                "--slot",
+                &slot,
+                "--count",
+                &next,
+            ],
+        );
+        let stack = run(
+            home.path(),
+            &[
+                "inventory",
+                "list",
+                save,
+                "--actor",
+                actor,
+                "--container",
+                container,
+                "--slot",
+                &slot,
+                "--all",
+            ],
+        );
+        assert_eq!(stack["items"][0]["path"], selected["path"]);
+        assert_eq!(
+            stack["items"][0]["count"].as_i64(),
+            next.parse::<i64>().ok()
+        );
+        let before = fs::read(save).unwrap();
+        run(
+            home.path(),
+            &[
+                "inventory",
+                "remove",
+                save,
+                "--actor",
+                actor,
+                "--container",
+                container,
+                "--slot",
+                &slot,
+                "--dry-run",
+            ],
+        );
+        assert_eq!(fs::read(save).unwrap(), before);
+        run(
+            home.path(),
+            &[
+                "inventory",
+                "remove",
+                save,
+                "--actor",
+                actor,
+                "--container",
+                container,
+                "--slot",
+                &slot,
+            ],
+        );
+        let remaining = run(
+            home.path(),
+            &[
+                "inventory",
+                "list",
+                save,
+                "--actor",
+                actor,
+                "--container",
+                container,
+                "--slot",
+                &slot,
+                "--all",
+            ],
+        );
+        assert!(remaining["items"].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
 fn domain_writes_resolve_aliases_and_find_states_before_applying_the_new_filter() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");

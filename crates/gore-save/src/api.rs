@@ -44,6 +44,7 @@ pub const COMMANDS: &[&str] = &[
     "search_typed_properties",
     "query_progression",
     "private.skills.list",
+    "private.inventory.list",
     "private.npc.list",
     "private.characters.list",
     "private.npc.attributes",
