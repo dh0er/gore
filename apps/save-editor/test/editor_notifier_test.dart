@@ -2439,6 +2439,49 @@ void main() {
   // ---------------------------------------------------------------------------
 
   test(
+    'saveAllPending permits a revive with another NPC tag or corpse edit',
+    () async {
+      for (final path in [
+        ['LooseTagsByGlobalId', '{NPC-B}'],
+        ['m_SavedInventories', '{Character_NPC-B_123}', 'Items'],
+      ]) {
+        final core = _RecordingCoreService();
+        final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+        await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+        notifier.setPendingEdit(
+          'npc.revive:NPC-A',
+          const PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.npc.revive',
+                'value': {'id': 'NPC-A'},
+              },
+            ],
+          ),
+        );
+        notifier.setPendingEdit(
+          'typed:NPC-B',
+          PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.typed.setValue',
+                'value': {'path': path, 'value': 1},
+              },
+            ],
+          ),
+        );
+        expect(await notifier.saveAllPending(), isTrue);
+        expect(notifier.state.error, isNull);
+        expect(
+          core.requests.where((r) => r.command == 'write_save'),
+          hasLength(1),
+        );
+        expect(notifier.state.pendingEdits, isEmpty);
+      }
+    },
+  );
+
+  test(
     'saveAllPending refuses an All-Data MemorizedEvents edit with an NPC revive',
     () async {
       final core = _RecordingCoreService();

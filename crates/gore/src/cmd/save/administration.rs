@@ -429,6 +429,15 @@ pub(super) fn stage(file: &Path, payload: &Value, dry_run: bool) -> Result<Value
     let path = PathBuf::from(payload["path"].as_str().context("draft has no save path")?)
         .canonicalize()?;
     let hash = api::file_sha1(&path)?;
+    if payload["expectedSha1"]
+        .as_str()
+        .is_some_and(|expected| expected != hash)
+    {
+        return Err(gore_save::CoreError::Validation(
+            "save changed since command inspection".into(),
+        )
+        .into());
+    }
     let change = |mut current: Value| -> std::result::Result<Value, gore_save::CoreError> {
         if current.as_object().is_some_and(|m| m.is_empty()) {
             current = json!({"format":"gore.save.draft.v1","path":path,"expectedSha1":hash,"expectedPersistentSha1":api::file_sha1(&path.parent().unwrap().join("PersistentDataList.sav")).ok(),"edits":[]});
@@ -846,10 +855,10 @@ fn copy_admin_files(
         } else if ty.is_file()
             && (backup
                 || path.extension().is_some_and(|e| e == "sav")
-                || entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|name| name.contains(".sav.assign-final-goresave-")))
+                || entry.file_name().to_str().is_some_and(|name| {
+                    let name = name.to_ascii_lowercase();
+                    name.contains(".sav.assign-final-goresave-") || name.contains(".sav.bak.")
+                }))
         {
             if path.extension().is_some_and(|e| e == "json") {
                 let bytes = fs::read(&path)?;

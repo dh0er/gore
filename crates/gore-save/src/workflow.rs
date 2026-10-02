@@ -322,13 +322,16 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
                     let raw = edit
                         .value
                         .get("questStatePath")
-                        .or_else(|| edit.value.get("statePath"));
+                        .or_else(|| edit.value.get("statePath"))
+                        .filter(|path| !path.is_null());
                     if let Some(raw) = raw {
                         let strings: Vec<String> = serde_json::from_value(raw.clone())
                             .map_err(|e| invalid(e.to_string()))?;
                         if crate::properties::parse_path(&strings)? == *path {
                             return Err(pending("glossaryQuest", Some(path)));
                         }
+                    } else if crate::path_is_a_quest_current_state(path) {
+                        return Err(pending("glossaryQuest", Some(path)));
                     }
                 }
                 PrivateEdit::SkillSet(skill) => {
@@ -752,7 +755,10 @@ mod tests {
                         "Value",
                     ],
                     vec!["LooseTagsByGlobalId", "{NPC-A}"],
-                    vec!["m_SavedInventories", "{NPC-A}", "Items"],
+                    vec!["m_SavedInventories", "{Character_NPC-A}", "Items"],
+                    vec!["m_SavedInventories", "{Character_NPC-A_123}", "Items"],
+                    vec!["LooseTagsByGlobalId"],
+                    vec!["m_SavedInventories"],
                 ],
             ),
             (
@@ -813,6 +819,88 @@ mod tests {
                 .is_ok()
             );
         }
+    }
+
+    #[test]
+    fn revive_tag_and_corpse_conflicts_allow_other_npcs_but_guard_all_memory_owners() {
+        let revive = json!({"path":"private.npc.revive","value":{"id":"NPC-A"}});
+        for path in [
+            vec!["LooseTagsByGlobalId", "{NPC-B}"],
+            vec!["m_SavedInventories", "{Character_NPC-B}", "Items"],
+            vec!["m_SavedInventories", "{Character_NPC-B_123}", "Items"],
+        ] {
+            let raw = raw(&path);
+            for edits in [vec![revive.clone(), raw.clone()], vec![raw, revive.clone()]] {
+                assert!(plan(&edits).is_ok());
+            }
+        }
+        for owner in ["NPC-A", "NPC-B", "Hero"] {
+            let path = raw(&[
+                "LongTermMemoryByGlobalId",
+                &format!("{{{owner}}}"),
+                "MemorizedEvents",
+                "[0]",
+                "Time",
+            ]);
+            assert!(matches!(
+                plan(&[revive.clone(), path]),
+                Err(CoreError::PlanConflict {
+                    kind: "property",
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn derived_glossary_quest_states_conflict_before_grouping_and_explicit_paths_stay_scoped() {
+        let mut segment = json!({"path":"private.glossary.setSegment","value":{
+            "documentClass":"/Script/Angelscript.Document_Glossary_Bloodfly",
+            "segmentClass":"/Script/Angelscript.DocumentSegment_Glossary_Bloodfly_01",
+            "unlocked":true
+        }});
+        let path = [
+            "QuestDataByClass",
+            "{Quest_Glossary_Bloodfly_01}",
+            "CurrentState",
+        ];
+        let state = raw(&path);
+        for null in [false, true] {
+            if null {
+                segment["value"]["questStatePath"] = Value::Null;
+            }
+            for edits in [
+                vec![segment.clone(), state.clone()],
+                vec![state.clone(), segment.clone()],
+            ] {
+                assert!(matches!(
+                    plan(&edits),
+                    Err(CoreError::PlanConflict {
+                        kind: "glossaryQuest",
+                        ..
+                    })
+                ));
+            }
+        }
+        segment["value"]["questStatePath"] = json!(path);
+        assert!(matches!(
+            plan(&[segment.clone(), state]),
+            Err(CoreError::PlanConflict {
+                kind: "glossaryQuest",
+                ..
+            })
+        ));
+        assert!(
+            plan(&[
+                segment,
+                raw(&[
+                    "QuestDataByClass",
+                    "{Quest_Glossary_Wolf_01}",
+                    "CurrentState"
+                ])
+            ])
+            .is_ok()
+        );
     }
 
     #[test]

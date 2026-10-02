@@ -54,6 +54,128 @@ fn run_failure(home: &Path, args: &[&str]) -> Value {
 }
 
 #[test]
+fn adjacent_legacy_backup_dry_runs_validate_without_changing_live_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    let backup = home.join("G1R-001.sav.bak.1000");
+    fs::copy(fixture(), &save).unwrap();
+    fs::copy(fixture(), &backup).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let backup_arg = backup.to_str().unwrap();
+    run(
+        home,
+        &[
+            "backups", "rename", save_arg, "--backup", backup_arg, "--name", "Keep",
+        ],
+    );
+    let labels = home.join("goresave_backups/backup_names.json");
+    let label_bytes = fs::read(&labels).unwrap();
+    let save_hash = gore_save::api::file_sha1(&save).unwrap();
+    let backup_hash = gore_save::api::file_sha1(&backup).unwrap();
+    for operation in ["restore", "delete", "rename"] {
+        let mut args = vec![
+            "backups",
+            operation,
+            save_arg,
+            "--backup",
+            backup_arg,
+            "--dry-run",
+        ];
+        if operation == "rename" {
+            args.extend(["--name", "Changed"]);
+        }
+        let result = run(home, &args);
+        assert_eq!(result["validated"], true, "{result}");
+        assert_eq!(fs::read(&labels).unwrap(), label_bytes);
+        assert_eq!(gore_save::api::file_sha1(&save).unwrap(), save_hash);
+        assert_eq!(gore_save::api::file_sha1(&backup).unwrap(), backup_hash);
+    }
+    assert_eq!(
+        run(home, &["backups", "list", save_arg])["backups"][0]["name"],
+        "Keep"
+    );
+}
+
+#[test]
+fn mixed_case_pending_placement_note_survives_a_later_move_without_stay() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let actor = "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN";
+    let original = run(home, &["position", "show", save_arg, "--actor", actor]);
+    let x = original["pose"]["location"]["x"].as_f64().unwrap();
+    let draft = home.join("mixed-case.json");
+    let draft_arg = draft.to_str().unwrap();
+    run(home, &["draft", "create", draft_arg, "--target", save_arg]);
+    run(
+        home,
+        &[
+            "position",
+            "set",
+            save_arg,
+            "--actor",
+            actor,
+            "--x",
+            &(x + 100.0).to_string(),
+            "--stay",
+            "--draft",
+            draft_arg,
+        ],
+    );
+    let mut staged: Value = serde_json::from_slice(&fs::read(&draft).unwrap()).unwrap();
+    let id = staged["placementNotes"][0]["npc"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let first_note = staged["placementNotes"][0]["note"].clone();
+    staged["placementNotes"][0]["npc"] = json!(id.to_uppercase());
+    fs::write(&draft, serde_json::to_vec(&staged).unwrap()).unwrap();
+    run(
+        home,
+        &[
+            "position",
+            "set",
+            save_arg,
+            "--actor",
+            &id.to_lowercase(),
+            "--x",
+            &(x + 200.0).to_string(),
+            "--draft",
+            draft_arg,
+        ],
+    );
+    let staged = run(home, &["draft", "show", draft_arg]);
+    assert_eq!(staged["placementNotes"].as_array().unwrap().len(), 1);
+    assert_eq!(staged["placementNotes"][0]["npc"], id);
+    assert_eq!(
+        staged["placementNotes"][0]["note"]["original_location"],
+        first_note["original_location"]
+    );
+    assert_eq!(
+        staged["placementNotes"][0]["note"]["original_routine_class"],
+        first_note["original_routine_class"]
+    );
+    assert_eq!(
+        staged["placementNotes"][0]["note"]["written_location"][0],
+        x + 200.0
+    );
+    run(home, &["draft", "apply", draft_arg]);
+    let pinned = run(
+        home,
+        &["position", "pin-status", save_arg, "--actor", actor],
+    );
+    assert_eq!(pinned["routineClass"], pinned["inertRoutineClass"]);
+    assert_eq!(pinned["undo"]["restorable"], true);
+    assert_eq!(
+        pinned["undo"]["originalLocation"],
+        original["pose"]["location"]
+    );
+}
+
+#[test]
 fn repinning_after_staged_undo_keeps_the_latest_routine_and_undo_note() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

@@ -650,7 +650,13 @@ pub(super) fn position(v: &str, o: &Options) -> Result<Value> {
     let pending_note = pending
         .as_ref()
         .and_then(|d| d["placementNotes"].as_array())
-        .and_then(|rows| rows.iter().find(|r| r["npc"] == o.actor))
+        .and_then(|rows| {
+            rows.iter().find(|r| {
+                r["npc"]
+                    .as_str()
+                    .is_some_and(|npc| npc.eq_ignore_ascii_case(&o.actor))
+            })
+        })
         .map(|r| serde_json::from_value::<gore_save::placement::PlacementNote>(r["note"].clone()))
         .transpose()?;
     let previous_note = gore_save::placement::read_notes(save(o)?).remove(&o.actor);

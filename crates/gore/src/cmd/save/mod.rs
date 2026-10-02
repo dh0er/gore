@@ -22,6 +22,9 @@ mod updates;
 pub struct Options {
     /// Save file, or draft file for draft commands
     pub save: Option<PathBuf>,
+    /// Snapshot taken before save-derived selectors and values are read.
+    #[arg(skip)]
+    pub inspected_sha1: Option<String>,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -732,6 +735,15 @@ pub(super) fn write(o: &Options, edits: Vec<Value>, extras: Value) -> Result<Val
     p["path"] = json!(save(o)?);
     p["edits"] = json!(edits);
     p["dryRun"] = json!(o.dry_run);
+    if let Some(hash) = &o.inspected_sha1 {
+        if p["expectedSha1"]
+            .as_str()
+            .is_some_and(|expected| expected != hash)
+        {
+            bail!("save snapshot differs from the requested expectedSha1");
+        }
+        p["expectedSha1"] = json!(hash);
+    }
     if let Some(out) = &o.out {
         p["outputPath"] = json!(out)
     }
@@ -739,6 +751,16 @@ pub(super) fn write(o: &Options, edits: Vec<Value>, extras: Value) -> Result<Val
         return administration::stage(draft, &p, o.dry_run);
     }
     call("apply_edits", p)
+}
+
+fn capture_save_snapshot(o: &Options) -> Result<Options> {
+    let mut guarded = o.clone();
+    if guarded.inspected_sha1.is_none() {
+        if let Some(path) = &guarded.save {
+            guarded.inspected_sha1 = Some(api::file_sha1(path)?);
+        }
+    }
+    Ok(guarded)
 }
 
 fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
@@ -756,6 +778,8 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
     {
         return administration::dispatch(g, v, o);
     }
+    let guarded = capture_save_snapshot(o)?;
+    let o = &guarded;
     if matches!(
         g,
         "catalog" | "items" | "locations" | "assets" | "screenshot" | "localization"
@@ -1480,5 +1504,74 @@ fn time(v: &str, o: &Options) -> Result<Value> {
         )
     } else {
         Ok(display::clock_parts(&row))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inspected_save_hash_guards_direct_writes_and_draft_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let save = temp.path().join("G1R-001.sav");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../gore-save/assets/start_saves/resources_gothic.sav"),
+            &save,
+        )
+        .unwrap();
+        let options = Options {
+            save: Some(save.clone()),
+            ..Options::default()
+        };
+        let inspected = capture_save_snapshot(&options).unwrap();
+        call(
+            "write_save",
+            json!({"path":save,"backup":false,"edits":[
+                edit("public.m_PlayerSaveName", json!("Concurrent save change"))
+            ]}),
+        )
+        .unwrap();
+        let current_hash = api::file_sha1(&save).unwrap();
+        assert_ne!(
+            inspected.inspected_sha1.as_deref(),
+            Some(current_hash.as_str())
+        );
+        let stale_edits = vec![edit(
+            "public.m_PlayerSaveName",
+            json!("Stale inspected edit"),
+        )];
+        for dry_run in [false, true] {
+            let guarded = Options {
+                dry_run,
+                ..inspected.clone()
+            };
+            let error = write(&guarded, stale_edits.clone(), json!({})).unwrap_err();
+            assert!(error.to_string().contains("changed"), "{error}");
+            assert_eq!(api::file_sha1(&save).unwrap(), current_hash);
+        }
+        assert!(!temp.path().join("goresave_backups").exists());
+
+        let draft = temp.path().join("guarded.json");
+        let guarded = Options {
+            draft: Some(draft.clone()),
+            ..inspected
+        };
+        for dry_run in [false, true] {
+            let options = Options {
+                dry_run,
+                ..guarded.clone()
+            };
+            let error = write(&options, stale_edits.clone(), json!({})).unwrap_err();
+            assert!(error.to_string().contains("changed"), "{error}");
+            assert!(!draft.exists());
+        }
+        administration::stage(&draft, &json!({"path":save,"edits":[]}), false).unwrap();
+        let original_draft = std::fs::read(&draft).unwrap();
+        let error = write(&guarded, stale_edits, json!({})).unwrap_err();
+        assert!(error.to_string().contains("changed"), "{error}");
+        assert_eq!(std::fs::read(&draft).unwrap(), original_draft);
+        assert_eq!(api::file_sha1(&save).unwrap(), current_hash);
     }
 }

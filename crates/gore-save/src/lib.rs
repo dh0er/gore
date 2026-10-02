@@ -11950,10 +11950,17 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
                 || path_is_a_quest_current_state(path)
         }
         // Strips memory events, death tags and the corpse entry.
-        PrivateEdit::NpcRevive(_) => {
+        PrivateEdit::NpcRevive(revive) => {
             path_has_name(path, "MemorizedEvents")
-                || path_has_name(path, "LooseTagsByGlobalId")
-                || path_has_name(path, "m_SavedInventories")
+                || path_enters_map_entry(path, "LooseTagsByGlobalId", &revive.id)
+                || match segment_after_name(path, "m_SavedInventories") {
+                    None => false,
+                    Some(Some(properties::PathSeg::MapKey(key))) => {
+                        npc::is_corpse_key_for(key, &revive.id)
+                    }
+                    // Whole-map and unkeyed edits can remove the targeted corpse.
+                    Some(_) => true,
+                }
         }
         // Insert or update ONE character's knowledge entry. Another character's
         // entry is a different map value, and every applier re-resolves its target
