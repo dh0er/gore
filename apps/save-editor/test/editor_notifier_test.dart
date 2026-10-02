@@ -2433,20 +2433,20 @@ void main() {
   // The core's SAME-TARGET rule is order-independent: a structured operation
   // rewrites its target wholesale, so a raw typed edit addressing what it
   // rewrites is refused in the same write whichever way round the two come.
-  // The packer must SPLIT those pairs into sequential sub-writes (which is how
-  // they ran before batching existed) instead of building a write the core
-  // rejects — a rejection fails the whole Save with nothing committed.
+  // Revive and knowledge collisions must also be refused before grouping:
+  // sequential writes can silently discard the raw operation's result. Keep
+  // both pending intents so the user can resolve the conflict before saving.
   // ---------------------------------------------------------------------------
 
   test(
-    'saveAllPending splits an All-Data MemorizedEvents edit from an NPC revive',
+    'saveAllPending refuses an All-Data MemorizedEvents edit with an NPC revive',
     () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-      // A plain value edit inside an NPC's MemorizedEvents (not a structural
-      // array op, so the memory-event guard above does not refuse it)...
+      // A plain value edit inside an NPC's MemorizedEvents is also discarded
+      // by a revive that removes the containing memory event.
       notifier.setPendingEdit(
         'typed:lizard-memory-time',
         const PendingSaveEdit(
@@ -2483,31 +2483,18 @@ void main() {
 
       final ok = await notifier.saveAllPending();
 
-      expect(ok, isTrue);
-      expect(notifier.state.error, isNull);
-      final writes = core.requests
-          .where((r) => r.command == 'write_save')
-          .toList();
-      // TWO writes: sequential, so the typed edit lands and the revive then
-      // re-reads the file and strips events from what is on disk.
-      expect(writes, hasLength(2));
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('Conflicting'));
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
       expect(
-        (writes[0].payload['edits'] as List).map((e) => (e as Map)['path']),
-        ['private.typed.setValue'],
+        notifier.state.pendingEdits.keys,
+        unorderedEquals(['typed:lizard-memory-time', 'npc.revive:Lizard-1']),
       );
-      expect(
-        (writes[1].payload['edits'] as List).map((e) => (e as Map)['path']),
-        ['private.npc.revive'],
-      );
-      // Backup-once still holds, on the first write.
-      expect(writes.where((w) => w.payload['backup'] == true), hasLength(1));
-      expect(writes.first.payload['backup'], isTrue);
-      expect(notifier.state.pendingEdits, isEmpty);
     },
   );
 
   test(
-    'saveAllPending splits a knowledge edit from a typed edit in the SAME entry',
+    'saveAllPending refuses a knowledge edit and a typed edit in the SAME entry',
     () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
@@ -2551,18 +2538,12 @@ void main() {
 
       final ok = await notifier.saveAllPending();
 
-      expect(ok, isTrue);
-      final writes = core.requests
-          .where((r) => r.command == 'write_save')
-          .toList();
-      expect(writes, hasLength(2));
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('Conflicting'));
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
       expect(
-        (writes[0].payload['edits'] as List).map((e) => (e as Map)['path']),
-        ['private.typed.setValue'],
-      );
-      expect(
-        (writes[1].payload['edits'] as List).map((e) => (e as Map)['path']),
-        ['private.knowledge.setEntry'],
+        notifier.state.pendingEdits.keys,
+        unorderedEquals(['knowledge', 'typed:diego-knowledge']),
       );
     },
   );

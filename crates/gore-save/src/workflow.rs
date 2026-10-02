@@ -286,7 +286,11 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
                 continue;
             };
             match spec {
-                PrivateEdit::NpcRelationship(_) | PrivateEdit::LockSetUnlocked(_) => {
+                PrivateEdit::NpcRelationship(_)
+                | PrivateEdit::LockSetUnlocked(_)
+                | PrivateEdit::NpcRevive(_)
+                | PrivateEdit::KnowledgeAddCharacter(_)
+                | PrivateEdit::KnowledgeSetEntry(_) => {
                     if crate::structured_edit_rewrites(spec, path) {
                         return Err(pending(
                             if matches!(spec, PrivateEdit::NpcRelationship(_)) {
@@ -723,6 +727,91 @@ mod tests {
                 );
                 assert!(plan(&[edit, npc("NPC-Gorn")]).is_ok());
             }
+        }
+    }
+
+    #[test]
+    fn revive_and_knowledge_rewrites_reject_raw_collisions_in_either_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let save = temp.path().join("G1R-001.sav");
+        fs::write(&save, b"guarded source").unwrap();
+        let revive = json!({"path":"private.npc.revive","value":{"id":"NPC-A"}});
+        let add = json!({"path":"private.knowledge.addCharacter","value":{"value":"Hero"}});
+        let entry = json!({"path":"private.knowledge.setEntry","value":{
+            "character":"Hero","entry":"Info_Test","present":true
+        }});
+        for (structured, paths) in [
+            (
+                revive,
+                vec![
+                    vec![
+                        "LongTermMemoryByGlobalId",
+                        "{NPC-A}",
+                        "MemorizedEvents",
+                        "[0]",
+                        "Value",
+                    ],
+                    vec!["LooseTagsByGlobalId", "{NPC-A}"],
+                    vec!["m_SavedInventories", "{NPC-A}", "Items"],
+                ],
+            ),
+            (
+                add,
+                vec![vec![
+                    "CharacterKnowledgeByUniqueName",
+                    "{Hero}",
+                    "Knowledge",
+                ]],
+            ),
+            (
+                entry,
+                vec![vec![
+                    "CharacterKnowledgeByUniqueName",
+                    "{Hero}",
+                    "Knowledge",
+                    "Info_Test",
+                ]],
+            ),
+        ] {
+            for path in paths {
+                let raw = raw(&path);
+                for edits in [
+                    vec![structured.clone(), raw.clone()],
+                    vec![raw.clone(), structured.clone()],
+                ] {
+                    assert!(matches!(
+                        plan(&edits),
+                        Err(CoreError::PlanConflict {
+                            kind: "property",
+                            ..
+                        })
+                    ));
+                    for dry_run in [false, true] {
+                        assert!(matches!(
+                            apply_request(&json!({"path":save,"edits":edits,"dryRun":dry_run})),
+                            Err(CoreError::PlanConflict {
+                                kind: "property",
+                                ..
+                            })
+                        ));
+                        assert_eq!(fs::read(&save).unwrap(), b"guarded source");
+                        assert!(!temp.path().join("goresave_backups").exists());
+                    }
+                }
+            }
+            assert!(plan(&[structured, raw(&["Unrelated", "Value"])]).is_ok());
+        }
+        for edit in [
+            json!({"path":"private.knowledge.addCharacter","value":{"value":"Hero"}}),
+            json!({"path":"private.knowledge.setEntry","value":{"character":"Hero","entry":"Info_Test","present":true}}),
+        ] {
+            assert!(
+                plan(&[
+                    edit,
+                    raw(&["CharacterKnowledgeByUniqueName", "{Diego}", "Knowledge"])
+                ])
+                .is_ok()
+            );
         }
     }
 

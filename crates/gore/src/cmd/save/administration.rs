@@ -520,13 +520,32 @@ pub(super) fn stage(file: &Path, payload: &Value, dry_run: bool) -> Result<Value
             if let Some(entries) = payload[key].as_array() {
                 let mut values = current[key].as_array().cloned().unwrap_or_default();
                 for entry in entries {
-                    values.retain(|v| {
-                        if key == "placementNotes" {
-                            v["npc"] != entry["npc"]
+                    let npc = if key == "placementNotes" {
+                        entry["npc"].as_str()
+                    } else {
+                        entry.as_str()
+                    };
+                    let matches = |value: &Value, records: bool| {
+                        let name = if records {
+                            value["npc"].as_str()
                         } else {
-                            v != entry
+                            value.as_str()
+                        };
+                        name.zip(npc)
+                            .is_some_and(|(name, npc)| name.eq_ignore_ascii_case(npc))
+                    };
+                    values.retain(|v| !matches(v, key == "placementNotes"));
+                    let opposite = if key == "placementNotes" {
+                        "clearPlacementNotes"
+                    } else {
+                        "placementNotes"
+                    };
+                    if let Some(rows) = current.get_mut(opposite).and_then(Value::as_array_mut) {
+                        rows.retain(|v| !matches(v, opposite == "placementNotes"));
+                        if rows.is_empty() {
+                            current.as_object_mut().unwrap().remove(opposite);
                         }
-                    });
+                    }
                     values.push(entry.clone());
                 }
                 current[key] = json!(values);
@@ -1113,6 +1132,49 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staging_placement_actions_replaces_opposite_and_same_case_variants_for_one_npc() {
+        for key in ["placementNotes", "clearPlacementNotes"] {
+            let temp = tempfile::tempdir().unwrap();
+            let save = temp.path().join("G1R-001.sav");
+            let file = temp.path().join("draft.json");
+            fs::write(&save, b"source").unwrap();
+            let position = |npc: &str| {
+                json!({"path":"private.typed.setValue","value":{
+                    "path":["PositionByGlobalId",format!("{{{npc}}}"),"CharacterLocation"],"value":1
+                }})
+            };
+            let action = |key: &str, npc: &str, version: u32| {
+                if key == "placementNotes" {
+                    json!({"npc":npc,"note":{"version":version}})
+                } else {
+                    json!(npc)
+                }
+            };
+            let opposite = if key == "placementNotes" {
+                "clearPlacementNotes"
+            } else {
+                "placementNotes"
+            };
+            let mut initial = json!({"path":save,"edits":[position("NPC-A"),position("NPC-B")]});
+            initial[opposite] = json!([action(opposite, "NPC-A", 0), action(opposite, "NPC-B", 0)]);
+            stage(&file, &initial, false).unwrap();
+            let before = fs::read(&file).unwrap();
+            let mut next = json!({"path":save,"edits":[]});
+            next[key] = json!([action(key, "npc-a", 1)]);
+            let preview = stage(&file, &next, true).unwrap()["data"].clone();
+            assert_eq!(fs::read(&file).unwrap(), before);
+            assert_eq!(preview[opposite], json!([action(opposite, "NPC-B", 0)]));
+            let staged = stage(&file, &next, false).unwrap()["data"].clone();
+            assert_eq!(staged, preview);
+            next[key] = json!([action(key, "NPC-a", 2)]);
+            let replaced = stage(&file, &next, false).unwrap()["data"].clone();
+            assert_eq!(replaced[key], next[key]);
+            assert_eq!(replaced[opposite], preview[opposite]);
+            assert_eq!(replaced["edits"], initial["edits"]);
+        }
+    }
 
     #[test]
     fn removing_any_placement_component_discards_the_whole_action_and_keeps_other_edits() {

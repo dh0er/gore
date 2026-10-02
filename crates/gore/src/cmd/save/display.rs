@@ -723,7 +723,17 @@ pub(super) fn position(v: &str, o: &Options) -> Result<Value> {
         {
             bail!("NPC cannot be pinned");
         }
-        if !pinned {
+        let pending_routine = pending
+            .as_ref()
+            .and_then(|draft| draft["edits"].as_array())
+            .and_then(|edits| {
+                edits.iter().find(|edit| {
+                    edit["path"] == "private.typed.setValue"
+                        && edit["value"]["path"] == data["routineClassPath"]
+                })
+            })
+            .map(|edit| &edit["value"]["value"]);
+        if !pinned || pending_routine.is_some_and(|class| *class != data["inertRoutineClass"]) {
             edits.push(edit(
                 "private.typed.setValue",
                 json!({"path":data["routineClassPath"],"value":data["inertRoutineClass"]}),

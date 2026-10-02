@@ -54,6 +54,68 @@ fn run_failure(home: &Path, args: &[&str]) -> Value {
 }
 
 #[test]
+fn repinning_after_staged_undo_keeps_the_latest_routine_and_undo_note() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let actor = "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN";
+    let original = run(home, &["position", "show", save_arg, "--actor", actor]);
+    let first_x = (original["pose"]["location"]["x"].as_f64().unwrap() + 100.0).to_string();
+    let second_x = (original["pose"]["location"]["x"].as_f64().unwrap() + 200.0).to_string();
+    run(
+        home,
+        &[
+            "position", "set", save_arg, "--actor", actor, "--x", &first_x, "--stay",
+        ],
+    );
+    let draft = home.join("placement.json");
+    let draft_arg = draft.to_str().unwrap();
+    run(home, &["draft", "create", draft_arg, "--target", save_arg]);
+    run(
+        home,
+        &[
+            "position", "undo", save_arg, "--actor", actor, "--draft", draft_arg,
+        ],
+    );
+    assert_eq!(
+        run(home, &["draft", "show", draft_arg])["clearPlacementNotes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    run(
+        home,
+        &[
+            "position", "set", save_arg, "--actor", actor, "--x", &second_x, "--stay", "--draft",
+            draft_arg,
+        ],
+    );
+    let staged = run(home, &["draft", "show", draft_arg]);
+    assert!(staged.get("clearPlacementNotes").is_none());
+    assert_eq!(staged["placementNotes"].as_array().unwrap().len(), 1);
+    run(home, &["draft", "apply", draft_arg]);
+    let pinned = run(
+        home,
+        &["position", "pin-status", save_arg, "--actor", actor],
+    );
+    assert_eq!(pinned["routineClass"], pinned["inertRoutineClass"]);
+    assert_eq!(pinned["undo"]["restorable"], true);
+    assert_eq!(pinned["undo"]["routineRestorable"], true);
+    assert_eq!(
+        pinned["undo"]["originalLocation"],
+        original["pose"]["location"]
+    );
+    run(home, &["position", "undo", save_arg, "--actor", actor]);
+    let restored = run(home, &["position", "show", save_arg, "--actor", actor]);
+    assert_eq!(restored["pose"], original["pose"]);
+    assert_eq!(restored["routineClass"], original["routineClass"]);
+    assert!(restored["undo"].is_null());
+}
+
+#[test]
 fn backup_companions_are_listed_only_when_requested_without_modifying_files() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
