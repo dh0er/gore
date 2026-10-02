@@ -470,13 +470,15 @@ const COMMANDS: &[CommandSpec] = &[
         "report",
         "Save Editor: report",
         OPTIONS,
-        Safety::write_truncating(&["out"]).mutates_when_switch_without("with_assets", "manifest"),
+        Safety::write_truncating(&["out"])
+            .mutates_when_switch_without("with_assets", "manifest")
+            .mutates_when_switch("open"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
     .hides_cli_flags(&["copy"])
     .guide("save-games")
-    .gated_because("prepares, quarantines, or prunes images in the shared Save Editor icon cache"),
+    .gated_because("prepares, quarantines, or prunes the shared Save Editor icon cache, or opens the report in the system viewer"),
     CommandSpec::new(
         "about",
         "Save Editor: about",
@@ -1342,12 +1344,13 @@ const COMMANDS: &[CommandSpec] = &[
         "assets export",
         "Save Editor: assets export",
         OPTIONS,
-        Safety::write_truncating(&["out"]),
+        Safety::write_truncating(&["out"]).mutates_when_switch("open"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
     .hides_cli_flags(&["copy"])
-    .guide("save-games"),
+    .guide("save-games")
+    .gated_because("opens the exported image in the system viewer"),
     CommandSpec::new(
         "assets open",
         "Save Editor: assets open",
@@ -1645,12 +1648,13 @@ const COMMANDS: &[CommandSpec] = &[
         "screenshot export",
         "Save Editor: screenshot export",
         OPTIONS,
-        Safety::write_truncating(&["out"]),
+        Safety::write_truncating(&["out"]).mutates_when_switch("open"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
     .hides_cli_flags(&["copy"])
-    .guide("save-games"),
+    .guide("save-games")
+    .gated_because("opens the exported screenshot in the system viewer"),
     CommandSpec::new(
         "updates check",
         "Save Editor: updates check",

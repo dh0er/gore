@@ -342,6 +342,16 @@ fn describe_arguments(command: &CommandSpec) -> String {
 }
 
 fn safety_note(safety: &Safety) -> String {
+    if let Some(switch) = safety.mutates_when_switch {
+        let mut note = format!(
+            "{}, but `{switch}: true` needs --allow-write",
+            safety.base.label()
+        );
+        if let Some((switch, input)) = safety.mutates_when_switch_without {
+            note.push_str(&format!("; `{switch}: true` without `{input}` also changes shared state and needs --allow-write"));
+        }
+        return note;
+    }
     if let Some((switch, input)) = safety.mutates_when_switch_without {
         return format!(
             "{}, but `{switch}: true` without `{input}` changes shared state and needs --allow-write",

@@ -466,7 +466,15 @@ pub fn plan_request(payload: &Value) -> Result<Value, CoreError> {
     let edits = payload["edits"]
         .as_array()
         .ok_or_else(|| invalid("edits must be an array"))?;
-    Ok(json!({"groups": plan(edits)?}))
+    let groups = plan(edits)?;
+    if let Some(notes) = payload.get("placementNotes") {
+        crate::placement::parse_records(notes)?;
+    }
+    if let Some(clears) = payload.get("clearPlacementNotes") {
+        crate::placement::parse_clears(clears)?;
+    }
+    let sidecars = placement_sidecar_groups(payload, edits, &groups)?;
+    Ok(json!({"groups":groups,"sidecars":sidecars}))
 }
 
 /// Simulates every step using the real byte appliers without writing backups or sidecars.
@@ -795,6 +803,31 @@ mod tests {
                 .any(|group| group.contains(&1) && group.contains(&3)),
             "another overlapping edit must not separate an NPC's pose and routine"
         );
+    }
+
+    #[test]
+    fn planning_assigns_placement_sidecars_to_their_npcs_write_group() {
+        let stock = |count| json!({"path":"private.traders.setStock","value":{"index":0,"path":crate::traders::ORE_PATH,"count":count}});
+        let edits = json!([
+            stock(100),
+            stock(101),
+            raw(&["PositionByGlobalId", "{NPC-A}", "CharacterLocation"])
+        ]);
+        let notes = json!([{"npc":"npc-a","note":{
+            "original_location":[0.0,0.0,0.0],"written_location":[1.0,2.0,3.0]
+        }}]);
+        let payload = json!({"edits":edits,"placementNotes":notes,"clearPlacementNotes":["NPC-A"]});
+        let planned = plan_request(&payload).unwrap();
+        assert_eq!(planned["groups"], json!([[0], [1, 2]]));
+        assert_eq!(
+            planned["sidecars"],
+            json!([{}, {
+                "placementNotes":notes,"clearPlacementNotes":["NPC-A"]
+            }])
+        );
+        let mut orphan = payload;
+        orphan["clearPlacementNotes"] = json!(["NPC-B"]);
+        assert!(plan_request(&orphan).is_err());
     }
 
     #[test]

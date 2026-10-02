@@ -1434,6 +1434,29 @@ mod tests {
     }
 
     #[test]
+    fn save_exports_do_not_spawn_a_viewer_without_consent() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut session, spawn) = faked(exec::Outcome::success("{}\n"));
+        for subcommand in ["report", "assets export", "screenshot export"] {
+            let result = session.handle_unasked(&request("tools/call", json!({
+                "name":"gore_save", "arguments":{
+                    "subcommand":subcommand, "args":{
+                        "save":"fixture.sav", "out":temp.path().join("fresh.out"), "open":true
+                    }
+                }
+            }))).expect("answered").result.expect("result");
+            assert_eq!(result["isError"], json!(true), "{subcommand}");
+            assert!(
+                result["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("system viewer")
+            );
+            assert!(spawn.calls().is_empty());
+        }
+    }
+
+    #[test]
     fn save_clipboard_arguments_are_rejected_before_any_command_is_spawned() {
         let (mut session, spawn) = faked(exec::Outcome::success("{}\n"));
         for subcommand in ["list", "inspect", "report", "screenshot export", "rename"] {

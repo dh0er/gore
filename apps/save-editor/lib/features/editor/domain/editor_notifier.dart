@@ -1375,10 +1375,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final allEdits = <_KeyedEdit>[];
     var syncPersistent = false;
     var displayEditCount = 0;
-    // Placement notes belong to the SAVE, not to any one edit, so they are
-    // collected across every pending key and ride the first sub-write — the same
-    // one that takes the backup. The core only records them once those bytes are
-    // committed.
+    // Let the shared planner attach each placement sidecar to the group that
+    // commits that NPC's pose/routine, including actions after the backup write.
     final placementNotes = <Map<String, Object?>>[];
     final clearPlacementNotes = <String>[];
     for (final key in snapshotKeys) {
@@ -1402,6 +1400,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
         'plan_edits',
         payload: {
           'edits': [for (final keyed in allEdits) keyed.edit],
+          if (placementNotes.isNotEmpty) 'placementNotes': placementNotes,
+          if (clearPlacementNotes.isNotEmpty)
+            'clearPlacementNotes': clearPlacementNotes,
         },
       );
     } catch (error) {
@@ -1431,6 +1432,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return false;
     }
     final groups = ((planned['data'] as Map)['groups'] as List);
+    final sidecars = ((planned['data'] as Map)['sidecars'] as List);
     final worklist = <_SubWrite>[
       for (var i = 0; i < groups.length; i++)
         _SubWrite(
@@ -1438,8 +1440,17 @@ class EditorNotifier extends StateNotifier<EditorState> {
             for (final index in groups[i] as List) allEdits[index as int].edit,
           ],
           syncPersistentDataList: i == 0 && syncPersistent,
-          placementNotes: i == 0 ? placementNotes : const [],
-          clearPlacementNotes: i == 0 ? clearPlacementNotes : const [],
+          placementNotes: [
+            for (final note
+                in (sidecars[i] as Map)['placementNotes'] as List? ?? const [])
+              (note as Map).cast<String, Object?>(),
+          ],
+          clearPlacementNotes: [
+            for (final id
+                in (sidecars[i] as Map)['clearPlacementNotes'] as List? ??
+                    const [])
+              id as String,
+          ],
         ),
     ];
 
@@ -1453,6 +1464,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // edit map objects flow from the registry into the sub-writes, and two
     // distinct adds of the same item must count as two entries, never collapse.
     final committedEdits = Set<Map<String, Object?>>.identity();
+    final committedPlacementActors = <String>{};
     // The first (backup-taking) sub-write's response data drives the success
     // message: its `backupPath` is the one pristine snapshot for this Save.
     Map<String, Object?> firstData = const {};
@@ -1508,6 +1520,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
             placementNoteWarning ??= warning;
           }
           committedEdits.addAll(sub.edits);
+          committedPlacementActors.addAll([
+            for (final note in sub.placementNotes)
+              (note['npc'] as String).toLowerCase(),
+            for (final id in sub.clearPlacementNotes) id.toLowerCase(),
+          ]);
           state = state.copyWith(
             saveProgress: (done: i + 1, total: worklist.length),
           );
@@ -1539,7 +1556,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
         // may already have changed the file. Preserve every still-unwritten draft
         // across that refresh so the user can compare/retry it against fresh disk
         // state. refresh() clears the error, so restore the write failure afterward.
-        final preserved = _pendingMinusCommitted(committedEdits);
+        final preserved = _pendingMinusCommitted(
+          committedEdits,
+          committedPlacementActors,
+        );
         // Restore the drafts ATOMICALLY with the new inspection — but only if we
         // land back on the same save they target. refresh() may clear/auto-switch
         // selectedPath (this save vanished, or another slot was auto-selected);
@@ -1587,12 +1607,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
             PendingSaveEdit(
               edits: remaining,
               syncPersistentDataList: entry.value.syncPersistentDataList,
-              // Carried, not dropped: a retry of the still-unwritten edits must
-              // still record its undo note. Re-recording one whose sub-write did
-              // commit is harmless — the note is keyed by NPC and identical — but
-              // losing it would leave an NPC pinned with no way back.
-              placementNotes: entry.value.placementNotes,
-              clearPlacementNotes: entry.value.clearPlacementNotes,
+              placementNotes: entry.value.placementNotes
+                  .where(
+                    (note) => !committedPlacementActors.contains(
+                      (note['npc'] as String).toLowerCase(),
+                    ),
+                  )
+                  .toList(),
+              clearPlacementNotes: entry.value.clearPlacementNotes
+                  .where(
+                    (id) =>
+                        !committedPlacementActors.contains(id.toLowerCase()),
+                  )
+                  .toList(),
               displayCount: entry.value.displayCount,
             ),
           );
@@ -1608,6 +1635,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// whose earlier sub-write committed keeps only its still-unwritten edits.
   Map<String, PendingSaveEdit> _pendingMinusCommitted(
     Set<Map<String, Object?>> committed,
+    Set<String> committedPlacementActors,
   ) {
     final result = <String, PendingSaveEdit>{};
     for (final entry in state.pendingEdits.entries) {
@@ -1618,10 +1646,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
         result[entry.key] = PendingSaveEdit(
           edits: remaining,
           syncPersistentDataList: entry.value.syncPersistentDataList,
-          // See the same carry in the converge loop above: an undo note has to
-          // survive a partial save, or the retry pins an NPC with no way back.
-          placementNotes: entry.value.placementNotes,
-          clearPlacementNotes: entry.value.clearPlacementNotes,
+          placementNotes: entry.value.placementNotes
+              .where(
+                (note) => !committedPlacementActors.contains(
+                  (note['npc'] as String).toLowerCase(),
+                ),
+              )
+              .toList(),
+          clearPlacementNotes: entry.value.clearPlacementNotes
+              .where(
+                (id) => !committedPlacementActors.contains(id.toLowerCase()),
+              )
+              .toList(),
           displayCount: entry.value.displayCount,
         );
       }

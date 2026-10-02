@@ -844,8 +844,15 @@ void main() {
           {
             'path': 'private.typed.setValue',
             'value': {
-              'path': ['x'],
+              'path': ['PositionByGlobalId', '{A}', 'CharacterLocation'],
               'value': {'x': 1.0, 'y': 2.0, 'z': 3.0},
+            },
+          },
+          {
+            'path': 'private.typed.setValue',
+            'value': {
+              'path': ['PositionByGlobalId', '{B}', 'CharacterLocation'],
+              'value': {'x': 0.0, 'y': 0.0, 'z': 0.0},
             },
           },
         ],
@@ -873,6 +880,95 @@ void main() {
     expect(kept.placementNotes.single['npc'], 'A');
     expect(kept.clearPlacementNotes, ['B']);
   });
+
+  for (final clear in [false, true]) {
+    test(
+      'placement ${clear ? "clears" : "notes"} follow their write group and stay pending on failure',
+      () async {
+        for (final earlierPose in [false, true]) {
+          final core = _FailSecondWriteCoreService(
+            scanData: {
+              'saves': [
+                {
+                  'path': r'C:\tmp\saves\G1R-001.sav',
+                  'slot': 'G1R-001',
+                  'format': 'GSAV',
+                  'fileSize': 914367,
+                  'sha1': 'abc',
+                  'status': 'ok',
+                  'playerSaveName': 'Auto',
+                },
+              ],
+            },
+          );
+          final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+          await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+          Map<String, Object?> stock(int count) => {
+            'path': 'private.traders.setStock',
+            'value': {
+              'index': 0,
+              'path': '/Script/Angelscript.ItMi_Orenugget',
+              'count': count,
+            },
+          };
+          Map<String, Object?> pose(String npc) => {
+            'path': 'private.typed.setValue',
+            'value': {
+              'path': ['PositionByGlobalId', '{$npc}', 'CharacterLocation'],
+              'value': {'x': 1.0, 'y': 2.0, 'z': 3.0},
+            },
+          };
+          Map<String, Object?> note(String npc) => {
+            'npc': npc,
+            'note': {
+              'original_location': [0.0, 0.0, 0.0],
+              'written_location': [1.0, 2.0, 3.0],
+            },
+          };
+          final laterStock = stock(101);
+          final laterPose = pose('B');
+          notifier.setPendingEdit(
+            'mixed',
+            PendingSaveEdit(
+              edits: [
+                stock(100),
+                if (earlierPose) pose('A'),
+                laterStock,
+                laterPose,
+              ],
+              placementNotes: clear
+                  ? const []
+                  : [if (earlierPose) note('A'), note('B')],
+              clearPlacementNotes: clear
+                  ? [if (earlierPose) 'A', 'B']
+                  : const [],
+            ),
+          );
+          expect(await notifier.saveAllPending(), isFalse);
+          final writes = core.requests
+              .where((r) => r.command == 'write_save')
+              .toList();
+          expect(writes, hasLength(2));
+          final key = clear ? 'clearPlacementNotes' : 'placementNotes';
+          expect(
+            writes.first.payload[key],
+            earlierPose ? [clear ? 'A' : note('A')] : isNull,
+          );
+          expect(writes.last.payload[key], [clear ? 'B' : note('B')]);
+          final pending = notifier.state.pendingEdits['mixed']!;
+          expect(pending.edits, [laterStock, laterPose]);
+          expect(pending.placementNotes, clear ? isEmpty : [note('B')]);
+          expect(pending.clearPlacementNotes, clear ? ['B'] : isEmpty);
+          // A retry must carry only the still-uncommitted NPC's sidecar.
+          expect(await notifier.saveAllPending(), isFalse);
+          final retry = core.requests.lastWhere(
+            (r) => r.command == 'write_save',
+          );
+          expect(retry.payload[key], [clear ? 'B' : note('B')]);
+        }
+      },
+    );
+  }
 
   test('a failed undo note is reported beside the successful save', () async {
     // The core writes the note AFTER the bytes land and reports a failure beside

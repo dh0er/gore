@@ -622,6 +622,17 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
                     }
                 }
             }
+            if removed["path"] == "public.m_PlayerSaveName"
+                && data["edits"].as_array().is_some_and(|edits| {
+                    !edits
+                        .iter()
+                        .any(|edit| edit["path"] == "public.m_PlayerSaveName")
+                })
+            {
+                data.as_object_mut()
+                    .unwrap()
+                    .remove("syncPersistentDataList");
+            }
         } else {
             data["edits"] = json!([]);
             let save = Path::new(data["path"].as_str().context("draft has no source")?);
@@ -642,15 +653,6 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
             ] {
                 data.as_object_mut().unwrap().remove(key);
             }
-        }
-        if data["edits"].as_array().is_some_and(|edits| {
-            !edits
-                .iter()
-                .any(|edit| edit["path"] == "public.m_PlayerSaveName")
-        }) {
-            data.as_object_mut()
-                .unwrap()
-                .remove("syncPersistentDataList");
         }
         if !o.dry_run {
             api::update_json_file(file, |current| {
@@ -1236,6 +1238,54 @@ mod tests {
         assert_eq!(before, fs::read(&draft).unwrap());
         assert_eq!(fs::read(save).unwrap(), b"source");
     }
+    #[test]
+    fn removing_an_unrelated_draft_edit_preserves_an_independent_profile_guard() {
+        let temp = tempfile::tempdir().unwrap();
+        let save = temp.path().join("G1R-001.sav");
+        let file = temp.path().join("draft.json");
+        let profile = temp.path().join("PersistentDataList.sav");
+        let bytes = include_bytes!("../../../../gore-save/assets/start_saves/resources_gothic.sav");
+        fs::write(&save, bytes).unwrap();
+        fs::write(&profile, b"profile snapshot").unwrap();
+        let attribute =
+            json!({"path":"private.player.setAttribute","value":{"id":"Health","baseValue":300}});
+        let other =
+            json!({"path":"private.player.setAttribute","value":{"id":"Mana","currentValue":20}});
+        stage(
+            &file,
+            &json!({"path":save,"edits":[attribute,other],"syncPersistentDataList":true}),
+            false,
+        )
+        .unwrap();
+        let before = fs::read(&file).unwrap();
+        let mut options = Options {
+            save: Some(file.clone()),
+            operation: Some(1),
+            dry_run: true,
+            ..Default::default()
+        };
+        let simulated = draft("remove", &options).unwrap();
+        assert_eq!(simulated["syncPersistentDataList"], true);
+        assert_eq!(fs::read(&file).unwrap(), before);
+        options.dry_run = false;
+        let removed = draft("remove", &options).unwrap();
+        assert_eq!(removed["syncPersistentDataList"], true);
+        assert_eq!(
+            removed["expectedPersistentSha1"],
+            simulated["expectedPersistentSha1"]
+        );
+        assert_eq!(removed["edits"], json!([attribute]));
+        draft("validate", &options).unwrap();
+        fs::write(&profile, b"changed profile difficulty").unwrap();
+        assert!(
+            draft("validate", &options)
+                .unwrap_err()
+                .to_string()
+                .contains("profile changed since draft creation")
+        );
+        assert_eq!(fs::read(&save).unwrap(), bytes);
+    }
+
     #[test]
     fn resource_presets_dominate_sublevels_and_unknown_settings_remain_unknown() {
         assert_eq!(resolved_resources(&json!({"preset":"DifficultyPreset_Hard","resources":"ResourcesDifficultySettings_Standard"})).unwrap(),"Hard");

@@ -1466,6 +1466,24 @@ mod tests {
         assert_eq!(std::fs::read(fresh).unwrap(), b"existing report");
     }
 
+    #[test]
+    fn save_exports_gate_opening_the_system_viewer() {
+        let temp = tempfile::tempdir().unwrap();
+        for sub in ["report", "assets export", "screenshot export"] {
+            let mut args =
+                json!({"save":"fixture.sav","out":temp.path().join("fresh.out"),"open":true});
+            assert!(
+                asks_about_a_write(question("gore_save", sub, args.clone(), &options())),
+                "{sub}"
+            );
+            assert!(question("gore_save", sub, args.clone(), &permissive()).is_none());
+            args["open"] = json!(false);
+            assert!(question("gore_save", sub, args.clone(), &options()).is_none());
+            args.as_object_mut().unwrap().remove("open");
+            assert!(question("gore_save", sub, args, &options()).is_none());
+        }
+    }
+
     fn compile_args() -> Value {
         json!({
             "src": "scripts",
