@@ -286,7 +286,13 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
                 continue;
             };
             match spec {
-                PrivateEdit::NpcRelationship(_)
+                PrivateEdit::PlayerName(_)
+                | PrivateEdit::ProfileName(_)
+                | PrivateEdit::PlayerAttribute(_)
+                | PrivateEdit::PlayerTransform(_)
+                | PrivateEdit::InventoryItemCount(_)
+                | PrivateEdit::StoryApply(_)
+                | PrivateEdit::NpcRelationship(_)
                 | PrivateEdit::LockSetUnlocked(_)
                 | PrivateEdit::NpcRevive(_)
                 | PrivateEdit::KnowledgeAddCharacter(_)
@@ -850,6 +856,151 @@ mod tests {
                 })
             ));
         }
+    }
+
+    #[test]
+    fn player_transform_conflicts_follow_requested_components_and_guard_the_player_array() {
+        let location = json!({"x":1.0,"y":2.0,"z":3.0});
+        let rotation = json!({"pitch":4.0,"yaw":5.0,"roll":6.0});
+        for value in [
+            json!({"location":location}),
+            json!({"rotation":rotation}),
+            json!({"location":location,"rotation":rotation}),
+        ] {
+            let transform = json!({"path":"private.player.setTransform","value":value});
+            for (leaf, key) in [("m_Location", "location"), ("m_Rotation", "rotation")] {
+                let path = raw(&["m_SavedPlayers", "[0]", leaf]);
+                for edits in [
+                    vec![transform.clone(), path.clone()],
+                    vec![path, transform.clone()],
+                ] {
+                    if value.get(key).is_some() {
+                        assert!(matches!(
+                            plan(&edits),
+                            Err(CoreError::PlanConflict {
+                                kind: "property",
+                                ..
+                            })
+                        ));
+                    } else {
+                        assert!(plan(&edits).is_ok());
+                    }
+                }
+            }
+            let array = json!({"path":"private.typed.arrayDuplicate","value":{"path":["m_SavedPlayers"],"index":0}});
+            assert!(matches!(
+                plan(&[transform.clone(), array]),
+                Err(CoreError::PlanConflict {
+                    kind: "property",
+                    ..
+                })
+            ));
+            assert!(
+                plan(&[
+                    transform.clone(),
+                    raw(&["PositionByGlobalId", "{NPC-A}", "CharacterLocation"])
+                ])
+                .is_ok()
+            );
+            assert!(plan(&[transform, raw(&["NpcData", "m_Location"])]).is_ok());
+        }
+    }
+
+    #[test]
+    fn fixed_structured_edits_guard_names_attributes_counts_and_story_values() {
+        let attribute =
+            json!({"path":"private.player.setAttribute","value":{"id":"Health","baseValue":1.0}});
+        let count = json!({"path":"private.inventory.setItemCount","value":{"path":"/Script/Angelscript.ItMi_Orenugget","actorId":"NPC-A","count":2}});
+        let story = json!({"path":"private.story.apply","value":{"changes":[{"id":"Planner_Test","present":true,"rawValue":2,"expected":{"stored":true,"rawValue":0},"allowUnknownCreate":true}]}});
+        for (structured, same, other) in [
+            (
+                json!({"path":"private.player.setPlayerName","value":{"name":"Hero"}}),
+                vec!["PlayerData", "m_PlayerName"],
+                vec!["PlayerData", "m_Title"],
+            ),
+            (
+                json!({"path":"private.profile.setProfileName","value":{"name":"Profile"}}),
+                vec!["PlayerData", "m_ProfileName"],
+                vec!["PlayerData", "m_PlayerName"],
+            ),
+            (
+                attribute.clone(),
+                vec![
+                    "AttributesByGlobalId",
+                    "{Hero}",
+                    "AttributeSetsByClass",
+                    "{/Script/G1R.AttributeSet_Health}",
+                    "Attributes",
+                    "{Health}",
+                    "BaseValue",
+                ],
+                vec![
+                    "AttributesByGlobalId",
+                    "{NPC-A}",
+                    "AttributeSetsByClass",
+                    "{/Script/G1R.AttributeSet_Health}",
+                    "Attributes",
+                    "{Health}",
+                    "BaseValue",
+                ],
+            ),
+            (
+                count,
+                vec![
+                    "CharacterState",
+                    "_Inventory",
+                    "{NPC-A}",
+                    "m_Slots",
+                    "[1]",
+                    "m_SlotData",
+                    "m_ItemCount",
+                ],
+                vec![
+                    "CharacterState",
+                    "_Inventory",
+                    "{NPC-B}",
+                    "m_Slots",
+                    "[1]",
+                    "m_SlotData",
+                    "m_ItemCount",
+                ],
+            ),
+            (
+                story,
+                vec!["StoryPropertyValues", "{Planner_Test}"],
+                vec!["StoryPropertyValues", "{Another_Test}"],
+            ),
+        ] {
+            let same = raw(&same);
+            for edits in [
+                vec![structured.clone(), same.clone()],
+                vec![same, structured.clone()],
+            ] {
+                assert!(matches!(
+                    plan(&edits),
+                    Err(CoreError::PlanConflict {
+                        kind: "property",
+                        ..
+                    })
+                ));
+            }
+            assert!(plan(&[structured, raw(&other)]).is_ok());
+        }
+        assert!(
+            plan(&[
+                attribute,
+                raw(&[
+                    "AttributesByGlobalId",
+                    "{Hero}",
+                    "AttributeSetsByClass",
+                    "{/Script/G1R.AttributeSet_Health}",
+                    "Attributes",
+                    "{Health}",
+                    "CurrentValue"
+                ])
+            ])
+            .is_ok()
+        );
     }
 
     #[test]

@@ -10,6 +10,13 @@ fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gore-save/assets/start_saves/resources_gothic.sav")
 }
+fn execute_core(command: &str, payload: Value) -> Value {
+    gore_save::api::execute(&gore_save::api::Request {
+        command: command.into(),
+        payload,
+    })
+    .unwrap()
+}
 fn run(home: &Path, args: &[&str]) -> Value {
     run_from(home, None, args)
 }
@@ -589,6 +596,197 @@ fn backup_companions_are_listed_only_when_requested_without_modifying_files() {
         b"damaged profile backups are still listed for inspection"
     );
     assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+}
+
+#[test]
+fn hero_transform_raw_collisions_reject_core_writes_and_keep_staged_drafts() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let inspection = execute_core("inspect_save", json!({"path":save,"includePrivate":true}));
+    let original = &inspection["private"]["player"]["transform"];
+    let properties = execute_core(
+        "search_typed_properties",
+        json!({"path":save,"query":"m_SavedPlayers","includeNodes":true,"limit":1000}),
+    );
+    let draft = home.join("position.json");
+    let draft_arg = draft.to_str().unwrap();
+    let x = (original["location"]["x"].as_f64().unwrap() + 10.0).to_string();
+    run(
+        home,
+        &["position", "set", save_arg, "--x", &x, "--draft", draft_arg],
+    );
+    let staged = run(home, &["draft", "show", draft_arg]);
+    let transform = staged["edits"][0].clone();
+    let draft_bytes = fs::read(&draft).unwrap();
+    let save_hash = gore_save::api::file_sha1(&save).unwrap();
+    for (leaf, value) in [
+        (
+            "m_Location",
+            json!({"x":original["location"]["x"].as_f64().unwrap()+20.0,"y":original["location"]["y"],"z":original["location"]["z"]}),
+        ),
+        (
+            "m_Rotation",
+            json!({"pitch":original["rotation"]["pitch"],"yaw":original["rotation"]["yaw"].as_f64().unwrap()+20.0,"roll":original["rotation"]["roll"]}),
+        ),
+    ] {
+        let rows: Vec<_> = properties["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| {
+                row["path"]
+                    .as_array()
+                    .is_some_and(|path| path.last().and_then(Value::as_str) == Some(leaf))
+            })
+            .collect();
+        assert_eq!(rows.len(), 1);
+        let path = rows[0]["path"].clone();
+        let raw = json!({"path":"private.typed.setValue","value":{"path":path,"value":value}});
+        // Each edit is valid by itself; only their overlap causes the refusal.
+        execute_core(
+            "apply_edits",
+            json!({"path":save,"edits":[raw.clone()],"dryRun":true}),
+        );
+        for edits in [
+            vec![transform.clone(), raw.clone()],
+            vec![raw.clone(), transform.clone()],
+        ] {
+            for command in ["write_save", "apply_edits"] {
+                let error = gore_save::api::execute(&gore_save::api::Request {
+                    command: command.into(),
+                    payload: json!({"path":save,"edits":edits,"backup":true}),
+                })
+                .unwrap_err();
+                assert!(
+                    matches!(
+                        error,
+                        gore_save::CoreError::UnsupportedEdit(_)
+                            | gore_save::CoreError::PlanConflict {
+                                kind: "property",
+                                ..
+                            }
+                    ),
+                    "{error}"
+                );
+                assert_eq!(gore_save::api::file_sha1(&save).unwrap(), save_hash);
+                assert!(!home.join("goresave_backups").exists());
+            }
+        }
+        let path_file = home.join("path.json");
+        fs::write(&path_file, serde_json::to_vec(&path).unwrap()).unwrap();
+        let value_arg = value.to_string();
+        run(
+            home,
+            &[
+                "data",
+                "set",
+                save_arg,
+                "--path-file",
+                path_file.to_str().unwrap(),
+                "--value-json",
+                &value_arg,
+                "--draft",
+                draft_arg,
+            ],
+        );
+        let conflicting_draft = fs::read(&draft).unwrap();
+        for operation in ["validate", "apply"] {
+            let error = run_failure(home, &["draft", operation, draft_arg]);
+            assert!(
+                error["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("pending edit conflict"),
+                "{error}"
+            );
+            assert_eq!(fs::read(&draft).unwrap(), conflicting_draft);
+        }
+        assert_eq!(gore_save::api::file_sha1(&save).unwrap(), save_hash);
+        assert!(!home.join("goresave_backups").exists());
+        fs::write(&draft, &draft_bytes).unwrap();
+    }
+}
+
+#[test]
+fn slot_checks_and_repairs_cover_other_npcs_regardless_of_the_actor_selector() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let actor = "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN";
+    let properties = execute_core(
+        "search_typed_properties",
+        json!({"path":save,"query":"m_Slots m_Id","includeNodes":true,"limit":1000}),
+    );
+    let path = properties["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| {
+            row["path"].as_array().is_some_and(|path| {
+                !path.iter().any(|p| p == "m_SavedPlayers")
+                    && path.iter().any(|p| p == "m_Slots")
+                    && path.last().and_then(Value::as_str) == Some("m_Id")
+                    && !path
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .any(|p| p.to_lowercase().contains("diego"))
+            })
+        })
+        .expect("fixture has another NPC's inventory slot")["path"]
+        .clone();
+    execute_core(
+        "write_save",
+        json!({"path":save,"backup":false,"edits":[{"path":"private.typed.setValue","value":{"path":path,"value":9999}}]}),
+    );
+    let damaged_hash = gore_save::api::file_sha1(&save).unwrap();
+    let global = run(home, &["inventory", "check-slots", save_arg]);
+    assert!(global["slotIntegrity"]["misalignedSlots"].as_u64().unwrap() > 0);
+    for selected in [actor, "unresolved actor is irrelevant to a global repair"] {
+        let checked = run(
+            home,
+            &[
+                "inventory",
+                "check-slots",
+                save_arg,
+                "--actor",
+                selected,
+                "--container",
+                "MainContainer",
+                "--slot",
+                "0",
+            ],
+        );
+        assert_eq!(checked["slotIntegrity"], global["slotIntegrity"]);
+        run(
+            home,
+            &[
+                "inventory",
+                "repair-slots",
+                save_arg,
+                "--actor",
+                selected,
+                "--dry-run",
+            ],
+        );
+        assert_eq!(gore_save::api::file_sha1(&save).unwrap(), damaged_hash);
+        assert!(!home.join("goresave_backups").exists());
+    }
+    run(
+        home,
+        &["inventory", "repair-slots", save_arg, "--actor", actor],
+    );
+    let repaired = run(
+        home,
+        &["inventory", "check-slots", save_arg, "--actor", actor],
+    );
+    assert_eq!(repaired["slotIntegrity"]["misalignedSlots"], 0);
+    assert_eq!(repaired["slotIntegrity"]["containers"], 0);
+    assert_ne!(gore_save::api::file_sha1(&save).unwrap(), damaged_hash);
 }
 
 #[test]

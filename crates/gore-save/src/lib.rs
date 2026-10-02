@@ -11935,6 +11935,24 @@ fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> 
 /// too.
 fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) -> bool {
     match edit {
+        PrivateEdit::PlayerName(_) => ["m_PlayerName", "m_CharacterName", "m_UserName"]
+            .iter()
+            .any(|name| path_has_name(path, name)),
+        PrivateEdit::ProfileName(_) => path_has_name(path, "m_ProfileName"),
+        PrivateEdit::PlayerAttribute(attribute) => {
+            path_enters_map_entry(path, "AttributesByGlobalId", skills::HERO)
+                && path_has_key(path, &attribute.id)
+                && private_player_attribute_set_for_id(&attribute.id)
+                    .is_some_and(|class| path_has_key(path, class))
+                && ((attribute.base_value.is_some() && path_has_name(path, "BaseValue"))
+                    || (attribute.current_value.is_some() && path_has_name(path, "CurrentValue")))
+        }
+        PrivateEdit::PlayerTransform(transform) => {
+            path_has_name(path, "m_SavedPlayers")
+                && (matches!(path.last(), Some(properties::PathSeg::Name(name)) if name == "m_SavedPlayers")
+                    || (transform.location.is_some() && path_has_name(path, "m_Location"))
+                    || (transform.rotation.is_some() && path_has_name(path, "m_Rotation")))
+        }
         // Patches or appends a modifier under this NPC's relationship entry.
         PrivateEdit::NpcRelationship(relationship) => {
             path_enters_map_entry(path, "RelationshipByGlobalId", &relationship.id)
@@ -11994,6 +12012,14 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
         }
         PrivateEdit::InventoryRemoveItem(remove) => {
             slot_edit_targets_actor(path, remove.actor_id.as_deref())
+        }
+        PrivateEdit::InventoryItemCount(count) => {
+            slot_edit_targets_actor(path, count.actor_id.as_deref())
+                && path_has_name(path, "m_ItemCount")
+        }
+        PrivateEdit::StoryApply(changes) => {
+            path_has_name(path, "StoryPropertyValues")
+                && changes.iter().any(|change| path_has_key(path, &change.id))
         }
         // Narrower still: it only rewrites ids, but it does so across every
         // container in the save, so it is not scoped to one actor.

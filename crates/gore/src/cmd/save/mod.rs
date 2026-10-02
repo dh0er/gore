@@ -1343,7 +1343,7 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
 }
 fn inventory(v: &str, o: &Options) -> Result<Value> {
     if matches!(v, "list" | "show" | "check-slots") {
-        let mut data = if o.actor.eq_ignore_ascii_case("hero") {
+        let mut data = if v == "check-slots" || o.actor.eq_ignore_ascii_case("hero") {
             let mut summary = call(
                 "inspect_save",
                 json!({"path":save(o)?,"includePrivate":true}),
@@ -1411,7 +1411,7 @@ fn inventory(v: &str, o: &Options) -> Result<Value> {
         _ => "private.inventory.repairSlots",
     };
     let mut data = json!({});
-    if !o.actor.eq_ignore_ascii_case("hero") {
+    if v != "repair-slots" && !o.actor.eq_ignore_ascii_case("hero") {
         data["actorId"] = json!(npc_id(o)?);
     }
     let item = o.item.as_ref().or(o.id.as_ref());

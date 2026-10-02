@@ -2439,6 +2439,49 @@ void main() {
   // ---------------------------------------------------------------------------
 
   test(
+    'saveAllPending refuses raw edits that overwrite a pending Hero transform',
+    () async {
+      for (final leaf in ['m_Location', 'm_Rotation']) {
+        final core = _RecordingCoreService();
+        final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+        await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+        notifier.setPendingEdit(
+          'player.transform',
+          const PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.player.setTransform',
+                'value': {
+                  'location': {'x': 1.0, 'y': 2.0, 'z': 3.0},
+                  'rotation': {'pitch': 4.0, 'yaw': 5.0, 'roll': 6.0},
+                },
+              },
+            ],
+          ),
+        );
+        notifier.setPendingEdit(
+          'typed:pose',
+          PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.typed.setValue',
+                'value': {
+                  'path': ['m_SavedPlayers', '[0]', leaf],
+                  'value': 1,
+                },
+              },
+            ],
+          ),
+        );
+        expect(await notifier.saveAllPending(), isFalse);
+        expect(notifier.state.error, contains('Conflicting'));
+        expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+        expect(notifier.state.pendingEdits, hasLength(2));
+      }
+    },
+  );
+
+  test(
     'saveAllPending permits a revive with another NPC tag or corpse edit',
     () async {
       for (final path in [
