@@ -53,6 +53,324 @@ fn run_failure(home: &Path, args: &[&str]) -> Value {
     value["error"].clone()
 }
 
+// A strictly typed profile registry, including the difficulty and slot arrays
+// used by the native reset, detach and delete operations.
+fn profile_fixture(preset: &str) -> Vec<u8> {
+    fn string(value: &str) -> Vec<u8> {
+        let mut bytes = ((value.len() + 1) as i32).to_le_bytes().to_vec();
+        bytes.extend_from_slice(value.as_bytes());
+        bytes.push(0);
+        bytes
+    }
+    fn property(name: &str, kind: &str, descriptor: &[u8], value: &[u8]) -> Vec<u8> {
+        let mut bytes = string(name);
+        bytes.extend(string(kind));
+        bytes.extend(descriptor);
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend((value.len() as u32).to_le_bytes());
+        bytes.push(0);
+        bytes.extend(value);
+        bytes
+    }
+    fn structure(name: &str) -> Vec<u8> {
+        let mut bytes = 1u32.to_le_bytes().to_vec();
+        bytes.extend(string(name));
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(string("/Script/G1R"));
+        bytes
+    }
+    fn slots(name: &str, populated: bool) -> Vec<u8> {
+        let mut descriptor = 1u32.to_le_bytes().to_vec();
+        descriptor.extend(string("StrProperty"));
+        let mut value = u32::from(populated).to_le_bytes().to_vec();
+        if populated {
+            value.extend(string("G1R-001"));
+        }
+        property(name, "ArrayProperty", &descriptor, &value)
+    }
+    let mut public = property("m_SlotName", "StrProperty", &[], &string("G1R-001"));
+    public.extend(property(
+        "m_PlayerSaveName",
+        "StrProperty",
+        &[],
+        &string("Profile test"),
+    ));
+    public.extend(property(
+        "m_ProfileId",
+        "IntProperty",
+        &[],
+        &0i32.to_le_bytes(),
+    ));
+    public.extend(string("None"));
+    let mut map = 0u32.to_le_bytes().to_vec();
+    map.extend(1u32.to_le_bytes());
+    map.extend(string("G1R-001"));
+    map.extend(public);
+    let mut map_descriptor = 2u32.to_le_bytes().to_vec();
+    map_descriptor.extend(string("StrProperty"));
+    map_descriptor.extend(0u32.to_le_bytes());
+    map_descriptor.extend(string("StructProperty"));
+    map_descriptor.extend(structure("SaveGamePublicData"));
+    let mut profile = property("m_ProfileName", "StrProperty", &[], &string("Profile0"));
+    profile.extend(property(
+        "m_ProfileId",
+        "IntProperty",
+        &[],
+        &0i32.to_le_bytes(),
+    ));
+    for (name, class) in [
+        ("m_difficultyPreset", "DifficultyPreset"),
+        ("m_customCombatSettings", "CombatDifficultySettings"),
+        ("m_customResourcesSettings", "ResourcesDifficultySettings"),
+        (
+            "m_customProgressionSettings",
+            "ProgressionDifficultySettings",
+        ),
+    ] {
+        profile.extend(property(
+            name,
+            "ObjectProperty",
+            &[],
+            &string(&format!("/Script/Angelscript.{class}_{preset}")),
+        ));
+    }
+    for (name, populated) in [
+        ("m_SavedSlotsNames", true),
+        ("m_QuickSaveName", false),
+        ("m_AutoSaveName", false),
+    ] {
+        profile.extend(slots(name, populated));
+    }
+    profile.extend(string("None"));
+    let mut profiles = 1u32.to_le_bytes().to_vec();
+    profiles.extend(profile);
+    let mut array_descriptor = 1u32.to_le_bytes().to_vec();
+    array_descriptor.extend(string("StructProperty"));
+    array_descriptor.extend(structure("ProfileEntry"));
+    let mut bytes = b"GVAS".to_vec();
+    bytes.extend([0u8; 24]);
+    bytes.extend(string("/Script/G1R.PersistentDataList"));
+    bytes.push(0);
+    bytes.extend(slots("m_SavedGamesNames", true));
+    bytes.extend(property(
+        "m_SavedGamesPublicData",
+        "MapProperty",
+        &map_descriptor,
+        &map,
+    ));
+    bytes.extend(property(
+        "m_Profiles",
+        "ArrayProperty",
+        &array_descriptor,
+        &profiles,
+    ));
+    bytes.extend(string("None"));
+    bytes.extend(0u32.to_le_bytes());
+    bytes
+}
+
+#[test]
+fn inventory_reset_uses_the_selected_saves_profile_difficulty() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let configured = home.join("configured");
+    let external = home.join("external");
+    for (directory, preset) in [(&configured, "Easy"), (&external, "Hard")] {
+        fs::create_dir(directory).unwrap();
+        fs::copy(fixture(), directory.join("G1R-001.sav")).unwrap();
+        fs::write(
+            directory.join("PersistentDataList.sav"),
+            profile_fixture(preset),
+        )
+        .unwrap();
+    }
+    run(
+        home,
+        &[
+            "settings",
+            "set",
+            "--key",
+            "saveDir",
+            "--value",
+            configured.to_str().unwrap(),
+        ],
+    );
+    let save = external.join("G1R-001.sav");
+    let save_arg = save.to_str().unwrap();
+    let original_hash = gore_save::api::file_sha1(&save).unwrap();
+    let foreign_save_hash = gore_save::api::file_sha1(&configured.join("G1R-001.sav")).unwrap();
+    let foreign_profile_hash =
+        gore_save::api::file_sha1(&configured.join("PersistentDataList.sav")).unwrap();
+    let profile_hash = gore_save::api::file_sha1(&external.join("PersistentDataList.sav")).unwrap();
+    assert_eq!(
+        run(home, &["difficulty", "show", save_arg, "--profile", "0"])["difficultyPreset"],
+        "/Script/Angelscript.DifficultyPreset_Hard"
+    );
+    let draft = home.join("reset.json");
+    run(
+        home,
+        &[
+            "inventory",
+            "reset",
+            save_arg,
+            "--draft",
+            draft.to_str().unwrap(),
+        ],
+    );
+    let staged = run(home, &["draft", "show", draft.to_str().unwrap()]);
+    assert_eq!(staged["edits"][0]["value"]["resourcesLevel"], "Hard");
+    let override_draft = home.join("override.json");
+    run(
+        home,
+        &[
+            "inventory",
+            "reset",
+            save_arg,
+            "--resources-level",
+            "Novice",
+            "--draft",
+            override_draft.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        run(home, &["draft", "show", override_draft.to_str().unwrap()])["edits"][0]["value"]["resourcesLevel"],
+        "Novice"
+    );
+    assert_eq!(gore_save::api::file_sha1(&save).unwrap(), original_hash);
+    run(home, &["inventory", "reset", save_arg, "--dry-run"]);
+    assert_eq!(gore_save::api::file_sha1(&save).unwrap(), original_hash);
+    run(home, &["draft", "apply", draft.to_str().unwrap()]);
+    let hard = fixture().with_file_name("resources_hard.sav");
+    assert_eq!(
+        run(home, &["inventory", "list", save_arg, "--all"])["items"],
+        run(
+            home,
+            &["inventory", "list", hard.to_str().unwrap(), "--all"]
+        )["items"]
+    );
+    assert_eq!(
+        gore_save::api::file_sha1(&configured.join("G1R-001.sav")).unwrap(),
+        foreign_save_hash
+    );
+    assert_eq!(
+        gore_save::api::file_sha1(&configured.join("PersistentDataList.sav")).unwrap(),
+        foreign_profile_hash
+    );
+    assert_eq!(
+        gore_save::api::file_sha1(&external.join("PersistentDataList.sav")).unwrap(),
+        profile_hash
+    );
+    assert!(!configured.join("goresave_backups").exists());
+}
+
+#[test]
+fn detach_and_delete_use_the_supplied_saves_registry_including_missing_saves() {
+    for (operation, missing) in [("detach", false), ("detach", true), ("delete", false)] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let configured = home.join("configured");
+        let external = home.join("external");
+        for (directory, preset) in [(&configured, "Easy"), (&external, "Hard")] {
+            fs::create_dir(directory).unwrap();
+            fs::copy(fixture(), directory.join("G1R-001.sav")).unwrap();
+            fs::write(
+                directory.join("PersistentDataList.sav"),
+                profile_fixture(preset),
+            )
+            .unwrap();
+        }
+        run(
+            home,
+            &[
+                "settings",
+                "set",
+                "--key",
+                "saveDir",
+                "--value",
+                configured.to_str().unwrap(),
+            ],
+        );
+        let save = external.join("G1R-001.sav");
+        let own_save_hash = gore_save::api::file_sha1(&save).unwrap();
+        if missing {
+            fs::remove_file(&save).unwrap();
+        }
+        let profile = external.join("PersistentDataList.sav");
+        let profile_hash = gore_save::api::file_sha1(&profile).unwrap();
+        let foreign_save_hash = gore_save::api::file_sha1(&configured.join("G1R-001.sav")).unwrap();
+        let foreign_profile_hash =
+            gore_save::api::file_sha1(&configured.join("PersistentDataList.sav")).unwrap();
+        let mut args = if operation == "detach" {
+            vec!["profile", "detach"]
+        } else {
+            vec!["delete"]
+        };
+        args.extend([save.to_str().unwrap(), "--profile", "0"]);
+        let mut conflicting = args.clone();
+        conflicting.extend(["--root", configured.to_str().unwrap()]);
+        let error = run_failure(home, &conflicting);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("save's own directory")
+        );
+        let mut preview = args.clone();
+        preview.push("--dry-run");
+        assert_eq!(run(home, &preview)["validated"], true);
+        assert_eq!(gore_save::api::file_sha1(&profile).unwrap(), profile_hash);
+        assert_eq!(save.exists(), !missing);
+        if !missing {
+            assert_eq!(gore_save::api::file_sha1(&save).unwrap(), own_save_hash);
+        }
+        assert!(!configured.join("goresave_backups").exists());
+        assert!(!external.join("goresave_backups").exists());
+        let slot_only = run(
+            home,
+            &[
+                "profile",
+                "detach",
+                "--slot",
+                "G1R-001",
+                "--profile",
+                "0",
+                "--dry-run",
+            ],
+        );
+        assert_eq!(
+            Path::new(slot_only["request"]["persistentPath"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            configured
+                .join("PersistentDataList.sav")
+                .canonicalize()
+                .unwrap()
+        );
+        let save_index = if operation == "detach" { 2 } else { 1 };
+        args[save_index] = "G1R-001.sav";
+        run_from(home, Some(&external), &args);
+        assert_eq!(save.exists(), operation == "detach" && !missing);
+        if operation == "detach" && !missing {
+            assert_eq!(gore_save::api::file_sha1(&save).unwrap(), own_save_hash);
+        }
+        assert_ne!(gore_save::api::file_sha1(&profile).unwrap(), profile_hash);
+        let listing = run(
+            home,
+            &["profiles", "list", "--root", external.to_str().unwrap()],
+        );
+        assert_eq!(listing["profiles"][0]["savedSlots"], json!([]));
+        assert_eq!(
+            gore_save::api::file_sha1(&configured.join("G1R-001.sav")).unwrap(),
+            foreign_save_hash
+        );
+        assert_eq!(
+            gore_save::api::file_sha1(&configured.join("PersistentDataList.sav")).unwrap(),
+            foreign_profile_hash
+        );
+        assert!(!configured.join("goresave_backups").exists());
+    }
+}
+
 #[test]
 fn adjacent_legacy_backup_dry_runs_validate_without_changing_live_files() {
     let temp = tempfile::tempdir().unwrap();

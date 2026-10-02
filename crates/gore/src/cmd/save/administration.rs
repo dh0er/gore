@@ -75,6 +75,28 @@ fn root(o: &Options) -> Result<PathBuf> {
 fn profile_path(o: &Options) -> Result<PathBuf> {
     Ok(root(o)?.join("PersistentDataList.sav"))
 }
+fn save_context(o: &Options) -> Result<Options> {
+    let mut context = o.clone();
+    if let Some(path) = &o.save {
+        // Detaching a stale registry entry must also work after its save vanished.
+        let path = normalized_path(path);
+        let parent = path
+            .parent()
+            .context("save has no parent directory")?
+            .to_owned();
+        if o.root
+            .as_ref()
+            .is_some_and(|root| !same_path(&root.to_string_lossy(), &parent.to_string_lossy()))
+        {
+            bail!("--root must be the save's own directory; use save import to move it");
+        }
+        context.save = Some(path);
+        context.root = Some(parent);
+    } else if let Some(root) = &o.root {
+        context.root = Some(normalized_path(root));
+    }
+    Ok(context)
+}
 fn scan(o: &Options) -> Result<Value> {
     let mut data = call("scan_save_dir_readonly", json!({"path":root(o)?}))?;
     let settings = settings_read("editor")?;
@@ -145,12 +167,16 @@ fn resolved_resources(difficulty: &Value) -> Result<String> {
         .map(normalize_resources)
         .unwrap_or_else(|| Ok("Gothic".into()))
 }
+fn profile_resource_settings(profile: &Value) -> Value {
+    json!({"preset":profile["difficultyPreset"],"resources":profile["customResourcesSettings"]})
+}
 pub(super) fn resources_level(o: &Options) -> Result<String> {
     if let Some(level) = &o.resources_level {
         return normalize_resources(level);
     }
-    let listing = scan(o)?;
-    let selected = o.save.as_deref().and_then(|p| p.canonicalize().ok());
+    let context = save_context(o)?;
+    let listing = scan(&context)?;
+    let selected = context.save.as_deref().and_then(|p| p.canonicalize().ok());
     let id = listing["saves"]
         .as_array()
         .and_then(|rows| {
@@ -163,12 +189,14 @@ pub(super) fn resources_level(o: &Options) -> Result<String> {
         })
         .and_then(|r| r["persistentProfileId"].as_i64());
     let profiles = listing["profiles"].as_array();
-    let attached = profiles.and_then(|rows| {
-        rows.iter()
-            .find(|r| id.is_some() && r["profileId"].as_i64() == id)
-    });
-    if let Some(profile) = attached.filter(|p| has_difficulty(&p["difficulty"])) {
-        return resolved_resources(&profile["difficulty"]);
+    let attached = profiles
+        .and_then(|rows| {
+            rows.iter()
+                .find(|r| id.is_some() && r["profileId"].as_i64() == id)
+        })
+        .map(profile_resource_settings);
+    if let Some(difficulty) = attached.filter(has_difficulty) {
+        return resolved_resources(&difficulty);
     }
     if let Some(save) = &selected {
         let inspection = call("inspect_save", json!({"path":save}))?;
@@ -180,11 +208,7 @@ pub(super) fn resources_level(o: &Options) -> Result<String> {
         rows.iter()
             .find(|r| r["profileId"] == listing["activeProfileId"])
     });
-    resolved_resources(
-        &active
-            .map(|p| p["difficulty"].clone())
-            .unwrap_or(Value::Null),
-    )
+    resolved_resources(&active.map(profile_resource_settings).unwrap_or(Value::Null))
 }
 fn normalize_resources(raw: &str) -> Result<String> {
     let last = raw
@@ -799,6 +823,8 @@ fn draft_after_apply(mut data: Value, result: &Value) -> Result<Value> {
 }
 
 pub(super) fn difficulty(v: &str, o: &Options) -> Result<Value> {
+    let context = save_context(o)?;
+    let o = &context;
     let id = o.profile.context("--profile required")?;
     if v == "show" {
         let data = scan(o)?;
@@ -989,9 +1015,10 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             Ok(data)
         }
         ("profiles", _) => {
-            let data = scan(o)?;
+            let context = save_context(o)?;
+            let data = scan(&context)?;
             if v == "show" {
-                return difficulty("show", o);
+                return difficulty("show", &context);
             }
             Ok(json!({"profiles":data["profiles"],"activeProfileId":data["activeProfileId"]}))
         }
@@ -1004,16 +1031,8 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 destination.target = None;
             } else {
                 input = input.canonicalize()?;
-                let parent = input
-                    .parent()
-                    .context("save has no parent directory")?
-                    .to_owned();
-                if o.root.as_ref().is_some_and(|root| {
-                    !same_path(&root.to_string_lossy(), &parent.to_string_lossy())
-                }) {
-                    bail!("--root must be the save's own directory; use save import to move it");
-                }
-                destination.root = Some(parent);
+                destination.save = Some(input.clone());
+                destination = save_context(&destination)?;
             }
             let root = root(&destination)?;
             destination.root = Some(root.clone());
@@ -1055,6 +1074,8 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             admin_write("assign_save_profile", p, &destination)
         }
         ("profile", "detach") | ("", "delete") => {
+            let context = save_context(o)?;
+            let o = &context;
             let input = o.save.as_deref();
             let slot = o
                 .slot
