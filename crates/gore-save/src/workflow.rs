@@ -42,6 +42,96 @@ fn actor(edit: &Edit) -> Option<&str> {
         .and_then(Value::as_str)
         .filter(|v| !v.is_empty())
 }
+
+/// NPC pose/routine edits whose bytes and placement sidecar form one action.
+pub fn placement_actor(edit: &Value) -> Option<&str> {
+    if edit["path"] != "private.typed.setValue" {
+        return None;
+    }
+    edit["value"]["path"]
+        .as_array()?
+        .windows(3)
+        .find_map(|parts| {
+            if matches!(
+                (parts[0].as_str()?, parts[2].as_str()?),
+                (
+                    "PositionByGlobalId",
+                    "CharacterLocation" | "CharacterRotation"
+                ) | ("DailyRoutineByGlobalId", "DailyRoutineClass")
+            ) {
+                parts[1].as_str()?.strip_prefix('{')?.strip_suffix('}')
+            } else {
+                None
+            }
+        })
+}
+
+/// Keep only sidecars whose placement action still has pending byte edits.
+pub fn retain_pending_placement_sidecars(payload: &mut Value) {
+    let actors = payload["edits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(placement_actor)
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
+    for key in ["placementNotes", "clearPlacementNotes"] {
+        if let Some(entries) = payload[key].as_array_mut() {
+            entries.retain(|entry| {
+                let npc = if key == "placementNotes" {
+                    entry["npc"].as_str()
+                } else {
+                    entry.as_str()
+                };
+                npc.is_some_and(|npc| actors.contains(&npc.to_lowercase()))
+            });
+            if entries.is_empty() {
+                payload.as_object_mut().unwrap().remove(key);
+            }
+        }
+    }
+}
+
+fn placement_sidecar_groups(
+    payload: &Value,
+    raw: &[Value],
+    groups: &[Vec<usize>],
+) -> Result<Vec<Value>, CoreError> {
+    let mut actions = vec![json!({}); groups.len()];
+    for key in ["placementNotes", "clearPlacementNotes"] {
+        for entry in payload[key].as_array().into_iter().flatten() {
+            let npc = if key == "placementNotes" {
+                entry["npc"].as_str()
+            } else {
+                entry.as_str()
+            }
+            .ok_or_else(|| invalid("placement action needs an NPC id"))?;
+            let steps = groups
+                .iter()
+                .enumerate()
+                .filter(|(_, group)| {
+                    group.iter().any(|index| {
+                        placement_actor(&raw[*index])
+                            .is_some_and(|actor| actor.eq_ignore_ascii_case(npc))
+                    })
+                })
+                .map(|(step, _)| step)
+                .collect::<Vec<_>>();
+            if steps.len() != 1 {
+                return Err(invalid(format!(
+                    "placement action for {npc} must belong to one write group"
+                )));
+            }
+            let data = actions[steps[0]].as_object_mut().unwrap();
+            data.entry(key)
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .unwrap()
+                .push(entry.clone());
+        }
+    }
+    Ok(actions)
+}
 fn typed(edit: &Edit) -> Result<Option<Vec<PathSeg>>, CoreError> {
     if !edit.path.starts_with("private.typed.") {
         return Ok(None);
@@ -280,6 +370,31 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
                 .is_some_and(crate::may_invalidate_caller_ordinals),
         )
     });
+    // Pose and routine fields are independent of unrelated fixed edits. Keep
+    // all fields for one NPC adjacent so an overlapping stock/attribute edit
+    // cannot split a placement action across atomic writes.
+    let mut grouped = Vec::with_capacity(fixed.len());
+    let mut used = vec![false; raw.len()];
+    for &index in &fixed {
+        if used[index] {
+            continue;
+        }
+        if let Some(npc) = placement_actor(&raw[index]) {
+            for &sibling in &fixed {
+                if !used[sibling]
+                    && placement_actor(&raw[sibling])
+                        .is_some_and(|actor| actor.eq_ignore_ascii_case(npc))
+                {
+                    used[sibling] = true;
+                    grouped.push(sibling);
+                }
+            }
+        } else {
+            used[index] = true;
+            grouped.push(index);
+        }
+    }
+    fixed = grouped;
     for (_, group) in &arrays {
         let positions: Vec<_> = splice
             .iter()
@@ -430,6 +545,7 @@ pub fn apply_with_progress(
     if let Some(clears) = payload.get("clearPlacementNotes") {
         crate::placement::parse_clears(clears)?;
     }
+    let sidecars = placement_sidecar_groups(payload, raw, &groups)?;
     if payload["dryRun"].as_bool().unwrap_or(false) {
         return Ok(
             json!({"dryRun":true,"groups":groups,"expectedSha1":hashes[0],"resultSha1":hashes.last(),"committed":[],"remaining":(0..raw.len()).collect::<Vec<_>>() }),
@@ -463,10 +579,14 @@ pub fn apply_with_progress(
                 .iter()
                 .any(|i| raw[*i]["path"] == "public.m_PlayerSaveName")
         );
-        if step > 0 {
-            for key in ["placementNotes", "clearPlacementNotes", "outputPath"] {
-                request.as_object_mut().unwrap().remove(key);
+        for key in ["placementNotes", "clearPlacementNotes"] {
+            request.as_object_mut().unwrap().remove(key);
+            if let Some(entries) = sidecars[step].get(key) {
+                request[key] = entries.clone();
             }
+        }
+        if step > 0 {
+            request.as_object_mut().unwrap().remove("outputPath");
         }
         match crate::api::execute(&crate::api::Request {
             command: "write_save".into(),
@@ -608,5 +728,148 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn interleaved_npc_pose_and_routine_edits_stay_in_one_write_group() {
+        let stock = |count| json!({"path":"private.traders.setStock","value":{"index":0,"path":crate::traders::ORE_PATH,"count":count}});
+        let edits = [
+            stock(100),
+            raw(&["PositionByGlobalId", "{NPC-A}", "CharacterLocation"]),
+            stock(101),
+            raw(&["DailyRoutineByGlobalId", "{NPC-A}", "DailyRoutineClass"]),
+            raw(&["PositionByGlobalId", "{NPC-B}", "CharacterLocation"]),
+        ];
+        let groups = plan(&edits).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert!(
+            groups
+                .iter()
+                .any(|group| group.contains(&1) && group.contains(&3)),
+            "another overlapping edit must not separate an NPC's pose and routine"
+        );
+    }
+
+    #[test]
+    fn partial_draft_retains_only_unconsumed_npc_placement_sidecars() {
+        let mut payload = json!({"edits":[
+            raw(&["PositionByGlobalId", "{npc-b}", "CharacterLocation"]),
+            raw(&["_AttributeSet", "{NPC-A}", "Health"])
+        ], "placementNotes":[{"npc":"NPC-A"},{"npc":"NPC-B"}],
+            "clearPlacementNotes":["NPC-A","NPC-B"]});
+        retain_pending_placement_sidecars(&mut payload);
+        assert_eq!(payload["placementNotes"], json!([{"npc":"NPC-B"}]));
+        assert_eq!(payload["clearPlacementNotes"], json!(["NPC-B"]));
+        payload["edits"] = json!([]);
+        retain_pending_placement_sidecars(&mut payload);
+        assert!(payload.get("placementNotes").is_none());
+        assert!(payload.get("clearPlacementNotes").is_none());
+    }
+
+    #[test]
+    fn placement_sidecars_wait_for_the_associated_write_and_survive_partial_failure() {
+        for clear in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("G1R-001.sav");
+            let bytes = include_bytes!("../assets/start_saves/resources_gothic.sav");
+            fs::write(&path, bytes).unwrap();
+            let npc = "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN";
+            let pose = crate::api::execute(&crate::api::Request {
+                command: "private.npc.position".into(),
+                payload: json!({"path":path,"id":npc}),
+            })
+            .unwrap()["pose"]
+                .clone();
+            let original = &pose["location"];
+            let next = json!({"x":original["x"].as_f64().unwrap()+10.0,"y":original["y"],"z":original["z"]});
+            let note = crate::placement::PlacementNote {
+                original_location: [
+                    original["x"].as_f64().unwrap(),
+                    original["y"].as_f64().unwrap(),
+                    original["z"].as_f64().unwrap(),
+                ],
+                written_location: [
+                    next["x"].as_f64().unwrap(),
+                    next["y"].as_f64().unwrap(),
+                    next["z"].as_f64().unwrap(),
+                ],
+                original_rotation: None,
+                written_rotation: None,
+                original_routine_class: None,
+                written_routine_class: None,
+            };
+            if clear {
+                let previous = crate::placement::PlacementNote {
+                    original_location: note.written_location,
+                    written_location: note.original_location,
+                    ..note.clone()
+                };
+                crate::placement::record(&path, &[(npc.into(), previous)]).unwrap();
+            }
+            let initial = crate::placement::read_notes(&path);
+            let root = crate::decode_private_root_cached(
+                &path,
+                &crate::codec_backend::KrakenBackend::default(),
+            )
+            .unwrap();
+            let index = crate::traders::list_traders(&root)
+                .unwrap()
+                .into_iter()
+                .find(|trader| trader.ore.is_some() && !trader.placeholder)
+                .unwrap()
+                .index;
+            drop(root);
+            let raw = json!([
+                {"path":"private.traders.setStock","value":{"index":index,"path":crate::traders::ORE_PATH,"count":100}},
+                {"path":"private.traders.setStock","value":{"index":index,"path":crate::traders::ORE_PATH,"count":101}},
+                {"path":"private.typed.setValue","value":{"path":pose["locationPath"],"value":next}}
+            ]);
+            let mut request = json!({"path":path,"edits":raw,"backup":false});
+            if clear {
+                request["clearPlacementNotes"] = json!([npc]);
+            } else {
+                request["placementNotes"] = json!([{"npc":npc,"note":note}]);
+            }
+            let interrupted = apply_with_progress(&request, |progress| {
+                assert_eq!(progress["step"], 1);
+                assert_eq!(
+                    crate::placement::read_notes(&path),
+                    initial,
+                    "an unrelated committed group must not publish or clear the NPC's sidecar"
+                );
+                fs::write(&path, b"external change").unwrap();
+            })
+            .unwrap();
+            assert_eq!(interrupted["committed"], json!([0]));
+            assert_eq!(interrupted["remaining"], json!([1, 2]));
+            assert_eq!(crate::placement::read_notes(&path), initial);
+            let mut remaining = request.clone();
+            remaining["edits"] = json!([raw[1], raw[2]]);
+            retain_pending_placement_sidecars(&mut remaining);
+            assert!(
+                remaining
+                    .get(if clear {
+                        "clearPlacementNotes"
+                    } else {
+                        "placementNotes"
+                    })
+                    .is_some()
+            );
+            fs::write(&path, bytes).unwrap();
+            let complete = apply_request(&request).unwrap();
+            assert_eq!(complete["complete"], true, "{complete}");
+            let notes = crate::placement::read_notes(&path);
+            if clear {
+                assert!(!notes.contains_key(npc));
+            } else {
+                assert_eq!(notes.get(npc), Some(&note));
+            }
+            let pose = crate::api::execute(&crate::api::Request {
+                command: "private.npc.position".into(),
+                payload: json!({"path":path,"id":npc}),
+            })
+            .unwrap();
+            assert_eq!(pose["pose"]["location"], next);
+        }
     }
 }

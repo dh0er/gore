@@ -412,6 +412,129 @@ fn inventory_container_and_slot_selectors_resolve_the_stack_before_editing() {
 }
 
 #[test]
+fn inventory_slot_only_selectors_keep_the_resolved_hero_container() {
+    let home = tempfile::tempdir().unwrap();
+    let save = home.path().join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    // Seed the empty ArmorSlot in the bundled game-start save. Its id 0 also
+    // exists in MainContainer, whose non-lootable marker is hidden from lists.
+    let armor = "/Script/Angelscript.Ore_Armor_H";
+    let prefix = json!([
+        "m_GenericData",
+        "{PlayersSavedData}",
+        "m_SavedPlayers",
+        "[0]",
+        "m_Inventory",
+        "m_Values",
+        "Items",
+        "[3]",
+        "m_Slots",
+        "[0]",
+        "m_SlotData"
+    ]);
+    let edits = [
+        ("m_ItemDefinition", json!(armor)),
+        ("m_ItemCount", json!(1)),
+    ]
+    .into_iter()
+    .map(|(member, value)| {
+        let mut path = prefix.as_array().unwrap().clone();
+        path.push(json!(member));
+        json!({"path":"private.typed.setValue","value":{"path":path,"value":value}})
+    })
+    .collect::<Vec<_>>();
+    gore_save::api::execute(&gore_save::api::Request {
+        command: "write_save".into(),
+        payload: json!({"path":save,"edits":edits}),
+    })
+    .unwrap();
+    let save = save.to_str().unwrap();
+    let original = run(home.path(), &["inventory", "list", save, "--all"]);
+    let main = |inventory: &Value| {
+        inventory["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["containerType"] == "MainContainer")
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let original_main = main(&original);
+    let selected = run(
+        home.path(),
+        &["inventory", "list", save, "--slot", "0", "--all"],
+    );
+    assert_eq!(selected["items"].as_array().unwrap().len(), 1);
+    assert_eq!(selected["items"][0]["containerType"], "ArmorSlot");
+    assert_eq!(selected["items"][0]["equipped"], true);
+    let before = fs::read(save).unwrap();
+    run(
+        home.path(),
+        &[
+            "inventory",
+            "set-count",
+            save,
+            "--slot",
+            "0",
+            "--count",
+            "2",
+            "--dry-run",
+        ],
+    );
+    assert_eq!(fs::read(save).unwrap(), before);
+    run(
+        home.path(),
+        &[
+            "inventory",
+            "set-count",
+            save,
+            "--slot",
+            "0",
+            "--count",
+            "2",
+        ],
+    );
+    let selected = run(
+        home.path(),
+        &["inventory", "list", save, "--slot", "0", "--all"],
+    );
+    assert_eq!(selected["items"][0]["count"], 2);
+    run(
+        home.path(),
+        &[
+            "inventory",
+            "set-count",
+            save,
+            "--item",
+            armor,
+            "--slot",
+            "0",
+            "--count",
+            "3",
+        ],
+    );
+    let inventory = run(home.path(), &["inventory", "list", save, "--all"]);
+    assert_eq!(main(&inventory), original_main);
+    let selected = inventory["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["containerType"] == "ArmorSlot")
+        .unwrap();
+    assert_eq!(selected["count"], 3);
+    run(home.path(), &["inventory", "remove", save, "--slot", "0"]);
+    let inventory = run(home.path(), &["inventory", "list", save, "--all"]);
+    assert_eq!(main(&inventory), original_main);
+    assert!(
+        inventory["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["containerType"] != "ArmorSlot")
+    );
+}
+
+#[test]
 fn domain_writes_resolve_aliases_and_find_states_before_applying_the_new_filter() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
@@ -563,7 +686,7 @@ fn interface_and_game_text_languages_follow_shared_preferences_independently() {
     fs::create_dir_all(cache.parent().unwrap()).unwrap();
     fs::write(
         cache,
-        json!({key:{"english":"English quest","german":"Deutsche Quest","japanese":"日本語"}})
+        json!({key:{"english":"English quest","german":"Deutsche Quest","japanese":"日本語","brazilian":"Missão brasileira"}})
             .to_string(),
     )
     .unwrap();
@@ -617,6 +740,43 @@ fn interface_and_game_text_languages_follow_shared_preferences_independently() {
         "zh-Hans"
     );
     assert!(run(home, &["licenses"])["fonts"]["NotoSerifTC"].is_string());
+    set("appLocale", "pt-BR");
+    assert_eq!(
+        run(home, &["quests", "list", save])["quests"][0]["label"],
+        "Missão brasileira"
+    );
+    set("gameTextLocale", "pt-BR");
+    assert_eq!(
+        run(home, &["settings", "show", "--scope", "ui"])["settings"]["gameTextLocale"],
+        "pt-BR"
+    );
+}
+
+#[test]
+fn overview_uses_the_selected_actors_inventory_and_skills() {
+    let home = tempfile::tempdir().unwrap();
+    let save = fixture();
+    let save = save.to_str().unwrap();
+    for actor in ["hero", "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN"] {
+        let inventory = run(
+            home.path(),
+            &["inventory", "list", save, "--actor", actor, "--all"],
+        );
+        let skills = run(
+            home.path(),
+            &["skills", "list", save, "--actor", actor, "--all"],
+        );
+        let overview = run(home.path(), &["overview", save, "--actor", actor]);
+        assert_eq!(overview["inventory"]["items"], inventory["items"]);
+        assert!(overview["inventory"].get("public").is_none());
+        assert_eq!(overview["skills"]["skills"], skills["skills"]);
+        assert!(
+            !overview["inventory"]["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
 
 #[test]

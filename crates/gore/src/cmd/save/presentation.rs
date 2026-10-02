@@ -449,6 +449,13 @@ mod tests {
         }
         assert_eq!(metadata()["story"].as_object().unwrap().len(), 419);
         assert_eq!(metadata()["ui"].as_object().unwrap().len(), 16);
+        let game_languages = [
+            "en", "de", "fr", "it", "es", "pl", "ru", "ja", "zh-Hans", "pt-BR",
+        ];
+        for default in metadata()["gameTextDefaults"].as_object().unwrap().values() {
+            assert!(game_languages.contains(&default.as_str().unwrap()));
+        }
+        assert_eq!(metadata()["gameTextDefaults"]["pt-BR"], "pt-BR");
         assert_eq!(
             attribute_info(
                 "RecoveryRatePerHourOfSleep",

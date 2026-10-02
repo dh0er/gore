@@ -70,8 +70,11 @@ def build():
     # Inline lists can have several ids on one line; ignore comments first.
     hidden = re.findall(r"'([^']+)'", re.sub(r"//[^\n]*", "", hidden_body + unused))
     languages = read("lib/loc/game_lang.dart", sources).split("const List<UiLang> kUiLangs =", 1)[1].split("];", 1)[0]
-    defaults = dict(re.findall(r"UiLang\(\s*'([^']+)'.*?,\s*'([^']+)'\s*,?\s*\)", languages, re.S))
-    if len(defaults) < 10:
+    defaults = dict(re.findall(
+        r"UiLang\(\s*'([^']+)'\s*,\s*'[^']*'\s*,\s*"
+        r"Locale(?:\.fromSubtags)?\([^)]*\)\s*,\s*'([^']+)'\s*,?\s*\)",
+        languages, re.S))
+    if len(defaults) < 10 or len(defaults) != len(re.findall(r"\bUiLang\s*\(", languages)):
         raise ValueError("could not extract the Editor interface language table")
     ui, selects = {}, {}
     for lang in defaults:

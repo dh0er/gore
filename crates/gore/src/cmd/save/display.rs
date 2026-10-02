@@ -804,15 +804,6 @@ fn overview(o: &Options) -> Result<Value> {
     let mut data = json!({"inspection":inspection});
     for (key, command) in [
         ("characters", "private.characters.list"),
-        ("skills", "private.skills.list"),
-        (
-            "inventory",
-            if o.actor.eq_ignore_ascii_case("hero") {
-                "inspect_save"
-            } else {
-                "private.npc.inventory"
-            },
-        ),
         ("factions", "private.factions.list"),
         ("traders", "private.traders.list"),
     ] {
@@ -820,6 +811,15 @@ fn overview(o: &Options) -> Result<Value> {
             Ok(v) => v,
             Err(e) => json!({"available":false,"error":e.to_string()}),
         };
+    }
+    let selected = Options {
+        all: true,
+        offset: 0,
+        ..o.clone()
+    };
+    for section in ["inventory", "skills"] {
+        data[section] = super::dispatch(section, "list", &selected)
+            .unwrap_or_else(|error| json!({"available":false,"error":error.to_string()}));
     }
     data["worldTime"] = match clock(o) {
         Ok(row) => clock_parts(&row),

@@ -546,25 +546,7 @@ pub(super) fn stage(file: &Path, payload: &Value, dry_run: bool) -> Result<Value
     )
 }
 fn placement_edit_npc(edit: &Value) -> Option<&str> {
-    if edit["path"] != "private.typed.setValue" {
-        return None;
-    }
-    edit["value"]["path"]
-        .as_array()?
-        .windows(3)
-        .find_map(|parts| {
-            if matches!(
-                (parts[0].as_str()?, parts[2].as_str()?),
-                (
-                    "PositionByGlobalId",
-                    "CharacterLocation" | "CharacterRotation"
-                ) | ("DailyRoutineByGlobalId", "DailyRoutineClass")
-            ) {
-                parts[1].as_str()?.strip_prefix('{')?.strip_suffix('}')
-            } else {
-                None
-            }
-        })
+    gore_save::workflow::placement_actor(edit)
 }
 
 fn draft(v: &str, o: &Options) -> Result<Value> {
@@ -713,13 +695,10 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
         }
         data.as_object_mut().unwrap().remove("dryRun");
         if !committed.is_empty() {
-            for key in [
-                "placementNotes",
-                "clearPlacementNotes",
-                "syncPersistentDataList",
-            ] {
-                data.as_object_mut().unwrap().remove(key);
-            }
+            gore_save::workflow::retain_pending_placement_sidecars(&mut data);
+            data.as_object_mut()
+                .unwrap()
+                .remove("syncPersistentDataList");
         }
         let publication = api::update_json_file(file, |current| {
             if current != original {

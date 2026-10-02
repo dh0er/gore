@@ -1362,9 +1362,10 @@ fn inventory(v: &str, o: &Options) -> Result<Value> {
     if !o.actor.eq_ignore_ascii_case("hero") {
         data["actorId"] = json!(npc_id(o)?);
     }
-    if let Some(item) = o.item.as_ref().or(o.id.as_ref()) {
-        data["path"] = json!(display::existing_item_path(item)?)
-    } else if matches!(v, "set-count" | "remove") {
+    let item = o.item.as_ref().or(o.id.as_ref());
+    if matches!(v, "set-count" | "remove")
+        && (item.is_none() || o.slot.is_some() || o.container.is_some())
+    {
         if o.slot.is_none() && o.container.is_none() {
             bail!("--item or a container/slot selector required");
         }
@@ -1392,6 +1393,13 @@ fn inventory(v: &str, o: &Options) -> Result<Value> {
                 .as_str()
                 .context("selected stack has no item definition path")?
         );
+        for key in ["slotId", "containerType"] {
+            if !rows[0][key].is_null() {
+                data[key] = rows[0][key].clone();
+            }
+        }
+    } else if let Some(item) = item {
+        data["path"] = json!(display::existing_item_path(item)?)
     }
     if let Some(count) = o.count {
         data["count"] = json!(count)
