@@ -712,6 +712,9 @@ fn draft_after_apply(mut data: Value, result: &Value) -> Result<Value> {
             .map(|(_, e)| e)
             .collect::<Vec<_>>()
     );
+    let has_pending = data["edits"]
+        .as_array()
+        .is_some_and(|edits| !edits.is_empty());
     if !committed.is_empty() {
         if let Some(hash) = result["sha1"].as_str() {
             data["expectedSha1"] = json!(hash);
@@ -727,7 +730,7 @@ fn draft_after_apply(mut data: Value, result: &Value) -> Result<Value> {
             .unwrap_or(Path::new("."))
             .join("PersistentDataList.sav");
         data["path"] = json!(committed_path);
-        if consumed_sync || data["syncPersistentDataList"] != true {
+        if consumed_sync || !has_pending || data["syncPersistentDataList"] != true {
             data["expectedPersistentSha1"] = json!(api::file_sha1(&profile).ok());
         }
         data.as_object_mut().unwrap().remove("outputPath");
@@ -735,7 +738,7 @@ fn draft_after_apply(mut data: Value, result: &Value) -> Result<Value> {
     data.as_object_mut().unwrap().remove("dryRun");
     if !committed.is_empty() {
         gore_save::workflow::retain_pending_placement_sidecars(&mut data);
-        if consumed_sync || data["edits"].as_array().is_some_and(Vec::is_empty) {
+        if consumed_sync || !has_pending {
             data.as_object_mut()
                 .unwrap()
                 .remove("syncPersistentDataList");
@@ -1362,6 +1365,57 @@ mod tests {
         );
         assert_eq!(api::file_sha1(&save).unwrap(), before_retry);
         assert_eq!(fs::read(&profile).unwrap(), b"changed profile difficulty");
+    }
+
+    #[test]
+    fn completed_guarded_apply_refreshes_the_profile_snapshot_for_new_draft_edits() {
+        let temp = tempfile::tempdir().unwrap();
+        let save = temp.path().join("G1R-001.sav");
+        let file = temp.path().join("draft.json");
+        let profile = temp.path().join("PersistentDataList.sav");
+        fs::write(
+            &save,
+            include_bytes!("../../../../gore-save/assets/start_saves/resources_gothic.sav"),
+        )
+        .unwrap();
+        fs::write(&profile, b"initial profile").unwrap();
+        stage(
+            &file,
+            &json!({"path":save,"syncPersistentDataList":true,"edits":[{
+                "path":"private.player.setAttribute","value":{"id":"Health","baseValue":300}
+            }]}),
+            false,
+        )
+        .unwrap();
+        let original = read_json(&file).unwrap();
+        let result = gore_save::workflow::apply_with_progress(&original, |_| {
+            fs::write(&profile, b"profile changed after the final write").unwrap();
+        })
+        .unwrap();
+        assert_eq!(result["complete"], true);
+        assert_eq!(result["committed"], json!([0]));
+        let completed = draft_after_apply(original.clone(), &result).unwrap();
+        assert_eq!(completed["edits"], json!([]));
+        assert!(completed.get("syncPersistentDataList").is_none());
+        assert_ne!(
+            completed["expectedPersistentSha1"],
+            original["expectedPersistentSha1"]
+        );
+        assert_eq!(
+            completed["expectedPersistentSha1"],
+            api::file_sha1(&profile).unwrap()
+        );
+        api::update_json_file(&file, |_| Ok(completed)).unwrap();
+        let staged = stage(
+            &file,
+            &json!({"path":save,"syncPersistentDataList":true,
+                "edits":[{"path":"public.m_PlayerSaveName","value":"Next draft name"}]
+            }),
+            false,
+        )
+        .unwrap();
+        assert_eq!(staged["pending"], 1);
+        assert_eq!(staged["data"]["syncPersistentDataList"], true);
     }
 
     #[test]
