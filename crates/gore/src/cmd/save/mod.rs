@@ -1221,6 +1221,11 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
                     && o.group
                         .as_ref()
                         .is_none_or(|g| r["presentation"]["group"] == *g)
+                    && o.set_class.as_deref().is_none_or(|class| {
+                        r["setClass"].as_str().is_some_and(|set| {
+                            set == class || set.rsplit('.').next() == Some(class)
+                        })
+                    })
             });
         }
         let mut filter = o.clone();

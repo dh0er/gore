@@ -1049,7 +1049,13 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 o,
             )
         }
-        ("backups", "list") => call("list_backups", payload(o)?),
+        ("backups", "list") => {
+            let mut data = call("list_backups", payload(o)?)?;
+            if !o.include_companions {
+                data.as_object_mut().unwrap().remove("companionBackups");
+            }
+            Ok(data)
+        }
         ("backups", _) => {
             let path = o
                 .target

@@ -54,6 +54,105 @@ fn run_failure(home: &Path, args: &[&str]) -> Value {
 }
 
 #[test]
+fn backup_companions_are_listed_only_when_requested_without_modifying_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let original_sha1 = gore_save::api::file_sha1(&save).unwrap();
+    let directory = home.join("goresave_backups");
+    fs::create_dir(&directory).unwrap();
+    let backup = directory.join("G1R-001.sav.bak.1000");
+    fs::copy(&save, &backup).unwrap();
+    let companion = directory.join("PersistentDataList.sav.bak.1000");
+    fs::write(
+        &companion,
+        b"damaged profile backups are still listed for inspection",
+    )
+    .unwrap();
+    let save_arg = save.to_str().unwrap();
+    let plain = run(home, &["backups", "list", save_arg]);
+    assert!(plain.get("companionBackups").is_none());
+    assert_eq!(plain["backups"].as_array().unwrap().len(), 1);
+    let detailed = run(home, &["backups", "list", save_arg, "--include-companions"]);
+    assert_eq!(detailed["backups"], plain["backups"]);
+    let companions = detailed["companionBackups"].as_array().unwrap();
+    assert_eq!(companions.len(), 1);
+    assert_eq!(companions[0]["path"], json!(companion));
+    assert_eq!(companions[0]["scope"], "persistent_data_list");
+    assert_eq!(gore_save::api::file_sha1(&save).unwrap(), original_sha1);
+    assert_eq!(gore_save::api::file_sha1(&backup).unwrap(), original_sha1);
+    assert_eq!(
+        fs::read(&companion).unwrap(),
+        b"damaged profile backups are still listed for inspection"
+    );
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+}
+
+#[test]
+fn attribute_set_selectors_disambiguate_hero_and_npc_reads_before_pagination() {
+    let home = tempfile::tempdir().unwrap();
+    let save = fixture();
+    let save_arg = save.to_str().unwrap();
+    for actor in ["hero", "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN"] {
+        let key = if actor == "hero" {
+            "results"
+        } else {
+            "attributes"
+        };
+        let base = [
+            "attributes",
+            "show",
+            save_arg,
+            "--actor",
+            actor,
+            "--attribute",
+            "RecoveryRatePerHourOfSleep",
+            "--all",
+        ];
+        let all = run(home.path(), &base);
+        let rows = all[key].as_array().unwrap();
+        let full_class = "/Script/G1R.AttributeSet_Health";
+        let expected: Vec<_> = rows
+            .iter()
+            .filter(|row| row["setClass"] == full_class)
+            .cloned()
+            .collect();
+        assert!(!expected.is_empty());
+        assert!(expected.len() < rows.len());
+        for selector in [full_class, "AttributeSet_Health"] {
+            let mut args = base.to_vec();
+            args.extend(["--set-class", selector]);
+            let shown = run(home.path(), &args);
+            assert_eq!(shown[key], json!(expected));
+            assert_eq!(shown["total"], expected.len());
+        }
+        let offset = if expected.len() > 1 { 1 } else { 0 };
+        let offset_arg = offset.to_string();
+        let selected = run(
+            home.path(),
+            &[
+                "attributes",
+                "list",
+                save_arg,
+                "--actor",
+                actor,
+                "--attribute",
+                "RecoveryRatePerHourOfSleep",
+                "--set-class",
+                "AttributeSet_Health",
+                "--offset",
+                &offset_arg,
+                "--limit",
+                "1",
+            ],
+        );
+        assert_eq!(selected[key], json!([expected[offset]]));
+        assert_eq!(selected["total"], expected.len());
+    }
+}
+
+#[test]
 fn library_removes_missing_absolute_and_relative_paths_without_requiring_their_directory() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
