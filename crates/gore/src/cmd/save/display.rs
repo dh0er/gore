@@ -268,7 +268,8 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 .context("invalid localization catalog")?
                 .iter()
                 .filter(|(id, texts)| {
-                    id.contains(&query) || texts.to_string().to_lowercase().contains(&query)
+                    id.to_lowercase().contains(&query)
+                        || texts.to_string().to_lowercase().contains(&query)
                 })
                 .map(|(id, texts)| json!({"id":id,"languages":texts}))
                 .collect::<Vec<_>>();

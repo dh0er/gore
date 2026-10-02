@@ -823,7 +823,24 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
         ("position", _) => display::position(v, o),
         ("time", _) => time(v, o),
         ("difficulty", _) => administration::difficulty(v, o),
-        ("quests" | "tutorials" | "glossary", "list" | "show") => progression(g, o),
+        ("quests" | "tutorials" | "glossary", "list") => progression(g, o),
+        ("quests" | "tutorials" | "glossary", "show") => {
+            let id =
+                o.id.as_deref()
+                    .or(o.entry.as_deref())
+                    .or(o.document.as_deref())
+                    .context("--id, --entry or --document required")?;
+            let data = progression(
+                g,
+                &Options {
+                    query: Some(id.to_owned()),
+                    offset: 0,
+                    all: true,
+                    ..o.clone()
+                },
+            )?;
+            Ok(display::find_row(&data, id)?.clone())
+        }
         ("quests" | "tutorials" | "glossary", "set-state") => {
             let data = progression(
                 g,

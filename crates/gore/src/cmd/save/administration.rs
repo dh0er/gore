@@ -545,6 +545,28 @@ pub(super) fn stage(file: &Path, payload: &Value, dry_run: bool) -> Result<Value
         json!({"draft":file,"pending":result["edits"].as_array().map(Vec::len),"data":result,"dryRun":dry_run}),
     )
 }
+fn placement_edit_npc(edit: &Value) -> Option<&str> {
+    if edit["path"] != "private.typed.setValue" {
+        return None;
+    }
+    edit["value"]["path"]
+        .as_array()?
+        .windows(3)
+        .find_map(|parts| {
+            if matches!(
+                (parts[0].as_str()?, parts[2].as_str()?),
+                (
+                    "PositionByGlobalId",
+                    "CharacterLocation" | "CharacterRotation"
+                ) | ("DailyRoutineByGlobalId", "DailyRoutineClass")
+            ) {
+                parts[1].as_str()?.strip_prefix('{')?.strip_suffix('}')
+            } else {
+                None
+            }
+        })
+}
+
 fn draft(v: &str, o: &Options) -> Result<Value> {
     let file = save(o)?;
     if v == "create" {
@@ -586,16 +608,9 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
                         } else {
                             entry.as_str()
                         };
-                        !removed["value"]["path"].as_array().is_some_and(|path| {
-                            path.iter().any(|segment| {
-                                segment
-                                    .as_str()
-                                    .and_then(|s| s.strip_prefix('{'))
-                                    .and_then(|s| s.strip_suffix('}'))
-                                    .zip(npc)
-                                    .is_some_and(|(id, npc)| id.eq_ignore_ascii_case(npc))
-                            })
-                        })
+                        !placement_edit_npc(&removed)
+                            .zip(npc)
+                            .is_some_and(|(id, npc)| id.eq_ignore_ascii_case(npc))
                     });
                     if entries.is_empty() {
                         data.as_object_mut().unwrap().remove(key);
@@ -940,6 +955,10 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 .or_else(|| input.and_then(|p| p.file_stem()).and_then(|s| s.to_str()))
                 .context("--slot or a save required")?;
             let id = o.profile.context("--profile required")?;
+            let input = match input {
+                Some(path) => path.to_owned(),
+                None => root(o)?.join(format!("{slot}.sav")),
+            };
             let p = json!({"path":input,"slot":slot,"profileId":id,"persistentPath":profile_path(o)?,"backup":true});
             admin_write(
                 if v == "delete" {
@@ -1036,6 +1055,30 @@ mod tests {
                 json!({"path":save,"edits":[position("NPC-A"),position("NPC-B"),rename]});
             payload[key] = json!([action("npc-a"), action("NPC-B")]);
             stage(&file, &payload, false).unwrap();
+
+            for (map, member) in [
+                ("_AttributeSet", "Health"),
+                ("_Inventory", "InventoryItems"),
+                ("PositionByGlobalId", "SpawnLocation"),
+            ] {
+                let unrelated = json!({"path":"private.typed.setValue","value":{
+                    "path":["CharacterState",map,"{NPC-A}",member],"value":1
+                }});
+                stage(&file, &json!({"path":save,"edits":[unrelated]}), false).unwrap();
+                let removed = draft(
+                    "remove",
+                    &Options {
+                        save: Some(file.clone()),
+                        operation: Some(3),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    removed[key], payload[key],
+                    "unrelated changes to the same NPC keep its undo"
+                );
+            }
 
             let mut options = Options {
                 save: Some(file.clone()),

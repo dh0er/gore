@@ -13,6 +13,8 @@ gore save statistics "C:\saves\G1R-001.sav" --json
 
 Profile IDs are internal, zero based IDs. `--other` selects detached saves. `--actor hero` selects the controlled player. NPCs can be selected by their exact saved GlobalId or an unambiguous UniqueName. Queries with pagination return a total; `--all` follows every page from `--offset`.
 
+For quests, tutorials and glossary, `show` requires `--id`, `--entry` or `--document` and returns the matching entry independently of list pagination. Save deletion accepts a file path or `delete --root <folder> --slot G1R-001 --profile 0`; both use the same guarded recovery transaction.
+
 ## Edit or stage
 
 ```powershell

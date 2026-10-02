@@ -136,6 +136,69 @@ fn import_discovers_the_destination_without_using_the_external_source_parent() {
 }
 
 #[test]
+fn slot_only_delete_reaches_the_same_guarded_transaction_as_a_positional_save() {
+    let temp = tempfile::tempdir().unwrap();
+    let save = temp.path().join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let mut errors = Vec::new();
+    for positional in [false, true] {
+        let mut command = Command::cargo_bin("gore").unwrap();
+        command
+            .env("LOCALAPPDATA", temp.path())
+            .env("APPDATA", temp.path())
+            .env("XDG_DATA_HOME", temp.path())
+            .args(["save", "delete"]);
+        if positional {
+            command.arg(&save);
+        }
+        let output = command
+            .arg("--root")
+            .arg(temp.path())
+            .args(["--slot", "G1R-001", "--profile", "0", "--json"])
+            .assert()
+            .failure()
+            .get_output()
+            .stdout
+            .clone();
+        let result: Value = serde_json::from_slice(&output).unwrap();
+        errors.push(result["error"]["message"].as_str().unwrap().to_owned());
+        assert_eq!(fs::read(&save).unwrap(), before);
+    }
+    assert_eq!(errors[0], errors[1]);
+    assert!(
+        errors[0].contains("PersistentDataList.sav was not found"),
+        "{}",
+        errors[0]
+    );
+}
+
+#[test]
+fn localization_find_matches_identifiers_regardless_of_case() {
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("gore").join("loc_catalog.json");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    fs::write(
+        &catalog,
+        serde_json::to_vec(&json!({
+            "Document_Glossary_Bloodfly":{"en":"No identifier here"},
+            "Other":{"en":"A different text"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for query in [
+        "Document_Glossary_Bloodfly",
+        "document_glossary_bloodfly",
+        "BLOODFLY",
+    ] {
+        let data = run(temp.path(), &["localization", "find", "--query", query]);
+        assert_eq!(data["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(data["entries"][0]["id"], "Document_Glossary_Bloodfly");
+    }
+}
+
+#[test]
 fn domain_writes_resolve_aliases_and_find_states_before_applying_the_new_filter() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
@@ -151,6 +214,40 @@ fn domain_writes_resolve_aliases_and_find_states_before_applying_the_new_filter(
         };
         assert_ne!(row["currentState"], "EQuestState::Succeeded");
         let id = row["id"].as_str().unwrap();
+        let selected = if domain == "glossary" {
+            data["categories"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|category| category["entries"].as_array().unwrap())
+                .last()
+                .unwrap()
+        } else {
+            data["quests"].as_array().unwrap().last().unwrap()
+        };
+        for (option, value) in [
+            ("--id", selected["id"].as_str().unwrap()),
+            ("--entry", selected["id"].as_str().unwrap()),
+            (
+                "--document",
+                selected[if domain == "glossary" {
+                    "documentClass"
+                } else {
+                    "questClass"
+                }]
+                .as_str()
+                .unwrap(),
+            ),
+        ] {
+            let shown = run(
+                &home,
+                &[
+                    domain, "show", save, option, value, "--limit", "1", "--offset", "100000",
+                ],
+            );
+            assert_eq!(shown["id"], selected["id"]);
+            assert_eq!(shown["statePath"], selected["statePath"]);
+        }
         run(
             &home,
             &[
