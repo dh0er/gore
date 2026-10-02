@@ -202,16 +202,43 @@ fn normalize_resources(raw: &str) -> Result<String> {
     }
     .into())
 }
+fn normalized_path(path: &Path) -> PathBuf {
+    if let Ok(path) = path.canonicalize() {
+        return path;
+    }
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+    if let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) {
+        if let Ok(parent) = parent.canonicalize() {
+            return parent.join(name);
+        }
+    }
+    absolute
+}
+
 fn same_path(a: &str, b: &str) -> bool {
-    let a = Path::new(a)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(a));
-    let b = Path::new(b)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(b));
+    let a = normalized_path(Path::new(a));
+    let b = normalized_path(Path::new(b));
     if cfg!(windows) {
-        a.to_string_lossy()
-            .eq_ignore_ascii_case(&b.to_string_lossy())
+        use std::path::{Component, Prefix};
+        let parts = |path: &Path| -> Vec<String> {
+            path.components()
+                .filter(|part| !matches!(part, Component::CurDir))
+                .map(|part| match part {
+                    Component::Prefix(prefix) => match prefix.kind() {
+                        Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+                            (letter as char).to_ascii_lowercase().to_string()
+                        }
+                        Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
+                            format!("{}/{}", server.to_string_lossy(), share.to_string_lossy())
+                                .to_lowercase()
+                        }
+                        _ => part.as_os_str().to_string_lossy().to_lowercase(),
+                    },
+                    _ => part.as_os_str().to_string_lossy().to_lowercase(),
+                })
+                .collect()
+        };
+        parts(&a) == parts(&b)
     } else {
         a == b
     }
@@ -369,11 +396,7 @@ fn library(v: &str, o: &Options) -> Result<Value> {
         return settings_read("editor");
     }
     let input = save(o)?;
-    let file = input
-        .canonicalize()
-        .unwrap_or_else(|_| input.to_owned())
-        .to_string_lossy()
-        .into_owned();
+    let file = normalized_path(input).to_string_lossy().into_owned();
     let key = if matches!(v, "hide" | "unhide") {
         "hiddenOtherSavePaths"
     } else {
@@ -945,12 +968,24 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             Ok(json!({"profiles":data["profiles"],"activeProfileId":data["activeProfileId"]}))
         }
         ("profile", "assign") | ("", "import") => {
-            let input = save(o)?;
+            let mut input = save(o)?.to_owned();
             let mut destination = o.clone();
             if v == "import" {
                 // The external source is never a hint for the destination.
                 destination.save = None;
                 destination.target = None;
+            } else {
+                input = input.canonicalize()?;
+                let parent = input
+                    .parent()
+                    .context("save has no parent directory")?
+                    .to_owned();
+                if o.root.as_ref().is_some_and(|root| {
+                    !same_path(&root.to_string_lossy(), &parent.to_string_lossy())
+                }) {
+                    bail!("--root must be the save's own directory; use save import to move it");
+                }
+                destination.root = Some(parent);
             }
             let root = root(&destination)?;
             destination.root = Some(root.clone());

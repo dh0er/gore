@@ -11,20 +11,23 @@ fn fixture() -> PathBuf {
         .join("../gore-save/assets/start_saves/resources_gothic.sav")
 }
 fn run(home: &Path, args: &[&str]) -> Value {
-    let output = Command::cargo_bin("gore")
-        .unwrap()
+    run_from(home, None, args)
+}
+
+fn run_from(home: &Path, directory: Option<&Path>, args: &[&str]) -> Value {
+    let mut command = Command::cargo_bin("gore").unwrap();
+    command
         .env("LOCALAPPDATA", home)
         .env("APPDATA", home)
         .env("XDG_DATA_HOME", home)
         .env("GORE_DISABLE_GAME_AUTODETECT", "1")
         .args(["save"])
         .args(args)
-        .arg("--json")
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
+        .arg("--json");
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+    let output = command.assert().success().get_output().stdout.clone();
     let value: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["ok"], true, "{value}");
     value["data"].clone()
@@ -48,6 +51,121 @@ fn run_failure(home: &Path, args: &[&str]) -> Value {
     let value: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["ok"], false, "{value}");
     value["error"].clone()
+}
+
+#[test]
+fn library_removes_missing_absolute_and_relative_paths_without_requiring_their_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let directory = home.join("external");
+    fs::create_dir(&directory).unwrap();
+    let file = directory.join("old.sav");
+    fs::write(&file, b"external library reference").unwrap();
+    let path = file.to_str().unwrap();
+    run(home, &["library", "add", path]);
+    run(home, &["library", "hide", path]);
+    fs::remove_file(&file).unwrap();
+    fs::remove_dir(&directory).unwrap();
+    let settings_path = home.join("gore/gore-save/settings.json");
+    let before = fs::read(&settings_path).unwrap();
+    let preview = run(home, &["library", "remove", path, "--dry-run"]);
+    assert_eq!(preview["externalSavePaths"], json!([]));
+    assert_eq!(fs::read(&settings_path).unwrap(), before);
+    let preview = run_from(
+        home,
+        Some(home),
+        &["library", "unhide", "external/old.sav", "--dry-run"],
+    );
+    assert_eq!(preview["hiddenOtherSavePaths"], json!([]));
+    assert_eq!(fs::read(&settings_path).unwrap(), before);
+    assert_eq!(
+        run(home, &["library", "remove", path])["externalSavePaths"],
+        json!([])
+    );
+    let removed = run_from(home, Some(home), &["library", "unhide", "external/old.sav"]);
+    assert_eq!(removed["externalSavePaths"], json!([]));
+    assert_eq!(removed["hiddenOtherSavePaths"], json!([]));
+    assert!(!directory.exists());
+}
+
+#[test]
+fn profile_assignment_uses_the_explicit_saves_parent_and_rejects_a_foreign_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let configured = home.join("configured");
+    let external = home.join("external");
+    fs::create_dir(&configured).unwrap();
+    fs::create_dir(&external).unwrap();
+    let save = external.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let profile = configured.join("PersistentDataList.sav");
+    fs::write(&profile, b"foreign profile must remain untouched").unwrap();
+    run(
+        home,
+        &[
+            "settings",
+            "set",
+            "--key",
+            "saveDir",
+            "--value",
+            configured.to_str().unwrap(),
+        ],
+    );
+    let save_sha1 = gore_save::api::file_sha1(&save).unwrap();
+    let expected = external
+        .canonicalize()
+        .unwrap()
+        .join("PersistentDataList.sav");
+    for flags in [
+        vec![],
+        vec!["--dry-run"],
+        vec!["--root", external.to_str().unwrap()],
+    ] {
+        let mut args = vec![
+            "profile",
+            "assign",
+            save.to_str().unwrap(),
+            "--profile",
+            "0",
+        ];
+        let dry_run = flags.contains(&"--dry-run");
+        args.extend(flags);
+        let error = run_failure(home, &args);
+        let message = error["message"].as_str().unwrap();
+        assert!(
+            message.contains("PersistentDataList.sav was not found"),
+            "{error}"
+        );
+        if !dry_run {
+            assert!(message.contains(expected.to_str().unwrap()), "{error}");
+        }
+    }
+    let error = run_failure(
+        home,
+        &[
+            "profile",
+            "assign",
+            save.to_str().unwrap(),
+            "--profile",
+            "0",
+            "--root",
+            configured.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("use save import")
+    );
+    assert_eq!(gore_save::api::file_sha1(&save).unwrap(), save_sha1);
+    assert_eq!(
+        fs::read(&profile).unwrap(),
+        b"foreign profile must remain untouched"
+    );
+    assert!(!configured.join("G1R-001.sav").exists());
+    assert!(!configured.join("goresave_backups").exists());
+    assert!(!external.join("goresave_backups").exists());
 }
 
 #[test]
