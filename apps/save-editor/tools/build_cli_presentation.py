@@ -69,14 +69,19 @@ def build():
     hidden = re.findall(r"^\s*'([^']+)'", hidden_body + unused, re.M)
     # Inline lists can have several ids on one line; ignore comments first.
     hidden = re.findall(r"'([^']+)'", re.sub(r"//[^\n]*", "", hidden_body + unused))
+    languages = read("lib/loc/game_lang.dart", sources).split("const List<UiLang> kUiLangs =", 1)[1].split("];", 1)[0]
+    defaults = dict(re.findall(r"UiLang\(\s*'([^']+)'.*?,\s*'([^']+)'\s*,?\s*\)", languages, re.S))
+    if len(defaults) < 10:
+        raise ValueError("could not extract the Editor interface language table")
     ui, selects = {}, {}
-    for lang, file in [(x, x.replace("-", "_")) for x in ["en", "de", "fr", "it", "es", "pl", "ru", "ja", "zh-Hans", "pt-BR"]]:
-        file = {"zh_Hans": "zh_Hans", "pt_BR": "pt_BR"}.get(file, file)
+    for lang in defaults:
+        file = lang.replace("-", "_")
         strings = json.loads(read(f"lib/l10n/app_{file}.arb", sources))
         ui[lang] = {key: value for key, value in strings.items() if not key.startswith("@")}
         selects[lang] = {key: arms for key, value in ui[lang].items() if (arms := select_arms(value))}
     return {"schema": 1, "sources": sources, "story": entries,
-            "attributeGroups": groups, "hiddenAttributes": sorted(set(hidden)), "ui": ui, "selects": selects}
+            "attributeGroups": groups, "hiddenAttributes": sorted(set(hidden)), "ui": ui,
+            "gameTextDefaults": defaults, "selects": selects}
 
 
 def main():

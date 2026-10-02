@@ -193,6 +193,9 @@ pub struct Options {
     pub lcache: Option<PathBuf>,
     #[arg(long, default_value = "auto")]
     pub lang: String,
+    /// Game text language, independently of the interface language
+    #[arg(long, default_value = "auto")]
+    pub game_lang: String,
     #[arg(long)]
     pub show_ids: bool,
     #[arg(long)]
@@ -440,11 +443,24 @@ impl SaveAction {
 
 pub fn run(action: SaveAction) -> Result<()> {
     let (group, verb, mut o) = action.parts();
+    let automatic_ui = o.lang == "auto";
+    let preferences = administration::settings_read("ui").unwrap_or_default();
     if o.lang == "auto" {
-        o.lang = administration::settings_read("ui").unwrap_or_default()["appLocale"]
+        o.lang = preferences["appLocale"]
             .as_str()
             .unwrap_or("en")
             .to_string();
+    }
+    if o.game_lang == "auto" {
+        o.game_lang = if automatic_ui {
+            preferences["gameTextLocale"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+        } else {
+            None
+        }
+        .unwrap_or_else(|| text::default_game_language(&o.lang))
+        .to_string();
     }
     let result = dispatch(group, verb, &o);
     match result {
@@ -608,7 +624,7 @@ fn progression(section: &str, o: &Options) -> Result<Value> {
     if section == "story" {
         presentation::annotate_story(&mut data);
     }
-    display::localize(&mut data, &o.lang)?;
+    display::localize(&mut data, o)?;
     if section == "knowledge" {
         display::filter(&mut data, "entries", o);
     }
@@ -1094,7 +1110,7 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
         }
         let mut filter = o.clone();
         filter.id = o.attribute.clone().or(o.id.clone());
-        display::localize(&mut data, &o.lang)?;
+        display::localize(&mut data, o)?;
         display::filter(&mut data, key, &filter);
         display::paginate(&mut data, key, o);
         return Ok(data);
@@ -1205,7 +1221,7 @@ fn inventory(v: &str, o: &Options) -> Result<Value> {
         }
         let mut filter = o.clone();
         filter.id = o.item.clone().or(o.id.clone());
-        display::localize(&mut data, &o.lang)?;
+        display::localize(&mut data, o)?;
         display::filter(&mut data, "items", &filter);
         display::paginate(&mut data, "items", o);
         return Ok(data);

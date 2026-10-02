@@ -18,6 +18,14 @@ fn scalar(value: &Value) -> String {
         _ => escape(&value.to_string()),
     }
 }
+fn field(row: &Value, key: &str, depth: usize, show_ids: bool) -> String {
+    let value = render(&row[key], depth, show_ids);
+    if matches!(key, "label" | "tooltip" | "description" | "text") || key.ends_with("Text") {
+        format!("<span class=game-text>{value}</span>")
+    } else {
+        value
+    }
+}
 fn render(value: &Value, depth: usize, show_ids: bool) -> String {
     match value {
         Value::Array(rows) => {
@@ -48,7 +56,29 @@ fn render(value: &Value, depth: usize, show_ids: bool) -> String {
                     );
                 }
                 let keys = keys.into_iter().collect::<Vec<_>>();
-                format!("<div class=scroll><table><thead><tr>{}</tr></thead><tbody>{}</tbody></table></div>",keys.iter().map(|k|format!("<th>{}</th>",escape(&label(k)))).collect::<String>(),rows.iter().map(|row|format!("<tr>{}</tr>",keys.iter().map(|k|format!("<td title=\"{}\">{}</td>",escape(row["tooltip"].as_str().or(row["presentation"]["tooltip"].as_str()).unwrap_or("")),render(&row[k],depth+1,show_ids))).collect::<String>())).collect::<String>())
+                format!(
+                    "<div class=scroll><table><thead><tr>{}</tr></thead><tbody>{}</tbody></table></div>",
+                    keys.iter()
+                        .map(|k| format!("<th>{}</th>", escape(&label(k))))
+                        .collect::<String>(),
+                    rows.iter()
+                        .map(|row| format!(
+                            "<tr>{}</tr>",
+                            keys.iter()
+                                .map(|k| format!(
+                                    "<td title=\"{}\">{}</td>",
+                                    escape(
+                                        row["tooltip"]
+                                            .as_str()
+                                            .or(row["presentation"]["tooltip"].as_str())
+                                            .unwrap_or("")
+                                    ),
+                                    field(row, k, depth + 1, show_ids)
+                                ))
+                                .collect::<String>()
+                        ))
+                        .collect::<String>()
+                )
             } else {
                 format!(
                     "<ul>{}</ul>",
@@ -73,7 +103,7 @@ fn render(value: &Value, depth: usize, show_ids: bool) -> String {
                             render(v, depth + 1, show_ids)
                         )
                     } else {
-                        scalar(v)
+                        field(value, k, depth + 1, show_ids)
                     }
                 ))
                 .collect::<String>()
@@ -96,7 +126,7 @@ fn data_image(path: &Path) -> Result<String> {
     ))
 }
 pub(super) fn html(data: &Value, settings: &Value, o: &Options) -> Result<String> {
-    let texts = super::text::Texts::load(&o.lang)?;
+    let texts = super::text::Texts::load_options(o)?;
     let title = texts.ui("appTitle");
     let title = if title == "appTitle" {
         "GORE Save report".into()
@@ -152,6 +182,12 @@ pub(super) fn html(data: &Value, settings: &Value, o: &Options) -> Result<String
                 "../../../../../apps/save-editor/assets/fonts/NotoSerifSC-Variable.ttf"
             )),
         ),
+        (_, "zh-Hant") => (
+            "Editor",
+            Some(include_bytes!(
+                "../../../../../apps/save-editor/assets/fonts/NotoSerifTC-Variable.ttf"
+            )),
+        ),
         ("podkova", _) => (
             "Editor",
             Some(include_bytes!(
@@ -166,6 +202,22 @@ pub(super) fn html(data: &Value, settings: &Value, o: &Options) -> Result<String
         ),
     };
     let mut font_css=bytes.map(|bytes|format!("@font-face{{font-family:Editor;src:url(data:font/ttf;base64,{}) format('truetype');font-weight:100 900}}",base64::engine::general_purpose::STANDARD.encode(bytes))).unwrap_or_default();
+    let game = if o.game_lang.is_empty() || o.game_lang == "auto" {
+        super::text::default_game_language(&o.lang)
+    } else {
+        &o.game_lang
+    };
+    // Game labels can use a different script from the interface and its font.
+    let game_bytes: &[u8] = match game {
+        "ja" => {
+            include_bytes!("../../../../../apps/save-editor/assets/fonts/NotoSerifJP-Variable.ttf")
+        }
+        "zh-Hans" => {
+            include_bytes!("../../../../../apps/save-editor/assets/fonts/NotoSerifSC-Variable.ttf")
+        }
+        _ => include_bytes!("../../../../../apps/save-editor/assets/fonts/NotoSerif-Variable.ttf"),
+    };
+    font_css.push_str(&format!("@font-face{{font-family:GameText;src:url(data:font/ttf;base64,{}) format('truetype');font-weight:100 900}}.game-text{{font-family:GameText,'{font}',serif}}", base64::engine::general_purpose::STANDARD.encode(game_bytes)));
     if settings["themeMode"] == "system" {
         font_css.push_str("@media(prefers-color-scheme:dark){body{background:#171b21!important;color:#eee!important}:root{color-scheme:dark!important}}");
     }
@@ -257,11 +309,36 @@ pub(super) fn html(data: &Value, settings: &Value, o: &Options) -> Result<String
         "<details><summary>Diagnostic JSON</summary><pre>{}</pre></details>",
         escape(&serde_json::to_string_pretty(data)?)
     ));
-    Ok(format!("<!doctype html><html lang=\"{}\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><style>{font_css}:root{{color-scheme:{}}}body{{background:{};color:{};font:{}px '{font}',serif;margin:2rem}}nav{{display:flex;flex-wrap:wrap;gap:1rem}}section{{margin-block:2rem}}.scroll{{overflow:auto}}table{{border-collapse:collapse}}th,td{{padding:.5rem;border:1px solid #8885;text-align:left;vertical-align:top}}dl{{display:grid;grid-template-columns:minmax(8rem,auto) 1fr;gap:.5rem}}dd{{margin:0;min-width:0}}img{{max-width:100%;max-height:500px}}.gallery{{display:flex;flex-wrap:wrap;gap:1rem}}.gallery figure{{margin:0;max-width:280px}}.icon{{max-width:96px;max-height:96px}}pre{{white-space:pre-wrap;overflow-wrap:anywhere}}a{{color:inherit}}</style></head><body>{body}</body></html>",escape(&o.lang),escape(&title),if dark{"dark"}else{"light"},if dark{"#171b21"}else{"#faf8f2"},if dark{"#eee"}else{"#232323"},16.0*scale))
+    Ok(format!(
+        "<!doctype html><html lang=\"{}\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><style>{font_css}:root{{color-scheme:{}}}body{{background:{};color:{};font:{}px '{font}',serif;margin:2rem}}nav{{display:flex;flex-wrap:wrap;gap:1rem}}section{{margin-block:2rem}}.scroll{{overflow:auto}}table{{border-collapse:collapse}}th,td{{padding:.5rem;border:1px solid #8885;text-align:left;vertical-align:top}}dl{{display:grid;grid-template-columns:minmax(8rem,auto) 1fr;gap:.5rem}}dd{{margin:0;min-width:0}}img{{max-width:100%;max-height:500px}}.gallery{{display:flex;flex-wrap:wrap;gap:1rem}}.gallery figure{{margin:0;max-width:280px}}.icon{{max-width:96px;max-height:96px}}pre{{white-space:pre-wrap;overflow-wrap:anywhere}}a{{color:inherit}}</style></head><body>{body}</body></html>",
+        escape(&o.lang),
+        escape(&title),
+        if dark { "dark" } else { "light" },
+        if dark { "#171b21" } else { "#faf8f2" },
+        if dark { "#eee" } else { "#232323" },
+        16.0 * scale
+    ))
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_different_game_script_gets_its_own_embedded_face() {
+        let o = Options {
+            lang: "zh-Hant".into(),
+            game_lang: "ja".into(),
+            ..Default::default()
+        };
+        let html = html(
+            &json!({"quests":{"quests":[{"label":"日本語"}]}}),
+            &json!({"uiFontFamily":"notoSerif"}),
+            &o,
+        )
+        .unwrap();
+        assert!(html.contains("font-family:GameText"));
+        assert!(html.contains("class=game-text>日本語"));
+        assert!(html.contains("lang=\"zh-Hant\""));
+    }
     #[test]
     fn report_escapes_game_text_and_preserves_tooltips_and_preferences() {
         let options = Options {

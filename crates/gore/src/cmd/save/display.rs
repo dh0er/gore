@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 
 pub(super) fn print(data: &Value, o: &Options) -> Result<()> {
     let mut data = data.clone();
-    if let Err(error) = localize(&mut data, &o.lang) {
+    if let Err(error) = localize(&mut data, o) {
         data["displayWarning"] = json!(error.to_string());
     }
     let text = serde_json::to_string_pretty(&data)?;
@@ -196,8 +196,8 @@ pub(super) fn find_row<'a>(data: &'a Value, id: &str) -> Result<&'a Value> {
     }
     find(data, id).context("entry was not found")
 }
-pub(super) fn localize(data: &mut Value, lang: &str) -> Result<()> {
-    super::text::Texts::load(lang)?.apply(data)
+pub(super) fn localize(data: &mut Value, o: &Options) -> Result<()> {
+    super::text::Texts::load_options(o)?.apply(data)
 }
 
 fn loc_payload(o: &Options) -> Result<Value> {
@@ -252,7 +252,7 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             }
             filter(&mut data, key, &options);
             paginate(&mut data, key, o);
-            localize(&mut data, &o.lang)?;
+            localize(&mut data, o)?;
             Ok(data)
         }
         ("localization", "status") => call("loc_status", json!({})),
@@ -327,7 +327,8 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             "Podkova":include_str!("../../../../../apps/save-editor/assets/licenses/Podkova-OFL.txt"),
             "NotoSerif":include_str!("../../../../../apps/save-editor/assets/licenses/NotoSerif-OFL.txt"),
             "NotoSerifJP":include_str!("../../../../../apps/save-editor/assets/licenses/NotoSerifJP-OFL.txt"),
-            "NotoSerifSC":include_str!("../../../../../apps/save-editor/assets/licenses/NotoSerifSC-OFL.txt")}}),
+            "NotoSerifSC":include_str!("../../../../../apps/save-editor/assets/licenses/NotoSerifSC-OFL.txt"),
+            "NotoSerifTC":include_str!("../../../../../apps/save-editor/assets/licenses/NotoSerifTC-OFL.txt")}}),
         ),
         ("", "overview" | "statistics" | "report") => {
             let mut selected = o.clone();
@@ -868,7 +869,7 @@ fn overview(o: &Options) -> Result<Value> {
         }
     }
     data["statistics"] = super::presentation::statistics(&data, o)?;
-    localize(&mut data, &o.lang)?;
+    localize(&mut data, o)?;
     Ok(data)
 }
 

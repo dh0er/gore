@@ -262,6 +262,11 @@ fn settings(v: &str, o: &Options) -> Result<Value> {
         let value = serde_json::from_str(raw).unwrap_or_else(|_| json!(raw));
         validate_setting(key, &value)?;
         data[key] = value;
+        if o.scope == "ui" && key == "appLocale" {
+            data["gameTextLocale"] = json!(super::text::default_game_language(
+                data[key].as_str().unwrap()
+            ));
+        }
     } else if o.key.is_some() {
         data.as_object_mut().unwrap().remove(key);
     } else {
@@ -285,6 +290,9 @@ fn settings(v: &str, o: &Options) -> Result<Value> {
             }
             if let Some(value) = proposed.get(key) {
                 current[key] = value.clone();
+                if o.scope == "ui" && key == "appLocale" {
+                    current["gameTextLocale"] = proposed["gameTextLocale"].clone();
+                }
             } else {
                 current.as_object_mut().unwrap().remove(key);
             }
@@ -311,11 +319,22 @@ fn validate_setting(key: &str, value: &Value) -> Result<()> {
             }
         }
         "appLocale" => {
-            if !matches!(
-                value.as_str(),
-                Some("en" | "de" | "fr" | "it" | "es" | "pl" | "ru" | "ja" | "zh-Hans" | "pt-BR")
-            ) {
+            if value
+                .as_str()
+                .is_none_or(|lang| super::presentation::metadata()["ui"][lang].is_null())
+            {
                 bail!("invalid locale");
+            }
+        }
+        "gameTextLocale" => {
+            if value.as_str().is_none_or(|lang| {
+                !super::presentation::metadata()["gameTextDefaults"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .any(|v| v == lang)
+            }) {
+                bail!("invalid game text locale");
             }
         }
         "windowWidth" | "windowHeight" => {

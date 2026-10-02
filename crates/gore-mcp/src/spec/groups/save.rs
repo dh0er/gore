@@ -267,6 +267,7 @@ const OPTIONS: &[ArgSpec] = &[
     ArgSpec::new("manifest", Long("manifest"), Path, "manifest", false),
     ArgSpec::new("lcache", Long("lcache"), Path, "lcache", false),
     ArgSpec::new("lang", Long("lang"), Str, "lang", false),
+    ArgSpec::new("game_lang", Long("game-lang"), Str, "game_lang", false),
     ArgSpec::new("show_ids", Switch("show-ids"), Bool, "show ids", false),
     ArgSpec::new("copy", Switch("copy"), Bool, "copy", false),
     ArgSpec::new("open", Switch("open"), Bool, "open", false),
@@ -381,6 +382,7 @@ const READ_OPTIONS: &[ArgSpec] = &[
     OPTIONS[92],
     OPTIONS[93],
     OPTIONS[94],
+    OPTIONS[95],
 ];
 const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
@@ -1802,7 +1804,10 @@ const COMMANDS: &[CommandSpec] = &[
     .guide("save-games"),
 ];
 pub const SAVE: GroupSpec = GroupSpec {
-    tool: "gore_save", title: "Save Editor", cli: "save", shape: GroupShape::Nested,
+    tool: "gore_save",
+    title: "Save Editor",
+    cli: "save",
+    shape: GroupShape::Nested,
     summary: "Inspect and edit saves, profiles, world state, inventory and raw data; manage backups and drafts.",
     commands: COMMANDS,
 };

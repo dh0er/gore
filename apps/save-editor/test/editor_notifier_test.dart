@@ -6516,10 +6516,11 @@ class _RecordingCoreService implements GoresaveCoreService {
     switch (command) {
       case 'plan_edits':
         final native = NativeGoresaveCoreService.tryCreate();
-        if (native == null)
+        if (native == null) {
           throw StateError(
             'Build gore-save before running editor workflow tests',
           );
+        }
         return native.execute(command, payload: payload);
       case 'scan_save_dir':
         return {

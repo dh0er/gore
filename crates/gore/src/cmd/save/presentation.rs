@@ -374,14 +374,16 @@ pub(super) fn statistics(data: &Value, o: &Options) -> Result<Value> {
     let quest_available = verified && private["progression"]["status"] == "ok";
     for state in ["Succeeded", "Failed", "Running", "Available"] {
         quests[state] = if quest_available {
-            json!(private["progression"]["questStates"].as_object().map(|m| m
-                .iter()
-                .filter(|(k, _)| k
-                    .rsplit("::")
-                    .next()
-                    .is_some_and(|k| k.eq_ignore_ascii_case(state)))
-                .map(|(_, v)| v.as_u64().unwrap_or(0))
-                .sum::<u64>()))
+            json!(private["progression"]["questStates"].as_object().map(|m| {
+                m.iter()
+                    .filter(|(k, _)| {
+                        k.rsplit("::")
+                            .next()
+                            .is_some_and(|k| k.eq_ignore_ascii_case(state))
+                    })
+                    .map(|(_, v)| v.as_u64().unwrap_or(0))
+                    .sum::<u64>()
+            }))
         } else {
             Value::Null
         };
@@ -446,7 +448,7 @@ mod tests {
             );
         }
         assert_eq!(metadata()["story"].as_object().unwrap().len(), 419);
-        assert_eq!(metadata()["ui"].as_object().unwrap().len(), 10);
+        assert_eq!(metadata()["ui"].as_object().unwrap().len(), 16);
         assert_eq!(
             attribute_info(
                 "RecoveryRatePerHourOfSleep",

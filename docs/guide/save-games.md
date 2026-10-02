@@ -62,6 +62,8 @@ The raw request format is the Editor protocol: `{"command":"…","payload":{…}
 
 The CLI reads the same `gore/gore-save/settings.json` and `ui_settings.json` as the Editor. Legacy settings are read without modifying old files and migrated on an explicit settings write. Use `settings set --scope ui --key themeMode --value dark`, or any of the Editor's font, scale, locale, window, ID and update preference keys. Reports consume these preferences.
 
+`--lang` selects one of the Editor's 16 interface languages; `--game-lang` independently selects one of the 10 game-text languages. Automatic selection uses `appLocale` and `gameTextLocale` from shared preferences. Changing `appLocale` selects its matching game text, like the Editor; a later `gameTextLocale` change overrides only the game text. An explicit `--lang` uses its matching game text unless `--game-lang` is also supplied. Traditional Chinese uses the simplified Chinese game catalog; Czech, Ukrainian, Hungarian, Romanian and Turkish default to English game text.
+
 `assets prepare --game <installation>` returns an icon manifest used by `assets list/export/open/release --manifest <file>`. `assets … --kind portraits --game <installation>` reads loose glossary artwork. `report <SAVE> --out report.html --with-assets --game <installation> --open` produces a local report. Missing optional image/text sources remain visible as unavailable.
 
 Backup deletion is permanent and requires `--yes` in scripts. Save deletion retains the native recovery transaction. Read-only listing never repairs metadata; run `recovery repair` explicitly when needed. MCP exposes the complete family as `gore_save` and retains its existing write-permission gate.

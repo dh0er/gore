@@ -214,6 +214,82 @@ fn domain_writes_resolve_aliases_and_find_states_before_applying_the_new_filter(
 }
 
 #[test]
+fn interface_and_game_text_languages_follow_shared_preferences_independently() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = fixture();
+    let save = save.to_str().unwrap();
+    let initial = run(home, &["quests", "list", save]);
+    let class = initial["quests"][0]["questClass"].as_str().unwrap();
+    let body = class
+        .rsplit('.')
+        .next()
+        .unwrap()
+        .strip_prefix("Quest_")
+        .unwrap()
+        .to_lowercase();
+    let key = format!("quest-{body}-name");
+    let cache = home.join("gore/loc_catalog.json");
+    fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    fs::write(
+        cache,
+        json!({key:{"english":"English quest","german":"Deutsche Quest","japanese":"日本語"}})
+            .to_string(),
+    )
+    .unwrap();
+    let set = |key: &str, code: &str| {
+        run(
+            home,
+            &[
+                "settings", "set", "--scope", "ui", "--key", key, "--value", code,
+            ],
+        )
+    };
+    set("appLocale", "uk");
+    assert_eq!(
+        run(home, &["settings", "show", "--scope", "ui"])["settings"]["gameTextLocale"],
+        "en"
+    );
+    set("gameTextLocale", "de");
+    assert_eq!(
+        run(home, &["quests", "list", save])["quests"][0]["label"],
+        "Deutsche Quest"
+    );
+    assert_eq!(
+        run(home, &["quests", "list", save, "--lang", "cs"])["quests"][0]["label"],
+        "English quest"
+    );
+    assert_eq!(
+        run(
+            home,
+            &["quests", "list", save, "--lang", "cs", "--game-lang", "ja"]
+        )["quests"][0]["label"],
+        "日本語"
+    );
+    let ui = run(
+        home,
+        &[
+            "catalog", "search", "--kind", "ui-texts", "--id", "language",
+        ],
+    );
+    let arb: Value = serde_json::from_slice(
+        &fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../apps/save-editor/lib/l10n/app_uk.arb"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(ui["entries"][0]["text"], arb["language"]);
+    set("appLocale", "zh-Hant");
+    assert_eq!(
+        run(home, &["settings", "show", "--scope", "ui"])["settings"]["gameTextLocale"],
+        "zh-Hans"
+    );
+    assert!(run(home, &["licenses"])["fonts"]["NotoSerifTC"].is_string());
+}
+
+#[test]
 fn native_reads_reports_and_drafts_work_without_an_editor_process() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");

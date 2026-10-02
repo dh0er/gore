@@ -54,9 +54,25 @@ pub(super) struct Texts {
     sets: Vec<&'static str>,
     lang: String,
 }
+pub(super) fn default_game_language(lang: &str) -> &'static str {
+    presentation::metadata()["gameTextDefaults"][lang]
+        .as_str()
+        .unwrap_or("en")
+}
 impl Texts {
-    pub(super) fn load(lang: &str) -> Result<Self> {
-        let sets = match lang {
+    pub(super) fn load_options(o: &Options) -> Result<Self> {
+        let game = if o.game_lang.is_empty() || o.game_lang == "auto" {
+            default_game_language(&o.lang)
+        } else {
+            &o.game_lang
+        };
+        Self::load_languages(&o.lang, game)
+    }
+    fn load_languages(lang: &str, game: &str) -> Result<Self> {
+        if presentation::metadata()["ui"][lang].is_null() {
+            bail!("unsupported interface language {lang}");
+        }
+        let sets = match game {
             "en" => vec![],
             "de" => vec!["german_new", "german"],
             "fr" => vec!["french"],
@@ -67,7 +83,7 @@ impl Texts {
             "ja" => vec!["japanese"],
             "zh-Hans" => vec!["schinese"],
             "pt-BR" => vec!["brazilian"],
-            _ => bail!("unsupported language {lang}"),
+            _ => bail!("unsupported game text language {game}"),
         };
         let path = gore_loc::paths::loc_catalog_path();
         let catalog = if path.is_file() {
