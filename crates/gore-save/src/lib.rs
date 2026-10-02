@@ -446,7 +446,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
         "scan_save_dir_readonly" => {
             let path = payload.get("path").and_then(Value::as_str).map(PathBuf::from).unwrap_or_else(default_save_root);
             let backend = codec_backend::KrakenBackend::default();
-            let summary = scan_save_dir_summary_with_codec_backend(&path, Some(&backend))?;
+            let summary = scan_save_dir_summary_readonly_with_codec_backend(&path, Some(&backend))?;
             Ok(json!({"saveRoot": path, "saves": summary.saves, "profiles": summary.profiles, "activeProfileId": summary.active_profile_id}))
         }
         "scan_save_dir" => {
@@ -1041,13 +1041,22 @@ fn scan_save_dir_summary_with_codec_backend(
     path: &Path,
     codec_backend: Option<&dyn codec_backend::CodecBackend>,
 ) -> Result<SaveDirSummary, CoreError> {
+    recover_interrupted_profile_assignment_claims(path);
+    scan_save_dir_summary_readonly_with_codec_backend(path, codec_backend)
+}
+
+/// Listing must not publish or retire interrupted assignment claims. Recovery
+/// belongs to the mutating scan used by the Editor and explicit CLI repair.
+fn scan_save_dir_summary_readonly_with_codec_backend(
+    path: &Path,
+    codec_backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<SaveDirSummary, CoreError> {
     if !path.exists() {
         return Err(CoreError::Io(format!(
             "save directory does not exist: {}",
             path.display()
         )));
     }
-    recover_interrupted_profile_assignment_claims(path);
     let mut persistent = persistent_data_list_summary_for_dir(path).unwrap_or_default();
     let profile_slot_owners =
         normalize_profile_saved_slots(&mut persistent.profiles, &persistent.slots);
@@ -19767,6 +19776,16 @@ mod tests {
         let interrupted_claim = claim_existing_target(&save_path, "assign-final").unwrap();
         assert!(!save_path.exists());
 
+        let persistent_before = fs::read(&persistent_path).unwrap();
+        api::execute(&api::Request {
+            command: "scan_save_dir_readonly".into(),
+            payload: json!({"path": dir.path()}),
+        })
+        .unwrap();
+        assert!(!save_path.exists(), "a read-only scan must not restore a claim");
+        assert_eq!(fs::read(&interrupted_claim).unwrap(), assigned);
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent_before);
+
         let summary = scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
 
         assert_eq!(fs::read(&save_path).unwrap(), assigned);
@@ -19800,6 +19819,17 @@ mod tests {
         let stale_claim = claim_existing_target(&save_path, "assign-final").unwrap();
         let concurrent_save = minimal_gsav("Concurrent winner");
         fs::write(&save_path, &concurrent_save).unwrap();
+
+        let claim_before = fs::read(&stale_claim).unwrap();
+        let persistent_before = fs::read(&persistent_path).unwrap();
+        api::execute(&api::Request {
+            command: "scan_save_dir_readonly".into(),
+            payload: json!({"path": dir.path()}),
+        })
+        .unwrap();
+        assert_eq!(fs::read(&stale_claim).unwrap(), claim_before);
+        assert_eq!(fs::read(&save_path).unwrap(), concurrent_save);
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent_before);
 
         scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
         assert_eq!(fs::read(&save_path).unwrap(), concurrent_save);
