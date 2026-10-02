@@ -177,6 +177,187 @@ fn profile_fixture(preset: &str) -> Vec<u8> {
 }
 
 #[test]
+fn knowledge_filters_select_all_core_pages_before_pagination() {
+    use gore_save::codec_backend::{CodecBackend, KrakenBackend};
+
+    fn string(value: &str) -> Vec<u8> {
+        let mut bytes = ((value.len() + 1) as i32).to_le_bytes().to_vec();
+        bytes.extend_from_slice(value.as_bytes());
+        bytes.push(0);
+        bytes
+    }
+    fn property(name: &str, kind: &str, descriptor: &[u8], value: &[u8]) -> Vec<u8> {
+        let mut bytes = string(name);
+        bytes.extend(string(kind));
+        bytes.extend(descriptor);
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend((value.len() as u32).to_le_bytes());
+        bytes.push(0);
+        bytes.extend(value);
+        bytes
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    let mut entries = (0..1001)
+        .map(|i| format!("Voiceline_Page_{i:04}"))
+        .collect::<Vec<_>>();
+    entries.extend((0..120).map(|i| format!("ChoicePage{i:04}")));
+    entries.push("Choice62749".into());
+    let mut set = 0u32.to_le_bytes().to_vec();
+    set.extend((entries.len() as u32).to_le_bytes());
+    for entry in &entries {
+        set.extend(string(entry));
+    }
+    let mut set_descriptor = 1u32.to_le_bytes().to_vec();
+    set_descriptor.extend(string("NameProperty"));
+    let mut map = 0u32.to_le_bytes().to_vec();
+    map.extend(1u32.to_le_bytes());
+    map.extend(string("Hero"));
+    map.extend(property("Knowledge", "SetProperty", &set_descriptor, &set));
+    map.extend(string("None"));
+    let mut map_descriptor = 2u32.to_le_bytes().to_vec();
+    map_descriptor.extend(string("NameProperty"));
+    map_descriptor.extend(0u32.to_le_bytes());
+    map_descriptor.extend(string("StructProperty"));
+    map_descriptor.extend(1u32.to_le_bytes());
+    map_descriptor.extend(string("KnowledgeSet"));
+    map_descriptor.extend(1u32.to_le_bytes());
+    map_descriptor.extend(string("/Script/G1R"));
+    let mut private = string("/Script/Angelscript.GothicFinalDataGame");
+    private.push(0);
+    private.extend(property(
+        "CharacterKnowledgeByUniqueName",
+        "MapProperty",
+        &map_descriptor,
+        &map,
+    ));
+    private.extend(string("None"));
+    private.extend(0u32.to_le_bytes());
+    gore_save::properties::parse_private_root(&private).unwrap();
+    let compressed = KrakenBackend.compress(&private, 4).unwrap();
+    let mut stream = (private.len() as u64).to_le_bytes().to_vec();
+    stream.extend(string("Oodle"));
+    stream.extend(0x9E2A83C1u32.to_le_bytes());
+    stream.extend(0x22222222u32.to_le_bytes());
+    stream.extend((private.len() as u64).to_le_bytes());
+    stream.push(2);
+    for _ in 0..2 {
+        stream.extend((compressed.len() as u64).to_le_bytes());
+        stream.extend((private.len() as u64).to_le_bytes());
+    }
+    stream.extend(compressed);
+    let reference = fs::read(fixture()).unwrap();
+    let public_size = u32::from_le_bytes(reference[9..13].try_into().unwrap()) as usize;
+    let mut bytes = reference[..13 + public_size].to_vec();
+    let body_size = (bytes.len() + stream.len()) as u32;
+    bytes[5..9].copy_from_slice(&body_size.to_le_bytes());
+    bytes.extend(stream);
+    bytes.extend(0u32.to_le_bytes());
+    fs::write(&save, &bytes).unwrap();
+    let catalog = home.join("gore/loc_catalog.json");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    fs::write(
+        &catalog,
+        json!({"text_andre_20220118_145939":{"english":"Needle knowledge on a later page"}})
+            .to_string(),
+    )
+    .unwrap();
+    let catalog_bytes = fs::read(&catalog).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let all = run(
+        home,
+        &[
+            "knowledge",
+            "list",
+            save_arg,
+            "--character",
+            "Hero",
+            "--all",
+        ],
+    );
+    assert_eq!(all["total"], entries.len());
+    let expected = all["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["category"] == "choice")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(expected.len(), 121);
+    let common = [
+        "knowledge",
+        "list",
+        save_arg,
+        "--character",
+        "Hero",
+        "--category",
+        "CHOICE",
+    ];
+    let default = run(home, &common);
+    assert_eq!(default["entries"], json!(&expected[..100]));
+    assert_eq!(default["total"], 121);
+    assert_eq!(default["count"], 100);
+    assert_eq!(default["limit"], 100);
+    let mut args = common.to_vec();
+    args.extend(["--offset", "1", "--limit", "2"]);
+    let page = run(home, &args);
+    assert_eq!(page["entries"], json!(&expected[1..3]));
+    assert_eq!(page["total"], 121);
+    assert_eq!(page["count"], 2);
+    assert_eq!(page["offset"], 1);
+    assert_eq!(page["limit"], 2);
+    args.push("--all");
+    let rest = run(home, &args);
+    assert_eq!(rest["entries"], json!(&expected[1..]));
+    assert_eq!(rest["total"], 121);
+    assert_eq!(rest["count"], 120);
+    assert_eq!(rest["limit"], 120);
+    let mut exact = common.to_vec();
+    exact.extend(["--id", "Choice62749"]);
+    let last = run(home, &exact);
+    assert_eq!(last["entries"], json!([expected.last().unwrap()]));
+    assert_eq!(last["total"], 1);
+    assert_eq!(last["count"], 1);
+    let localized = run(
+        home,
+        &[
+            "knowledge",
+            "list",
+            save_arg,
+            "--character",
+            "Hero",
+            "--query",
+            "needle knowledge",
+        ],
+    );
+    assert_eq!(localized["entries"], last["entries"]);
+    assert_eq!(localized["total"], 1);
+    assert_eq!(localized["count"], 1);
+    let payload_file = home.join("knowledge-query.json");
+    fs::write(
+        &payload_file,
+        json!({"character":"Hero","query":"needle knowledge"}).to_string(),
+    )
+    .unwrap();
+    let from_payload = run(
+        home,
+        &[
+            "knowledge",
+            "list",
+            save_arg,
+            "--payload-file",
+            payload_file.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(from_payload["entries"], localized["entries"]);
+    assert_eq!(from_payload["total"], 1);
+    assert_eq!(fs::read(&catalog).unwrap(), catalog_bytes);
+    assert_eq!(fs::read(&save).unwrap(), bytes);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
 fn inventory_reset_uses_the_selected_saves_profile_difficulty() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

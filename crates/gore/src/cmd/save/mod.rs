@@ -667,13 +667,45 @@ fn progression(section: &str, o: &Options) -> Result<Value> {
             character(o)?
         });
     }
-    let mut data = paged("query_progression", p, o)?;
+    let knowledge_query = p["query"].as_str().map(str::to_owned);
+    let mut data = if section == "knowledge" {
+        // Knowledge categories and localized labels exist only after enrichment.
+        // Read every core page before filtering and slicing the display rows.
+        p.as_object_mut().unwrap().remove("query");
+        p["offset"] = json!(0);
+        p["limit"] = json!(1000);
+        paged(
+            "query_progression",
+            p,
+            &Options {
+                all: true,
+                offset: 0,
+                limit: 1000,
+                ..o.clone()
+            },
+        )?
+    } else {
+        paged("query_progression", p, o)?
+    };
     if section == "story" {
         presentation::annotate_story(&mut data);
     }
     display::localize(&mut data, o)?;
     if section == "knowledge" {
-        display::filter(&mut data, "entries", o);
+        display::filter(
+            &mut data,
+            "entries",
+            &Options {
+                query: knowledge_query,
+                ..o.clone()
+            },
+        );
+        display::paginate(&mut data, "entries", o);
+        data["limit"] = if o.all {
+            data["count"].clone()
+        } else {
+            json!(o.limit)
+        };
     }
     if section == "glossary" && o.with_assets {
         display::attach_artwork(&mut data, o);
