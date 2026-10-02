@@ -18,6 +18,7 @@ import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import '../domain/editor_notifier.dart';
@@ -1221,12 +1222,13 @@ class _StockSection extends ConsumerWidget {
       for (final filter in itemStats?.filters ?? const <InventoryFilter>[])
         ?itemCategoryFromFilterId(filter.id): filter,
     };
-    String categoryLabel(ItemCategory category) {
+    (String text, bool fromCatalog) categoryLabel(ItemCategory category) {
       final key = filtersById[category]?.nameKey ?? '';
       final fromGame = key.isEmpty
           ? null
           : resolveGameText(locCatalog, key, lang);
-      return fromGame ?? localizedItemCategoryLabel(l10n, category);
+      if (fromGame != null) return (fromGame, true);
+      return (localizedItemCategoryLabel(l10n, category), false);
     }
 
     // The compact pane has no sidebar, so it lists every line at once. The core
@@ -1345,21 +1347,37 @@ class _StockSection extends ConsumerWidget {
                               child: Column(
                                 children: [
                                   for (final group in groups)
-                                    SidebarTile(
-                                      icon: iconForItemCategory(group.category),
-                                      gameIcon:
-                                          filtersById[group.category]?.icon ??
-                                          gameIconForItemCategory(
-                                            group.category,
-                                          ),
-                                      label: l10n.categoryWithCount(
-                                        categoryLabel(group.category),
+                                    () {
+                                      final named = categoryLabel(
+                                        group.category,
+                                      );
+                                      final parts = catalogCountParts(
+                                        l10n,
+                                        named.$1,
                                         group.items.length,
-                                      ),
-                                      selected: group.category == selected,
-                                      onTap: () =>
-                                          onSelectCategory(group.category),
-                                    ),
+                                      );
+                                      final catalog = named.$2 && parts.splits;
+                                      return SidebarTile(
+                                        icon: iconForItemCategory(
+                                          group.category,
+                                        ),
+                                        gameTextLocale: catalog
+                                            ? lang.locale
+                                            : null,
+                                        catalogRun: catalog ? parts.run : null,
+                                        catalogLead: parts.lead,
+                                        catalogTail: parts.tail,
+                                        gameIcon:
+                                            filtersById[group.category]?.icon ??
+                                            gameIconForItemCategory(
+                                              group.category,
+                                            ),
+                                        label: parts.full,
+                                        selected: group.category == selected,
+                                        onTap: () =>
+                                            onSelectCategory(group.category),
+                                      );
+                                    }(),
                                 ],
                               ),
                             ),
@@ -1480,10 +1498,13 @@ class _PendingLineRow extends ConsumerWidget {
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
     final showObjectIds = ref.watch(showObjectIdsProvider);
     final isAdd = tone == PendingTone.add;
+    final catalogName = localizedGameName(locCatalog, lang, item.id);
+    final fromCatalog = catalogName != null && catalogName.trim().isNotEmpty;
     return PendingStructuralRow(
       tone: tone,
       icon: isAdd ? Icons.add_circle_outline : Icons.delete_outline,
-      title: localizedGameName(locCatalog, lang, item.id) ?? item.id,
+      title: fromCatalog ? catalogName : item.id,
+      gameTextLocale: fromCatalog ? lang.locale : null,
       subtitle: isAdd
           ? l10n.pendingAddSubtitle(item.count)
           : l10n.pendingRemovalSubtitle,
@@ -1524,7 +1545,9 @@ class _StockRow extends ConsumerWidget {
     // `.value` (not `.asData?.value`) so a background refresh keeps the previous
     // catalog instead of briefly dropping every row back to its raw class id.
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
-    final label = localizedGameName(locCatalog, lang, item.id) ?? item.id;
+    final catalogName = localizedGameName(locCatalog, lang, item.id);
+    final fromCatalog = catalogName != null && catalogName.trim().isNotEmpty;
+    final label = fromCatalog ? catalogName : item.id;
     final showObjectIds = ref.watch(showObjectIdsProvider);
     // The id repeats the title whenever no localized name exists, so drop it
     // then rather than printing the same string twice.
@@ -1563,7 +1586,10 @@ class _StockRow extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(label),
+        Text(
+          label,
+          style: fromCatalog ? gameScriptTextStyle(context, lang.locale) : null,
+        ),
         if (subtitle.isNotEmpty)
           Text(subtitle, style: theme.textTheme.bodySmall),
       ],
@@ -1574,7 +1600,12 @@ class _StockRow extends ConsumerWidget {
     // rather than a stocked item, so it has no card.
     Widget hoverable(Widget row) => item.isOre
         ? row
-        : ItemStatsTooltip(itemId: item.id, title: label, child: row);
+        : ItemStatsTooltip(
+            itemId: item.id,
+            title: label,
+            titleFromCatalog: fromCatalog,
+            child: row,
+          );
 
     return LayoutBuilder(
       builder: (context, box) {
@@ -1593,7 +1624,12 @@ class _StockRow extends ConsumerWidget {
               contentPadding: const EdgeInsets.symmetric(horizontal: 8),
               horizontalTitleGap: 8,
               leading: icon,
-              title: Text(label),
+              title: Text(
+                label,
+                style: fromCatalog
+                    ? gameScriptTextStyle(context, lang.locale)
+                    : null,
+              ),
               subtitle: subtitle.isEmpty
                   ? null
                   : Text(subtitle, style: theme.textTheme.bodySmall),

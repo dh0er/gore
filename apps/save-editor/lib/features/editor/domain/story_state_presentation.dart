@@ -24,11 +24,17 @@ class StoryGlossaryLink {
   final String segmentClass;
   final List<String> textIds;
 
-  String npcName(Map<String, Map<String, String>> catalog, GameLang lang) {
-    return localizedGameName(catalog, lang, uniqueName) ??
-        localizedGameName(catalog, lang, npcCatalogId) ??
-        humanizeStoryId(npcCatalogId.split('_').last);
-  }
+  String npcName(Map<String, Map<String, String>> catalog, GameLang lang) =>
+      catalogNpcName(catalog, lang) ??
+      humanizeStoryId(npcCatalogId.split('_').last);
+
+  /// Catalog name only. Null when the tile must fall back to a readable id.
+  String? catalogNpcName(
+    Map<String, Map<String, String>> catalog,
+    GameLang lang,
+  ) =>
+      localizedGameName(catalog, lang, uniqueName) ??
+      localizedGameName(catalog, lang, npcCatalogId);
 
   List<String> localizedParagraphs(
     Map<String, Map<String, String>> catalog,

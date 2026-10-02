@@ -14,6 +14,7 @@ import 'package:goresave/features/editor/ui/grouped_attribute_sidebar.dart';
 import 'package:goresave/features/editor/ui/hero_stats_card.dart'
     show formatHeroValue;
 import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 /// Optional NPC status wiring for [NpcAttributesPanel]. When supplied, a Status
 /// row (`Status: <lebend|tot>` + a Revive action + HP readout) is rendered as
@@ -91,6 +92,8 @@ class NpcAttributesPanel extends StatefulWidget {
     this.skillsSection,
     this.attributeLabel,
     this.attributeTooltip,
+    this.attributeFromCatalog,
+    this.tooltipFromCatalog,
   });
 
   final Future<NpcAttributesResult> Function() load;
@@ -131,6 +134,12 @@ class NpcAttributesPanel extends StatefulWidget {
 
   /// Resolves an attribute to a one-sentence explanation for its label tooltip.
   final AttributeLabelResolver? attributeTooltip;
+
+  /// True when the resolved label came from the game catalog.
+  final bool Function(String id, String? setClass)? attributeFromCatalog;
+
+  /// True when the resolved tooltip came from the game catalog.
+  final bool Function(String id, String? setClass)? tooltipFromCatalog;
 
   @override
   State<NpcAttributesPanel> createState() => _NpcAttributesPanelState();
@@ -441,6 +450,10 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
               key: ValueKey((widget.reloadKey, a.key, a.basePath)),
               attribute: a,
               label: _displayLabel(a),
+              labelFromCatalog:
+                  widget.attributeFromCatalog?.call(a.key, a.setClass) ?? false,
+              tooltipFromCatalog:
+                  widget.tooltipFromCatalog?.call(a.key, a.setClass) ?? false,
               gameIcon: gameIconForAttribute(a.key, a.setClass),
               tooltip: widget.attributeTooltip?.call(a.key, a.setClass) ?? '',
               editable: widget.editable,
@@ -578,6 +591,8 @@ class _NpcAttributeRow extends StatefulWidget {
     super.key,
     required this.attribute,
     required this.label,
+    this.labelFromCatalog = false,
+    this.tooltipFromCatalog = false,
     this.tooltip = '',
     this.gameIcon,
     required this.editable,
@@ -589,6 +604,12 @@ class _NpcAttributeRow extends StatefulWidget {
 
   final NpcAttributeRow attribute;
   final String label;
+
+  /// The label is catalog text, so it uses the game-text face.
+  final bool labelFromCatalog;
+
+  /// The tooltip is catalog text, so it uses the game-text face.
+  final bool tooltipFromCatalog;
 
   /// One sentence on what this value does in the game. Empty = no tooltip.
   final String tooltip;
@@ -670,10 +691,22 @@ class _NpcAttributeRowState extends State<_NpcAttributeRow> {
             label: widget.label,
             iconName: widget.gameIcon,
             style: Theme.of(context).textTheme.labelLarge,
+            gameTextLocale: widget.labelFromCatalog
+                ? GameTextScript.maybeOf(context)
+                : null,
           );
+          final game = widget.tooltipFromCatalog
+              ? GameTextScript.maybeOf(context)
+              : null;
+          final font = game == null ? null : gameScriptTextStyle(context, game);
           final Widget rowLabel = widget.tooltip.isEmpty
               ? labelText
-              : Tooltip(message: widget.tooltip, child: labelText);
+              : font == null
+              ? Tooltip(message: widget.tooltip, child: labelText)
+              : Tooltip(
+                  richMessage: TextSpan(text: widget.tooltip, style: font),
+                  child: labelText,
+                );
           if (compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

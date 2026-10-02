@@ -7,9 +7,9 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/providers/data_providers.dart';
 
-/// The currently selected [GameLang], derived from the persisted locale code.
+/// The currently selected [GameLang], independent of the interface language.
 final currentGameLangProvider = Provider<GameLang>((ref) {
-  return gameLangByCode(ref.watch(localeProvider));
+  return gameLangByCode(ref.watch(gameTextLocaleProvider));
 });
 
 /// Monotonic counter bumped after a successful localization extraction so the
@@ -21,8 +21,9 @@ final locCatalogReloadProvider = StateProvider<int>((ref) => 0);
 /// [resolveGameText], which lowercases the lookup id. Returns an empty map when
 /// no catalog has been extracted yet (or on any read/parse error), so callers
 /// can always fall back to their existing derived/raw names.
-final locCatalogProvider =
-    FutureProvider<Map<String, Map<String, String>>>((ref) async {
+final locCatalogProvider = FutureProvider<Map<String, Map<String, String>>>((
+  ref,
+) async {
   // Re-run when an extraction completes.
   ref.watch(locCatalogReloadProvider);
 

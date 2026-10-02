@@ -5,7 +5,7 @@ import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/ui/design/app_theme.dart';
 
-/// Appearance settings (theme mode, UI scale, language) shown in the Settings
+/// Appearance settings (theme mode, UI scale, languages) shown in the Settings
 /// tab.
 class AppearanceSettingsCard extends ConsumerWidget {
   const AppearanceSettingsCard({super.key});
@@ -15,12 +15,11 @@ class AppearanceSettingsCard extends ConsumerWidget {
     final themeMode = ref.watch(themeModeProvider);
     final selectedUiFont = ref.watch(uiFontFamilyProvider);
     final uiScale = ref.watch(uiScaleProvider);
-    // Normalize through gameLangByCode so an unknown/typo'd persisted code maps
-    // to a real kGameLangs entry; otherwise the DropdownButton (whose items are
-    // the kGameLangs codes) asserts on a value with no matching item.
-    final lang = gameLangByCode(ref.watch(localeProvider));
-    final localeCode = lang.code;
-    final uiFont = effectiveUiFontFamily(selectedUiFont, lang);
+    // Normalize through the catalogs so an unknown persisted code maps to a
+    // real entry; otherwise the dropdown asserts on a value with no item.
+    final uiLang = uiLangByCode(ref.watch(localeProvider));
+    final gameLang = gameLangByCode(ref.watch(gameTextLocaleProvider));
+    final uiFont = effectiveUiFontFamily(selectedUiFont, uiLang.locale);
     final l10n = AppLocalizations.of(context);
     final textTheme = Theme.of(context).textTheme;
     return Card(
@@ -69,34 +68,31 @@ class AppearanceSettingsCard extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                SizedBox(
-                  width: 90,
-                  child: Text(l10n.language, style: textTheme.labelLarge),
-                ),
-                Expanded(
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: DropdownButton<String>(
-                      value: localeCode,
-                      onChanged: (code) {
-                        if (code != null) {
-                          ref.read(localeProvider.notifier).setLocale(code);
-                        }
-                      },
-                      items: [
-                        for (final lang in kGameLangs)
-                          DropdownMenuItem(
-                            value: lang.code,
-                            child: Text(lang.endonym),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
+            _LanguageRow(
+              label: l10n.language,
+              value: uiLang.code,
+              dropdownKey: const ValueKey('ui-language-dropdown'),
+              items: [
+                for (final lang in kUiLangs)
+                  DropdownMenuItem(value: lang.code, child: Text(lang.endonym)),
               ],
+              onChanged: (code) => selectUiLanguage(ref, code),
             ),
+            const SizedBox(height: 16),
+            _LanguageRow(
+              label: l10n.gameTextLanguage,
+              value: gameLang.code,
+              dropdownKey: const ValueKey('game-text-language-dropdown'),
+              items: [
+                for (final lang in kGameLangs)
+                  DropdownMenuItem(value: lang.code, child: Text(lang.endonym)),
+              ],
+              onChanged: (code) => ref
+                  .read(gameTextLocaleProvider.notifier)
+                  .setGameTextLocale(code),
+            ),
+            const SizedBox(height: 4),
+            Text(l10n.gameTextLanguageHint, style: textTheme.bodySmall),
             const SizedBox(height: 16),
             Row(
               children: [
@@ -117,7 +113,7 @@ class AppearanceSettingsCard extends ConsumerWidget {
                       },
                       items: [
                         for (final font in UiFontFamily.values)
-                          if (uiFontFamilySupportedFor(font, lang))
+                          if (uiFontFamilySupportedFor(font, uiLang.locale))
                             DropdownMenuItem(
                               value: font,
                               child: Text(
@@ -129,7 +125,7 @@ class AppearanceSettingsCard extends ConsumerWidget {
                                 style: TextStyle(
                                   fontFamily: uiFontFamilyName(
                                     font,
-                                    lang.locale,
+                                    uiLang.locale,
                                   ),
                                 ),
                               ),
@@ -178,6 +174,47 @@ class AppearanceSettingsCard extends ConsumerWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _LanguageRow extends StatelessWidget {
+  const _LanguageRow({
+    required this.label,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+    required this.dropdownKey,
+  });
+
+  final String label;
+  final String value;
+  final List<DropdownMenuItem<String>> items;
+  final ValueChanged<String> onChanged;
+  final Key dropdownKey;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 132,
+          child: Text(label, style: Theme.of(context).textTheme.labelLarge),
+        ),
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: DropdownButton<String>(
+              key: dropdownKey,
+              value: value,
+              onChanged: (code) {
+                if (code != null) onChanged(code);
+              },
+              items: items,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

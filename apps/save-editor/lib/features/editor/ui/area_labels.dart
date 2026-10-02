@@ -61,3 +61,20 @@ String localizedAreaLabel(
   }
   return appAreaLabel(areaId, l10n) ?? area.label;
 }
+
+/// The game catalog's own name for [areaId], or null when the area is one of
+/// the app-owned buckets (or the catalog has no string for it).
+String? catalogAreaLabel(
+  String areaId,
+  LocationCatalog catalog,
+  Map<String, Map<String, String>> locCatalog,
+  GameLang lang,
+) {
+  if (areaId.isEmpty) return null;
+  final area = catalog.areaById(areaId);
+  final locId = area?.locId;
+  if (locId == null || locId.isEmpty) return null;
+  final localized = resolveGameText(locCatalog, locId, lang);
+  if (localized == null || localized.trim().isEmpty) return null;
+  return localized;
+}

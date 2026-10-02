@@ -1653,7 +1653,14 @@ class AppLocalizationsPl extends AppLocalizations {
       'Wskazówka: Ctrl + / Ctrl - zmienia powiększenie w dowolnym miejscu aplikacji.';
 
   @override
-  String get language => 'Język';
+  String get language => 'Interfejs';
+
+  @override
+  String get gameTextLanguage => 'Tekst gry';
+
+  @override
+  String get gameTextLanguageHint =>
+      'Wybór języka interfejsu ustawia też pasujący tekst gry. Tekst gry możesz potem zmienić osobno.';
 
   @override
   String get updatesTitle => 'Aktualizacje';

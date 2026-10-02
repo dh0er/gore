@@ -24,6 +24,7 @@ class PendingStructuralRow extends StatelessWidget {
     required this.cancelTooltip,
     required this.tone,
     this.technicalId,
+    this.gameTextLocale,
   });
 
   final IconData icon;
@@ -36,6 +37,9 @@ class PendingStructuralRow extends StatelessWidget {
   /// Class path or id, shown monospaced under the subtitle when the user has
   /// technical ids switched on.
   final String? technicalId;
+
+  /// Game-text language for [title]. The subtitle stays in the interface face.
+  final Locale? gameTextLocale;
 
   @override
   Widget build(BuildContext context) {
@@ -57,7 +61,13 @@ class PendingStructuralRow extends StatelessWidget {
           title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: fg),
+          style: gameTextLocale == null
+              ? TextStyle(color: fg)
+              : gameScriptTextStyle(
+                  context,
+                  gameTextLocale!,
+                  style: TextStyle(color: fg),
+                ),
         ),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,

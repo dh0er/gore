@@ -2,6 +2,38 @@ import 'package:flutter/material.dart';
 
 import 'package:goresave/features/editor/domain/item_categories.dart';
 import 'package:goresave/features/editor/ui/game_icon.dart';
+import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/ui/design/app_theme.dart';
+
+/// Pieces of [AppLocalizations.categoryWithCount]: the catalog name, and the
+/// interface wrapper around it (` (3)`, `（3）`).
+class CatalogCountParts {
+  const CatalogCountParts(this.full, this.run, this.lead, this.tail);
+
+  final String full;
+  final String run;
+  final String lead;
+  final String tail;
+
+  bool get splits => full == '$lead$run$tail' && run.isNotEmpty;
+}
+
+CatalogCountParts catalogCountParts(
+  AppLocalizations l10n,
+  String name,
+  int count,
+) {
+  const mark = '\uE000';
+  final full = l10n.categoryWithCount(name, count);
+  if (name.contains(mark)) return CatalogCountParts(full, name, '', '');
+  final probe = l10n.categoryWithCount(mark, count);
+  final at = probe.indexOf(mark);
+  if (at < 0) return CatalogCountParts(full, name, '', '');
+  final lead = probe.substring(0, at);
+  final tail = probe.substring(at + mark.length);
+  if (full != '$lead$name$tail') return CatalogCountParts(full, name, '', '');
+  return CatalogCountParts(full, name, lead, tail);
+}
 
 /// A selectable left-sidebar row, matching the Player/Progression tab style.
 class SidebarTile extends StatelessWidget {
@@ -12,6 +44,10 @@ class SidebarTile extends StatelessWidget {
     required this.selected,
     required this.onTap,
     this.gameIcon,
+    this.gameTextLocale,
+    this.catalogRun,
+    this.catalogLead = '',
+    this.catalogTail = '',
   });
 
   final IconData icon;
@@ -23,29 +59,79 @@ class SidebarTile extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
+  /// When set, [label] is game text and uses that script's face.
+  ///
+  /// [catalogRun] is the catalog slice inside a mixed [label]. [catalogLead]
+  /// and [catalogTail] stay on the interface face.
+  final Locale? gameTextLocale;
+  final String? catalogRun;
+  final String catalogLead;
+  final String catalogTail;
+
+  bool get _mixedCatalog =>
+      catalogRun != null &&
+      catalogRun!.isNotEmpty &&
+      label == '$catalogLead$catalogRun$catalogTail';
+
   /// The label, ellipsized to one line, wrapped in a [Tooltip] ONLY when it
   /// actually does not fit. A tooltip that repeats text the user can already
   /// read in full is noise, so the row is measured against its own width first
   /// (`TextPainter.didExceedMaxLines`) with the same style, scale and direction
   /// the `Text` will use — otherwise the measurement and the render disagree.
-  Widget _label(BuildContext context, TextStyle? style) {
+  Widget _label(BuildContext context, TextStyle? uiStyle) {
+    final mixed = _mixedCatalog;
+    final run = catalogRun ?? '';
+    final gameStyle = !mixed || gameTextLocale == null
+        ? null
+        : gameScriptTextStyle(context, gameTextLocale!, style: uiStyle);
+    final span = !mixed
+        ? TextSpan(text: label, style: uiStyle)
+        : TextSpan(
+            children: [
+              if (catalogLead.isNotEmpty)
+                TextSpan(text: catalogLead, style: uiStyle),
+              TextSpan(text: run, style: gameStyle ?? uiStyle),
+              if (catalogTail.isNotEmpty)
+                TextSpan(text: catalogTail, style: uiStyle),
+            ],
+          );
     return LayoutBuilder(
       builder: (context, constraints) {
-        final text = Text(
-          label,
+        final text = Text.rich(
+          span,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: style,
         );
         final painter = TextPainter(
-          text: TextSpan(text: label, style: style),
+          text: span,
           maxLines: 1,
           textDirection: Directionality.of(context),
           textScaler: MediaQuery.textScalerOf(context),
         )..layout(maxWidth: constraints.maxWidth);
         if (!painter.didExceedMaxLines) return text;
-        return Tooltip(message: label, child: text);
+        if (!mixed || gameTextLocale == null) {
+          return Tooltip(message: label, child: text);
+        }
+        final font = gameScriptTextStyle(context, gameTextLocale!);
+        if (font == null) return Tooltip(message: label, child: text);
+        return Tooltip(
+          richMessage: TextSpan(
+            children: [
+              if (catalogLead.isNotEmpty) TextSpan(text: catalogLead),
+              TextSpan(text: run, style: font),
+              if (catalogTail.isNotEmpty) TextSpan(text: catalogTail),
+            ],
+          ),
+          child: text,
+        );
       },
+    );
+  }
+
+  TextStyle? _uiStyle(BuildContext context, ColorScheme scheme) {
+    return Theme.of(context).textTheme.bodyMedium?.copyWith(
+      color: selected ? scheme.primary : scheme.onSurface,
+      fontWeight: selected ? FontWeight.w600 : null,
     );
   }
 
@@ -74,10 +160,13 @@ class SidebarTile extends StatelessWidget {
                 Expanded(
                   child: _label(
                     context,
-                    Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: selected ? scheme.primary : scheme.onSurface,
-                      fontWeight: selected ? FontWeight.w600 : null,
-                    ),
+                    catalogRun == null
+                        ? gameScriptTextStyle(
+                            context,
+                            gameTextLocale ?? Localizations.localeOf(context),
+                            style: _uiStyle(context, scheme),
+                          )
+                        : _uiStyle(context, scheme),
                   ),
                 ),
               ],
@@ -87,6 +176,30 @@ class SidebarTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Chip label: catalog name on the game-text face, count wrapper on the UI face.
+Widget catalogCountChipLabel(
+  BuildContext context, {
+  required AppLocalizations l10n,
+  required String name,
+  required int count,
+  Locale? gameLocale,
+}) {
+  final parts = catalogCountParts(l10n, name, count);
+  final font = gameLocale == null || !parts.splits
+      ? null
+      : gameScriptTextStyle(context, gameLocale);
+  if (font == null) return Text(parts.full);
+  return Text.rich(
+    TextSpan(
+      children: [
+        if (parts.lead.isNotEmpty) TextSpan(text: parts.lead),
+        TextSpan(text: parts.run, style: font),
+        if (parts.tail.isNotEmpty) TextSpan(text: parts.tail),
+      ],
+    ),
+  );
 }
 
 /// Material icon for an item category, used by inventory sidebars.

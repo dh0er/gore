@@ -1650,7 +1650,14 @@ class AppLocalizationsFr extends AppLocalizations {
       'Astuce : Ctrl + / Ctrl - modifie le zoom partout dans l\'application.';
 
   @override
-  String get language => 'Langue';
+  String get language => 'Interface';
+
+  @override
+  String get gameTextLanguage => 'Texte du jeu';
+
+  @override
+  String get gameTextLanguageHint =>
+      'Choisir la langue de l’interface sélectionne aussi le texte du jeu correspondant. Tu peux ensuite en choisir un autre.';
 
   @override
   String get updatesTitle => 'Mises à jour';

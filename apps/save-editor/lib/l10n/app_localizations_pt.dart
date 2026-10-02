@@ -1640,7 +1640,14 @@ class AppLocalizationsPt extends AppLocalizations {
       'Dica: Ctrl + / Ctrl - altera o zoom em qualquer parte do app.';
 
   @override
-  String get language => 'Idioma';
+  String get language => 'Interface';
+
+  @override
+  String get gameTextLanguage => 'Texto do jogo';
+
+  @override
+  String get gameTextLanguageHint =>
+      'Escolher o idioma da interface também seleciona o texto do jogo correspondente. Depois podes escolher outro.';
 
   @override
   String get updatesTitle => 'Atualizações';
@@ -4956,7 +4963,14 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       'Dica: Ctrl + / Ctrl - altera o zoom em qualquer parte do app.';
 
   @override
-  String get language => 'Idioma';
+  String get language => 'Interface';
+
+  @override
+  String get gameTextLanguage => 'Texto do jogo';
+
+  @override
+  String get gameTextLanguageHint =>
+      'Escolher o idioma da interface também seleciona o texto do jogo correspondente. Depois você pode escolher outro.';
 
   @override
   String get updatesTitle => 'Atualizações';

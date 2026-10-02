@@ -1650,7 +1650,14 @@ class AppLocalizationsRu extends AppLocalizations {
       'Совет: Ctrl + / Ctrl - меняет масштаб в любом месте приложения.';
 
   @override
-  String get language => 'Язык';
+  String get language => 'Интерфейс';
+
+  @override
+  String get gameTextLanguage => 'Текст игры';
+
+  @override
+  String get gameTextLanguageHint =>
+      'Выбор языка интерфейса также выбирает подходящий текст игры. Текст игры можно затем изменить отдельно.';
 
   @override
   String get updatesTitle => 'Обновления';

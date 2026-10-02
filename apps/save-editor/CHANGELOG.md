@@ -8,15 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-24
+
 ### Added
 
-- Browse and edit chest and door locks under World → Locks, with search and
-  filters. Relocking a door also closes it.
-
-### Changed
-
-- Story states are easier to browse, with clearer filters and help. Unused
-  entries are hidden by default and can be shown when needed.
+- Chests and doors can now be unlocked and relocked.
+- New UI languages are available: Czech, Ukrainian, Hungarian, Romanian,
+  Turkish and Traditional Chinese.
+- The UI language and the game text language can now be set separately.
 
 ## [1.4.1] - 2026-09-06
 

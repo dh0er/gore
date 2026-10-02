@@ -17,12 +17,23 @@ String localizedAttributeName(
   String attributeId, {
   String? setClass,
   AppLocalizations? l10n,
+}) =>
+    catalogAttributeName(catalog, lang, attributeId, setClass: setClass) ??
+    readableAttributeName(attributeId, l10n, setClass);
+
+/// The game catalog's own name for [attributeId], or null when the catalog
+/// has no single match. Callers that then show [readableAttributeName] are
+/// showing an interface string, not game text.
+String? catalogAttributeName(
+  Map<String, Map<String, String>> catalog,
+  GameLang lang,
+  String attributeId, {
+  String? setClass,
 }) {
-  final fallback = readableAttributeName(attributeId, l10n, setClass);
-  if (catalog.isEmpty || attributeId.trim().isEmpty) return fallback;
+  if (catalog.isEmpty || attributeId.trim().isEmpty) return null;
 
   final id = _catalogPart(attributeId);
-  if (id.isEmpty) return fallback;
+  if (id.isEmpty) return null;
 
   final set = _attributeSetName(setClass);
   if (set != null) {
@@ -53,14 +64,14 @@ String localizedAttributeName(
         !key.endsWith(suffix)) {
       continue;
     }
-    if (matchingKey != null) return fallback;
+    if (matchingKey != null) return null;
     matchingKey = key;
   }
   if (matchingKey != null) {
     final matched = resolveGameText(catalog, matchingKey, lang);
     if (_nonBlank(matched) case final value?) return value;
   }
-  return fallback;
+  return null;
 }
 
 /// Human-friendly fallback for attributes absent from the loc catalog.

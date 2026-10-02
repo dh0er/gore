@@ -38,9 +38,50 @@ void main() {
     expect(tooltip.subtitle, 'One-Handed Sword');
     expect(tooltip.stats.first.label, 'Edge Dmg');
     expect(tooltip.stats.first.value, '17');
+    expect(tooltip.stats.first.catalogLabel, isTrue);
     expect(tooltip.requirementsLabel, 'Requirements:');
     expect(tooltip.requirements.single.label, 'Strength');
     expect(tooltip.requirements.single.value, '14');
+    expect(tooltip.requirements.single.catalogLabel, isTrue);
+    expect(tooltip.requirementsLabelFromCatalog, isTrue);
+  });
+
+  test('a missing damage name stays an interface tag', () {
+    const stats = ItemStats(damage: {'Item_Damage_Physical_Edge': 17});
+    final tooltip = buildItemTooltip(
+      title: 'Blade',
+      stats: stats,
+      catalog: const {},
+      lang: lang,
+      l10n: l10n,
+    );
+
+    expect(tooltip.stats.single.label, 'Item_Damage_Physical_Edge');
+    expect(tooltip.stats.single.catalogLabel, isFalse);
+  });
+
+  test('a missing attribute name stays an interface string', () {
+    const stats = ItemStats(
+      value: 4,
+      onConsume: [
+        ItemConsumeEffect(effect: 'Heal_Insta', params: {'Heal': 5}),
+      ],
+      onEquip: {'Strength': 2, 'Resistance_Edge': 10},
+      requires: {'Dexterity': 10},
+    );
+    final tooltip = buildItemTooltip(
+      title: 'Ring',
+      stats: stats,
+      catalog: const {},
+      lang: lang,
+      l10n: l10n,
+    );
+
+    expect(tooltip.stats.map((row) => row.catalogLabel), everyElement(isFalse));
+    expect(tooltip.protection.single.catalogLabel, isFalse);
+    expect(tooltip.requirements.single.catalogLabel, isFalse);
+    expect(tooltip.protectionLabelFromCatalog, isFalse);
+    expect(tooltip.requirementsLabelFromCatalog, isFalse);
   });
 
   test('an unnamed type tag falls back to its named parent', () {
@@ -249,6 +290,7 @@ void main() {
     // single figure.
     expect(tooltip.stats.first.label, 'Health');
     expect(tooltip.stats.first.value, '+1/s · 3 s');
+    expect(tooltip.stats.first.interfaceValueRun, '3 s');
   });
 
   test('a brew lists every effect it carries, magnitude and percentage', () {
@@ -276,9 +318,21 @@ void main() {
 
     final values = {for (final row in tooltip.stats) row.label: row.value};
     expect(values['Alcohol'], '+40');
+    expect(
+      tooltip.stats
+          .firstWhere((row) => row.label == 'Alcohol')
+          .interfaceValueRun,
+      isNull,
+    );
     // The effect class raises the resistance by a share of itself, for a span
     // it declares rather than one the item passes in.
     expect(values['Fire Protection'], '+15% · 30 s');
+    expect(
+      tooltip.stats
+          .firstWhere((row) => row.label == 'Fire Protection')
+          .interfaceValueRun,
+      '30 s',
+    );
   });
 
   test('a spell that deals no damage still names its mana cost', () {
@@ -403,6 +457,43 @@ void main() {
       'Broadaxe Head',
     ]);
     expect(tooltip.ingredientForLabel, isNotEmpty);
+  });
+
+  test('a missing recipe or ingredient name stays an interface id', () {
+    const stats = ItemStats(
+      itemType: 'Item_Writing',
+      teaches: [
+        ItemRecipeStep(
+          station: 'forge',
+          needs: {'ItMi_Missing': 2},
+          makes: {'ItMi_Smith_Iron': 1},
+        ),
+      ],
+      ingredientFor: ['ItMi_Smith_Iron', 'ItMi_Missing'],
+    );
+    final tooltip = buildItemTooltip(
+      title: 'Schematic',
+      stats: stats,
+      catalog: _catalog({'itmi_smith_iron': 'Iron'}),
+      lang: lang,
+      l10n: l10n,
+    );
+
+    expect(tooltip.recipe.single.label, '2× ItMi_Missing  →  Iron');
+    expect(
+      tooltip.recipe.single.labelRuns.map((run) => (run.text, run.fromCatalog)),
+      [
+        ('2× ', false),
+        ('ItMi_Missing', false),
+        ('  →  ', false),
+        ('Iron', true),
+      ],
+    );
+    expect(tooltip.recipeProduct, 'Iron');
+    expect(tooltip.ingredientFor.map((row) => (row.label, row.catalogLabel)), [
+      ('Iron', true),
+      ('ItMi_Missing', false),
+    ]);
   });
 
   test('a writing shows its own text, and an item its own description key', () {

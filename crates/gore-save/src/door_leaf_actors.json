@@ -1,0 +1,154 @@
+{
+  "AbandonedMine_Fence_Door": [
+    "FenceDoor_Abandoned_C_UAID_E89C256C6855633902_1078604137"
+  ],
+  "AbandonedMine_UluTalisman_Door": [
+    "Abandoned_Mine_Door_C_UAID_E89C256C68556F3902_1228615249"
+  ],
+  "AMR_Storage_Room_Door": [
+    "IO_MF_Room_Door_C_UAID_C87F546CBBA2B81802_2020641232"
+  ],
+  "BC_LootCave_Door": [
+    "IO_Prison_Door_C_UAID_E89C256C685566D601_1535250123"
+  ],
+  "BC_LootCave_Door_02": [
+    "IO_Prison_Door_C_UAID_E89C256C685566D601_1613846124"
+  ],
+  "BT_Tower_Door": [
+    "IO_OC_Room_Door_C_UAID_2CF05D5C3CF1A34502_1517606055"
+  ],
+  "CV_Stash_Door": [
+    "IO_Merchant_Door_C_UAID_E89C256C685598D801_1127897022"
+  ],
+  "EZ_LootCage_Door": [
+    "IO_Prison_Door_C_UAID_E89C256C685567D601_1169690309"
+  ],
+  "FM_AbandonedGallery_Door": [
+    "IO_Prison_Door_C_UAID_E89C256C685564D601_1815740765"
+  ],
+  "FM_Winch_Gate": [
+    "IO_OC_Forge_Door_01_C_UAID_E89C256C685563D601_1782306587"
+  ],
+  "HC_InnosTemple_Door_01": [
+    "IO_MF_Room_Door_C_UAID_E89C256C6855D18B02_1871113071"
+  ],
+  "MF_CellarCages_Door": [
+    "IO_Prison_Door_C_UAID_2CF05D5C3CF163D701_1932027628"
+  ],
+  "MF_CellarCages_Door_02": [
+    "IO_Prison_Door_C_UAID_2CF05D5C3CF163D701_2099576629"
+  ],
+  "NC_Cave_Lee_Door": [
+    "IO_OC_NormalDoor_C_UAID_E89C256C685562D601_1576342408"
+  ],
+  "NC_Cave_Tavern_Door": [
+    "IO_OC_NormalDoor_C_UAID_E89C256C685561D601_1657593223"
+  ],
+  "NC_Cave_Tavern_Door_02": [
+    "IO_OC_NormalDoor_C_UAID_E89C256C685561D601_1778797224"
+  ],
+  "NC_RiceLord_Door_01": [
+    "IO_Prison_Door_C_UAID_C87F546CBBA2B71802_1479474053"
+  ],
+  "NC_RiceLord_Door_02": [
+    "IO_Prison_Door_C_UAID_C87F546CBBA2B71802_1578049054"
+  ],
+  "OC_Armory_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF166D501_1713138044"
+  ],
+  "OC_Cell12_Bandit_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1826651002"
+  ],
+  "OC_Cellar_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF17ED501_1751807282"
+  ],
+  "OC_Cellar_Door_02": [
+    "IO_Prison_Door_C_UAID_2CF05D5C3CF1504502_1147033447"
+  ],
+  "OC_Fisk_Hut_Door": [
+    "IO_Merchant_Door_C_UAID_E89C256C6855674902_1850998719"
+  ],
+  "OC_Fisk_Storage_Door": [
+    "IO_Merchant_Door_C_UAID_E89C256C6855674902_1958364720"
+  ],
+  "OC_Forge_Loot_Room_Door": [
+    "IO_OC_Forge_Door_01_C_UAID_2CF05D5C3CF178D501_2032003215"
+  ],
+  "OC_Gomez_Room_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF130D501_1492153544"
+  ],
+  "OC_Guards_Cell_01_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF167D501_1131860221"
+  ],
+  "OC_Guards_Cell_02_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF167D501_1211642222"
+  ],
+  "OC_Mages_Room_01_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF179D501_2026567397"
+  ],
+  "OC_Mages_Room_02_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF179D501_2069194398"
+  ],
+  "OC_Mages_Room_03_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF179D501_1326680392"
+  ],
+  "OC_Merchant_Secret_Passage_Door": [
+    "IO_OC_Forge_Door_01_C_UAID_2CF05D5C3CF180D501_1581364641"
+  ],
+  "OC_Orebaron_Room_01_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF130D501_1607675545"
+  ],
+  "OC_Orebaron_Room_02_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF130D501_1398447543"
+  ],
+  "OC_Prison_Dungeons_Cell_04_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1265090994"
+  ],
+  "OC_Prison_Dungeons_Cell_05_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1308812995"
+  ],
+  "OC_Prison_Dungeons_Cell_06_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1351102996"
+  ],
+  "OC_Prison_Dungeons_Cell_11_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1784882001"
+  ],
+  "OC_Prison_Dungeons_Cell_09_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1685530999"
+  ],
+  "OC_Prison_Dungeons_Cell_23_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF172D501_1521852189"
+  ],
+  "OC_Prison_Dungeons_Moat_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_2083723006"
+  ],
+  "OC_Raven_Room_01_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF12FD501_1796740364"
+  ],
+  "OC_Raven_Room_02_Door": [
+    "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF130D501_1098737541"
+  ],
+  "OC_Santino_Door": [
+    "IO_Merchant_Door_C_UAID_2CF05D5C3CF1FB7202_1121491068"
+  ],
+  "OrcGraveyard_Puzzle_Door": [
+    "Orc_Puzzle_Door_C_UAID_2CF05D5C3CF1EC1A02_1650216490"
+  ],
+  "SNT_LootCage_Door": [
+    "IO_Prison_Door_C_UAID_C87F546CBBA2B71802_1946792055"
+  ],
+  "SunkenTower_Door_02_Altar_A": [
+    "SunkenTower_Door_02_Altar_C_UAID_2CF05D5C3CF14B7E02_1407505779",
+    "SunkenTower_Door_02_Altar_C_UAID_2CF05D5C3CF14B7E02_1407669780"
+  ],
+  "SunkenTower_Door_02_Altar_B": [
+    "SunkenTower_Door_02_Altar_C_UAID_2CF05D5C3CF14B7E02_1407505779",
+    "SunkenTower_Door_02_Altar_C_UAID_2CF05D5C3CF14B7E02_1407669780"
+  ],
+  "SW_Captain_Ship_Door": [
+    "IO_Merchant_Door_C_UAID_2CF05D5C3CF1474702_1136748977"
+  ],
+  "XT_ExperimentalChamber_Door": [
+    "IO_XT_Door_C_UAID_E89C256C68556AA702_1263396527"
+  ]
+}

@@ -1639,7 +1639,14 @@ class AppLocalizationsDe extends AppLocalizations {
       'Tipp: Strg + / Strg - ändert den Zoom überall in der App.';
 
   @override
-  String get language => 'Sprache';
+  String get language => 'Oberfläche';
+
+  @override
+  String get gameTextLanguage => 'Spieltext';
+
+  @override
+  String get gameTextLanguageHint =>
+      'Mit der Oberflächensprache wird auch der passende Spieltext gewählt. Den Spieltext kannst du danach getrennt ändern.';
 
   @override
   String get updatesTitle => 'Updates';

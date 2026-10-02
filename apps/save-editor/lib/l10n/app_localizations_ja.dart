@@ -1590,7 +1590,14 @@ class AppLocalizationsJa extends AppLocalizations {
   String get zoomTip => 'ヒント: アプリ内のどこでも Ctrl + / Ctrl - でズームを変更できます。';
 
   @override
-  String get language => '言語';
+  String get language => 'インターフェース';
+
+  @override
+  String get gameTextLanguage => 'ゲームテキスト';
+
+  @override
+  String get gameTextLanguageHint =>
+      'インターフェースの言語を選ぶと、対応するゲームテキストも選ばれます。ゲームテキストはその後別に変更できます。';
 
   @override
   String get updatesTitle => 'アップデート';

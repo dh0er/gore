@@ -60,6 +60,7 @@ void main() {
     final main = journal.roots.oldCamp.single;
     expect(main.quest.id, oldMain);
     expect(main.label, 'Test of Faith');
+    expect(main.localized, isTrue);
     expect(main.description, 'Bring Diego the list.');
     expect(main.children.map((node) => node.quest.id), [
       oldObjective,
@@ -174,6 +175,7 @@ void main() {
     );
 
     expect(journal.roots.oldCamp.single.label, 'Readable MAIN');
+    expect(journal.roots.oldCamp.single.localized, isFalse);
     expect(journal.roots.oldCamp.single.children, isEmpty);
   });
 }

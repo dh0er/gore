@@ -17,8 +17,7 @@ In fact, the whole CLI is intended to be used by AI agents only. You can of cour
 but except for this README, the whole documentation is written by AI and might be incomplete and/or
 hard to understand.
 
-A no-code GUI, Mod Studio, is planned for the future. Its unfinished GUI
-workflows do not limit the CLI, MCP plugin, or Mod Manager.
+A no-code GUI, Mod Studio, is planned for the future.
 
 ## 🧰 Tools
 

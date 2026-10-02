@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:goresave/features/editor/domain/game_icons.dart';
 import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 import '../domain/hero_attributes.dart';
 import 'grouped_attribute_sidebar.dart';
@@ -47,6 +48,8 @@ class HeroStatsCard extends StatefulWidget {
     this.skillsSection,
     this.attributeLabel,
     this.attributeTooltip,
+    this.attributeFromCatalog,
+    this.tooltipFromCatalog,
   });
 
   final Future<HeroAttributesResult> Function() load;
@@ -85,6 +88,12 @@ class HeroStatsCard extends StatefulWidget {
 
   /// Resolves an attribute to a one-sentence explanation for its label tooltip.
   final AttributeLabelResolver? attributeTooltip;
+
+  /// True when the resolved label came from the game catalog.
+  final bool Function(String id, String? setClass)? attributeFromCatalog;
+
+  /// True when the resolved tooltip came from the game catalog.
+  final bool Function(String id, String? setClass)? tooltipFromCatalog;
 
   @override
   State<HeroStatsCard> createState() => _HeroStatsCardState();
@@ -461,6 +470,12 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       tooltip: tooltip,
       attribute: attribute,
       label: label,
+      labelFromCatalog:
+          widget.attributeFromCatalog?.call(attribute.id, attribute.setClass) ??
+          false,
+      tooltipFromCatalog:
+          widget.tooltipFromCatalog?.call(attribute.id, attribute.setClass) ??
+          false,
       editable: widget.editable,
       // Seed from pending text so edits made in other groups survive the
       // sidebar switch and are visible again when returning to this group.
@@ -517,6 +532,8 @@ class _HeroAttributeRow extends StatefulWidget {
     super.key,
     required this.attribute,
     required this.label,
+    this.labelFromCatalog = false,
+    this.tooltipFromCatalog = false,
     this.tooltip = '',
     this.gameIcon,
     required this.editable,
@@ -528,6 +545,12 @@ class _HeroAttributeRow extends StatefulWidget {
 
   final HeroAttribute attribute;
   final String label;
+
+  /// The label is catalog text, so it uses the game-text face.
+  final bool labelFromCatalog;
+
+  /// The tooltip is catalog text, so it uses the game-text face.
+  final bool tooltipFromCatalog;
 
   /// One sentence on what this value does in the game. Empty = no tooltip.
   final String tooltip;
@@ -621,10 +644,22 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
             label: widget.label,
             iconName: widget.gameIcon,
             style: labelStyle,
+            gameTextLocale: widget.labelFromCatalog
+                ? GameTextScript.maybeOf(context)
+                : null,
           );
+          final game = widget.tooltipFromCatalog
+              ? GameTextScript.maybeOf(context)
+              : null;
+          final font = game == null ? null : gameScriptTextStyle(context, game);
           final Widget rowLabel = widget.tooltip.isEmpty
               ? labelText
-              : Tooltip(message: widget.tooltip, child: labelText);
+              : font == null
+              ? Tooltip(message: widget.tooltip, child: labelText)
+              : Tooltip(
+                  richMessage: TextSpan(text: widget.tooltip, style: font),
+                  child: labelText,
+                );
           if (compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

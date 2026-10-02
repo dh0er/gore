@@ -13,6 +13,7 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/loc/progression_loc.dart';
 
@@ -636,7 +637,12 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
     required bool showObjectIds,
   }) {
     final trailing = _buildQuestStateControl(l10n, node.quest);
-    final title = SelectableText(node.label, maxLines: 1);
+    final gameLocale = ref.read(currentGameLangProvider).locale;
+    final title = SelectableText(
+      node.label,
+      maxLines: 1,
+      style: node.localized ? gameScriptTextStyle(context, gameLocale) : null,
+    );
     final subtitle = _buildQuestSubtitle(context, node, showObjectIds);
     if (node.children.isEmpty) {
       return ListTile(
@@ -687,7 +693,15 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (node.description case final description?)
-          Text(description, maxLines: 2, overflow: TextOverflow.ellipsis),
+          Text(
+            description,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: gameScriptTextStyle(
+              context,
+              ref.read(currentGameLangProvider).locale,
+            ),
+          ),
         if (showObjectIds)
           SelectableText(node.quest.id, maxLines: 1, style: muted),
       ],
@@ -1216,8 +1230,19 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                               caption: meta?.caption,
                               l10n: l10n,
                             );
+                            final fromCatalog = knowledgeEntryFromCatalog(
+                              locCatalog,
+                              lang,
+                              entry,
+                              locKey: meta?.locKey,
+                              caption: meta?.caption,
+                              l10n: l10n,
+                            );
                             final title =
                                 text ?? readableKnowledgeEntry(entry, l10n);
+                            final pendingStyle = TextStyle(
+                              color: scheme.onTertiaryContainer,
+                            );
                             return ListTile(
                               dense: true,
                               tileColor: scheme.tertiaryContainer.withValues(
@@ -1227,9 +1252,13 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                                 entry: entry,
                                 catalogCategory: meta?.category,
                                 title: title,
-                                titleStyle: TextStyle(
-                                  color: scheme.onTertiaryContainer,
-                                ),
+                                titleStyle: fromCatalog
+                                    ? gameScriptTextStyle(
+                                        context,
+                                        lang.locale,
+                                        style: pendingStyle,
+                                      )
+                                    : pendingStyle,
                               ),
                               subtitle: showObjectIds
                                   ? Text(
@@ -1279,20 +1308,34 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                                   caption: meta?.caption,
                                   l10n: l10n,
                                 );
+                                final fromCatalog = knowledgeEntryFromCatalog(
+                                  locCatalog,
+                                  lang,
+                                  entry,
+                                  locKey: meta?.locKey,
+                                  caption: meta?.caption,
+                                  l10n: l10n,
+                                );
                                 final title =
                                     text ?? readableKnowledgeEntry(entry, l10n);
+                                final savedStyle = isRemoved
+                                    ? const TextStyle(
+                                        decoration: TextDecoration.lineThrough,
+                                      )
+                                    : null;
                                 return ListTile(
                                   dense: true,
                                   title: _KnowledgeEntryTitle(
                                     entry: entry,
                                     catalogCategory: meta?.category,
                                     title: title,
-                                    titleStyle: isRemoved
-                                        ? const TextStyle(
-                                            decoration:
-                                                TextDecoration.lineThrough,
+                                    titleStyle: fromCatalog
+                                        ? gameScriptTextStyle(
+                                            context,
+                                            lang.locale,
+                                            style: savedStyle,
                                           )
-                                        : null,
+                                        : savedStyle,
                                   ),
                                   // Raw entry id is opt-in through Advanced
                                   // settings, independent of text resolution.

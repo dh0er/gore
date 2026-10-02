@@ -98,12 +98,22 @@ class _AddInventoryItemDialogState
 
   /// Localized game name for [id] when the loc_catalog has it; falls back to the
   /// derived id-only name (legal posture preserved when no catalog is present).
+  String? _catalogName(
+    Map<String, Map<String, String>> catalog,
+    GameLang lang,
+    String id,
+  ) {
+    final localized = localizedGameName(catalog, lang, id);
+    if (localized == null || localized.trim().isEmpty) return null;
+    return localized;
+  }
+
   String _displayName(
     Map<String, Map<String, String>> catalog,
     GameLang lang,
     String id,
   ) {
-    return localizedGameName(catalog, lang, id) ??
+    return _catalogName(catalog, lang, id) ??
         itemDisplayNameFromId(
           id,
           fallback: AppLocalizations.of(context).fallbackItem,
@@ -172,12 +182,13 @@ class _AddInventoryItemDialogState
       for (final filter in itemStats?.filters ?? const <InventoryFilter>[])
         ?itemCategoryFromFilterId(filter.id): filter,
     };
-    String categoryLabel(ItemCategory category) {
+    (String text, bool fromCatalog) categoryLabel(ItemCategory category) {
       final key = filtersById[category]?.nameKey ?? '';
       final fromGame = key.isEmpty
           ? null
           : resolveGameText(locCatalog, key, lang);
-      return fromGame ?? localizedItemCategoryLabel(l10n, category);
+      if (fromGame != null) return (fromGame, true);
+      return (localizedItemCategoryLabel(l10n, category), false);
     }
 
     return AlertDialog(
@@ -342,7 +353,19 @@ class _AddInventoryItemDialogState
                           children: [
                             Text(
                               _displayName(locCatalog, lang, _selected!.id),
-                              style: theme.textTheme.bodyMedium,
+                              style:
+                                  _catalogName(
+                                        locCatalog,
+                                        lang,
+                                        _selected!.id,
+                                      ) ==
+                                      null
+                                  ? theme.textTheme.bodyMedium
+                                  : gameScriptTextStyle(
+                                      context,
+                                      lang.locale,
+                                      style: theme.textTheme.bodyMedium,
+                                    ),
                               overflow: TextOverflow.ellipsis,
                             ),
                             if (showObjectIds)
@@ -401,26 +424,45 @@ class _AddInventoryItemDialogState
                                   child: Column(
                                     children: [
                                       for (final g in groups)
-                                        SidebarTile(
-                                          icon: iconForItemCategory(g.category),
-                                          gameIcon:
-                                              filtersById[g.category]?.icon ??
-                                              gameIconForItemCategory(
-                                                g.category,
-                                              ),
-                                          label: l10n.categoryWithCount(
-                                            categoryLabel(g.category),
+                                        () {
+                                          final named = categoryLabel(
+                                            g.category,
+                                          );
+                                          final parts = catalogCountParts(
+                                            l10n,
+                                            named.$1,
                                             g.entries.length,
-                                          ),
-                                          selected:
-                                              !searching &&
-                                              g.category == selectedCat,
-                                          onTap: () => setState(() {
-                                            _selectedCategory = g.category;
-                                            _query = '';
-                                            _searchController.clear();
-                                          }),
-                                        ),
+                                          );
+                                          final catalog =
+                                              named.$2 && parts.splits;
+                                          return SidebarTile(
+                                            icon: iconForItemCategory(
+                                              g.category,
+                                            ),
+                                            gameTextLocale: catalog
+                                                ? lang.locale
+                                                : null,
+                                            catalogRun: catalog
+                                                ? parts.run
+                                                : null,
+                                            catalogLead: parts.lead,
+                                            catalogTail: parts.tail,
+                                            gameIcon:
+                                                filtersById[g.category]?.icon ??
+                                                gameIconForItemCategory(
+                                                  g.category,
+                                                ),
+                                            label: parts.full,
+                                            selected:
+                                                !searching &&
+                                                g.category == selectedCat,
+                                            onTap: () => setState(() {
+                                              _selectedCategory = g.category;
+                                              _query = '';
+                                              _searchController.clear();
+                                            }),
+                                          );
+                                        }(),
                                     ],
                                   ),
                                 ),
@@ -475,9 +517,11 @@ class _AddInventoryItemDialogState
     final isSelected = _selected == entry;
     // Same hover block as the inventory, so the item can be judged before it is
     // added rather than after.
+    final catalogName = _catalogName(catalog, lang, entry.id);
     return ItemStatsTooltip(
       itemId: entry.id,
       title: _displayName(catalog, lang, entry.id),
+      titleFromCatalog: catalogName != null,
       // The tile is tappable and brings its own hover colour; a second tint on
       // top of it would only muddy the selected row.
       highlightOnHover: false,
@@ -497,6 +541,9 @@ class _AddInventoryItemDialogState
           _displayName(catalog, lang, entry.id),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
+          style: catalogName == null
+              ? null
+              : gameScriptTextStyle(context, lang.locale),
         ),
         subtitle: showObjectIds
             ? Text(entry.id, maxLines: 1, overflow: TextOverflow.ellipsis)
