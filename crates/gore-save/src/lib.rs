@@ -535,7 +535,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let path = required_path(&payload)?;
             let kraken_backend = codec_backend::KrakenBackend::default();
             let root = decode_private_root_cached(&path, &kraken_backend)?;
-            Ok(actor_inventory_summary(&root, None))
+            Ok(actor_inventory_summary_with_containers(&root, None, true))
         }
         "private.npc.list" => {
             let path = required_path(&payload)?;
@@ -8700,44 +8700,58 @@ fn triplet_matches_stored(current: [f64; 3], noted: [f64; 3], compact: bool) -> 
 /// (removable) path is present. The command names are identical to the
 /// player's; the frontend attaches `actorId` for the NPC case.
 fn actor_inventory_summary(root: &properties::RootObject, actor_id: Option<&str>) -> Value {
-    let Some(view) = inventory_main_container_view(root, actor_id) else {
+    actor_inventory_summary_with_containers(root, actor_id, actor_id.is_some())
+}
+
+fn actor_inventory_summary_with_containers(
+    root: &properties::RootObject,
+    actor_id: Option<&str>,
+    all_containers: bool,
+) -> Value {
+    let Some(view) = inventory_container_view(root, actor_id, all_containers) else {
         return json!({
             "items": [],
             "mainContainerPaths": [],
             "writable": [],
         });
     };
-    // NPC removal targets a specific container's slot precisely via
-    // (containerType, slotId), so any row with a stable slot id is removable —
-    // even a unique weapon/ore outside MainContainer, and even duplicate-path
-    // slots. The player removeItem edit is path-addressed (no slot id), so only
-    // globally-unique MainContainer paths are unambiguously removable there.
-    let is_npc = actor_id.is_some();
+    // Complete views address rows by container/slot for either actor. Legacy
+    // player summaries retain their path-only removal gate.
     let items = view
         .rows
         .iter()
-        .map(|(path, count, slot_id, container_label)| {
-            let removable = if is_npc {
+        .map(|row| {
+            let removable = if all_containers {
                 // Freeing a slot resets its payload from a state-free donor in
                 // the same inventory; without one the write would fail.
-                slot_id.is_some() && view.summary.has_clean_payload_donor
+                row.slot_id.is_some() && view.summary.has_clean_payload_donor
             } else {
-                view.summary.removable_paths.contains(path)
+                view.summary.removable_paths.contains(&row.path)
             };
-            json!({
-                "id": item_id_from_path(path),
-                "path": path,
-                "count": count,
+            let mut item = json!({
+                "id": item_id_from_path(&row.path),
+                "path": row.path,
+                "count": row.count,
                 "removable": removable,
                 // Stable per-slot discriminator (`m_Id`). Lets the frontend pin a
                 // count edit to one specific stack when two slots share a path.
-                "slotId": slot_id,
+                "slotId": row.slot_id,
                 // Short container label (e.g. `MainContainer`/`MeleeSlot`/`Pouch`).
-                // For NPC rows the frontend must echo this back as `containerType`
+                // Complete views echo this back as `containerType`
                 // on a per-container edit so the right container's slot is
-                // addressed; player rows are always `MainContainer`.
-                "containerType": container_label,
-            })
+                // addressed.
+                "containerType": row.container_type,
+            });
+            if all_containers {
+                item["equipped"] = json!(row.container_type == "ArmorSlot");
+                item["upgrades"] = json!(
+                    row.upgrades
+                        .iter()
+                        .map(|(key, value)| json!({"key":key,"value":value}))
+                        .collect::<Vec<_>>()
+                );
+            }
+            item
         })
         .collect::<Vec<_>>();
     let mut writable = Vec::new();
@@ -8753,9 +8767,8 @@ fn actor_inventory_summary(root: &properties::RootObject, actor_id: Option<&str>
     }
     // removeItem is offered when at least one emitted row is removable (NPC: any
     // row with a slot id; player: any globally-unique MainContainer path).
-    let any_removable = if is_npc {
-        view.summary.has_clean_payload_donor
-            && view.rows.iter().any(|(_, _, slot_id, _)| slot_id.is_some())
+    let any_removable = if all_containers {
+        view.summary.has_clean_payload_donor && view.rows.iter().any(|row| row.slot_id.is_some())
     } else {
         !view.summary.removable_paths.is_empty()
     };
@@ -12142,16 +12155,16 @@ struct PrivateInventoryItemCountEdit {
     /// Optional NPC GlobalId. `None` targets the player inventory; `Some(id)`
     /// targets that NPC's inventory. Parsed here; APPLY wiring is Task 16.
     actor_id: Option<String>,
-    /// Optional stable slot `m_Id`. When set (NPC inventory path only), the
-    /// target slot is selected by this id, disambiguating two slots that share
+    /// Optional stable slot `m_Id`. When set, the target slot is selected by
+    /// this id for either actor, disambiguating two slots that share
     /// the same item-definition path. When `None`, selection falls back to the
     /// path/id selector.
     slot_id: Option<i32>,
-    /// Optional container type (NPC inventory path only) — the short or qualified
+    /// Optional container type — the short or qualified
     /// `EInventoryTypes` label of the container holding the target slot (e.g.
     /// `MeleeSlot`, `Pouch`). `None` resolves to the MainContainer for
     /// back-compatibility with the player path and older frontends. A slot `m_Id`
-    /// is only unique WITHIN one container, so an NPC count edit must carry this
+    /// is only unique WITHIN one container, so an edit must carry this
     /// to address a non-MainContainer slot unambiguously.
     container_type: Option<String>,
 }
@@ -14984,16 +14997,22 @@ fn armor_slot_summary(root: &properties::RootObject) -> Option<ArmorSlotSummary>
 /// [`inventory_main_container_view`] for either the player or a single NPC.
 struct InventoryMainContainerView {
     summary: MainContainerSummary,
-    /// Inventory slots in storage order:
-    /// `(item-definition path, count, stable slot m_Id, container short label)`.
+    /// Inventory slots in storage order, including their stable identities.
     /// The slot id disambiguates two rows that share an item-definition path so a
     /// count edit can target one specific stack. The container short label (e.g.
     /// `MainContainer`/`MeleeSlot`/`Pouch`, the `EInventoryTypes::` prefix
     /// stripped) tells the frontend which container the row lives in so a
-    /// per-container edit can address it; it is `MainContainer` for every player
-    /// row (player view is MainContainer-only) and the row's real container for
-    /// NPC rows (which span all containers).
-    rows: Vec<(String, Option<i32>, Option<i32>, String)>,
+    /// per-container edit can address it. Legacy player summaries restrict
+    /// rows to MainContainer; complete actor views include every container.
+    rows: Vec<InventorySlotRow>,
+}
+
+struct InventorySlotRow {
+    path: String,
+    count: Option<i32>,
+    slot_id: Option<i32>,
+    container_type: String,
+    upgrades: Vec<(String, String)>,
 }
 
 /// Walk the typed inventory tree for `actor_id` (`None` = controlled player,
@@ -15005,6 +15024,14 @@ struct InventoryMainContainerView {
 fn inventory_main_container_view(
     root: &properties::RootObject,
     actor_id: Option<&str>,
+) -> Option<InventoryMainContainerView> {
+    inventory_container_view(root, actor_id, actor_id.is_some())
+}
+
+fn inventory_container_view(
+    root: &properties::RootObject,
+    actor_id: Option<&str>,
+    all_containers: bool,
 ) -> Option<InventoryMainContainerView> {
     let inventory_path = resolve_inventory_path(root, actor_id)?;
     let resolve_child = |suffix: &[&str]| -> Option<properties::PropertyValue> {
@@ -15088,12 +15115,8 @@ fn inventory_main_container_view(
             }
         }
     }
-    // Row emission diverges by actor:
-    //   - Player (`actor_id == None`): MainContainer-only (the player edit paths
-    //     can only address MainContainer). Every row is tagged `MainContainer`.
-    //   - NPC (`actor_id.is_some()`): ALL containers, so an equipped weapon
-    //     (MeleeSlot) or ore (Pouch) is visible. Each row is tagged with its own
-    //     container's short label.
+    // Legacy player summaries emit MainContainer rows. Complete views include
+    // every container, with the actual container label and slot metadata.
     // Both hide the non-lootable equipment markers (fists, watch-fight weapon).
     // Rows are addressed by id/path and slot, never by their position here, so
     // leaving them out changes nothing an edit can reach; the summary that gates
@@ -15107,7 +15130,7 @@ fn inventory_main_container_view(
             .unwrap_or_else(|| short_enum_label(MAIN_CONTAINER_ENUM_LABEL).to_string())
     };
     let mut rows = Vec::new();
-    let push_slot_rows = |rows: &mut Vec<(String, Option<i32>, Option<i32>, String)>,
+    let push_slot_rows = |rows: &mut Vec<InventorySlotRow>,
                           slots: &[properties::PropertyValue],
                           label: &str,
                           hide_markers: bool| {
@@ -15121,20 +15144,25 @@ fn inventory_main_container_view(
             if hide_markers && is_non_lootable_marker(&item_id_from_path(path)) {
                 continue;
             }
-            rows.push((
-                path.to_string(),
-                slot_item_count(slot),
-                slot_id(slot),
-                label.to_string(),
-            ));
+            rows.push(InventorySlotRow {
+                path: path.to_string(),
+                count: slot_item_count(slot),
+                slot_id: slot_id(slot),
+                container_type: label.to_string(),
+                upgrades: if label == "ArmorSlot" {
+                    slot_upgrade_pairs(slot)
+                } else {
+                    Vec::new()
+                },
+            });
         }
     };
-    match actor_id {
-        None => {
+    match all_containers {
+        false => {
             let main_label = short_enum_label(MAIN_CONTAINER_ENUM_LABEL);
             push_slot_rows(&mut rows, &main_slots, main_label, true);
         }
-        Some(_) => {
+        true => {
             if let Some(properties::PropertyValue::Array {
                 elements: containers,
             }) = resolve_child(&["m_Values", "Items"])
@@ -16727,29 +16755,28 @@ fn select_npc_count_slot(
     Ok(slot_index)
 }
 
-/// Patch an NPC slot's `m_ItemCount` via the typed path. Locates the NPC's
-/// MainContainer m_Slots (the same traversal addItem/removeItem use), finds the
+/// Patch either actor's slot count via its typed container/slot identity. Finds the
 /// slot whose `m_SlotData.m_ItemDefinition` matches the edit's selector, then
 /// resolves
 /// `[<npc inventory path...>, m_Values, Items, [main_index], m_Slots, [slot_index], m_SlotData, m_ItemCount]`
 /// and `patch_scalar`s the i32 count. The IntProperty is fixed-size, so the
 /// write is in place — no splice, no size cascade, payload length unchanged.
-fn apply_npc_inventory_item_count_edit_to_payload(
+fn apply_typed_inventory_item_count_edit_to_payload(
     payload: &mut [u8],
     edit: &PrivateInventoryItemCountEdit,
 ) -> Result<(), CoreError> {
-    let actor_id = edit
-        .actor_id
-        .as_deref()
-        .expect("caller guarantees an NPC actor_id");
+    let actor_id = edit.actor_id.as_deref();
+    let actor = actor_id
+        .map(|id| format!("NPC {id}"))
+        .unwrap_or_else(|| "player".into());
     let root = properties::parse_private_root(payload).map_err(|err| {
         CoreError::Parse(format!(
             "private.inventory.setItemCount requires a typed-parsable private payload: {err}"
         ))
     })?;
-    let inventory_path = resolve_inventory_path(&root, Some(actor_id)).ok_or_else(|| {
+    let inventory_path = resolve_inventory_path(&root, actor_id).ok_or_else(|| {
         CoreError::Parse(format!(
-            "NPC {actor_id} has no inventory container; cannot set item count"
+            "{actor} has no inventory container; cannot set item count"
         ))
     })?;
     // Resolve the specific container the edit targets (MainContainer when the
@@ -16772,13 +16799,12 @@ fn apply_npc_inventory_item_count_edit_to_payload(
     // falls back to the item-definition selector and rejects ambiguity.
     let slot_index = select_npc_count_slot(slots, edit).map_err(|err| match err {
         SlotSelectError::NotFound => CoreError::Validation(format!(
-            "NPC {actor_id} inventory does not contain the requested item"
+            "{actor} inventory does not contain the requested item"
         )),
-        SlotSelectError::Ambiguous => CoreError::Validation(
-            "NPC inventory item count edit matched multiple slots; \
+        SlotSelectError::Ambiguous => CoreError::Validation(format!(
+            "{actor} inventory item count edit matched multiple slots; \
              reload the inventory so the edit can target a specific stack"
-                .to_string(),
-        ),
+        )),
     })?;
 
     // Build the full typed path to that slot's m_SlotData.m_ItemCount and patch
@@ -16799,14 +16825,10 @@ fn apply_private_inventory_item_count_edit_to_payload(
     payload: &mut [u8],
     edit: &PrivateInventoryItemCountEdit,
 ) -> Result<(), CoreError> {
-    // NPC count edits go through the TYPED path: navigate to the target slot's
-    // m_SlotData.m_ItemCount IntProperty and patch it in place. IntProperty is a
-    // fixed-size 4-byte scalar, so patch_scalar never changes the payload length
-    // (no splice, no size cascade) — exactly like the player path's in-place
-    // write. The player path (actor_id == None) keeps its untyped FString-region
-    // scan unchanged below.
-    if edit.actor_id.is_some() {
-        return apply_npc_inventory_item_count_edit_to_payload(payload, edit);
+    // Explicit container/slot selectors use the typed path for either actor.
+    // Legacy player edits without selectors retain their FString-region scan.
+    if edit.actor_id.is_some() || edit.slot_id.is_some() || edit.container_type.is_some() {
+        return apply_typed_inventory_item_count_edit_to_payload(payload, edit);
     }
     let refs = scan_fstrings(payload, 0);
     let (start_idx, end_idx, scope) = inventory_item_region(&refs);
@@ -30498,15 +30520,23 @@ mod tests {
     /// Full private payload. MainContainer is deliberately NOT at index 0 in
     /// m_Keys/Items so the implementation must match by enum value.
     fn typed_inventory_private_payload(other_slots: &[Vec<u8>], main_slots: &[Vec<u8>]) -> Vec<u8> {
-        let keys = inv_enum_array_property("m_Keys", &[INV_OTHER_LABEL, INV_MAIN_LABEL]);
-        let items = inv_struct_array_property(
-            "Items",
-            "ContainerVirtualData",
-            &[
-                inv_container(INV_OTHER_LABEL, other_slots),
-                inv_container(INV_MAIN_LABEL, main_slots),
-            ],
-        );
+        typed_inventory_containers_payload(&[
+            (INV_OTHER_LABEL, other_slots),
+            (INV_MAIN_LABEL, main_slots),
+        ])
+    }
+
+    fn typed_inventory_containers_payload(containers: &[(&str, &[Vec<u8>])]) -> Vec<u8> {
+        let labels = containers
+            .iter()
+            .map(|(label, _)| *label)
+            .collect::<Vec<_>>();
+        let keys = inv_enum_array_property("m_Keys", &labels);
+        let container_values = containers
+            .iter()
+            .map(|(label, slots)| inv_container(label, slots))
+            .collect::<Vec<_>>();
+        let items = inv_struct_array_property("Items", "ContainerVirtualData", &container_values);
         let values = inv_struct_property("m_Values", "ContainerVirtualDataArray", &items);
         let mut inventory_props = keys;
         inventory_props.extend_from_slice(&values);
@@ -31297,6 +31327,131 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["slotId"], 7);
         assert_eq!(items[1]["slotId"], 9);
+    }
+
+    #[test]
+    fn complete_player_inventory_keeps_duplicate_armor_metadata_on_its_own_slot() {
+        let path = "/Script/Angelscript.Ore_Armor_H";
+        let upgrades = inv_struct_property(
+            "m_GenericData",
+            "StringMap",
+            &[
+                private_str_array_property("m_Keys", &["m_CurrentUpperBodyUpgrade"]),
+                private_str_array_property("m_Values", &["HeavyArmorUpgrade"]),
+            ]
+            .concat(),
+        );
+        let armor = [inv_item_slot(0, ARMOR_SLOT_ENUM_LABEL, path, 1, &upgrades)];
+        let main = [
+            inv_item_slot(0, INV_MAIN_LABEL, path, 1, &inv_empty_payload_map()),
+            inv_item_slot(1, INV_MAIN_LABEL, path, 1, &inv_empty_payload_map()),
+        ];
+        let payload = typed_inventory_containers_payload(&[
+            (ARMOR_SLOT_ENUM_LABEL, &armor),
+            (INV_MAIN_LABEL, &main),
+        ]);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let summary = actor_inventory_summary_with_containers(&root, None, true);
+        let items = summary["items"].as_array().unwrap();
+        assert_eq!(
+            items.len(),
+            3,
+            "one row per actual slot despite identical class/count"
+        );
+        assert_eq!(items[0]["containerType"], "ArmorSlot");
+        assert_eq!(items[0]["equipped"], true);
+        assert_eq!(
+            items[0]["upgrades"],
+            json!([
+                {"key":"m_CurrentUpperBodyUpgrade","value":"HeavyArmorUpgrade"}
+            ])
+        );
+        for (index, item) in items[1..].iter().enumerate() {
+            assert_eq!(item["containerType"], "MainContainer");
+            assert_eq!(item["slotId"], index);
+            assert_eq!(item["equipped"], false);
+            assert_eq!(item["upgrades"], json!([]));
+            assert_eq!(item["removable"], true);
+        }
+    }
+
+    #[test]
+    fn player_count_edits_use_container_and_slot_to_disambiguate_duplicate_stacks() {
+        let path = "/Script/Angelscript.ItMi_Orenugget";
+        let mut payload = typed_inventory_private_payload(
+            &[inv_item_slot(
+                0,
+                INV_OTHER_LABEL,
+                path,
+                7,
+                &inv_empty_payload_map(),
+            )],
+            &[
+                inv_item_slot(0, INV_MAIN_LABEL, path, 1, &inv_empty_payload_map()),
+                inv_item_slot(1, INV_MAIN_LABEL, path, 1, &inv_empty_payload_map()),
+            ],
+        );
+        let edit = PrivateInventoryItemCountEdit {
+            path: Some(path.into()),
+            count: 5,
+            slot_id: Some(1),
+            container_type: Some("MainContainer".into()),
+            ..Default::default()
+        };
+        apply_private_inventory_item_count_edit_to_payload(&mut payload, &edit).unwrap();
+        let rows = |payload: &[u8]| {
+            let root = properties::parse_private_root(payload).unwrap();
+            actor_inventory_summary_with_containers(&root, None, true)["items"].clone()
+        };
+        let items = rows(&payload);
+        assert_eq!(items[0]["count"], 7);
+        assert_eq!(items[1]["count"], 1);
+        assert_eq!(items[2]["count"], 5);
+        let before = payload.clone();
+        assert!(
+            apply_private_inventory_item_count_edit_to_payload(
+                &mut payload,
+                &PrivateInventoryItemCountEdit {
+                    slot_id: Some(42),
+                    ..edit.clone()
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(
+            payload, before,
+            "a stale slot selector never touches another stack"
+        );
+        apply_private_inventory_item_count_edit_to_payload(
+            &mut payload,
+            &PrivateInventoryItemCountEdit {
+                slot_id: Some(0),
+                container_type: Some("Quickslots".into()),
+                count: 8,
+                ..edit.clone()
+            },
+        )
+        .unwrap();
+        let items = rows(&payload);
+        assert_eq!(items[0]["count"], 8);
+        assert_eq!(items[1]["count"], 1);
+        assert_eq!(items[2]["count"], 5);
+        apply_private_inventory_remove_item_to_payload(
+            &mut payload,
+            &PrivateInventoryRemoveItemEdit {
+                path: path.into(),
+                slot_id: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let items = rows(&payload);
+        assert_eq!(items.as_array().unwrap().len(), 2);
+        assert_eq!(
+            items[1]["slotId"], 0,
+            "the other duplicate survives removal"
+        );
+        assert_eq!(items[1]["count"], 1);
     }
 
     #[test]

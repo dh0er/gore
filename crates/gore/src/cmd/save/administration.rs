@@ -595,9 +595,32 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
                 bail!("operation out of range");
             }
             let removed = list.remove(index);
+            let npc = placement_edit_npc(&removed).map(str::to_owned);
+            let has_action = npc.as_deref().is_some_and(|npc| {
+                ["placementNotes", "clearPlacementNotes"].iter().any(|key| {
+                    data[*key].as_array().is_some_and(|entries| {
+                        entries.iter().any(|entry| {
+                            let id = if *key == "placementNotes" {
+                                entry["npc"].as_str()
+                            } else {
+                                entry.as_str()
+                            };
+                            id.is_some_and(|id| id.eq_ignore_ascii_case(npc))
+                        })
+                    })
+                })
+            });
+            let list = data["edits"].as_array_mut().context("invalid draft")?;
+            if has_action {
+                list.retain(|edit| {
+                    !placement_edit_npc(edit)
+                        .zip(npc.as_deref())
+                        .is_some_and(|(id, npc)| id.eq_ignore_ascii_case(npc))
+                });
+            }
             let empty = list.is_empty();
-            // Placement sidecars describe the NPC edits that created them.
-            // Removing any part of that intent invalidates its undo action.
+            // A pin/undo/resume combines pose and routine changes with one
+            // sidecar. Discard that whole action when any of its edits is removed.
             for key in ["placementNotes", "clearPlacementNotes"] {
                 if empty {
                     data.as_object_mut().unwrap().remove(key);
@@ -1026,6 +1049,51 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removing_any_placement_component_discards_the_whole_action_and_keeps_other_edits() {
+        for key in ["placementNotes", "clearPlacementNotes"] {
+            for operation in 0..3 {
+                let temp = tempfile::tempdir().unwrap();
+                let save = temp.path().join("G1R-001.sav");
+                let file = temp.path().join("draft.json");
+                fs::write(&save, b"source").unwrap();
+                let change = |map: &str, npc: &str, member: &str| {
+                    json!({"path":"private.typed.setValue","value":{
+                        "path":[map,format!("{{{npc}}}"),member],"value":1
+                    }})
+                };
+                let attribute = change("_AttributeSet", "NPC-A", "Health");
+                let other_npc = change("PositionByGlobalId", "NPC-B", "CharacterLocation");
+                let mut payload = json!({"path":save,"edits":[
+                    change("PositionByGlobalId", "NPC-A", "CharacterLocation"),
+                    change("PositionByGlobalId", "NPC-A", "CharacterRotation"),
+                    change("DailyRoutineByGlobalId", "NPC-A", "DailyRoutineClass"),
+                    attribute, other_npc
+                ]});
+                payload[key] = if key == "placementNotes" {
+                    json!([{"npc":"npc-a","note":{}},{"npc":"NPC-B","note":{}}])
+                } else {
+                    json!(["npc-a", "NPC-B"])
+                };
+                stage(&file, &payload, false).unwrap();
+                let before = fs::read(&file).unwrap();
+                let mut options = Options {
+                    save: Some(file.clone()),
+                    operation: Some(operation),
+                    dry_run: true,
+                    ..Default::default()
+                };
+                let simulated = draft("remove", &options).unwrap();
+                assert_eq!(fs::read(&file).unwrap(), before);
+                options.dry_run = false;
+                let removed = draft("remove", &options).unwrap();
+                assert_eq!(removed, simulated);
+                assert_eq!(removed["edits"], json!([attribute, other_npc]));
+                assert_eq!(removed[key], json!([payload[key][1]]));
+            }
+        }
+    }
 
     #[test]
     fn removing_draft_operations_discards_their_placement_actions_only() {

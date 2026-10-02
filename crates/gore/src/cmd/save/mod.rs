@@ -1297,24 +1297,23 @@ fn inventory(v: &str, o: &Options) -> Result<Value> {
                 json!({"path":save(o)?,"includePrivate":true}),
             )?["private"]["inventory"]
                 .clone();
-            // The scan includes equipped items and upgrades; typed MainContainer
-            // rows additionally provide the stable slot identities used by edits.
+            // Complete typed rows carry container/slot identities and their own
+            // equipment metadata. Keep the scan only when typed inventory is absent.
             if let Ok(typed) = call("private.inventory.list", payload(o)?) {
-                let mut scanned = summary["items"].as_array().cloned().unwrap_or_default();
-                let mut items = typed["items"].as_array().cloned().unwrap_or_default();
-                for row in &mut items {
-                    if let Some(index) = scanned.iter().position(|item| {
-                        item["path"] == row["path"] && item["count"] == row["count"]
-                    }) {
-                        let item = scanned.remove(index);
-                        for key in ["equipped", "upgrades"] {
-                            row[key] = item[key].clone();
+                if typed["writable"]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty())
+                {
+                    summary["itemStackCount"] = json!(typed["items"].as_array().map(Vec::len));
+                    summary["items"] = typed["items"].clone();
+                    for capability in typed["writable"].as_array().into_iter().flatten() {
+                        if let Some(writable) = summary["writable"].as_array_mut() {
+                            if !writable.contains(capability) {
+                                writable.push(capability.clone());
+                            }
                         }
                     }
                 }
-                items.extend(scanned);
-                summary["itemStackCount"] = json!(items.len());
-                summary["items"] = json!(items);
             }
             summary
         } else {
