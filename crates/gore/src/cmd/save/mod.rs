@@ -583,6 +583,50 @@ pub(super) fn paged(command: &str, mut p: Value, o: &Options) -> Result<Value> {
     if !o.all {
         return Ok(result);
     }
+    if let Some(mut categories) = result["categories"].as_array().cloned() {
+        let count_entries = |categories: &[Value]| {
+            categories
+                .iter()
+                .map(|category| category["entries"].as_array().map_or(0, Vec::len))
+                .sum::<usize>()
+        };
+        let mut count = count_entries(&categories);
+        let mut offset = o.offset;
+        loop {
+            offset += count;
+            if count == 0 || offset >= result["total"].as_u64().unwrap_or(offset as u64) as usize {
+                break;
+            }
+            p["offset"] = json!(offset);
+            let page = call(command, p.clone())?;
+            let incoming = page["categories"]
+                .as_array()
+                .context("paged categories are not an array")?;
+            count = count_entries(incoming);
+            for category in incoming {
+                if let Some(existing) = categories.iter_mut().find(|c| c["id"] == category["id"]) {
+                    existing["entries"]
+                        .as_array_mut()
+                        .context("category entries are not an array")?
+                        .extend(
+                            category["entries"]
+                                .as_array()
+                                .context("category entries are not an array")?
+                                .iter()
+                                .cloned(),
+                        );
+                } else {
+                    categories.push(category.clone());
+                }
+            }
+        }
+        let count = count_entries(&categories);
+        result["categories"] = json!(categories);
+        result["offset"] = json!(o.offset);
+        result["limit"] = json!(count);
+        result["count"] = json!(count);
+        return Ok(result);
+    }
     let key = ["results", "quests", "npcs", "entries", "events", "values"]
         .into_iter()
         .find(|k| result[*k].is_array());

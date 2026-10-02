@@ -206,7 +206,27 @@ fn domain_writes_resolve_aliases_and_find_states_before_applying_the_new_filter(
     let save = fixture();
     let save = save.to_str().unwrap();
     for domain in ["quests", "tutorials", "glossary"] {
-        let data = run(&home, &[domain, "list", save, "--all"]);
+        let data = run(
+            &home,
+            &[
+                domain,
+                "list",
+                save,
+                "--all",
+                "--limit",
+                if domain == "glossary" { "7" } else { "100" },
+            ],
+        );
+        if domain == "glossary" {
+            let returned = data["categories"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|category| category["entries"].as_array().unwrap().len())
+                .sum::<usize>();
+            assert_eq!(Some(returned as u64), data["total"].as_u64());
+            assert_eq!(data["count"].as_u64(), Some(returned as u64));
+        }
         let row = if domain == "glossary" {
             &data["categories"][0]["entries"][0]
         } else {
