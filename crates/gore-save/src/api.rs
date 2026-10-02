@@ -249,7 +249,17 @@ pub fn recovery_status(root: &std::path::Path) -> Result<Value, CoreError> {
             if name.starts_with(crate::DELETED_SAVE_RECOVERY_MANIFEST_PREFIX)
                 && name.ends_with(crate::DELETED_SAVE_RECOVERY_MANIFEST_SUFFIX)
             {
-                if let Ok(manifest) = crate::read_deleted_save_recovery_manifest(&entry.path()) {
+                if let Ok(mut manifest) = crate::read_deleted_save_recovery_manifest(&entry.path())
+                {
+                    let Ok(Some(expected)) = crate::validate_discovered_deleted_save_recovery(
+                        root,
+                        &entry.path(),
+                        &manifest,
+                        false,
+                    ) else {
+                        continue;
+                    };
+                    manifest.persistent_post_delete_sha1 = expected;
                     manifests.push(
                         serde_json::to_value(manifest)
                             .map_err(|e| CoreError::Parse(e.to_string()))?,

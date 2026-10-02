@@ -3743,10 +3743,13 @@ fn read_deleted_save_recovery_manifest(
     Ok(manifest)
 }
 
+/// Read-only discovery uses `repair = false`; only a mutating scan may restore
+/// a claimed profile or retire an already completed recovery manifest.
 fn validate_discovered_deleted_save_recovery(
     save_root: &Path,
     manifest_path: &Path,
     manifest: &DeletedSaveRecoveryManifest,
+    repair: bool,
 ) -> Result<Option<String>, CoreError> {
     if deleted_save_recovery_manifest_path(&manifest.backup_path)? != manifest_path {
         return Err(CoreError::Validation(
@@ -3858,6 +3861,9 @@ fn validate_discovered_deleted_save_recovery(
                     "the recovery profile backup is not a valid PersistentDataList.sav: {error}"
                 ))
             })?;
+            if !repair {
+                return Ok(None);
+            }
             let staged = ScratchFile::create(
                 &manifest.persistent_path,
                 "tmp-delete-recovery",
@@ -3891,12 +3897,14 @@ fn validate_discovered_deleted_save_recovery(
         return Ok(Some(persistent_sha1));
     }
     if target_sha1.is_some() && persistent_sha1 == manifest.deleted_persistent_sha1 {
-        if let Some(warning) = retire_deleted_save_recovery_manifest(
-            &canonical_root,
-            &canonical_backup_dir,
-            manifest_path,
-        )? {
-            return Err(CoreError::Update(warning));
+        if repair {
+            if let Some(warning) = retire_deleted_save_recovery_manifest(
+                &canonical_root,
+                &canonical_backup_dir,
+                manifest_path,
+            )? {
+                return Err(CoreError::Update(warning));
+            }
         }
         return Ok(None);
     }
@@ -3926,7 +3934,7 @@ fn discover_deleted_save_recovery(save_root: &Path) -> Result<Option<Value>, Cor
             continue;
         };
         let Ok(expected_persistent_sha1) =
-            validate_discovered_deleted_save_recovery(save_root, &path, &manifest)
+            validate_discovered_deleted_save_recovery(save_root, &path, &manifest, true)
         else {
             continue;
         };
@@ -20193,6 +20201,18 @@ mod tests {
         // State after the slot claim but before the profile replacement.
         fs::write(&persistent_path, &persistent_original).unwrap();
 
+        let manifest_path = deleted_save_recovery_manifest_path(&backup_path).unwrap();
+        let manifest_before = fs::read(&manifest_path).unwrap();
+        let status = api::recovery_status(dir.path()).unwrap();
+        let listed = &status["recoveries"][0];
+        assert_eq!(
+            listed["persistentPostDeleteSha1"],
+            deleted["deletedPersistentSha1"]
+        );
+        assert_eq!(fs::read(&manifest_path).unwrap(), manifest_before);
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent_original);
+        assert!(!save_path.exists());
+
         let discovered = discover_deleted_save_recovery(dir.path())
             .unwrap()
             .expect("a missing slot with its original profile must be recoverable");
@@ -20203,9 +20223,9 @@ mod tests {
         restore_deleted_save(
             &save_path,
             &backup_path,
-            discovered["persistentPostDeleteSha1"].as_str().unwrap(),
-            discovered["deletedSaveSha1"].as_str().unwrap(),
-            discovered["deletedPersistentSha1"].as_str().unwrap(),
+            listed["persistentPostDeleteSha1"].as_str().unwrap(),
+            listed["deletedSaveSha1"].as_str().unwrap(),
+            listed["deletedPersistentSha1"].as_str().unwrap(),
         )
         .unwrap();
 
@@ -20238,6 +20258,17 @@ mod tests {
         fs::write(&persistent_path, &persistent_original).unwrap();
         let stranded_profile = claim_existing_target(&persistent_path, "claim").unwrap();
         assert!(!persistent_path.exists());
+
+        let manifest_before = fs::read(&manifest_path).unwrap();
+        assert_eq!(
+            api::recovery_status(dir.path()).unwrap()["recoveries"],
+            json!([])
+        );
+        assert!(
+            !persistent_path.exists(),
+            "listing must leave repairs to scan_save_dir"
+        );
+        assert_eq!(fs::read(&manifest_path).unwrap(), manifest_before);
 
         let response = execute_json_inner(
             &json!({

@@ -572,7 +572,36 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
             if index >= list.len() {
                 bail!("operation out of range");
             }
-            list.remove(index);
+            let removed = list.remove(index);
+            let empty = list.is_empty();
+            // Placement sidecars describe the NPC edits that created them.
+            // Removing any part of that intent invalidates its undo action.
+            for key in ["placementNotes", "clearPlacementNotes"] {
+                if empty {
+                    data.as_object_mut().unwrap().remove(key);
+                } else if let Some(entries) = data[key].as_array_mut() {
+                    entries.retain(|entry| {
+                        let npc = if key == "placementNotes" {
+                            entry["npc"].as_str()
+                        } else {
+                            entry.as_str()
+                        };
+                        !removed["value"]["path"].as_array().is_some_and(|path| {
+                            path.iter().any(|segment| {
+                                segment
+                                    .as_str()
+                                    .and_then(|s| s.strip_prefix('{'))
+                                    .and_then(|s| s.strip_suffix('}'))
+                                    .zip(npc)
+                                    .is_some_and(|(id, npc)| id.eq_ignore_ascii_case(npc))
+                            })
+                        })
+                    });
+                    if entries.is_empty() {
+                        data.as_object_mut().unwrap().remove(key);
+                    }
+                }
+            }
         } else {
             data["edits"] = json!([]);
             let save = Path::new(data["path"].as_str().context("draft has no source")?);
@@ -705,6 +734,53 @@ pub(super) fn difficulty(v: &str, o: &Options) -> Result<Value> {
     admin_write("write_difficulty", p, o)
 }
 
+fn copy_admin_files(
+    src: &Path,
+    dst: &Path,
+    backup: bool,
+    remap: &impl Fn(&mut Value),
+) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    if !src.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let to = dst.join(entry.file_name());
+        let ty = entry.file_type()?;
+        if ty.is_symlink() {
+            bail!(
+                "cannot simulate transactions through a symlink: {}",
+                path.display()
+            );
+        }
+        if ty.is_dir() && (backup || entry.file_name() == "goresave_backups") {
+            copy_admin_files(&path, &to, true, remap)?;
+        } else if ty.is_file()
+            && (backup
+                || path.extension().is_some_and(|e| e == "sav")
+                || entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.contains(".sav.assign-final-goresave-")))
+        {
+            if path.extension().is_some_and(|e| e == "json") {
+                let bytes = fs::read(&path)?;
+                if let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) {
+                    remap(&mut value);
+                    fs::write(to, serde_json::to_vec_pretty(&value)?)?;
+                } else {
+                    fs::write(to, bytes)?;
+                }
+            } else {
+                fs::copy(path, to)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Run the actual administrative core transaction against copies, including
 /// backups, manifests and placement notes. Validation is identical to a write.
 fn admin_write(command: &str, p: Value, o: &Options) -> Result<Value> {
@@ -764,42 +840,8 @@ fn admin_write(command: &str, p: Value, o: &Options) -> Result<Value> {
             _ => {}
         }
     }
-    fn copy(src: &Path, dst: &Path, backup: bool, mappings: &[(PathBuf, PathBuf)]) -> Result<()> {
-        fs::create_dir_all(dst)?;
-        if !src.is_dir() {
-            return Ok(());
-        }
-        for entry in fs::read_dir(src)? {
-            let entry = entry?;
-            let path = entry.path();
-            let to = dst.join(entry.file_name());
-            let ty = entry.file_type()?;
-            if ty.is_symlink() {
-                bail!(
-                    "cannot simulate transactions through a symlink: {}",
-                    path.display()
-                );
-            }
-            if ty.is_dir() && (backup || entry.file_name() == "goresave_backups") {
-                copy(&path, &to, true, mappings)?;
-            } else if ty.is_file() && (backup || path.extension().is_some_and(|e| e == "sav")) {
-                if path.extension().is_some_and(|e| e == "json") {
-                    let bytes = fs::read(&path)?;
-                    if let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) {
-                        remap(&mut value, mappings);
-                        fs::write(to, serde_json::to_vec_pretty(&value)?)?;
-                    } else {
-                        fs::write(to, bytes)?;
-                    }
-                } else {
-                    fs::copy(path, to)?;
-                }
-            }
-        }
-        Ok(())
-    }
     for (src, dst) in &mappings {
-        copy(src, dst, false, &mappings)?;
+        copy_admin_files(src, dst, false, &|value| remap(value, &mappings))?;
     }
     let mut request = p.clone();
     remap(&mut request, &mappings);
@@ -965,6 +1007,98 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removing_draft_operations_discards_their_placement_actions_only() {
+        for key in ["placementNotes", "clearPlacementNotes"] {
+            let temp = tempfile::tempdir().unwrap();
+            let save = temp.path().join("G1R-001.sav");
+            let file = temp.path().join("draft.json");
+            fs::write(&save, b"source").unwrap();
+            let action = |npc: &str| {
+                if key == "placementNotes" {
+                    json!({"npc":npc,"note":{
+                        "original_location":[1.0,2.0,3.0],
+                        "written_location":[4.0,5.0,6.0]
+                    }})
+                } else {
+                    json!(npc)
+                }
+            };
+            let position = |npc: &str| {
+                json!({"path":"private.typed.setValue","value":{
+                    "path":["PositionByGlobalId",format!("{{{npc}}}"),"CharacterLocation"],
+                    "value":{"x":4.0,"y":5.0,"z":6.0}
+                }})
+            };
+            let rename = json!({"path":"public.m_PlayerSaveName","value":"Unrelated"});
+            let mut payload =
+                json!({"path":save,"edits":[position("NPC-A"),position("NPC-B"),rename]});
+            payload[key] = json!([action("npc-a"), action("NPC-B")]);
+            stage(&file, &payload, false).unwrap();
+
+            let mut options = Options {
+                save: Some(file.clone()),
+                operation: Some(2),
+                ..Default::default()
+            };
+            let unchanged = draft("remove", &options).unwrap();
+            assert_eq!(
+                unchanged[key], payload[key],
+                "an unrelated removal keeps NPC actions"
+            );
+
+            options.operation = Some(0);
+            let removed = draft("remove", &options).unwrap();
+            assert_eq!(removed[key], json!([action("NPC-B")]));
+            stage(&file, &json!({"path":save,"edits":[rename]}), false).unwrap();
+            let before = fs::read(&file).unwrap();
+            options.dry_run = true;
+            assert!(draft("remove", &options).unwrap().get(key).is_none());
+            assert_eq!(fs::read(&file).unwrap(), before);
+            options.dry_run = false;
+            assert!(draft("remove", &options).unwrap().get(key).is_none());
+
+            stage(&file, &json!({"path":save,"edits":[rename]}), false).unwrap();
+            assert!(
+                read_json(&file).unwrap().get(key).is_none(),
+                "later edits must not revive removed sidecars"
+            );
+        }
+    }
+
+    #[test]
+    fn simulated_repair_copies_and_retires_assignment_claims_without_touching_the_source() {
+        let source = tempfile::tempdir().unwrap();
+        let simulation = tempfile::tempdir().unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../gore-save/assets/start_saves/resources_gothic.sav");
+        fs::copy(fixture, source.path().join("G1R-001.sav")).unwrap();
+        let claim = "G1R-001.sav.assign-final-goresave-1-2-3";
+        fs::write(source.path().join(claim), b"an older assignment").unwrap();
+        let live_before = fs::read(source.path().join("G1R-001.sav")).unwrap();
+
+        copy_admin_files(source.path(), simulation.path(), false, &|_| {}).unwrap();
+        assert_eq!(
+            fs::read(simulation.path().join(claim)).unwrap(),
+            b"an older assignment"
+        );
+        call("scan_save_dir", json!({"path":simulation.path()})).unwrap();
+        assert!(!simulation.path().join(claim).exists());
+        assert_eq!(
+            fs::read(simulation.path().join("G1R-001.sav")).unwrap(),
+            live_before
+        );
+        assert_eq!(
+            fs::read(source.path().join(claim)).unwrap(),
+            b"an older assignment"
+        );
+        assert_eq!(
+            fs::read(source.path().join("G1R-001.sav")).unwrap(),
+            live_before
+        );
+    }
+
     #[test]
     fn draft_registry_merges_story_and_partial_attributes_and_guards_profile_snapshot() {
         let temp = tempfile::tempdir().unwrap();
