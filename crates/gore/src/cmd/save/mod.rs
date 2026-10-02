@@ -803,6 +803,15 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             }
             api::execute(&request).map_err(Into::into)
         }
+        ("characters", "show") => {
+            let selected = Options {
+                actor: o.id.clone().unwrap_or_else(|| o.actor.clone()),
+                ..o.clone()
+            };
+            let mut row = actor_row(&selected)?;
+            presentation::Characters::load()?.annotate(&mut row);
+            Ok(row)
+        }
         ("characters", _) => {
             let mut data = call("private.characters.list", payload(o)?)?;
             let classifier = presentation::Characters::load()?;

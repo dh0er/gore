@@ -199,6 +199,63 @@ fn localization_find_matches_identifiers_regardless_of_case() {
 }
 
 #[test]
+fn character_show_resolves_hero_actor_aliases_and_ids_independently_of_pagination() {
+    let home = tempfile::tempdir().unwrap();
+    let save = fixture();
+    let save = save.to_str().unwrap();
+    let roster = run(home.path(), &["characters", "list", save, "--all"]);
+    let rows = roster["characters"].as_array().unwrap();
+    let hero = rows.iter().find(|row| row["globalId"] == "Hero").unwrap();
+    let shown = run(
+        home.path(),
+        &[
+            "characters",
+            "show",
+            save,
+            "--offset",
+            "100000",
+            "--limit",
+            "1",
+        ],
+    );
+    assert_eq!(&shown, hero);
+    let npc = rows
+        .iter()
+        .find(|row| {
+            row["uniqueName"]
+                .as_str()
+                .is_some_and(|name| name.contains("Diego"))
+                && rows
+                    .iter()
+                    .filter(|candidate| candidate["uniqueName"] == row["uniqueName"])
+                    .count()
+                    == 1
+        })
+        .unwrap();
+    for (option, value) in [
+        ("--actor", npc["uniqueName"].as_str().unwrap().to_string()),
+        ("--actor", npc["globalId"].as_str().unwrap().to_lowercase()),
+        ("--id", npc["globalId"].as_str().unwrap().to_uppercase()),
+    ] {
+        let shown = run(
+            home.path(),
+            &[
+                "characters",
+                "show",
+                save,
+                option,
+                &value,
+                "--offset",
+                "100000",
+                "--limit",
+                "1",
+            ],
+        );
+        assert_eq!(&shown, npc);
+    }
+}
+
+#[test]
 fn skill_story_event_selectors_and_attribute_offsets_select_the_requested_records() {
     let home = tempfile::tempdir().unwrap();
     let save = fixture();
