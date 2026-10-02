@@ -653,6 +653,7 @@ pub(super) fn position(v: &str, o: &Options) -> Result<Value> {
         .and_then(|rows| rows.iter().find(|r| r["npc"] == o.actor))
         .map(|r| serde_json::from_value::<gore_save::placement::PlacementNote>(r["note"].clone()))
         .transpose()?;
+    let previous_note = gore_save::placement::read_notes(save(o)?).remove(&o.actor);
     let mut extras = json!({});
     let mut edits = Vec::new();
     if v == "reset-to-spawn" {
@@ -676,14 +677,28 @@ pub(super) fn position(v: &str, o: &Options) -> Result<Value> {
         if data["undo"][valid] != true {
             bail!("placement undo is absent or stale");
         }
+        let original_routine = data["undo"]["originalRoutineClass"]
+            .as_str()
+            .filter(|class| !class.trim().is_empty());
+        if original_routine.is_none()
+            && (v == "resume-routine"
+                || previous_note
+                    .as_ref()
+                    .is_some_and(|note| note.written_routine_class.is_some()))
+        {
+            bail!("the original NPC routine is unavailable; placement note retained");
+        }
         if v == "undo" {
             next["location"] = data["undo"]["originalLocation"].clone();
             if !data["undo"]["originalRotation"].is_null() {
                 next["rotation"] = data["undo"]["originalRotation"].clone();
             }
         }
-        if !data["undo"]["originalRoutineClass"].is_null() {
-            edits.push(edit("private.typed.setValue",json!({"path":data["routineClassPath"],"value":data["undo"]["originalRoutineClass"]})));
+        if let Some(class) = original_routine {
+            edits.push(edit(
+                "private.typed.setValue",
+                json!({"path":data["routineClassPath"],"value":class}),
+            ));
         }
         extras["clearPlacementNotes"] = json!([o.actor]);
     } else {
@@ -714,7 +729,7 @@ pub(super) fn position(v: &str, o: &Options) -> Result<Value> {
                 json!({"path":data["routineClassPath"],"value":data["inertRoutineClass"]}),
             ));
         }
-        let previous = gore_save::placement::read_notes(save(o)?).remove(&o.actor);
+        let previous = previous_note;
         if previous.is_some()
             && (data["undo"]["restorable"] != true || data["undo"]["routineRestorable"] != true)
         {

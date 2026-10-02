@@ -51,6 +51,104 @@ fn run_failure(home: &Path, args: &[&str]) -> Value {
 }
 
 #[test]
+fn npc_restores_require_the_original_pinned_routine_and_preserve_its_note() {
+    let temp = tempfile::tempdir().unwrap();
+    let save = temp.path().join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let home = temp.path();
+    let actor = "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN";
+    let original = run(home, &["position", "show", save_arg, "--actor", actor]);
+    let x = (original["pose"]["location"]["x"].as_f64().unwrap() + 100.0).to_string();
+    run(
+        home,
+        &[
+            "position", "set", save_arg, "--actor", actor, "--x", &x, "--stay",
+        ],
+    );
+    let notes = gore_save::placement::read_notes(&save);
+    let (id, valid_note) = notes.iter().next().unwrap();
+    assert!(
+        valid_note
+            .original_routine_class
+            .as_ref()
+            .is_some_and(|class| !class.is_empty())
+    );
+    let pinned_sha1 = gore_save::api::file_sha1(&save).unwrap();
+    let pinned = run(home, &["position", "show", save_arg, "--actor", actor]);
+    let draft = home.join("restore-draft.json");
+    run(
+        home,
+        &[
+            "draft",
+            "create",
+            draft.to_str().unwrap(),
+            "--target",
+            save_arg,
+        ],
+    );
+    let draft_bytes = fs::read(&draft).unwrap();
+    let backup_count = fs::read_dir(home.join("goresave_backups")).unwrap().count();
+    for missing in [None, Some(String::new())] {
+        gore_save::placement::mutate_notes(&save, |notes| {
+            notes.get_mut(id).unwrap().original_routine_class = missing.clone();
+        })
+        .unwrap();
+        let note_path = gore_save::placement::notes_path(&save);
+        let note_bytes = fs::read(&note_path).unwrap();
+        let status = run(
+            home,
+            &["position", "pin-status", save_arg, "--actor", actor],
+        );
+        assert_eq!(status["undo"]["restorable"], true);
+        assert_eq!(status["undo"]["routineRestorable"], true);
+        for operation in ["resume-routine", "undo"] {
+            for flags in [
+                vec![],
+                vec!["--dry-run"],
+                vec!["--draft", draft.to_str().unwrap()],
+            ] {
+                let mut args = vec!["position", operation, save_arg, "--actor", actor];
+                args.extend(flags);
+                let error = run_failure(home, &args);
+                assert!(
+                    error["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("original NPC routine is unavailable")
+                );
+                assert_eq!(gore_save::api::file_sha1(&save).unwrap(), pinned_sha1);
+                assert_eq!(fs::read(&note_path).unwrap(), note_bytes);
+                assert_eq!(fs::read(&draft).unwrap(), draft_bytes);
+                assert_eq!(
+                    fs::read_dir(home.join("goresave_backups")).unwrap().count(),
+                    backup_count
+                );
+            }
+        }
+    }
+    gore_save::placement::record(&save, &[(id.clone(), valid_note.clone())]).unwrap();
+    run(
+        home,
+        &["position", "resume-routine", save_arg, "--actor", actor],
+    );
+    let resumed = run(home, &["position", "show", save_arg, "--actor", actor]);
+    assert_eq!(resumed["routineClass"], original["routineClass"]);
+    assert_eq!(resumed["pose"], pinned["pose"]);
+    assert!(resumed["undo"].is_null());
+    // A note for a move that left the routine alone needs only a pose restore.
+    let mut move_note = valid_note.clone();
+    move_note.original_routine_class = None;
+    move_note.written_routine_class = None;
+    gore_save::placement::record(&save, &[(id.clone(), move_note)]).unwrap();
+    run(home, &["position", "undo", save_arg, "--actor", actor]);
+    let restored = run(home, &["position", "show", save_arg, "--actor", actor]);
+    assert_eq!(restored["pose"], original["pose"]);
+    assert_eq!(restored["routineClass"], original["routineClass"]);
+    assert!(restored["undo"].is_null());
+}
+
+#[test]
 fn recovery_show_selects_one_record_without_changing_recovery_files() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
