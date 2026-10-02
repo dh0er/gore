@@ -118,10 +118,16 @@ pub struct ItemIconFileSeal {
 /// receives an immutable generation directory.
 pub fn prepare_item_icon_cache(game_root: &Path, items: &[ItemIconSpec]) -> Result<PathBuf> {
     let cache_root = gore_loc::paths::shared_data_dir();
+    prepare_item_icon_cache_at(game_root,items,&cache_root,true)
+}
+
+/// Prepare and verify images in a caller-owned cache root. Dry-run clients use
+/// an empty temporary directory and omit a persistent generation lease.
+pub fn prepare_item_icon_cache_at(game_root:&Path,items:&[ItemIconSpec],cache_root:&Path,lease:bool)->Result<PathBuf>{
     std::fs::create_dir_all(&cache_root)?;
     let utoc = crate::paths::main_container(game_root)?;
     let mut source = InstalledItemIconSource::open(&utoc, &cache_root)?;
-    prepare_item_icon_cache_with_source_and_lease(&cache_root, items, &mut source, true)
+    prepare_item_icon_cache_with_source_and_lease(&cache_root, items, &mut source, lease)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -800,6 +806,17 @@ fn complete_cache_matches(directory: &Path, expected: &ExpectedItemIconManifest)
         }
     }
     Ok(true)
+}
+
+/// Verify all paths, resource budgets, PNG bytes and decoded pixel seals in an
+/// existing cache, without preparing or publishing another generation.
+pub fn verified_item_icon_manifest(path: &Path) -> Result<ItemIconManifest> {
+    if path.file_name().and_then(|s|s.to_str())!=Some(MANIFEST_FILE_NAME) {
+        return Err(invalid_data("item icon path must name manifest.json"));
+    }
+    let directory=path.parent().ok_or_else(||invalid_data("manifest has no directory"))?;
+    if !complete_cache_is_owned(directory)? {return Err(invalid_data("item icon cache is incomplete or its seals no longer match"));}
+    structurally_complete_owned_manifest(directory)?.ok_or_else(||invalid_data("item icon manifest disappeared during verification"))
 }
 
 fn complete_cache_is_owned(directory: &Path) -> Result<bool> {

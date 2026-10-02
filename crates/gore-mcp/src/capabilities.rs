@@ -277,6 +277,7 @@ subcommand and returns its output with the exact command line for reproduction.
 TOOLS
   gore_guide     Search and read the modding guide and the technical reference. Start here.
   gore_help      The CLI's own `--help` for any command: exact flags, always current.
+  gore_save      Complete Save Editor operations: saves, profiles, actors, world, raw data, backups and drafts.
   gore_config    The shared configuration, above all where the game is installed.
   gore_doctor    Read-only setup and compiler readiness. Run once at the start of an authoring session.
   gore_find      Look an id, a class name or a display name up across every offline catalog.

@@ -35,6 +35,7 @@ pages! {
     Guide / "README"               => "guide/README.md",
     Guide / "getting-started"      => "guide/getting-started.md",
     Guide / "cli-reference"        => "guide/cli-reference.md",
+    Guide / "save-games"           => "guide/save-games.md",
     Guide / "find"                 => "guide/find.md",
     Guide / "dialog-trees"         => "guide/dialog-trees.md",
     Guide / "mcp"                  => "guide/mcp.md",

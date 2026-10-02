@@ -1232,10 +1232,16 @@ fn scalar(command: &CommandSpec, spec: &ArgSpec, value: &Value) -> Result<String
             }
             Ok(given.to_string())
         }
-        ArgKind::Bool => Err(BuildError::WrongType {
+        ArgKind::Float => value.as_f64().filter(|n|n.is_finite()).map(|n|n.to_string()).ok_or_else(||BuildError::WrongType {
             sub: command.sub,
             name: spec.name,
-            expected: "declared as a switch, not a value".into(),
+            expected: "a finite number".into(),
+            got: type_name(value),
+        }),
+        ArgKind::Bool => value.as_bool().map(|b|b.to_string()).ok_or_else(||BuildError::WrongType {
+            sub: command.sub,
+            name: spec.name,
+            expected: "a boolean".into(),
             got: type_name(value),
         }),
         ArgKind::StrList | ArgKind::IntList => Err(BuildError::WrongType {
@@ -1403,6 +1409,17 @@ mod tests {
         opts.allow_write = true;
         opts.allow_game_launch = true;
         opts
+    }
+
+    #[test]
+    fn save_arguments_preserve_fractional_coordinates_and_explicit_false_settings() {
+        let invocation=build_with("gore_save","position set",json!({"save":"fixture.sav","x":-12.75,"dry_run":true}),&permissive()).unwrap();
+        let args=invocation.argv.iter().map(|s|s.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert!(args.windows(2).any(|pair|pair==["--x","-12.75"]));
+        let invocation=build_with("gore_save","difficulty set",json!({"profile":1,"flow_helper":false,"permadeath":false,"dry_run":true}),&permissive()).unwrap();
+        let args=invocation.argv.iter().map(|s|s.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert!(args.windows(2).any(|pair|pair==["--flow-helper","false"]));
+        assert!(build_with("gore_save","position set",json!({"x":"wrong"}),&permissive()).is_err());
     }
 
     fn compile_args() -> Value {
@@ -3513,7 +3530,7 @@ mod tests {
                         }
                         ArgForm::Long(_) | ArgForm::Positional { .. } => !matches!(
                             arg.kind,
-                            ArgKind::Bool | ArgKind::StrList | ArgKind::IntList
+                            ArgKind::StrList | ArgKind::IntList
                         ),
                     };
                     assert!(

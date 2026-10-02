@@ -496,6 +496,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }
 
   final GoresaveCoreService _core;
+  bool _planningSave = false;
   final EditorSettingsStore _settingsStore;
   final AppLocalizations Function() _localizations;
   final bool Function(String path) _fileExists;
@@ -1352,7 +1353,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<bool> saveAllPending() async {
     if (state.hasInvalidEdits) return false;
     if (state.pendingEdits.isEmpty) return true;
-    if (state.isLoading) return false;
+    if (state.isLoading || _planningSave) return false;
     if (state.deletedSaveRecovery != null &&
         state.pendingEditsChangePersistentDataList) {
       return false;
@@ -1391,524 +1392,56 @@ class EditorNotifier extends StateNotifier<EditorState> {
       clearPlacementNotes.addAll(entry.clearPlacementNotes);
     }
 
-    // The same typed property can be edited from two surfaces at once (the
-    // Player tab's hero stats and the All data browser). Batching both would
-    // silently let sorted-key order pick the winner — refuse instead and let
-    // the user resolve the conflict.
-    final seenTypedPaths = <String>{};
-    final typedPaths = <List<Object?>>[];
-    for (final keyed in allEdits) {
-      final edit = keyed.edit;
-      if (edit['path'] != 'private.typed.setValue') continue;
-      final value = edit['value'];
-      if (value is! Map) continue;
-      final rawPath = value['path'];
-      if (rawPath is! List) continue;
-      final typedPath = List<Object?>.from(rawPath);
-      typedPaths.add(typedPath);
-      final path = typedPath.join(' › ');
-      if (!seenTypedPaths.add(path)) {
-        state = state.copyWith(
-          error: _l10n.editorConflictingPropertyEdits(path),
-        );
-        return false;
-      }
+    // Planning lives in the native core and is shared by the CLI. Preserve
+    // the registry's map identities so partial commits clear only their edits.
+    Map<String, Object?> planned;
+    _planningSave = true;
+    state = state.copyWith(isLoading: true);
+    try {
+      planned = await _execute(
+        'plan_edits',
+        payload: {
+          'edits': [for (final keyed in allEdits) keyed.edit],
+        },
+      );
+    } catch (error) {
+      state = state.copyWith(error: _l10n.editorSaveFailed('$error'));
+      return false;
+    } finally {
+      _planningSave = false;
+      state = state.copyWith(isLoading: false);
     }
-
-    // Glossary segment edits add/remove entries in the Hero's MemorizedEvents
-    // array. A queued raw typed edit to that array (or one of its descendants)
-    // cannot be sequenced safely with the structural glossary operation: the
-    // fixed typed batch runs first, after which a removal can discard that
-    // edited event, while editing OptionalClass1/2 can make the glossary lookup
-    // miss its target. Refuse the ambiguous combination instead of reporting
-    // success for two edits when only one intent survives.
-    final hasGlossarySegmentEdit = allEdits.any(
-      (keyed) => keyed.edit['path'] == 'private.glossary.setSegment',
-    );
-    if (hasGlossarySegmentEdit) {
-      for (final keyed in allEdits) {
-        final edit = keyed.edit;
-        final editPath = edit['path'];
-        if (editPath is! String || !editPath.startsWith('private.typed.')) {
-          continue;
-        }
-        final value = edit['value'];
-        if (value is! Map) continue;
-        final rawPath = value['path'];
-        if (rawPath is! List || !_addressesHeroMemorizedEvents(rawPath)) {
-          continue;
-        }
-        final path = rawPath.join(' › ');
-        state = state.copyWith(error: _l10n.editorGlossaryMemoryConflict(path));
-        return false;
-      }
+    if (planned['ok'] != true) {
+      final error = (planned['error'] as Map?) ?? const {};
+      final path = error['path']?.toString() ?? '';
+      final message = switch (error['kind']) {
+        'property' => _l10n.editorConflictingPropertyEdits(path),
+        'glossaryMemory' => _l10n.editorGlossaryMemoryConflict(path),
+        'glossaryQuest' => _l10n.editorGlossaryQuestConflict(path),
+        'relationship' => _l10n.editorRelationshipConflict(path),
+        'structuralMultiple' => _l10n.editorMultipleStructuralArrayEdits(path),
+        'structuralValue' => _l10n.editorStructuralArrayConflict(path),
+        'skillsEffect' => _l10n.editorSkillsEffectConflict,
+        'inventoryReset' => _l10n.editorInventoryResetConflict,
+        'inventorySlot' => _l10n.editorInventorySlotEditConflict,
+        'traderArray' => _l10n.editorTraderArrayConflict,
+        _ => _l10n.editorSaveFailed(_errorDetails(planned)),
+      };
+      state = state.copyWith(error: message);
+      return false;
     }
-
-    // A glossary segment operation with a questStatePath updates that
-    // CurrentState itself. Refuse a raw typed write to the exact same path;
-    // sequencing the two would silently make whichever sub-write runs last win.
-    //
-    // This has to catch every pair the core's own rule claims, or the packer
-    // splits the pair into two writes and lets the later one win in silence.
-    // So: any raw typed operation, not only a value write; the quest path under
-    // either of the two names the core reads it from; and the paths compared the
-    // way the core compares them, where an index segment is a number and [04]
-    // and [4] are one and the same.
-    if (hasGlossarySegmentEdit) {
-      final rawTypedPaths = <List<Object?>>[];
-      for (final keyed in allEdits) {
-        final editPath = keyed.edit['path'];
-        if (editPath is! String || !editPath.startsWith('private.typed.')) {
-          continue;
-        }
-        final value = keyed.edit['value'];
-        if (value is! Map) continue;
-        final rawPath = value['path'];
-        if (rawPath is List) rawTypedPaths.add(List<Object?>.from(rawPath));
-      }
-      for (final keyed in allEdits) {
-        final edit = keyed.edit;
-        if (edit['path'] != 'private.glossary.setSegment') continue;
-        final value = edit['value'];
-        if (value is! Map) continue;
-        final rawQuestPath = value['questStatePath'] ?? value['statePath'];
-        if (rawQuestPath is! List) continue;
-        final questPath = List<Object?>.from(rawQuestPath);
-        if (!rawTypedPaths.any((path) => _sameCorePath(path, questPath))) {
-          continue;
-        }
-        final path = questPath.join(' › ');
-        state = state.copyWith(error: _l10n.editorGlossaryQuestConflict(path));
-        return false;
-      }
-    }
-
-    // A structured relationship edit patches or appends an object below this
-    // NPC's RelationshipByGlobalId entry. A queued All-data edit below the same
-    // entry can therefore be overwritten by that later structural write (or an
-    // array removal can be undone when the structured write recreates the
-    // modifier). Block only the same-NPC collision; edits for different NPCs
-    // remain safely sequenced across their separate writes.
-    final relationshipNpcIds = <String>{};
-    for (final keyed in allEdits) {
-      final edit = keyed.edit;
-      if (edit['path'] != 'private.npc.setRelationship') continue;
-      final value = edit['value'];
-      if (value is! Map) continue;
-      final id = value['id'];
-      if (id is String && id.trim().isNotEmpty) {
-        relationshipNpcIds.add(id.trim().toLowerCase());
-      }
-    }
-    if (relationshipNpcIds.isNotEmpty) {
-      for (final keyed in allEdits) {
-        final edit = keyed.edit;
-        final editPath = edit['path'];
-        if (editPath is! String || !editPath.startsWith('private.typed.')) {
-          continue;
-        }
-        final value = edit['value'];
-        if (value is! Map) continue;
-        final rawPath = value['path'];
-        if (rawPath is! List ||
-            !_addressesNpcRelationshipEntry(rawPath, relationshipNpcIds)) {
-          continue;
-        }
-        final path = rawPath.join(' › ');
-        state = state.copyWith(error: _l10n.editorRelationshipConflict(path));
-        return false;
-      }
-    }
-
-    // Structural array edits are index-addressed. Multiple REMOVES for one
-    // array are safe when they target distinct original indices and run from
-    // highest to lowest: a higher splice cannot shift a lower target. Keep
-    // duplicate exclusive, however; insertion mixed with another structural
-    // intent is rejected rather than assigning surprising index semantics.
-    // Also reject a raw value edit inside a structurally edited array, where a
-    // splice could retarget that descendant.
-    final structuralArrayGroups = <_StructuralArrayGroup>[];
-    for (final keyed in allEdits) {
-      final op = keyed.edit['path'];
-      if (op != 'private.typed.arrayRemove' &&
-          op != 'private.typed.arrayDuplicate') {
-        continue;
-      }
-      final value = keyed.edit['value'];
-      final rawPath = value is Map ? value['path'] : null;
-      if (rawPath is! List) continue;
-      final path = List<Object?>.from(rawPath);
-      final rawIndex = value is Map ? value['index'] : null;
-      if (rawIndex is! num || rawIndex < 0 || rawIndex != rawIndex.toInt()) {
-        continue;
-      }
-      _StructuralArrayGroup? group;
-      for (final candidate in structuralArrayGroups) {
-        if (_sameEditorPath(candidate.path, path)) {
-          group = candidate;
-          break;
-        }
-      }
-      group ??= _StructuralArrayGroup(path);
-      if (!structuralArrayGroups.contains(group)) {
-        structuralArrayGroups.add(group);
-      }
-      final index = rawIndex.toInt();
-      if (group.edits.any((candidate) => candidate.index == index)) {
-        state = state.copyWith(
-          error: _l10n.editorMultipleStructuralArrayEdits(path.join(' › ')),
-        );
-        return false;
-      }
-      group.edits.add(
-        _IndexedStructuralEdit(
-          keyed: keyed,
-          index: index,
-          isDuplicate: op == 'private.typed.arrayDuplicate',
+    final groups = ((planned['data'] as Map)['groups'] as List);
+    final worklist = <_SubWrite>[
+      for (var i = 0; i < groups.length; i++)
+        _SubWrite(
+          edits: [
+            for (final index in groups[i] as List) allEdits[index as int].edit,
+          ],
+          syncPersistentDataList: i == 0 && syncPersistent,
+          placementNotes: i == 0 ? placementNotes : const [],
+          clearPlacementNotes: i == 0 ? clearPlacementNotes : const [],
         ),
-      );
-    }
-    for (final group in structuralArrayGroups) {
-      if (group.edits.length > 1 &&
-          group.edits.any((edit) => edit.isDuplicate)) {
-        state = state.copyWith(
-          error: _l10n.editorMultipleStructuralArrayEdits(
-            group.path.join(' › '),
-          ),
-        );
-        return false;
-      }
-      group.edits.sort((left, right) => right.index.compareTo(left.index));
-      final arrayPath = group.path;
-      final conflictingValuePath = typedPaths.where(
-        (path) => _editorPathIsPrefix(arrayPath, path),
-      );
-      if (conflictingValuePath.isEmpty) continue;
-      state = state.copyWith(
-        error: _l10n.editorStructuralArrayConflict(arrayPath.join(' › ')),
-      );
-      return false;
-    }
-    // Revive removes defeat/kill events across every owner's MemorizedEvents
-    // array. Combining it with an index-addressed edit to one of those arrays
-    // could shift the queued target before its sub-write, so require separate
-    // saves for those intentions.
-    final hasNpcRevive = allEdits.any(
-      (keyed) => keyed.edit['path'] == 'private.npc.revive',
-    );
-    if (hasNpcRevive) {
-      for (final group in structuralArrayGroups) {
-        if (!group.path.contains('MemorizedEvents')) continue;
-        state = state.copyWith(
-          error: _l10n.editorMultipleStructuralArrayEdits(
-            group.path.join(' › '),
-          ),
-        );
-        return false;
-      }
-    }
-
-    // Splicing structural edits (inventory, knowledge, glossary segments,
-    // memory events, NPC revive/relationship) insert or remove bytes mid-payload and shift every
-    // offset/index after the splice point; the core rejects a write that mixes
-    // one with ANY peer edit. Mirror the core's list and give each splicing edit
-    // its OWN write_save; everything else (fixed-size, in-place) batches into a
-    // single trailing write. Because the core re-reads the file fresh on every
-    // write_save and re-resolves symbolic paths per edit, sequential writes
-    // chain safely — even two splices on the same NPC, where the second
-    // re-parses the first's already-spliced tag container.
-    const splicingPaths = {
-      'private.inventory.addItem',
-      'private.inventory.removeItem',
-      'private.inventory.reset',
-      'private.knowledge.addCharacter',
-      'private.knowledge.setEntry',
-      'private.typed.arrayRemove',
-      'private.typed.arrayDuplicate',
-      'private.glossary.setSegment',
-      'private.npc.revive',
-      'private.npc.setRelationship',
-      // Both splice a trader's stock map, which shifts every later byte offset
-      // and renumbers the map's entry indices. private.traders.setStock is
-      // deliberately absent: it overwrites a bare i32 in place, so it batches.
-      'private.traders.addItem',
-      'private.traders.removeItem',
-      storyStateApplyPath,
-    };
-    // A skill edit can learn/unlearn — splicing the hero's ActiveEffects array —
-    // and the core rejects a write that mixes it with an index-addressed edit
-    // (an All-Data edit whose path steps through `[i]`), since the splice shifts
-    // that index. Skill edits DO batch safely among themselves, so give all of
-    // them ONE write of their own, run LAST — after the fixed batch so any
-    // indexed peer resolves against the pre-splice layout first.
-    const skillPath = 'private.skills.set';
-    final splicing = allEdits
-        .where((k) => splicingPaths.contains(k.edit['path']))
-        .toList();
-    // Reorder only the occupied positions for each array path. Other splicing
-    // operations retain their stable order, while every allowed remove group
-    // reaches its singleton sub-writes index-descending even if another caller
-    // inserted the pending edits out of order.
-    for (final group in structuralArrayGroups) {
-      final positions = <int>[];
-      for (var i = 0; i < splicing.length; i++) {
-        if (group.edits.any(
-          (entry) => identical(entry.keyed.edit, splicing[i].edit),
-        )) {
-          positions.add(i);
-        }
-      }
-      for (var i = 0; i < positions.length; i++) {
-        splicing[positions[i]] = group.edits[i].keyed;
-      }
-    }
-    // Adding a segment needs an existing SegmentUnlocked event as its byte
-    // template. If the same Save removes its last unlock first, a later add can
-    // no longer be encoded. Stable-partition only the glossary slots so all
-    // adds precede all removals while every non-glossary splice keeps its
-    // original position relative to the other structural operations.
-    final glossarySplices = splicing
-        .where((k) => k.edit['path'] == 'private.glossary.setSegment')
-        .toList();
-    final orderedGlossarySplices = <_KeyedEdit>[
-      ...glossarySplices.where(
-        (k) => (k.edit['value'] as Map?)?['unlocked'] == true,
-      ),
-      ...glossarySplices.where(
-        (k) => (k.edit['value'] as Map?)?['unlocked'] != true,
-      ),
     ];
-    var nextGlossarySplice = 0;
-    final orderedSplicing = <_KeyedEdit>[
-      for (final keyed in splicing)
-        if (keyed.edit['path'] == 'private.glossary.setSegment')
-          orderedGlossarySplices[nextGlossarySplice++]
-        else
-          keyed,
-    ];
-    final skillEdits = allEdits
-        .where((k) => k.edit['path'] == skillPath)
-        .toList();
-    // A raw All-Data `private.typed.setValue` on an ActiveEffects `EffectSpec/Def`
-    // leaf and a Skills-panel edit for the SAME actor both target that actor's
-    // effect array. They cannot be sequenced safely: a skill learn/unlearn
-    // SPLICES the array, so a Def edit ordered after it re-resolves its `[i]`
-    // against a shifted array and retargets the wrong effect — and ordered before
-    // it changes the GE class the skill edit resolves by base. Refuse only that
-    // same-actor collision (like the two-tab conflict above); a hero skill edit
-    // paired with an NPC's Def edit (or vice-versa) touches different arrays and
-    // is safe. With no skill edit for the Def's actor the Def edit is a normal
-    // fixed-size in-place write and batches as usual.
-    final skillActors = <String>{
-      for (final k in skillEdits) ?_skillEditActor(k.edit),
-    };
-    if (allEdits.any((k) {
-      final actor = _activeEffectsDefActor(k.edit);
-      return actor != null && skillActors.contains(actor);
-    })) {
-      state = state.copyWith(error: _l10n.editorSkillsEffectConflict);
-      return false;
-    }
-    // A reset REPLACES the whole m_Inventory of its actor. Any other edit that
-    // touches that SAME inventory — a structured setItemCount/addItem/removeItem
-    // for the same actor, or a raw All-data private.typed.setValue stepping
-    // through an m_Inventory — lands in an earlier sub-write (the fixed batch, or
-    // another splice), so the reset would silently overwrite (discard) it while
-    // Save still reported success for both. Refuse the combination (like the
-    // conflicts above); the reset and the other inventory edit must be saved
-    // separately. Structured ops are matched by the reset's actorId (null =
-    // player); the raw typed case is matched broadly (its actor is not cheaply
-    // recoverable from the path), so a cross-actor typed pair just gets a "save
-    // separately" nudge rather than a silent overwrite.
-    final resetActors = <String?>{
-      for (final k in allEdits)
-        if (k.edit['path'] == 'private.inventory.reset')
-          (k.edit['value'] as Map?)?['actorId'] as String?,
-    };
-    if (resetActors.isNotEmpty &&
-        allEdits.any((k) {
-          final path = k.edit['path'];
-          if (path == 'private.inventory.reset') return false;
-          if (_isInventoryTypedEdit(k.edit)) return true;
-          if (path == 'private.inventory.setItemCount' ||
-              path == 'private.inventory.addItem' ||
-              path == 'private.inventory.removeItem') {
-            return resetActors.contains(
-              (k.edit['value'] as Map?)?['actorId'] as String?,
-            );
-          }
-          return false;
-        })) {
-      state = state.copyWith(error: _l10n.editorInventoryResetConflict);
-      return false;
-    }
-    // The whole-save slot repair rewrites every misaligned m_Id. Any edit that
-    // addresses a slot by the id the UI showed — an NPC removal or count edit —
-    // must therefore run BEFORE it, so the repair gets its own trailing write
-    // instead of leading the fixed batch.
-    const repairSlotsPath = 'private.inventory.repairSlots';
-    final repairEdits = allEdits
-        .where((k) => k.edit['path'] == repairSlotsPath)
-        .toList();
-    // An add or a removal claims a whole slot — the add fills a blank one and
-    // resets its payload, the removal blanks one — so ANY raw All-Data edit into
-    // a slot would be silently overwritten while Save still reported success.
-    // The repair is narrower: it only rewrites ids, and only after everything
-    // else has run, so it collides with an edit of a slot's m_Id and with
-    // nothing else. Refuse those combinations the way a queued reset does.
-    const slotClaimingPaths = {
-      'private.inventory.addItem',
-      'private.inventory.removeItem',
-    };
-    final claimsSlots = allEdits.any(
-      (k) => slotClaimingPaths.contains(k.edit['path']),
-    );
-    final conflicts = claimsSlots
-        ? allEdits.any((k) => isInventorySlotTypedEdit(k.edit))
-        : repairEdits.isNotEmpty &&
-              allEdits.any((k) => isInventorySlotIdTypedEdit(k.edit));
-    if (conflicts) {
-      state = state.copyWith(error: _l10n.editorInventorySlotEditConflict);
-      return false;
-    }
-    // A trade change and a raw array operation on the trader array cannot be
-    // rescued by putting them in different writes: the trade change's row index
-    // came from a list read before either ran, so whichever goes second
-    // resolves it against a layout the first moved. The core refuses the pair
-    // inside one write; splitting them here would slip past that and report
-    // both as committed, so refuse before building the worklist.
-    if (traderArrayConflict(allEdits.map((k) => k.edit).toList()) != null) {
-      state = state.copyWith(error: _l10n.editorTraderArrayConflict);
-      return false;
-    }
-    // Lock changes splice the lock set and door arrays; relocking also pairs
-    // message names with structs by index. Splitting a conflicting raw edit
-    // into another write can shift its target or remap a door message, so
-    // reject every affected container before any sub-write reaches the save.
-    final lockEdits = allEdits
-        .where((keyed) => keyed.edit['path'] == 'private.locks.setUnlocked')
-        .toList();
-    if (lockEdits.isNotEmpty) {
-      for (final keyed in allEdits) {
-        final path = _rawTypedEditPath(keyed.edit);
-        if (path != null &&
-            lockEdits.any((lock) => structuredEditRewrites(lock.edit, path))) {
-          state = state.copyWith(
-            error: _l10n.editorConflictingPropertyEdits(path.join(' › ')),
-          );
-          return false;
-        }
-      }
-    }
-    final fixedBatch = allEdits
-        .where(
-          (k) =>
-              !splicingPaths.contains(k.edit['path']) &&
-              k.edit['path'] != skillPath &&
-              k.edit['path'] != repairSlotsPath,
-        )
-        .toList();
-    // Only one edit in this batch can move anything: a raw write to a slot's
-    // m_Id, which renumbers the ids and positions that a count or an indexed
-    // edit is addressed BY. Splitting the two would not make them safe — the
-    // second write would still resolve an id the first had already moved — but
-    // their order among the fixed edits is free, so let everything that moves
-    // nothing go first, where it still resolves against the layout the user was
-    // looking at. That is also the order the core accepts, so the pair keeps
-    // sharing one write.
-    final fixedMoversLast = [
-      ...fixedBatch.where((k) => !_mayInvalidateOrdinals(k.edit)),
-      ...fixedBatch.where((k) => _mayInvalidateOrdinals(k.edit)),
-    ];
-
-    // The edits in the exact order they must reach the core, which applies a batch
-    // sequentially against one payload and re-resolves every edit's target as it
-    // goes. All the ordering this method computed above is preserved by simple
-    // concatenation:
-    //  - the fixed batch leads. It carries syncPersistentDataList, so it is the
-    //    backup-taking write; and a manual Health edit lands before a splicing
-    //    npc.revive's HP restore, so the Revive action still wins as last writer.
-    //  - the splices keep glossary adds ahead of removals and array removals
-    //    index-descending.
-    //  - skills follow, then the slot repair, so every id-addressed edit above
-    //    resolved against the ids the user actually saw.
-    //  - story goes last: it always needs its own write, and putting it at the end
-    //    keeps it from taking the backup away from the syncPersistentDataList one.
-    final ordered = <_KeyedEdit>[
-      ...fixedMoversLast,
-      ...orderedSplicing.where((k) => k.edit['path'] != storyStateApplyPath),
-      ...skillEdits,
-      ...repairEdits,
-      ...orderedSplicing.where((k) => k.edit['path'] == storyStateApplyPath),
-    ];
-
-    // Pack that sequence into as few write_saves as the core will accept. It
-    // refuses three combinations — an edit addressed by an index or slot id
-    // placed after an edit that can change how many elements a container holds,
-    // a raw typed edit sharing a write with a structured operation that rewrites
-    // what it addresses, and two structured operations that rewrite one target
-    // (the last two order-independent) — so a new sub-write starts exactly when
-    // the next edit would hit any of them, plus one each for the two operations
-    // that must stand alone. In practice a whole editing session lands in a
-    // single write instead of one per splicing edit.
-    //
-    // A split is not a way to make a pair safe, only a way to keep the core from
-    // refusing the whole write: the checks further up refuse the combinations
-    // where running the two in sequence would resolve the second against a
-    // layout the first moved.
-    final worklist = <_SubWrite>[];
-    var current = <Map<String, Object?>>[];
-    var currentMayInvalidateOrdinals = false;
-    // syncPersistentDataList keys off a public/fixed edit, so it belongs to the
-    // first batch — which is also the one that takes the backup, so the companion
-    // file is updated with a restorable snapshot beside it.
-    var syncPending = syncPersistent;
-    void flush() {
-      if (current.isEmpty) return;
-      worklist.add(
-        _SubWrite(edits: current, syncPersistentDataList: syncPending),
-      );
-      syncPending = false;
-      current = <Map<String, Object?>>[];
-      currentMayInvalidateOrdinals = false;
-    }
-
-    for (final keyed in ordered) {
-      if (_exclusiveEditPaths.contains(keyed.edit['path'])) {
-        flush();
-        worklist.add(_SubWrite(edits: [keyed.edit]));
-        continue;
-      }
-      // Two reasons to start a new sub-write: the ordinal rule (positional —
-      // only an ordinal-carrying edit AFTER an ordinal-invalidating one), and
-      // the same-target rule (order-independent, so it is checked against every
-      // edit already in this batch, both ways round).
-      if ((currentMayInvalidateOrdinals && _carriesCallerOrdinal(keyed.edit)) ||
-          current.any(
-            (edit) =>
-                editsRewriteSameTarget(edit, keyed.edit) ||
-                structuredEditsShareATarget(edit, keyed.edit),
-          )) {
-        flush();
-      }
-      current.add(keyed.edit);
-      currentMayInvalidateOrdinals =
-          currentMayInvalidateOrdinals || _mayInvalidateOrdinals(keyed.edit);
-    }
-    flush();
-    // Hang the placement notes on whichever sub-write goes first. It is the one
-    // that takes the backup, and — for a position edit, which is never a
-    // splicing edit — the one that actually carries the move.
-    if (worklist.isNotEmpty &&
-        (placementNotes.isNotEmpty || clearPlacementNotes.isNotEmpty)) {
-      final first = worklist.first;
-      worklist[0] = _SubWrite(
-        edits: first.edits,
-        syncPersistentDataList: first.syncPersistentDataList,
-        placementNotes: placementNotes,
-        clearPlacementNotes: clearPlacementNotes,
-      );
-    }
 
     final n = displayEditCount;
     // Edit objects that committed bytes to disk, captured BEFORE the trailing
@@ -2643,7 +2176,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// slot first; the source file remains untouched. In both cases the core
   /// updates the save and PersistentDataList.sav as one operation.
   Future<bool> assignSelectedSaveToProfile(int profileId) async {
-    if (state.isLoading) return false;
+    if (state.isLoading || _planningSave) return false;
     if (state.deletedSaveRecovery != null) return false;
     if (state.hasUnsavedEdits) {
       state = state.copyWith(error: _l10n.editorUnsavedBeforeChangeSaveProfile);
@@ -2755,7 +2288,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     required String slot,
     required int profileId,
   }) async {
-    if (state.isLoading) return false;
+    if (state.isLoading || _planningSave) return false;
     if (state.deletedSaveRecovery != null) return false;
     if (state.hasUnsavedEdits) {
       state = state.copyWith(error: _l10n.editorUnsavedBeforeRemoveProfile);
@@ -4467,33 +4000,6 @@ class _KeyedEdit {
   final Map<String, Object?> edit;
 }
 
-class _IndexedStructuralEdit {
-  const _IndexedStructuralEdit({
-    required this.keyed,
-    required this.index,
-    required this.isDuplicate,
-  });
-
-  final _KeyedEdit keyed;
-  final int index;
-  final bool isDuplicate;
-}
-
-class _StructuralArrayGroup {
-  _StructuralArrayGroup(this.path);
-
-  final List<Object?> path;
-  final List<_IndexedStructuralEdit> edits = [];
-}
-
-bool _sameEditorPath(List<Object?> left, List<Object?> right) {
-  if (left.length != right.length) return false;
-  for (var i = 0; i < left.length; i++) {
-    if (left[i] != right[i]) return false;
-  }
-  return true;
-}
-
 /// What a structured edit rewrites as a whole, for the operations that resolve
 /// their target from a key and then replace whatever they find there. Two edits
 /// naming the same one cannot share a write.
@@ -4591,84 +4097,6 @@ bool _pathIsAQuestCurrentState(List<Object?> path) {
   return _pathHasName(path, 'QuestDataByClass');
 }
 
-/// Whether two raw segment lists address the same path in the sense the core
-/// gives them: `parse_path` reads `{k}` as a map key and `[n]` as an index, so
-/// `[03]` and `[3]` are one and the same segment to it even though the two
-/// strings differ. Used where a mirror has to agree with the core exactly;
-/// [_sameEditorPath] compares the segments as the editor wrote them.
-bool _sameCorePath(List<Object?> left, List<Object?> right) {
-  if (left.length != right.length) return false;
-  for (var i = 0; i < left.length; i++) {
-    if (!_sameCoreSegment(left[i], right[i])) return false;
-  }
-  return true;
-}
-
-bool _sameCoreSegment(Object? left, Object? right) {
-  if (left == right) return true;
-  final index = _indexSegment(left);
-  return index != null && index == _indexSegment(right);
-}
-
-/// The number of an `[n]` index segment, or null when [segment] is not one.
-int? _indexSegment(Object? segment) {
-  if (segment is! String) return null;
-  if (segment.length < 3 ||
-      !segment.startsWith('[') ||
-      !segment.endsWith(']')) {
-    return null;
-  }
-  return int.tryParse(segment.substring(1, segment.length - 1));
-}
-
-bool _editorPathIsPrefix(List<Object?> prefix, List<Object?> path) {
-  if (prefix.length > path.length) return false;
-  for (var i = 0; i < prefix.length; i++) {
-    if (prefix[i] != path[i]) return false;
-  }
-  return true;
-}
-
-bool _addressesHeroMemorizedEvents(List<Object?> path) {
-  const target = <String>[
-    'LongTermMemoryByGlobalId',
-    '{Hero}',
-    'MemorizedEvents',
-  ];
-  if (path.length < target.length) return false;
-  for (var start = 0; start <= path.length - target.length; start++) {
-    var matches = true;
-    for (var offset = 0; offset < target.length; offset++) {
-      if (path[start + offset] != target[offset]) {
-        matches = false;
-        break;
-      }
-    }
-    if (matches) return true;
-  }
-  return false;
-}
-
-/// Whether [path] targets the relationship map itself or an entry belonging to
-/// one of [npcIds] (already normalized to lower case). The generic All-data
-/// browser represents map keys as `{GlobalId}` path segments.
-bool _addressesNpcRelationshipEntry(List<Object?> path, Set<String> npcIds) {
-  for (var i = 0; i < path.length; i++) {
-    if (path[i] != 'RelationshipByGlobalId') continue;
-    // A hypothetical edit of the whole map collides with every structured
-    // relationship write, even though current UI operations normally descend
-    // to an individual entry first.
-    if (i + 1 >= path.length) return true;
-    final rawKey = path[i + 1];
-    if (rawKey is! String) return true;
-    final key = rawKey.startsWith('{') && rawKey.endsWith('}')
-        ? rawKey.substring(1, rawKey.length - 1)
-        : rawKey;
-    return npcIds.contains(key.trim().toLowerCase());
-  }
-  return false;
-}
-
 /// The actor a `private.skills.set` edit targets (`Hero` or an NPC GlobalId),
 /// or `null` if [edit] is not a skill edit. A skill edit that omits `actor`
 /// defaults to `Hero` — the core does the same, so the same-actor conflict guard
@@ -4682,33 +4110,6 @@ String? _skillEditActor(Map<String, Object?> edit) {
   // the target key, and the two must not disagree.
   final actor = value['actor'];
   return actor is String && actor.isNotEmpty ? actor : 'Hero';
-}
-
-/// The actor whose ActiveEffects a raw `private.typed.setValue` on an
-/// `EffectSpec/Def` leaf targets, or `null` when [edit] is not such an edit.
-///
-/// A Def edit's path is `ActiveEffectsByGlobalId/{actor}/ActiveEffects/[i]/
-/// EffectSpec/Def`; the `{actor}` segment is returned unwrapped so it matches
-/// the `actor` a `private.skills.set` carries. A skill edit and a Def edit for
-/// the SAME actor collide (a splice shifts that actor's indices); different
-/// actors touch independent arrays and are safe to save together.
-String? _activeEffectsDefActor(Map<String, Object?> edit) {
-  if (edit['path'] != 'private.typed.setValue') return null;
-  final value = edit['value'];
-  if (value is! Map) return null;
-  final path = value['path'];
-  if (path is! List) return null;
-  final segs = path.whereType<String>().toList();
-  final n = segs.length;
-  if (n < 2 || segs[n - 1] != 'Def' || segs[n - 2] != 'EffectSpec') {
-    return null;
-  }
-  final i = segs.indexOf('ActiveEffectsByGlobalId');
-  if (i < 0 || i + 1 >= segs.length) return null;
-  final key = segs[i + 1];
-  return (key.startsWith('{') && key.endsWith('}'))
-      ? key.substring(1, key.length - 1)
-      : key;
 }
 
 /// Whether [edit] is a raw `private.typed.setValue` whose path steps through an
@@ -4981,89 +4382,6 @@ bool editsRewriteSameTarget(
 /// pending. Both are refused as peers by the core: a story batch takes its
 /// compare-and-set snapshot from the payload as it enters and proves its own
 /// postconditions before committing, and a reset replaces the whole inventory.
-const _exclusiveEditPaths = {storyStateApplyPath, 'private.inventory.reset'};
-
-/// Whether [edit] can change how many elements a container holds, or renumber
-/// inventory slot ids — the only two things that invalidate an index or slot id a
-/// later edit in the same write was addressed with.
-///
-/// Mirrors `may_invalidate_caller_ordinals` in crates/gore-save/src/lib.rs. Keep the
-/// two in step: the core rejects the write outright when they disagree.
-bool _mayInvalidateOrdinals(Map<String, Object?> edit) {
-  final path = edit['path'];
-  if (path is! String) return true;
-  if (_typedEditPaths.contains(path) && path != 'private.typed.setValue') {
-    // setAdd/setRemove change a set's cardinality, arrayRemove/arrayDuplicate an
-    // array's length.
-    return true;
-  }
-  if (path == 'private.typed.setValue') {
-    // It can add or drop no container element — but writing a slot's m_Id
-    // renumbers slots, which is the other half of what invalidates an ordinal a
-    // later edit was addressed with.
-    final typedPath = _rawTypedEditPath(edit);
-    return typedPath != null && _pathWritesASlotId(typedPath);
-  }
-  return const {
-    'private.inventory.addItem',
-    'private.inventory.removeItem',
-    'private.inventory.reset',
-    'private.inventory.repairSlots',
-    'private.knowledge.addCharacter',
-    'private.knowledge.setEntry',
-    // Set-adds or set-removes a name in m_UnlockedLocks.
-    'private.locks.setUnlocked',
-    'private.npc.revive',
-    'private.npc.setRelationship',
-    'private.glossary.setSegment',
-    'private.skills.set',
-    // Splice an entry into or out of a trader's stock map, which changes how
-    // many entries it holds. private.traders.setStock is absent: it overwrites a
-    // bare i32 in place.
-    'private.traders.addItem',
-    'private.traders.removeItem',
-    storyStateApplyPath,
-  }.contains(path);
-}
-
-/// Whether [edit] addresses its target with an index or slot id the user's view of
-/// the save supplied — something an earlier length change would silently retarget.
-///
-/// Mirrors `carries_caller_ordinal` in crates/gore-save/src/lib.rs.
-bool _carriesCallerOrdinal(Map<String, Object?> edit) {
-  final path = edit['path'];
-  if (path is! String) return false;
-  final value = edit['value'];
-  if (path == 'private.typed.arrayRemove' ||
-      path == 'private.typed.arrayDuplicate') {
-    return true;
-  }
-  if (_typedEditPaths.contains(path)) {
-    final raw = value is Map ? value['path'] : null;
-    return raw is List &&
-        raw.whereType<String>().any(
-          (segment) => segment.startsWith('[') && segment.endsWith(']'),
-        );
-  }
-  if (path == 'private.inventory.setItemCount') {
-    // A slot id is an index by invariant. The player path carries an ordinal even
-    // without one: it finds the stack through a positional scan of the payload
-    // rather than through the typed tree.
-    return (value is Map ? value['slotId'] : null) != null ||
-        (value is Map ? value['actorId'] : null) == null;
-  }
-  if (path == 'private.inventory.removeItem') {
-    return (value is Map ? value['slotId'] : null) != null;
-  }
-  if (path == 'private.traders.setStock' ||
-      path == 'private.traders.addItem' ||
-      path == 'private.traders.removeItem') {
-    // Every trader edit addresses its row by an index into the trader array that
-    // the user's view supplied.
-    return true;
-  }
-  return false;
-}
 
 /// A raw typed edit that reaches a slot — INTO one (its id, its count, a set or
 /// array inside its payload, anything below `m_Slots/[i]`) or AT the slot array
@@ -5106,15 +4424,6 @@ bool isInventorySlotIdTypedEdit(Map<String, Object?> edit) {
   return segments[segments.length - 3] == 'm_Slots' &&
       slot.startsWith('[') &&
       slot.endsWith(']');
-}
-
-bool _isInventoryTypedEdit(Map<String, Object?> edit) {
-  if (edit['path'] != 'private.typed.setValue') return false;
-  final value = edit['value'];
-  if (value is! Map) return false;
-  final path = value['path'];
-  if (path is! List) return false;
-  return path.whereType<String>().contains('m_Inventory');
 }
 
 /// One write_save unit in [EditorNotifier.saveAllPending]'s worklist: the edits

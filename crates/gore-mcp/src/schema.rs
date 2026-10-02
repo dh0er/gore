@@ -166,6 +166,7 @@ fn argument_schema(arg: &ArgSpec) -> Value {
             schema
         }
         ArgKind::Bool => json!({ "type": "boolean", "description": description }),
+        ArgKind::Float => json!({ "type": "number", "description": description }),
         ArgKind::Enum(values) => {
             json!({ "type": "string", "enum": values, "description": description })
         }

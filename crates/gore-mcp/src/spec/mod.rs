@@ -70,6 +70,7 @@ pub enum ArgKind {
         min: Option<i64>,
         max: Option<i64>,
     },
+    Float,
     Bool,
     /// A closed set of string values, rendered into the schema as an `enum`.
     Enum(&'static [&'static str]),
@@ -85,6 +86,7 @@ impl ArgKind {
             ArgKind::Str => "string",
             ArgKind::Hex => "hex",
             ArgKind::Int { .. } => "integer",
+            ArgKind::Float => "number",
             ArgKind::Bool => "boolean",
             ArgKind::Enum(_) => "enum",
             ArgKind::StrList => "string[]",
@@ -742,6 +744,7 @@ pub const T_COMPILE: u64 = 2700;
 /// Ordered roughly by how early a user meets them: configure, then edit content, then package and
 /// install, then the deeper script tooling.
 pub const GROUPS: &[GroupSpec] = &[
+    groups::save::SAVE,
     groups::core::CONFIG,
     groups::core::DOCTOR,
     groups::core::FIND,
@@ -768,7 +771,7 @@ pub const GROUPS: &[GroupSpec] = &[
 ///
 /// A literal, not a computed value: it is a claim about the CLI, and the integration test compares
 /// it against what clap actually exposes. Changing it should be a deliberate act.
-pub const EXPECTED_LEAF_COUNT: usize = 112;
+pub const EXPECTED_LEAF_COUNT: usize = 254;
 
 pub fn group(tool: &str) -> Option<&'static GroupSpec> {
     GROUPS.iter().find(|group| group.tool == tool)
@@ -800,7 +803,7 @@ mod tests {
     #[test]
     fn the_table_covers_every_leaf_of_the_cli() {
         assert_eq!(leaf_count(), EXPECTED_LEAF_COUNT);
-        assert_eq!(GROUPS.len(), 20);
+        assert_eq!(GROUPS.len(), 21);
     }
 
     #[test]
@@ -1156,6 +1159,9 @@ mod tests {
             ("gore_dialog", "text", &["out"]),
             ("gore_loc", "export", &["out"]),
             ("gore_loc", "import", &["out"]),
+            ("gore_save", "report", &["out"]),
+            ("gore_save", "assets export", &["out"]),
+            ("gore_save", "screenshot export", &["out"]),
             ("gore_texture", "extract", &["out"]),
             ("gore_texture", "index", &["out"]),
             ("gore_as", "replace", &["out"]),

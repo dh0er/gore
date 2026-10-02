@@ -5,6 +5,15 @@ uses the matching version section as the GitHub release notes.
 
 ## [Unreleased]
 
+- Add 142 `gore save` commands covering the Save Editor: saves, profiles,
+  recovery, backups, actors, attributes, skills, inventories, positions, world
+  time, progression, factions, locks and merchant stock/timing.
+- Share the pending-edit planner with the Editor. Add guarded JSON drafts,
+  real byte-level dry runs, partial-commit results and progress reporting.
+- Expose the native save protocol and complete CLI surface through MCP.
+  Add shared catalogs, ten-language presentation, screenshots, verified game
+  images and standalone HTML reports using the Editor's display preferences.
+
 ## [0.4.0] - 2026-09-29
 
 - Add `gore npc levels` to list the level scripts available for character

@@ -9,6 +9,8 @@ pub mod skills;
 pub mod startsaves;
 pub mod story;
 pub mod traders;
+pub mod api;
+pub mod workflow;
 
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
@@ -44,6 +46,8 @@ pub enum CoreError {
     Validation(String),
     #[error("update error: {0}")]
     Update(String),
+    #[error("pending edit conflict ({kind}): {path}")]
+    PlanConflict { kind: &'static str, path: String },
 }
 
 impl From<std::io::Error> for CoreError {
@@ -416,21 +420,9 @@ pub fn execute_json(input: &str) -> String {
             response
         }
         Err(err) => {
-            let code = match &err {
-                CoreError::InvalidRequest(_) => "INVALID_REQUEST",
-                CoreError::Io(_) => "IO_ERROR",
-                CoreError::Parse(_) => "PARSE_ERROR",
-                CoreError::UnsupportedEdit(_) => "UNSUPPORTED_EDIT",
-                CoreError::Codec(_) => "CODEC_ERROR",
-                CoreError::Validation(_) => "VALIDATION_FAILED",
-                CoreError::Update(_) => "UPDATE_ERROR",
-            };
             json!({
                 "ok": false,
-                "error": {
-                    "code": code,
-                    "message": err.to_string()
-                }
+                "error": api::error_details(&err)
             })
             .to_string()
         }
@@ -447,6 +439,16 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
     let payload = value.get("payload").cloned().unwrap_or_else(|| json!({}));
 
     match command {
+        "capabilities" => Ok(api::capabilities()),
+        "recovery_status" => api::recovery_status(&payload.get("path").and_then(Value::as_str).map(PathBuf::from).unwrap_or_else(default_save_root)),
+        "plan_edits" => workflow::plan_request(&payload),
+        "apply_edits" => workflow::apply_request(&payload),
+        "scan_save_dir_readonly" => {
+            let path = payload.get("path").and_then(Value::as_str).map(PathBuf::from).unwrap_or_else(default_save_root);
+            let backend = codec_backend::KrakenBackend::default();
+            let summary = scan_save_dir_summary_with_codec_backend(&path, Some(&backend))?;
+            Ok(json!({"saveRoot": path, "saves": summary.saves, "profiles": summary.profiles, "activeProfileId": summary.active_profile_id}))
+        }
         "scan_save_dir" => {
             let path = payload
                 .get("path")
@@ -698,13 +700,24 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             };
             let kraken_backend = codec_backend::KrakenBackend::default();
             let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
-            let mut result = write_save_internal(
+            let expected_sha1 = payload.get("expectedSha1").and_then(Value::as_str);
+            if expected_sha1.is_some_and(|hash| api::file_sha1(&path).ok().as_deref()!=Some(hash)) {
+                return Err(CoreError::Validation("save changed since inspection".into()));
+            }
+            let mut result = write_save_internal_with_before_replace(
                 &path,
                 &edits,
                 backup,
                 output_path.as_deref(),
                 codec_backend,
                 sync_persistent_data_list,
+                |_| {
+                    if let Some(hash)=expected_sha1 {
+                        if api::file_sha1(&path)?!=hash {return Err(CoreError::Validation("save changed during edit preparation".into()));}
+                    }
+                    if sync_persistent_data_list {api::check_persistent_snapshot(&path,&payload)?;}
+                    Ok(())
+                },
             )?;
             // Only after the save bytes are on disk: a note recorded for a write
             // that then failed would offer to restore an NPC nobody moved. The
@@ -11449,24 +11462,8 @@ fn apply_public_edit(data: &mut Vec<u8>, edit: &Edit) -> Result<(), CoreError> {
     }
 }
 
-fn apply_private_edits(
-    data: &[u8],
-    edits: &[&Edit],
-    codec_backend: Option<&dyn codec_backend::CodecBackend>,
-) -> Result<Vec<u8>, CoreError> {
-    if !data.starts_with(b"GSAV") {
-        return Err(CoreError::UnsupportedEdit(
-            "private edits are only available for GSAV files".to_string(),
-        ));
-    }
-    let backend = codec_backend.ok_or_else(|| {
-        CoreError::Codec("private edits require a working codec backend".to_string())
-    })?;
-    let parts = split_gsav(data)?;
-    let stream = parse_compressed_stream(data, 13 + parts.public_payload.len())?;
-    let edit_specs = edits
-        .iter()
-        .map(|edit| match edit.path.as_str() {
+fn parse_private_edit(edit: &Edit) -> Result<PrivateEdit, CoreError> {
+    match edit.path.as_str() {
             "private.replaceFString" | "private.fstring" => {
                 parse_private_fstring_edit(edit).map(PrivateEdit::FString)
             }
@@ -11571,8 +11568,25 @@ fn apply_private_edits(
             other => Err(CoreError::UnsupportedEdit(format!(
                 "{other} is not writable in this build"
             ))),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        }
+}
+
+fn apply_private_edits(
+    data: &[u8],
+    edits: &[&Edit],
+    codec_backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Vec<u8>, CoreError> {
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "private edits are only available for GSAV files".to_string(),
+        ));
+    }
+    let backend = codec_backend.ok_or_else(|| {
+        CoreError::Codec("private edits require a working codec backend".to_string())
+    })?;
+    let parts = split_gsav(data)?;
+    let stream = parse_compressed_stream(data, 13 + parts.public_payload.len())?;
+    let edit_specs = edits.iter().map(|edit| parse_private_edit(edit)).collect::<Result<Vec<_>, _>>()?;
     // One StoryApply may contain many value-addressed story changes and applies them
     // transactionally on its own scratch payload. It stays exclusive for TRANSACTION
     // SCOPE, not for index shifting (the position rule below would already cover

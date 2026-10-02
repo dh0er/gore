@@ -1,3 +1,4 @@
+import 'shared_planner_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -121,9 +122,12 @@ class NpcPositionCoreService implements GoresaveCoreService {
   bool get isAvailable => true;
 
   Map<String, Object?>? _vec3((double, double, double)? triplet) =>
-      triplet == null ? null : {'x': triplet.$1, 'y': triplet.$2, 'z': triplet.$3};
+      triplet == null
+      ? null
+      : {'x': triplet.$1, 'y': triplet.$2, 'z': triplet.$3};
 
-  Map<String, Object?>? _rot3((double, double, double)? triplet) => triplet == null
+  Map<String, Object?>? _rot3((double, double, double)? triplet) =>
+      triplet == null
       ? null
       : {'pitch': triplet.$1, 'yaw': triplet.$2, 'roll': triplet.$3};
 
@@ -313,7 +317,7 @@ Future<void> pumpPositionApp(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        coreServiceProvider.overrideWithValue(core),
+        coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
         editorSettingsStoreProvider.overrideWithValue(
           const NoopEditorSettingsStore(),
         ),
@@ -390,7 +394,10 @@ Finder positionField(String id) => find.byKey(ValueKey('npc-position:$id'));
 /// The live text of one position field.
 String positionFieldText(WidgetTester tester, String id) => tester
     .widget<EditableText>(
-      find.descendant(of: positionField(id), matching: find.byType(EditableText)),
+      find.descendant(
+        of: positionField(id),
+        matching: find.byType(EditableText),
+      ),
     )
     .controller
     .text;

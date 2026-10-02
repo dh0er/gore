@@ -92,6 +92,9 @@ def main() -> int:
         codes.append(run("Flutter analyze", [str(FLUTTER), "analyze"], APP))
 
     if "flutter" in suites:
+        native = run("Build shared save workflow", [str(CARGO), "build", "-p", "gore-save"])
+        if native:
+            return native
         codes.append(run("Flutter tests", [str(FLUTTER), "test"], APP))
 
     return max(codes) if codes else 0

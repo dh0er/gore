@@ -1165,7 +1165,10 @@ void main() {
           edits: [
             const <String, Object?>{
               'path': 'private.inventory.addItem',
-              'value': {'path': '/Game/Item_A', 'count': 1},
+              'value': {
+                'path': '/Script/Angelscript.ItMi_Orenugget',
+                'count': 1,
+              },
             },
             storyStateApplyEdit(const [
               StoryStateEdit(
@@ -6511,6 +6514,13 @@ class _RecordingCoreService implements GoresaveCoreService {
   }) async {
     requests.add(_RecordedRequest(command, Map<String, Object?>.from(payload)));
     switch (command) {
+      case 'plan_edits':
+        final native = NativeGoresaveCoreService.tryCreate();
+        if (native == null)
+          throw StateError(
+            'Build gore-save before running editor workflow tests',
+          );
+        return native.execute(command, payload: payload);
       case 'scan_save_dir':
         return {
           'ok': true,

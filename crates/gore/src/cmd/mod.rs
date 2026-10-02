@@ -23,6 +23,7 @@ pub mod sync;
 pub mod texture;
 pub mod value;
 pub mod voice;
+pub mod save;
 
 /// Case-insensitive substring test shared by every bounded listing's `--filter`.
 ///
