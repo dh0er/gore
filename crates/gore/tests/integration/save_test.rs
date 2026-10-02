@@ -92,7 +92,7 @@ fn corrupt_ui_preferences_do_not_block_commands_or_a_full_reset() {
 fn import_discovers_the_destination_without_using_the_external_source_parent() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
-    let destination = home.join("G1R/Saved/SaveGames");
+    let destination = home.join("G1R").join("Saved").join("SaveGames");
     let downloads = temp.path().join("downloads");
     fs::create_dir_all(&destination).unwrap();
     fs::create_dir(&downloads).unwrap();
