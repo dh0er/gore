@@ -298,7 +298,8 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
                 | PrivateEdit::LockSetUnlocked(_)
                 | PrivateEdit::NpcRevive(_)
                 | PrivateEdit::KnowledgeAddCharacter(_)
-                | PrivateEdit::KnowledgeSetEntry(_) => {
+                | PrivateEdit::KnowledgeSetEntry(_)
+                | PrivateEdit::FactionsForgive(_) => {
                     if crate::structured_edit_rewrites(spec, path) {
                         return Err(pending(
                             if matches!(spec, PrivateEdit::NpcRelationship(_)) {
@@ -835,6 +836,74 @@ mod tests {
         ]);
         assert!(plan(&[skill.clone(), peer.clone()]).is_ok());
         assert!(plan(&[peer, skill]).is_ok());
+    }
+
+    #[test]
+    fn faction_forgiveness_guards_crime_flags_but_allows_other_fields() {
+        let forgive =
+            json!({"path":"private.factions.forgive","value":{"guild":"Guild.Human.OldCamp"}});
+        for path in [
+            vec![
+                "m_GenericData",
+                "{CrimeMemoryPersistentData}",
+                "GlobalCrimeDataEntries",
+                "[0]",
+                "bIsForgiven",
+            ],
+            vec![
+                "m_GenericData",
+                "{CrimeMemoryPersistentData}",
+                "RelativeCrimeDataEntries",
+                "{OC_STT_Diego}",
+                "RelativeCrimes",
+                "[0]",
+                "bIsSuppressed",
+            ],
+        ] {
+            let raw = raw(&path);
+            for edits in [
+                vec![forgive.clone(), raw.clone()],
+                vec![raw, forgive.clone()],
+            ] {
+                assert!(matches!(
+                    plan(&edits),
+                    Err(CoreError::PlanConflict {
+                        kind: "property",
+                        ..
+                    })
+                ));
+            }
+        }
+        for path in [
+            vec![
+                "m_GenericData",
+                "{CrimeMemoryPersistentData}",
+                "GlobalCrimeDataEntries",
+                "[0]",
+                "ID",
+            ],
+            vec![
+                "m_GenericData",
+                "{CrimeMemoryPersistentData}",
+                "RelativeCrimeDataEntries",
+                "{OC_STT_Diego}",
+                "RelativeCrimes",
+                "[0]",
+                "BaseSeverity",
+            ],
+            vec![
+                "m_GenericData",
+                "{OtherMemory}",
+                "GlobalCrimeDataEntries",
+                "[0]",
+                "bIsForgiven",
+            ],
+            vec!["Unrelated", "bIsSuppressed"],
+        ] {
+            let raw = raw(&path);
+            assert!(plan(&[forgive.clone(), raw.clone()]).is_ok());
+            assert!(plan(&[raw, forgive.clone()]).is_ok());
+        }
     }
 
     #[test]

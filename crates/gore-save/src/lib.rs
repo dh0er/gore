@@ -12043,6 +12043,17 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
             path_has_name(path, "StoryPropertyValues")
                 && changes.iter().any(|change| path_has_key(path, &change.id))
         }
+        // The guild-to-crime join depends on saved values, so a path-only plan
+        // guards the forgiveness fields across the crime blob. Other crime
+        // fields and identically named flags outside that blob stay independent.
+        PrivateEdit::FactionsForgive(_) => {
+            path_has_key(path, "CrimeMemoryPersistentData")
+                && (matches!(path, [.., properties::PathSeg::Name(entries), properties::PathSeg::Index(_), properties::PathSeg::Name(flag)]
+                    if entries == "GlobalCrimeDataEntries" && flag == "bIsForgiven")
+                    || (path_has_name(path, "RelativeCrimeDataEntries")
+                        && matches!(path, [.., properties::PathSeg::Name(entries), properties::PathSeg::Index(_), properties::PathSeg::Name(flag)]
+                            if entries == "RelativeCrimes" && flag == "bIsSuppressed")))
+        }
         // Narrower still: it only rewrites ids, but it does so across every
         // container in the save, so it is not scoped to one actor.
         PrivateEdit::InventoryRepairSlots => path_writes_a_slot_id(path),

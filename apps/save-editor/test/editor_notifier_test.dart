@@ -6441,6 +6441,58 @@ void main() {
   );
 
   test(
+    'saveAllPending keeps faction forgiveness and colliding raw crime flags',
+    () async {
+      for (final path in [
+        [
+          'm_GenericData',
+          '{CrimeMemoryPersistentData}',
+          'GlobalCrimeDataEntries',
+          '[0]',
+          'bIsForgiven',
+        ],
+        [
+          'm_GenericData',
+          '{CrimeMemoryPersistentData}',
+          'RelativeCrimeDataEntries',
+          '{OC_STT_Diego}',
+          'RelativeCrimes',
+          '[0]',
+          'bIsSuppressed',
+        ],
+      ]) {
+        for (final rawFirst in [false, true]) {
+          final core = _RecordingCoreService();
+          final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+          await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+          void raw() => notifier.setPendingEdit(
+            'typed:crime-flag',
+            PendingSaveEdit(
+              edits: [
+                {
+                  'path': 'private.typed.setValue',
+                  'value': {'path': path, 'value': false},
+                },
+              ],
+            ),
+          );
+          if (rawFirst) raw();
+          notifier.setPendingFactionForgive('Guild.Human.OldCamp');
+          if (!rawFirst) raw();
+
+          expect(await notifier.saveAllPending(), isFalse);
+          expect(notifier.state.error, contains('Conflicting'));
+          expect(
+            core.requests.where((r) => r.command == 'write_save'),
+            isEmpty,
+          );
+          expect(notifier.state.pendingEdits, hasLength(2));
+        }
+      }
+    },
+  );
+
+  test(
     'forgive rides the fixed-size batch (NOT a splicing write) on global save',
     () async {
       final core = _RecordingCoreService();

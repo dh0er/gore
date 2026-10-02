@@ -1522,6 +1522,112 @@ mod tests {
     // ── forgive ─────────────────────────────────────────────────────────────────
 
     #[test]
+    fn native_forgive_conflicts_refuse_raw_flags_before_save_publication() {
+        use crate::codec_backend::{CodecBackend, KrakenBackend};
+        use serde_json::json;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("G1R-001.sav");
+        let private = fixture();
+        let reference = crate::startsaves::start_save_bytes(crate::startsaves::resolve_level(None));
+        let parts = crate::split_gsav(reference).unwrap();
+        let template =
+            crate::parse_compressed_stream(reference, 13 + parts.public_payload.len()).unwrap();
+        let compressed = KrakenBackend.compress(&private, 4).unwrap();
+        let stream =
+            crate::build_compressed_stream_v2(&template, &[compressed], &[private.len() as u64])
+                .unwrap();
+        let source = crate::build_gsav(parts.version, parts.public_payload, &stream, parts.trailer);
+        std::fs::write(&path, &source).unwrap();
+        let forgive =
+            json!({"path":"private.factions.forgive","value":{"guild":"Guild.Human.OldCamp"}});
+        let execute = |command: &str, payload| {
+            crate::api::execute(&crate::api::Request {
+                command: command.into(),
+                payload,
+            })
+        };
+        execute(
+            "apply_edits",
+            json!({"path":path,"edits":[forgive.clone()],"dryRun":true}),
+        )
+        .unwrap();
+        for raw_path in [
+            vec![
+                "m_GenericData",
+                "{CrimeMemoryPersistentData}",
+                "GlobalCrimeDataEntries",
+                "[0]",
+                "bIsForgiven",
+            ],
+            vec![
+                "m_GenericData",
+                "{CrimeMemoryPersistentData}",
+                "RelativeCrimeDataEntries",
+                "{OC_STT_Diego}",
+                "RelativeCrimes",
+                "[0]",
+                "bIsSuppressed",
+            ],
+        ] {
+            let raw =
+                json!({"path":"private.typed.setValue","value":{"path":raw_path,"value":false}});
+            execute(
+                "apply_edits",
+                json!({"path":path,"edits":[raw.clone()],"dryRun":true}),
+            )
+            .unwrap();
+            for edits in [
+                vec![forgive.clone(), raw.clone()],
+                vec![raw, forgive.clone()],
+            ] {
+                for command in ["write_save", "apply_edits"] {
+                    let error = execute(command, json!({"path":path,"edits":edits,"backup":true}))
+                        .unwrap_err();
+                    if command == "apply_edits" {
+                        assert!(matches!(
+                            error,
+                            CoreError::PlanConflict {
+                                kind: "property",
+                                ..
+                            }
+                        ));
+                    } else {
+                        assert!(matches!(error, CoreError::UnsupportedEdit(_)));
+                    }
+                    assert_eq!(std::fs::read(&path).unwrap(), source);
+                    assert!(!temp.path().join("goresave_backups").exists());
+                }
+            }
+        }
+        execute(
+            "apply_edits",
+            json!({"path":path,"edits":[forgive],"backup":false}),
+        )
+        .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let payload = crate::decode_private_payload_from_bytes(&bytes, &KrakenBackend).unwrap();
+        let root = parse_private_root(&payload).unwrap();
+        let rows = list_guild_crimes(&root);
+        assert_eq!(
+            rows.iter()
+                .find(|row| row.guild == "Guild.Human.OldCamp")
+                .unwrap()
+                .unforgiven,
+            0
+        );
+        assert_eq!(
+            rows.iter()
+                .find(|row| row.guild == "Guild.Human.NewCamp")
+                .unwrap()
+                .unforgiven,
+            1
+        );
+        assert!(relative_suppressed_ids(&root).contains(&100));
+        assert!(!relative_suppressed_ids(&root).contains(&200));
+    }
+
+    #[test]
     fn forgive_flips_only_matching_global_and_relative_bools() {
         let mut payload = fixture();
 
