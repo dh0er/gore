@@ -1161,6 +1161,11 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
         }
         ("traders", "show") => call("private.traders.detail", payload(o)?),
         ("stock", _) => {
+            let count = if v == "set" {
+                o.count.context("--count required")?
+            } else {
+                o.count.unwrap_or(1)
+            };
             let path = display::existing_item_path(required(&o.item, "item")?)?;
             write(
                 o,
@@ -1170,7 +1175,7 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                         "add" => "private.traders.addItem",
                         _ => "private.traders.removeItem",
                     },
-                    json!({"index":o.index.context("--index required")?,"map":o.map,"path":path,"count":o.count.unwrap_or(1)}),
+                    json!({"index":o.index.context("--index required")?,"map":o.map,"path":path,"count":count}),
                 )],
                 json!({}),
             )

@@ -177,6 +177,110 @@ fn profile_fixture(preset: &str) -> Vec<u8> {
 }
 
 #[test]
+fn trader_stock_set_requires_an_explicit_count_without_writing_or_staging() {
+    let temp = tempfile::tempdir().unwrap();
+    let save = temp.path().join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let save = save.to_str().unwrap();
+    let draft = temp.path().join("pending.json");
+    let missing_draft = temp.path().join("missing.json");
+    run(
+        temp.path(),
+        &[
+            "rename",
+            save,
+            "--name",
+            "Pending name",
+            "--draft",
+            draft.to_str().unwrap(),
+        ],
+    );
+    let pending = fs::read(&draft).unwrap();
+    for map in ["current", "default"] {
+        for mode in [
+            vec![],
+            vec!["--dry-run"],
+            vec!["--draft", draft.to_str().unwrap()],
+            vec!["--draft", missing_draft.to_str().unwrap()],
+        ] {
+            let mut args = vec![
+                "traders",
+                "stock",
+                "set",
+                save,
+                "--index",
+                "1",
+                "--map",
+                map,
+                "--item",
+                "ItMi_Orenugget",
+            ];
+            args.extend(mode);
+            let error = run_failure(temp.path(), &args);
+            assert!(error.to_string().contains("--count required"), "{error}");
+            assert_eq!(fs::read(save).unwrap(), before);
+            assert_eq!(fs::read(&draft).unwrap(), pending);
+            assert!(!missing_draft.exists());
+            assert!(!temp.path().join("goresave_backups").exists());
+        }
+    }
+    let args = [
+        "traders",
+        "stock",
+        "set",
+        save,
+        "--index",
+        "1",
+        "--item",
+        "ItMi_Orenugget",
+        "--count",
+        "13",
+    ];
+    let mut simulated = args.to_vec();
+    simulated.push("--dry-run");
+    run(temp.path(), &simulated);
+    assert_eq!(fs::read(save).unwrap(), before);
+    assert!(!temp.path().join("goresave_backups").exists());
+    run(temp.path(), &args);
+    let trader = run(temp.path(), &["traders", "show", save, "--index", "1"]);
+    assert_eq!(trader["ore"], 13);
+    assert_eq!(
+        trader["defaultItems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "ItMi_Orenugget")
+            .unwrap()["count"],
+        18
+    );
+    run(
+        temp.path(),
+        &[
+            "traders",
+            "stock",
+            "add",
+            save,
+            "--index",
+            "1",
+            "--item",
+            "ItFo_Loaf",
+        ],
+    );
+    let trader = run(temp.path(), &["traders", "show", save, "--index", "1"]);
+    assert_eq!(
+        trader["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "ItFo_Loaf")
+            .unwrap()["count"],
+        1
+    );
+    assert_eq!(fs::read(draft).unwrap(), pending);
+}
+
+#[test]
 fn character_roles_include_every_catalog_assignment_before_pagination() {
     let temp = tempfile::tempdir().unwrap();
     let save = temp.path().join("G1R-001.sav");
