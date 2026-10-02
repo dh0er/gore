@@ -592,6 +592,118 @@ fn backup_companions_are_listed_only_when_requested_without_modifying_files() {
 }
 
 #[test]
+fn attribute_writes_resolve_exact_sets_and_reject_ambiguous_hero_and_npc_targets() {
+    for actor in ["hero", "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN"] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let save = home.join("G1R-001.sav");
+        fs::copy(fixture(), &save).unwrap();
+        let save_arg = save.to_str().unwrap();
+        let key = if actor == "hero" {
+            "results"
+        } else {
+            "attributes"
+        };
+        let show = [
+            "attributes",
+            "show",
+            save_arg,
+            "--actor",
+            actor,
+            "--attribute",
+            "RecoveryRatePerHourOfSleep",
+            "--all",
+        ];
+        let before = run(home, &show);
+        let full_class = "/Script/G1R.AttributeSet_Mana";
+        let rows = before[key].as_array().unwrap();
+        assert!(rows.iter().any(|row| row["setClass"] == full_class));
+        assert!(rows.iter().any(|row| row["setClass"] != full_class));
+        let mut expected_edits = Vec::new();
+        let mut expected_rows = rows.clone();
+        for row in &mut expected_rows {
+            if row["setClass"] != full_class {
+                continue;
+            }
+            if actor == "hero" {
+                let value = match row["path"]
+                    .as_array()
+                    .unwrap()
+                    .last()
+                    .and_then(Value::as_str)
+                {
+                    Some("BaseValue") => 0.5,
+                    Some("CurrentValue") => 0.75,
+                    _ => continue,
+                };
+                expected_edits.push(json!({"path":"private.typed.setValue","value":{"path":row["path"],"value":value}}));
+                row["value"] = json!(value.to_string());
+            } else {
+                for (field, path, value) in
+                    [("base", "basePath", 0.5), ("current", "currentPath", 0.75)]
+                {
+                    expected_edits.push(json!({"path":"private.typed.setValue","value":{"path":row[path],"value":value}}));
+                    row[field] = json!(value);
+                }
+            }
+        }
+        assert_eq!(expected_edits.len(), 2);
+        let draft = home.join("attribute.json");
+        let draft_arg = draft.to_str().unwrap();
+        run(home, &["draft", "create", draft_arg, "--target", save_arg]);
+        let original_draft = fs::read(&draft).unwrap();
+        let original_hash = gore_save::api::file_sha1(&save).unwrap();
+        let set = [
+            "attributes",
+            "set",
+            save_arg,
+            "--actor",
+            actor,
+            "--attribute",
+            "RecoveryRatePerHourOfSleep",
+            "--base",
+            "0.5",
+            "--current",
+            "0.75",
+        ];
+        for selector in [None, Some("Mana")] {
+            let mut args = set.to_vec();
+            args.extend(["--draft", draft_arg]);
+            if let Some(selector) = selector {
+                args.extend(["--set-class", selector]);
+            }
+            let error = run_failure(home, &args);
+            assert!(
+                error["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("resolve uniquely"),
+                "{error}"
+            );
+            assert_eq!(fs::read(&draft).unwrap(), original_draft);
+            assert_eq!(gore_save::api::file_sha1(&save).unwrap(), original_hash);
+            assert!(!home.join("goresave_backups").exists());
+        }
+        let mut preview = set.to_vec();
+        preview.extend(["--set-class", full_class, "--dry-run"]);
+        run(home, &preview);
+        assert_eq!(gore_save::api::file_sha1(&save).unwrap(), original_hash);
+        assert_eq!(fs::read(&draft).unwrap(), original_draft);
+        assert!(!home.join("goresave_backups").exists());
+        for selector in ["AttributeSet_Mana", full_class] {
+            let mut args = set.to_vec();
+            args.extend(["--set-class", selector, "--draft", draft_arg]);
+            run(home, &args);
+            let staged = run(home, &["draft", "show", draft_arg]);
+            assert_eq!(staged["edits"], json!(expected_edits));
+            assert_eq!(gore_save::api::file_sha1(&save).unwrap(), original_hash);
+        }
+        run(home, &["draft", "apply", draft_arg]);
+        assert_eq!(run(home, &show)[key], json!(expected_rows));
+    }
+}
+
+#[test]
 fn attribute_set_selectors_disambiguate_hero_and_npc_reads_before_pagination() {
     let home = tempfile::tempdir().unwrap();
     let save = fixture();

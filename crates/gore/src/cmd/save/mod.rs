@@ -1191,6 +1191,27 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
     }
 }
 
+fn attribute_set_class(row: &Value) -> &str {
+    row["path"]
+        .as_array()
+        .or_else(|| row["basePath"].as_array())
+        .and_then(|path| {
+            path.iter()
+                .position(|s| s == "AttributeSetsByClass")
+                .and_then(|i| path.get(i + 1))
+        })
+        .and_then(Value::as_str)
+        .map(|s| s.trim_matches(['{', '}']))
+        .unwrap_or("")
+}
+
+fn attribute_set_matches(row: &Value, class: Option<&str>) -> bool {
+    class.is_none_or(|class| {
+        let set = attribute_set_class(row);
+        set == class || set.rsplit('.').next() == Some(class)
+    })
+}
+
 fn attributes(v: &str, o: &Options) -> Result<Value> {
     let mut p = payload(o)?;
     let mut data = if o.actor.eq_ignore_ascii_case("hero") {
@@ -1225,17 +1246,8 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
                             .map(|s| s.trim_matches(['{', '}']))
                     })
                     .unwrap_or("");
-                let set = path
-                    .and_then(|p| {
-                        p.iter()
-                            .position(|s| s == "AttributeSetsByClass")
-                            .and_then(|i| p.get(i + 1))
-                    })
-                    .and_then(Value::as_str)
-                    .map(|s| s.trim_matches(['{', '}']))
-                    .unwrap_or("");
                 let id = id.to_string();
-                let set = set.to_string();
+                let set = attribute_set_class(row).to_string();
                 row["presentation"] = presentation::attribute_info(&id, &set, &o.lang);
                 row["attributeId"] = json!(id);
                 row["setClass"] = json!(set);
@@ -1245,11 +1257,7 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
                     && o.group
                         .as_ref()
                         .is_none_or(|g| r["presentation"]["group"] == *g)
-                    && o.set_class.as_deref().is_none_or(|class| {
-                        r["setClass"].as_str().is_some_and(|set| {
-                            set == class || set.rsplit('.').next() == Some(class)
-                        })
-                    })
+                    && attribute_set_matches(r, o.set_class.as_deref())
             });
         }
         let mut filter = o.clone();
@@ -1284,10 +1292,7 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
                                 } else {
                                     "CurrentValue"
                                 })
-                            && o.set_class.as_ref().is_none_or(|class| {
-                                p.iter()
-                                    .any(|s| s.as_str().is_some_and(|s| s.contains(class)))
-                            })
+                            && attribute_set_matches(r, o.set_class.as_deref())
                     })
                 })
                 .collect();
@@ -1301,10 +1306,16 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
         }
     } else {
         let rows = data["attributes"].as_array().context("no NPC attributes")?;
-        let row = rows
+        let matches: Vec<_> = rows
             .iter()
-            .find(|r| r["key"].as_str() == Some(id))
-            .context("unknown attribute")?;
+            .filter(|r| {
+                r["key"].as_str() == Some(id) && attribute_set_matches(r, o.set_class.as_deref())
+            })
+            .collect();
+        if matches.len() != 1 {
+            bail!("attribute must resolve uniquely; supply --set-class");
+        }
+        let row = matches[0];
         for (field, path, val) in [
             ("base", "basePath", o.base),
             ("current", "currentPath", o.current),
@@ -1315,6 +1326,9 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
                 None
             });
             if let Some(val) = val {
+                if !val.is_finite() {
+                    bail!("attribute value must be finite");
+                }
                 edits.push(edit(
                     "private.typed.setValue",
                     json!({"path":row[path],"value":val}),
