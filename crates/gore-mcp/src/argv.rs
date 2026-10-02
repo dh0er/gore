@@ -1422,6 +1422,50 @@ mod tests {
         assert!(build_with("gore_save","position set",json!({"x":"wrong"}),&permissive()).is_err());
     }
 
+    #[test]
+    fn save_reports_gate_implicit_icon_preparation_and_preserve_output_guards() {
+        let temp = tempfile::tempdir().unwrap();
+        let fresh = temp.path().join("report.html");
+        let mut args = json!({"save":"fixture.sav","out":fresh,"with_assets":true});
+        assert!(asks_about_a_write(question(
+            "gore_save",
+            "report",
+            args.clone(),
+            &options()
+        )));
+        assert!(question("gore_save", "report", args.clone(), &permissive()).is_none());
+        let safety = &spec::group("gore_save")
+            .unwrap()
+            .command("report")
+            .unwrap()
+            .safety;
+        assert_eq!(
+            safety.effective(args.as_object().unwrap()),
+            spec::Class::Mutate
+        );
+        assert_eq!(safety.worst_case(), spec::Class::Mutate);
+
+        args["manifest"] = json!(temp.path().join("prepared.json"));
+        assert!(question("gore_save", "report", args.clone(), &options()).is_none());
+        assert_eq!(
+            safety.effective(args.as_object().unwrap()),
+            spec::Class::Write
+        );
+        args.as_object_mut().unwrap().remove("manifest");
+        args["with_assets"] = json!(false);
+        assert!(question("gore_save", "report", args.clone(), &options()).is_none());
+        args.as_object_mut().unwrap().remove("with_assets");
+        assert!(question("gore_save", "report", args.clone(), &options()).is_none());
+        std::fs::write(&fresh, b"existing report").unwrap();
+        assert!(asks_about_a_write(question(
+            "gore_save",
+            "report",
+            args,
+            &options()
+        )));
+        assert_eq!(std::fs::read(fresh).unwrap(), b"existing report");
+    }
+
     fn compile_args() -> Value {
         json!({
             "src": "scripts",

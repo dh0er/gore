@@ -252,6 +252,9 @@ pub struct Safety {
     /// not. Treating them as unconditionally dangerous would block the safe usage; treating them
     /// as unconditionally safe would let an agent overwrite the game's own files.
     pub in_place_without: Option<&'static str>,
+    /// A switch that mutates shared state unless the caller supplies a prepared input.
+    /// For example, report images prepare the shared icon cache without a manifest.
+    pub mutates_when_switch_without: Option<(&'static str, &'static str)>,
     /// Arguments naming a path this command overwrites if it is already there.
     ///
     /// [`Class::Write`] promises "creates new files", and that is what lets it run ungated. A
@@ -332,6 +335,7 @@ impl Safety {
             base,
             offline_when: None,
             in_place_without: None,
+            mutates_when_switch_without: None,
             truncates: &[],
             derives: &[],
             installs_via: &[],
@@ -397,6 +401,15 @@ impl Safety {
         }
     }
 
+    pub const fn mutates_when_switch_without(
+        mut self,
+        switch: &'static str,
+        input: &'static str,
+    ) -> Self {
+        self.mutates_when_switch_without = Some((switch, input));
+        self
+    }
+
     /// Register arguments that make this an installation change when they point into the game
     /// tree. See [`Safety::installs_via`].
     pub const fn installs_via(mut self, args: &'static [&'static str]) -> Self {
@@ -437,6 +450,9 @@ impl Safety {
 
     /// The class this specific call falls into.
     pub fn effective(&self, args: &Map<String, Value>) -> Class {
+        if self.mutates_shared_state(args) {
+            return self.base.max(Class::Mutate);
+        }
         if self.is_explicitly_offline(args) {
             return Class::Write;
         }
@@ -448,6 +464,9 @@ impl Safety {
 
     /// The worst case, used for descriptions and annotations where no arguments are known yet.
     pub fn worst_case(&self) -> Class {
+        if self.mutates_when_switch_without.is_some() {
+            return self.base.max(Class::Mutate);
+        }
         match self.in_place_without {
             Some(_) => self.base.max(Class::Mutate),
             None => self.base,
@@ -472,6 +491,7 @@ impl Safety {
             matches!(self.base, Class::GameLaunch) && !self.is_explicitly_offline(args);
         Requirements {
             write: rewrites_in_place
+                || self.mutates_shared_state(args)
                 || matches!(
                     self.base,
                     Class::ManagerWrite | Class::Mutate | Class::Destructive
@@ -485,6 +505,12 @@ impl Safety {
     fn is_explicitly_offline(&self, args: &Map<String, Value>) -> bool {
         self.offline_when.is_some_and(|(arg, offline_value)| {
             args.get(arg).and_then(Value::as_str) == Some(offline_value)
+        })
+    }
+
+    fn mutates_shared_state(&self, args: &Map<String, Value>) -> bool {
+        self.mutates_when_switch_without.is_some_and(|(switch, input)| {
+            args.get(switch).and_then(Value::as_bool) == Some(true) && !args.contains_key(input)
         })
     }
 }

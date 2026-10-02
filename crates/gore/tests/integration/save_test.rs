@@ -780,6 +780,81 @@ fn overview_uses_the_selected_actors_inventory_and_skills() {
 }
 
 #[test]
+fn removing_a_draft_rename_releases_the_profile_guard_for_remaining_save_edits() {
+    let temp = tempfile::tempdir().unwrap();
+    let save = temp.path().join("G1R-001.sav");
+    let profile = temp.path().join("PersistentDataList.sav");
+    let draft = temp.path().join("draft.json");
+    fs::copy(fixture(), &save).unwrap();
+    fs::write(&profile, b"profile snapshot").unwrap();
+    let save = save.to_str().unwrap();
+    let draft = draft.to_str().unwrap();
+    run(
+        temp.path(),
+        &["rename", save, "--name", "Pending rename", "--draft", draft],
+    );
+    run(
+        temp.path(),
+        &[
+            "attributes",
+            "set",
+            save,
+            "--attribute",
+            "Health",
+            "--base",
+            "300",
+            "--draft",
+            draft,
+        ],
+    );
+    assert_eq!(
+        run(temp.path(), &["draft", "show", draft])["syncPersistentDataList"],
+        true
+    );
+    let before = fs::read(draft).unwrap();
+    let simulated = run(
+        temp.path(),
+        &["draft", "remove", draft, "--operation", "0", "--dry-run"],
+    );
+    assert!(simulated.get("syncPersistentDataList").is_none());
+    assert_eq!(fs::read(draft).unwrap(), before);
+
+    // Removing an unrelated edit keeps the rename's profile guard.
+    let unrelated = run(
+        temp.path(),
+        &["draft", "remove", draft, "--operation", "1", "--dry-run"],
+    );
+    assert_eq!(unrelated["syncPersistentDataList"], true);
+    let removed = run(temp.path(), &["draft", "remove", draft, "--operation", "0"]);
+    assert!(removed.get("syncPersistentDataList").is_none());
+    assert_eq!(removed["edits"].as_array().unwrap().len(), 1);
+    fs::write(&profile, b"changed profile difficulty").unwrap();
+    run(temp.path(), &["draft", "validate", draft]);
+    let applied = run(temp.path(), &["draft", "apply", draft]);
+    assert_eq!(applied["complete"], true);
+    assert_eq!(applied["committed"], json!([0]));
+    assert_eq!(fs::read(profile).unwrap(), b"changed profile difficulty");
+    assert_eq!(
+        run(temp.path(), &["draft", "show", draft])["edits"],
+        json!([])
+    );
+    let health = run(
+        temp.path(),
+        &["attributes", "show", save, "--attribute", "Health"],
+    );
+    let base = health["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["path"].as_array().unwrap().last() == Some(&json!("BaseValue")))
+        .unwrap();
+    assert_eq!(
+        base["value"].as_str().unwrap().parse::<f64>().unwrap(),
+        300.0
+    );
+}
+
+#[test]
 fn native_reads_reports_and_drafts_work_without_an_editor_process() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");

@@ -76,7 +76,7 @@ pub fn retain_pending_placement_sidecars(payload: &mut Value) {
         .map(str::to_lowercase)
         .collect::<Vec<_>>();
     for key in ["placementNotes", "clearPlacementNotes"] {
-        if let Some(entries) = payload[key].as_array_mut() {
+        if let Some(entries) = payload.get_mut(key).and_then(Value::as_array_mut) {
             entries.retain(|entry| {
                 let npc = if key == "placementNotes" {
                     entry["npc"].as_str()
@@ -299,7 +299,7 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
                     }
                 }
                 PrivateEdit::InventoryAddItem(_) | PrivateEdit::InventoryRemoveItem(_) => {
-                    if crate::path_reaches_inventory_slot(path) {
+                    if crate::structured_edit_rewrites(spec, path) {
                         return Err(pending("inventorySlot", None));
                     }
                 }
@@ -672,6 +672,53 @@ mod tests {
         assert!(plan(&[add, raw(&["m_Inventory", "m_Slots", "[1]", "m_Count"])]).is_err());
     }
     #[test]
+    fn inventory_slot_conflicts_are_scoped_to_the_structured_edits_actor() {
+        let player = raw(&[
+            "m_SavedPlayers",
+            "[0]",
+            "m_Inventory",
+            "m_Slots",
+            "[1]",
+            "m_Count",
+        ]);
+        let npc = |actor: &str| {
+            raw(&[
+                "CharacterState",
+                "_Inventory",
+                &format!("{{{actor}}}"),
+                "m_Slots",
+                "[1]",
+                "m_Count",
+            ])
+        };
+        for operation in ["private.inventory.addItem", "private.inventory.removeItem"] {
+            let hero = json!({"path":operation,"value":{
+                "path":"/Script/Angelscript.ItMi_Orenugget","count":1
+            }});
+            let mut diego = hero.clone();
+            diego["value"]["actorId"] = json!("NPC-Diego");
+            for (edit, same, other) in [
+                (hero, player.clone(), npc("NPC-Diego")),
+                (diego, npc("NPC-Diego"), player.clone()),
+            ] {
+                assert!(matches!(
+                    plan(&[edit.clone(), same]),
+                    Err(CoreError::PlanConflict {
+                        kind: "inventorySlot",
+                        ..
+                    })
+                ));
+                let groups = plan(&[edit.clone(), other]).unwrap();
+                assert_eq!(
+                    groups.iter().flatten().copied().collect::<Vec<_>>(),
+                    vec![1, 0]
+                );
+                assert!(plan(&[edit, npc("NPC-Gorn")]).is_ok());
+            }
+        }
+    }
+
+    #[test]
     fn pending_targets_replace_scalars_but_keep_distinct_adds() {
         assert_eq!(
             replacement_key(&raw(&["Events", "[04]", "Magnitude"])),
@@ -761,6 +808,10 @@ mod tests {
         assert_eq!(payload["placementNotes"], json!([{"npc":"NPC-B"}]));
         assert_eq!(payload["clearPlacementNotes"], json!(["NPC-B"]));
         payload["edits"] = json!([]);
+        retain_pending_placement_sidecars(&mut payload);
+        assert!(payload.get("placementNotes").is_none());
+        assert!(payload.get("clearPlacementNotes").is_none());
+        payload["edits"] = json!([raw(&["Events", "[0]", "Magnitude"])]);
         retain_pending_placement_sidecars(&mut payload);
         assert!(payload.get("placementNotes").is_none());
         assert!(payload.get("clearPlacementNotes").is_none());

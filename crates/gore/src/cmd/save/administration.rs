@@ -606,7 +606,7 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
             for key in ["placementNotes", "clearPlacementNotes"] {
                 if empty {
                     data.as_object_mut().unwrap().remove(key);
-                } else if let Some(entries) = data[key].as_array_mut() {
+                } else if let Some(entries) = data.get_mut(key).and_then(Value::as_array_mut) {
                     entries.retain(|entry| {
                         let npc = if key == "placementNotes" {
                             entry["npc"].as_str()
@@ -642,6 +642,15 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
             ] {
                 data.as_object_mut().unwrap().remove(key);
             }
+        }
+        if data["edits"].as_array().is_some_and(|edits| {
+            !edits
+                .iter()
+                .any(|edit| edit["path"] == "public.m_PlayerSaveName")
+        }) {
+            data.as_object_mut()
+                .unwrap()
+                .remove("syncPersistentDataList");
         }
         if !o.dry_run {
             api::update_json_file(file, |current| {

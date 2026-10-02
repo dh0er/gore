@@ -470,12 +470,13 @@ const COMMANDS: &[CommandSpec] = &[
         "report",
         "Save Editor: report",
         OPTIONS,
-        Safety::write_truncating(&["out"]),
+        Safety::write_truncating(&["out"]).mutates_when_switch_without("with_assets", "manifest"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
     .hides_cli_flags(&["copy"])
-    .guide("save-games"),
+    .guide("save-games")
+    .gated_because("prepares, quarantines, or prunes images in the shared Save Editor icon cache"),
     CommandSpec::new(
         "about",
         "Save Editor: about",

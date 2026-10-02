@@ -1402,6 +1402,38 @@ mod tests {
     }
 
     #[test]
+    fn save_report_icon_cache_mutation_is_gated_before_spawning() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut session, spawn) = faked(exec::Outcome::success("{}\n"));
+        let result = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({
+                    "name":"gore_save", "arguments":{
+                        "subcommand":"report", "args":{
+                            "save":"fixture.sav", "out":temp.path().join("fresh.html"),
+                            "with_assets":true
+                        }
+                    }
+                }),
+            ))
+            .expect("answered")
+            .result
+            .expect("result");
+        assert_eq!(result["isError"], json!(true));
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("icon cache")
+        );
+        assert!(
+            spawn.calls().is_empty(),
+            "the shared cache must not be prepared before consent"
+        );
+    }
+
+    #[test]
     fn save_clipboard_arguments_are_rejected_before_any_command_is_spawned() {
         let (mut session, spawn) = faked(exec::Outcome::success("{}\n"));
         for subcommand in ["list", "inspect", "report", "screenshot export", "rename"] {
