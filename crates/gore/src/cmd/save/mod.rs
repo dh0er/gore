@@ -1,8 +1,8 @@
 //! Save Editor operations exposed as native, scriptable CLI commands.
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use gore_save::api::{self, Request};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     io::{self, Read, Write},
@@ -441,7 +441,7 @@ impl SaveAction {
 pub fn run(action: SaveAction) -> Result<()> {
     let (group, verb, mut o) = action.parts();
     if o.lang == "auto" {
-        o.lang = administration::settings_read("ui")?["appLocale"]
+        o.lang = administration::settings_read("ui").unwrap_or_default()["appLocale"]
             .as_str()
             .unwrap_or("en")
             .to_string();
@@ -758,7 +758,11 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
         ("npc", "list" | "show") => {
             let mut p = payload(o)?;
             if v == "show" {
-                p["query"] = json!(o.id.as_deref().unwrap_or(&o.actor));
+                let selected = Options {
+                    actor: o.id.clone().unwrap_or_else(|| o.actor.clone()),
+                    ..o.clone()
+                };
+                p["query"] = json!(npc_id(&selected)?);
             }
             paged("private.npc.list", p, o)
         }
@@ -769,7 +773,7 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
         ),
         ("relationship", "show") => paged(
             "private.npc.list",
-            json!({"path":save(o)?,"query":o.actor,"limit":1000}),
+            json!({"path":save(o)?,"query":npc_id(o)?,"limit":1000}),
             o,
         ),
         ("relationship", "set") => write(
@@ -810,6 +814,8 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 &Options {
                     all: true,
                     include_unset: true,
+                    state: None,
+                    offset: 0,
                     ..o.clone()
                 },
             )?;
@@ -823,11 +829,22 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 .get("statePath")
                 .context("entry has no writable state path")?
                 .clone();
+            let state = required(&o.state, "state")?;
+            // Enum states remain strings; numeric CurrentState properties
+            // have no enum label and require a JSON integer for their raw path.
+            let state = if row["currentState"].is_null() {
+                state
+                    .parse::<i64>()
+                    .map(|n| json!(n))
+                    .unwrap_or_else(|_| json!(state))
+            } else {
+                json!(state)
+            };
             write(
                 o,
                 vec![edit(
                     "private.typed.setValue",
-                    json!({"path":path,"value":required(&o.state,"state")?}),
+                    json!({"path":path,"value":state}),
                 )],
                 json!({}),
             )
@@ -879,7 +896,7 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             o,
             vec![edit(
                 "private.knowledge.addCharacter",
-                json!({"value":o.character.as_deref().unwrap_or(&o.actor)}),
+                json!({"value":character(o)?}),
             )],
             json!({}),
         ),
@@ -932,11 +949,11 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 .context("invalid lock catalog")?
                 .clone();
             for row in &mut rows {
-                row["unlocked"] = json!(unlocked.iter().any(|id| id
-                    .as_str()
-                    .is_some_and(|s| row["l"]
+                row["unlocked"] = json!(unlocked.iter().any(|id| id.as_str().is_some_and(|s| {
+                    row["l"]
                         .as_str()
-                        .is_some_and(|id| s.eq_ignore_ascii_case(id)))));
+                        .is_some_and(|id| s.eq_ignore_ascii_case(id))
+                })));
             }
             data["locks"] = json!(rows);
             let mut selected = o.clone();

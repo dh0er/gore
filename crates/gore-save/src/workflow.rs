@@ -271,9 +271,14 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
         }
     }
     fixed.sort_by_key(|i| {
-        specs[*i]
-            .as_ref()
-            .is_some_and(crate::may_invalidate_caller_ordinals)
+        // A public rename is independent of private ordinals. Put it in the
+        // first group so its paired profile backup uses the pristine save.
+        (
+            edits[*i].path != "public.m_PlayerSaveName",
+            specs[*i]
+                .as_ref()
+                .is_some_and(crate::may_invalidate_caller_ordinals),
+        )
     });
     for (_, group) in &arrays {
         let positions: Vec<_> = splice
@@ -453,7 +458,11 @@ pub fn apply_with_progress(
         request["edits"] = json!(group.iter().map(|i| &raw[*i]).collect::<Vec<_>>());
         request["expectedSha1"] = json!(hashes[step]);
         request["backup"] = json!(step == 0 && payload["backup"].as_bool().unwrap_or(true));
-        request["syncPersistentDataList"] = json!(sync && step == 0);
+        request["syncPersistentDataList"] = json!(
+            sync && group
+                .iter()
+                .any(|i| raw[*i]["path"] == "public.m_PlayerSaveName")
+        );
         if step > 0 {
             for key in ["placementNotes", "clearPlacementNotes", "outputPath"] {
                 request.as_object_mut().unwrap().remove(key);

@@ -218,12 +218,26 @@ where
         crate::FileSnapshot::Missing => json!({}),
     };
     let after = update(before)?;
+    publish_json_file(path, &snapshot, after)
+}
+
+/// Deliberately discard preferences, including malformed JSON, with a guarded replace.
+pub fn reset_json_file(path: &std::path::Path) -> Result<Value, CoreError> {
+    let snapshot = crate::snapshot_file(path)?;
+    publish_json_file(path, &snapshot, json!({}))
+}
+
+fn publish_json_file(
+    path: &std::path::Path,
+    snapshot: &crate::FileSnapshot,
+    after: Value,
+) -> Result<Value, CoreError> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec_pretty(&after).map_err(|e| CoreError::Parse(e.to_string()))?;
     let staged = crate::ScratchFile::create(path, "tmp-json", &bytes)?;
-    crate::begin_replace_if_unchanged(path, staged.path(), &snapshot)?.commit();
+    crate::begin_replace_if_unchanged(path, staged.path(), snapshot)?.commit();
     Ok(after)
 }
 

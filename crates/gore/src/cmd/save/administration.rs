@@ -234,6 +234,15 @@ fn confirm(o: &Options, message: &str) -> Result<()> {
 }
 fn settings(v: &str, o: &Options) -> Result<Value> {
     let path = settings_path(&o.scope)?;
+    // A full reset must also recover unreadable or malformed preferences.
+    if v == "reset" && o.key.is_none() {
+        let data = if o.dry_run {
+            json!({})
+        } else {
+            api::reset_json_file(&path)?
+        };
+        return Ok(json!({"path":path,"settings":data,"dryRun":o.dry_run}));
+    }
     let mut data = settings_read(&o.scope)?;
     if v == "show" {
         return Ok(json!({"path":path,"settings":data}));
@@ -591,12 +600,13 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
     if !o.dry_run && v == "apply" {
         let committed: Vec<usize> = serde_json::from_value(result["committed"].clone())?;
         let list = data["edits"].as_array().context("invalid draft")?;
-        data["edits"] = json!(list
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !committed.contains(i))
-            .map(|(_, e)| e)
-            .collect::<Vec<_>>());
+        data["edits"] = json!(
+            list.iter()
+                .enumerate()
+                .filter(|(i, _)| !committed.contains(i))
+                .map(|(_, e)| e)
+                .collect::<Vec<_>>()
+        );
         if !committed.is_empty() {
             if let Some(hash) = result["sha1"].as_str() {
                 data["expectedSha1"] = json!(hash);
@@ -816,11 +826,18 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
         }
         ("profile", "assign") | ("", "import") => {
             let input = save(o)?;
-            let root = root(o)?;
+            let mut destination = o.clone();
+            if v == "import" {
+                // The external source is never a hint for the destination.
+                destination.save = None;
+                destination.target = None;
+            }
+            let root = root(&destination)?;
+            destination.root = Some(root.clone());
             let id = o.profile.context("--profile required")?;
             let mut p = json!({"path":input,"persistentPath":root.join("PersistentDataList.sav"),"profileId":id,"backup":true});
             if v == "import" {
-                let listing = scan(o)?;
+                let listing = scan(&destination)?;
                 let used = listing["saves"]
                     .as_array()
                     .context("save listing unavailable")?;
@@ -852,7 +869,7 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 };
                 p["destinationPath"] = json!(root.join(format!("{slot}.sav")));
             }
-            admin_write("assign_save_profile", p, o)
+            admin_write("assign_save_profile", p, &destination)
         }
         ("profile", "detach") | ("", "delete") => {
             let input = o.save.as_deref();
@@ -956,12 +973,14 @@ mod tests {
         stage(&draft, &story("Third", 4), true).unwrap();
         assert_eq!(before, fs::read(&draft).unwrap());
         fs::write(temp.path().join("PersistentDataList.sav"), b"new profile").unwrap();
-        assert!(stage(
-            &draft,
-            &json!({"path":save,"edits":[],"syncPersistentDataList":true}),
-            false
-        )
-        .is_err());
+        assert!(
+            stage(
+                &draft,
+                &json!({"path":save,"edits":[],"syncPersistentDataList":true}),
+                false
+            )
+            .is_err()
+        );
         assert_eq!(before, fs::read(&draft).unwrap());
         assert_eq!(fs::read(save).unwrap(), b"source");
     }

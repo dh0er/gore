@@ -1,6 +1,6 @@
 //! Contract and workflow checks through the shipped command-line interface.
 use assert_cmd::Command;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -67,6 +67,152 @@ fn every_editor_feature_maps_to_existing_cli_and_mcp_leaves() {
         );
     }
 }
+
+#[test]
+fn corrupt_ui_preferences_do_not_block_commands_or_a_full_reset() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let path = home.join("gore/gore-save/ui_settings.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    for bytes in [b"{broken".as_slice(), b"null".as_slice()] {
+        fs::write(&path, bytes).unwrap();
+        run(home, &["about"]);
+        run(home, &["settings", "reset", "--scope", "ui", "--dry-run"]);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let reset = run(home, &["settings", "reset", "--scope", "ui"]);
+        assert_eq!(reset["settings"], json!({}));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap(),
+            json!({})
+        );
+    }
+}
+
+#[test]
+fn import_discovers_the_destination_without_using_the_external_source_parent() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let destination = home.join("G1R/Saved/SaveGames");
+    let downloads = temp.path().join("downloads");
+    fs::create_dir_all(&destination).unwrap();
+    fs::create_dir(&downloads).unwrap();
+    let source = downloads.join("G1R-010.sav");
+    fs::copy(fixture(), &source).unwrap();
+    let source_profile = downloads.join("PersistentDataList.sav");
+    fs::write(&source_profile, b"external profile must not be touched").unwrap();
+    let output = Command::cargo_bin("gore")
+        .unwrap()
+        .env("LOCALAPPDATA", &home)
+        .env("APPDATA", &home)
+        .env("XDG_DATA_HOME", &home)
+        .args([
+            "save",
+            "import",
+            source.to_str().unwrap(),
+            "--profile",
+            "0",
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let result: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(result["ok"], false);
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(destination.join("PersistentDataList.sav").to_str().unwrap()),
+        "{result}"
+    );
+    assert_eq!(
+        fs::read(&source_profile).unwrap(),
+        b"external profile must not be touched"
+    );
+    assert_eq!(fs::read(&source).unwrap(), fs::read(fixture()).unwrap());
+    assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+}
+
+#[test]
+fn domain_writes_resolve_aliases_and_find_states_before_applying_the_new_filter() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let save = fixture();
+    let save = save.to_str().unwrap();
+    for domain in ["quests", "tutorials", "glossary"] {
+        let data = run(&home, &[domain, "list", save, "--all"]);
+        let row = if domain == "glossary" {
+            &data["categories"][0]["entries"][0]
+        } else {
+            &data["quests"][0]
+        };
+        assert_ne!(row["currentState"], "EQuestState::Succeeded");
+        let id = row["id"].as_str().unwrap();
+        run(
+            &home,
+            &[
+                domain,
+                "set-state",
+                save,
+                "--id",
+                id,
+                "--state",
+                "EQuestState::Succeeded",
+                "--dry-run",
+            ],
+        );
+    }
+    let draft = temp.path().join("aliases.json");
+    let draft = draft.to_str().unwrap();
+    run(
+        &home,
+        &["knowledge", "create-character", save, "--draft", draft],
+    );
+    assert_eq!(
+        run(&home, &["draft", "show", draft])["edits"][0]["value"]["value"],
+        "Hero"
+    );
+    let characters = run(&home, &["characters", "list", save, "--all"]);
+    let npc = characters["characters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| {
+            r["uniqueName"]
+                .as_str()
+                .is_some_and(|n| n.contains("Diego"))
+                && r["globalId"].is_string()
+        })
+        .unwrap();
+    let alias = npc["uniqueName"].as_str().unwrap();
+    let id = npc["globalId"].as_str().unwrap();
+    for command in [vec!["npc", "show"], vec!["npc", "relationship", "show"]] {
+        let mut args = command;
+        args.extend([save, "--actor", alias]);
+        let rows = run(&home, &args);
+        assert_eq!(rows["npcs"][0]["id"], id);
+    }
+    run(
+        &home,
+        &[
+            "knowledge",
+            "create-character",
+            save,
+            "--actor",
+            id,
+            "--draft",
+            draft,
+        ],
+    );
+    assert_eq!(
+        run(&home, &["draft", "show", draft])["edits"][1]["value"]["value"],
+        alias
+    );
+}
+
 #[test]
 fn native_reads_reports_and_drafts_work_without_an_editor_process() {
     let temp = tempfile::tempdir().unwrap();

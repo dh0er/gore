@@ -22563,6 +22563,78 @@ mod tests {
     }
 
     #[test]
+    fn workflow_syncs_a_late_rename_and_keeps_one_pristine_paired_backup() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let original = startsaves::start_save_bytes(startsaves::ResourcesLevel::Gothic);
+        let profile = persistent_data_list(&[(
+            "G1R-001",
+            "Persistent old",
+            1,
+            "MainMap",
+            3600.0,
+            false,
+            true,
+        )]);
+        fs::write(&path, original).unwrap();
+        fs::write(&persistent_path, &profile).unwrap();
+        let root = decode_private_root_cached(&path, &codec_backend::KrakenBackend).unwrap();
+        let index = traders::list_traders(&root)
+            .unwrap()
+            .into_iter()
+            .find(|t| t.ore.is_some() && !t.placeholder)
+            .unwrap()
+            .index;
+        let stock = |count| {
+            json!({"path":"private.traders.setStock","value":{
+                "index":index,"path":traders::ORE_PATH,"count":count
+            }})
+        };
+        let edits = vec![
+            stock(100),
+            stock(200),
+            json!({
+                "path":"public.m_PlayerSaveName","value":"Synced workflow name"
+            }),
+        ];
+        let result = workflow::apply_request(&json!({
+            "path":path,"edits":edits,"syncPersistentDataList":true,
+            "expectedPersistentSha1":sha1_hex(&profile)
+        }))
+        .unwrap();
+        assert_eq!(result["complete"], true, "{result}");
+        assert_eq!(result["committed"], json!([2, 0, 1]));
+        assert_eq!(
+            inspect_save(&path, false).unwrap()["public"]["playerSaveName"],
+            "Synced workflow name"
+        );
+        assert_eq!(
+            persistent_slot_metadata_for_dir(dir.path()).unwrap()["G1R-001"]
+                .player_save_name
+                .as_deref(),
+            Some("Synced workflow name")
+        );
+        let results = result["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        let backup = results[0]["backupPath"].as_str().unwrap();
+        let paired = results[0]["persistentBackupPath"].as_str().unwrap();
+        assert_eq!(fs::read(backup).unwrap(), original);
+        assert_eq!(fs::read(paired).unwrap(), profile);
+        assert_eq!(
+            backup.rsplit("G1R-001.sav.bak.").next(),
+            paired.rsplit("PersistentDataList.sav.bak.").next()
+        );
+        assert!(results[1]["backupPath"].is_null());
+        assert!(results[1]["persistentBackupPath"].is_null());
+        let root = decode_private_root_cached(&path, &codec_backend::KrakenBackend).unwrap();
+        assert_eq!(
+            traders::trader_detail(&root, index).unwrap().summary.ore,
+            Some(200)
+        );
+    }
+
+    #[test]
     fn write_save_syncs_player_save_name_to_persistent_data_list() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");

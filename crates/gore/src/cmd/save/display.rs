@@ -39,13 +39,19 @@ pub(super) fn clipboard(text: &str) -> Result<()> {
 }
 pub(super) fn open(path: &Path) -> Result<()> {
     #[cfg(windows)]
-    let status = Command::new("explorer.exe").arg(path).status()?;
-    #[cfg(target_os = "macos")]
-    let status = Command::new("open").arg(path).status()?;
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let status = Command::new("xdg-open").arg(path).status()?;
-    if !status.success() {
-        bail!("could not open {}", path.display());
+    {
+        // Explorer hands off to the shell; its exit code is not a launch result.
+        Command::new("explorer.exe").arg(path).spawn()?;
+    }
+    #[cfg(not(windows))]
+    {
+        #[cfg(target_os = "macos")]
+        let status = Command::new("open").arg(path).status()?;
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let status = Command::new("xdg-open").arg(path).status()?;
+        if !status.success() {
+            bail!("could not open {}", path.display());
+        }
     }
     Ok(())
 }
@@ -73,7 +79,7 @@ pub(super) fn catalog(domain: &str) -> Result<Value> {
         "hero-attributes" => {
             return Ok(
                 json!({"groups":super::presentation::metadata()["attributeGroups"],"hidden":super::presentation::metadata()["hiddenAttributes"]}),
-            )
+            );
         }
         "ui-texts" => return Ok(super::presentation::metadata()["ui"].clone()),
         _ => bail!("unknown catalog domain {domain}"),
