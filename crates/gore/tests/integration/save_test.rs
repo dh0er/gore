@@ -29,6 +29,105 @@ fn run(home: &Path, args: &[&str]) -> Value {
     assert_eq!(value["ok"], true, "{value}");
     value["data"].clone()
 }
+
+fn run_failure(home: &Path, args: &[&str]) -> Value {
+    let output = Command::cargo_bin("gore")
+        .unwrap()
+        .env("LOCALAPPDATA", home)
+        .env("APPDATA", home)
+        .env("XDG_DATA_HOME", home)
+        .env("GORE_DISABLE_GAME_AUTODETECT", "1")
+        .arg("save")
+        .args(args)
+        .arg("--json")
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["ok"], false, "{value}");
+    value["error"].clone()
+}
+
+#[test]
+fn recovery_show_selects_one_record_without_changing_recovery_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let backups = root.join("goresave_backups");
+    fs::create_dir(&backups).unwrap();
+    let persistent = root.join("PersistentDataList.sav");
+    fs::write(&persistent, b"guarded post-delete profile").unwrap();
+    let profile_sha1 = gore_save::api::file_sha1(&persistent).unwrap();
+    let mut records = Vec::new();
+    let mut paths = vec![persistent.clone()];
+    for (slot, epoch) in [(1, 1000), (2, 2000)] {
+        let name = format!("G1R-{slot:03}.sav.bak.{epoch}");
+        let backup = backups.join(&name);
+        let paired = backups.join(format!("PersistentDataList.sav.bak.{epoch}"));
+        fs::write(&backup, format!("deleted slot {slot}")).unwrap();
+        fs::write(&paired, format!("original profile {slot}")).unwrap();
+        let record = json!({
+            "version":1,"createdEpoch":epoch,
+            "targetPath":root.join(format!("G1R-{slot:03}.sav")),
+            "backupPath":backup,"persistentPath":persistent,
+            "persistentBackupPath":paired,"persistentPostDeleteSha1":profile_sha1,
+            "deletedSaveSha1":gore_save::api::file_sha1(&backup).unwrap(),
+            "deletedPersistentSha1":gore_save::api::file_sha1(&paired).unwrap()
+        });
+        let manifest = backups.join(format!(".delete-recovery.{name}.json"));
+        fs::write(&manifest, serde_json::to_vec(&record).unwrap()).unwrap();
+        paths.extend([backup, paired, manifest]);
+        records.push(record);
+    }
+    let snapshots: Vec<_> = paths
+        .iter()
+        .map(|path| (path, fs::read(path).unwrap()))
+        .collect();
+    let root_arg = root.to_str().unwrap();
+    let listed = run(root, &["recovery", "list", "--root", root_arg]);
+    assert_eq!(listed["recoveries"], json!(records));
+    let selected = run(
+        root,
+        &[
+            "recovery",
+            "show",
+            "--root",
+            root_arg,
+            "--backup",
+            records[0]["backupPath"].as_str().unwrap(),
+        ],
+    );
+    assert_eq!(selected, records[0]);
+    assert_eq!(
+        run(root, &["recovery", "show", "--root", root_arg]),
+        records[1]
+    );
+    let missing = backups.join("G1R-003.sav.bak.3000");
+    let error = run_failure(
+        root,
+        &[
+            "recovery",
+            "show",
+            "--root",
+            root_arg,
+            "--backup",
+            missing.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("no matching recovery")
+    );
+    for (path, bytes) in snapshots {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    assert!(!root.join("G1R-001.sav").exists());
+    assert!(!root.join("G1R-002.sav").exists());
+}
+
 #[test]
 fn every_editor_feature_maps_to_existing_cli_and_mcp_leaves() {
     let parity = gore_save::api::editor_parity();
@@ -986,6 +1085,73 @@ fn native_reads_reports_and_drafts_work_without_an_editor_process() {
     let backups = run(&home, &["backups", "list", save]);
     assert_eq!(backups["backups"].as_array().unwrap().len(), 1);
     let backup = backups["backups"][0]["path"].as_str().unwrap();
+    let named = run(
+        &home,
+        &[
+            "backups",
+            "rename",
+            save,
+            "--backup",
+            backup,
+            "--name",
+            "Keep this label",
+        ],
+    );
+    assert_eq!(named["name"], "Keep this label");
+    assert_eq!(
+        run(&home, &["backups", "list", save])["backups"][0]["name"],
+        "Keep this label"
+    );
+    let labels = temp.path().join("goresave_backups/backup_names.json");
+    let label_bytes = fs::read(&labels).unwrap();
+    let save_sha1 = gore_save::api::file_sha1(Path::new(save)).unwrap();
+    let backup_sha1 = gore_save::api::file_sha1(Path::new(backup)).unwrap();
+    for flags in [
+        vec![],
+        vec!["--name", "Other", "--clear-name"],
+        vec!["--name", ""],
+        vec!["--name", "  "],
+    ] {
+        let mut args = vec!["backups", "rename", save, "--backup", backup];
+        args.extend(flags);
+        let error = run_failure(&home, &args);
+        assert!(error["message"].as_str().unwrap().contains("--clear-name"));
+        assert_eq!(fs::read(&labels).unwrap(), label_bytes);
+        assert_eq!(
+            gore_save::api::file_sha1(Path::new(save)).unwrap(),
+            save_sha1
+        );
+        assert_eq!(
+            gore_save::api::file_sha1(Path::new(backup)).unwrap(),
+            backup_sha1
+        );
+    }
+    run(
+        &home,
+        &[
+            "backups",
+            "rename",
+            save,
+            "--backup",
+            backup,
+            "--clear-name",
+            "--dry-run",
+        ],
+    );
+    assert_eq!(fs::read(&labels).unwrap(), label_bytes);
+    let cleared = run(
+        &home,
+        &[
+            "backups",
+            "rename",
+            save,
+            "--backup",
+            backup,
+            "--clear-name",
+        ],
+    );
+    assert!(cleared["name"].is_null());
+    assert!(run(&home, &["backups", "list", save])["backups"][0]["name"].is_null());
     let current = fs::read(save).unwrap();
     run(
         &home,

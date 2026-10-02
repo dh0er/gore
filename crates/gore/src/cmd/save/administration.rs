@@ -893,6 +893,21 @@ fn admin_write(command: &str, p: Value, o: &Options) -> Result<Value> {
     Ok(json!({"dryRun":true,"command":command,"request":p,"validated":true,"simulation":result}))
 }
 
+fn selected_recovery<'a>(data: &'a Value, o: &Options) -> Result<&'a Value> {
+    data["recoveries"]
+        .as_array()
+        .context("no recovery")?
+        .iter()
+        .rev()
+        .find(|r| {
+            !r.is_null()
+                && o.backup
+                    .as_ref()
+                    .is_none_or(|p| r["backupPath"] == json!(p))
+        })
+        .context("no matching recovery")
+}
+
 pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
     match (g, v) {
         ("settings", _) => settings(v, o),
@@ -1007,6 +1022,14 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 .or(o.save.as_deref())
                 .context("save target required")?;
             let backup = o.backup.as_deref().context("--backup required")?;
+            if v == "rename" {
+                if o.clear_name == o.name.is_some() {
+                    bail!("specify exactly one of --name or --clear-name");
+                }
+                if o.name.as_deref().is_some_and(|name| name.trim().is_empty()) {
+                    bail!("--name must not be blank; use --clear-name to remove the label");
+                }
+            }
             if v == "delete" {
                 confirm(o, "Permanently delete this backup")?;
             }
@@ -1021,21 +1044,15 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 o,
             )
         }
-        ("recovery", "list" | "show") => call("recovery_status", json!({"path":root(o)?})),
+        ("recovery", "list") => call("recovery_status", json!({"path":root(o)?})),
+        ("recovery", "show") => {
+            let data = call("recovery_status", json!({"path":root(o)?}))?;
+            Ok(selected_recovery(&data, o)?.clone())
+        }
         ("recovery", "repair") => admin_write("scan_save_dir", json!({"path":root(o)?}), o),
         ("recovery", "restore" | "dismiss") => {
             let data = call("recovery_status", json!({"path":root(o)?}))?;
-            let rows = data["recoveries"].as_array().context("no recovery")?;
-            let recovery = rows
-                .iter()
-                .rev()
-                .find(|r| {
-                    !r.is_null()
-                        && o.backup
-                            .as_ref()
-                            .is_none_or(|p| r["backupPath"] == json!(p))
-                })
-                .context("no matching recovery")?;
+            let recovery = selected_recovery(&data, o)?;
             let p = json!({"path":recovery["targetPath"],"backupPath":recovery["backupPath"],"expectedPersistentSha1":recovery["persistentPostDeleteSha1"],"expectedSaveSha1":recovery["deletedSaveSha1"],"expectedPersistentBackupSha1":recovery["deletedPersistentSha1"]});
             admin_write(
                 if v == "restore" {
