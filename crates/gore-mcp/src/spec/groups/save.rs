@@ -269,7 +269,6 @@ const OPTIONS: &[ArgSpec] = &[
     ArgSpec::new("lang", Long("lang"), Str, "lang", false),
     ArgSpec::new("game_lang", Long("game-lang"), Str, "game_lang", false),
     ArgSpec::new("show_ids", Switch("show-ids"), Bool, "show ids", false),
-    ArgSpec::new("copy", Switch("copy"), Bool, "copy", false),
     ArgSpec::new("open", Switch("open"), Bool, "open", false),
     ArgSpec::new("scope", Long("scope"), Str, "scope", false),
     ArgSpec::new("key", Long("key"), Str, "key", false),
@@ -285,8 +284,8 @@ const OPTIONS: &[ArgSpec] = &[
         false,
     ),
 ];
-// Read leaves share the CLI argument type; its inert --out flag is omitted
-// from the MCP schema so it cannot advertise an output the leaf never writes.
+// Clipboard writes stay in the CLI; MCP omits --copy for every safety class.
+// Read leaves also omit the inert --out flag.
 const READ_OPTIONS: &[ArgSpec] = &[
     OPTIONS[0],
     OPTIONS[1],
@@ -382,7 +381,6 @@ const READ_OPTIONS: &[ArgSpec] = &[
     OPTIONS[92],
     OPTIONS[93],
     OPTIONS[94],
-    OPTIONS[95],
 ];
 const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
@@ -393,7 +391,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "inspect",
@@ -403,7 +401,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "refresh",
@@ -413,7 +411,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "rename",
@@ -423,6 +421,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -433,6 +432,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -443,6 +443,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -453,7 +454,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "statistics",
@@ -463,7 +464,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "report",
@@ -473,6 +474,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games"),
     CommandSpec::new(
         "about",
@@ -482,7 +484,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "licenses",
@@ -492,7 +494,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "validate",
@@ -502,7 +504,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "profiles list",
@@ -512,7 +514,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "profiles show",
@@ -522,7 +524,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "profile assign",
@@ -532,6 +534,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -542,6 +545,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -552,7 +556,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "characters show",
@@ -562,7 +566,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "attributes list",
@@ -572,7 +576,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "attributes show",
@@ -582,7 +586,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "attributes set",
@@ -592,6 +596,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -602,7 +607,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "skills show",
@@ -612,7 +617,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "skills set",
@@ -622,6 +627,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -632,7 +638,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "inventory show",
@@ -642,7 +648,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "inventory set-count",
@@ -652,6 +658,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -662,6 +669,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -672,6 +680,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -682,6 +691,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -692,7 +702,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "inventory repair-slots",
@@ -702,6 +712,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -712,7 +723,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "position set",
@@ -722,6 +733,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -732,6 +744,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -742,7 +755,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "position resume-routine",
@@ -752,6 +765,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -762,6 +776,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -772,7 +787,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "time set",
@@ -782,6 +797,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -792,7 +808,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "difficulty set",
@@ -802,6 +818,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -812,7 +829,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "quests show",
@@ -822,7 +839,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "quests set-state",
@@ -832,6 +849,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -842,7 +860,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "tutorials show",
@@ -852,7 +870,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "tutorials set-state",
@@ -862,6 +880,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -872,7 +891,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "story show",
@@ -882,7 +901,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "story set",
@@ -892,6 +911,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -902,6 +922,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -912,7 +933,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "knowledge add",
@@ -922,6 +943,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -932,6 +954,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -942,6 +965,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -952,7 +976,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "events show",
@@ -962,7 +986,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "events remove",
@@ -972,6 +996,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -982,6 +1007,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -992,7 +1018,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "factions show",
@@ -1002,7 +1028,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "factions forgive",
@@ -1012,6 +1038,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1022,7 +1049,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "locks show",
@@ -1032,7 +1059,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "locks unlock",
@@ -1042,6 +1069,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1052,6 +1080,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1062,7 +1091,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "backups rename",
@@ -1072,6 +1101,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1082,6 +1112,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1092,6 +1123,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1102,7 +1134,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "recovery show",
@@ -1112,7 +1144,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "recovery restore",
@@ -1122,6 +1154,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1132,6 +1165,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1142,6 +1176,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1152,7 +1187,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "library add",
@@ -1162,6 +1197,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1172,6 +1208,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1182,6 +1219,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1192,6 +1230,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1202,7 +1241,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "settings get",
@@ -1212,7 +1251,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "settings set",
@@ -1222,6 +1261,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1232,6 +1272,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1242,7 +1283,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "localization prepare",
@@ -1252,6 +1293,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1262,7 +1304,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "assets prepare",
@@ -1272,6 +1314,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1282,7 +1325,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "assets list",
@@ -1292,7 +1335,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "assets export",
@@ -1302,6 +1345,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games"),
     CommandSpec::new(
         "assets open",
@@ -1311,6 +1355,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1321,6 +1366,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1331,7 +1377,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "data show",
@@ -1341,7 +1387,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "data set",
@@ -1351,6 +1397,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1361,6 +1408,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1371,6 +1419,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1381,6 +1430,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1391,6 +1441,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1401,7 +1452,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "core exec",
@@ -1411,6 +1462,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1421,7 +1473,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "draft create",
@@ -1431,6 +1483,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1441,7 +1494,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "draft stage",
@@ -1451,6 +1504,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1461,6 +1515,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1471,6 +1526,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1481,7 +1537,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "draft apply",
@@ -1491,6 +1547,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1501,7 +1558,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "catalog show",
@@ -1511,7 +1568,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "catalog search",
@@ -1521,7 +1578,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "items list",
@@ -1531,7 +1588,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "items show",
@@ -1541,7 +1598,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "items search",
@@ -1551,7 +1608,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "locations list",
@@ -1561,7 +1618,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "locations show",
@@ -1571,7 +1628,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "locations search",
@@ -1581,7 +1638,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "screenshot export",
@@ -1591,6 +1648,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games"),
     CommandSpec::new(
         "updates check",
@@ -1600,7 +1658,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "updates open-release",
@@ -1610,6 +1668,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1620,6 +1679,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1630,7 +1690,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "npc relationship set",
@@ -1640,6 +1700,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1650,6 +1711,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1660,6 +1722,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1670,6 +1733,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1680,6 +1744,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1690,6 +1755,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1700,7 +1766,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "traders timing set",
@@ -1710,6 +1776,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1720,6 +1787,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1730,7 +1798,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "npc show",
@@ -1740,7 +1808,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "npc revive",
@@ -1750,6 +1818,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1760,7 +1829,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "glossary show",
@@ -1770,7 +1839,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "glossary set-state",
@@ -1780,6 +1849,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
+    .hides_cli_flags(&["copy"])
     .guide("save-games")
     .gated_because("changes save files, their backups, drafts, or shared Save Editor settings"),
     CommandSpec::new(
@@ -1790,7 +1860,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
     CommandSpec::new(
         "traders show",
@@ -1800,7 +1870,7 @@ const COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .json(JsonSupport::Stdout)
-    .hides_cli_flags(&["out"])
+    .hides_cli_flags(&["out", "copy"])
     .guide("save-games"),
 ];
 pub const SAVE: GroupSpec = GroupSpec {

@@ -1402,6 +1402,37 @@ mod tests {
     }
 
     #[test]
+    fn save_clipboard_arguments_are_rejected_before_any_command_is_spawned() {
+        let (mut session, spawn) = faked(exec::Outcome::success("{}\n"));
+        for subcommand in ["list", "inspect", "report", "screenshot export", "rename"] {
+            let result = session
+                .handle_unasked(&request(
+                    "tools/call",
+                    json!({
+                        "name":"gore_save", "arguments":{
+                            "subcommand":subcommand,"args":{"copy":true}
+                        }
+                    }),
+                ))
+                .expect("answered")
+                .result
+                .expect("result");
+            assert_eq!(result["isError"], json!(true), "{subcommand}: {result}");
+            assert!(
+                result["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("copy"),
+                "{result}"
+            );
+            assert!(
+                spawn.calls().is_empty(),
+                "the clipboard must never be touched through MCP"
+            );
+        }
+    }
+
+    #[test]
     fn a_bad_argument_is_a_tool_error_the_model_can_act_on() {
         let (mut session, spawn) = faked(exec::Outcome::success(""));
         let response = session
