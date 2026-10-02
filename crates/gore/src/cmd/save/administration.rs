@@ -677,40 +677,7 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
     data["dryRun"] = json!(o.dry_run || v == "validate");
     let mut result = call("apply_edits", data.clone())?;
     if !o.dry_run && v == "apply" {
-        let committed: Vec<usize> = serde_json::from_value(result["committed"].clone())?;
-        let list = data["edits"].as_array().context("invalid draft")?;
-        data["edits"] = json!(
-            list.iter()
-                .enumerate()
-                .filter(|(i, _)| !committed.contains(i))
-                .map(|(_, e)| e)
-                .collect::<Vec<_>>()
-        );
-        if !committed.is_empty() {
-            if let Some(hash) = result["sha1"].as_str() {
-                data["expectedSha1"] = json!(hash);
-            }
-            let committed_path = PathBuf::from(
-                result["path"]
-                    .as_str()
-                    .unwrap_or(data["path"].as_str().unwrap_or("")),
-            );
-            let committed_path = committed_path.canonicalize().unwrap_or(committed_path);
-            let profile = committed_path
-                .parent()
-                .unwrap_or(Path::new("."))
-                .join("PersistentDataList.sav");
-            data["path"] = json!(committed_path);
-            data["expectedPersistentSha1"] = json!(api::file_sha1(&profile).ok());
-            data.as_object_mut().unwrap().remove("outputPath");
-        }
-        data.as_object_mut().unwrap().remove("dryRun");
-        if !committed.is_empty() {
-            gore_save::workflow::retain_pending_placement_sidecars(&mut data);
-            data.as_object_mut()
-                .unwrap()
-                .remove("syncPersistentDataList");
-        }
+        data = draft_after_apply(data, &result)?;
         let publication = api::update_json_file(file, |current| {
             if current != original {
                 return Err(gore_save::CoreError::Validation(
@@ -729,6 +696,52 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
         }
     }
     Ok(result)
+}
+
+fn draft_after_apply(mut data: Value, result: &Value) -> Result<Value> {
+    let committed: Vec<usize> = serde_json::from_value(result["committed"].clone())?;
+    let list = data["edits"].as_array().context("invalid draft")?;
+    let consumed_sync = committed.iter().any(|index| {
+        list.get(*index)
+            .is_some_and(|edit| edit["path"] == "public.m_PlayerSaveName")
+    });
+    data["edits"] = json!(
+        list.iter()
+            .enumerate()
+            .filter(|(i, _)| !committed.contains(i))
+            .map(|(_, e)| e)
+            .collect::<Vec<_>>()
+    );
+    if !committed.is_empty() {
+        if let Some(hash) = result["sha1"].as_str() {
+            data["expectedSha1"] = json!(hash);
+        }
+        let committed_path = PathBuf::from(
+            result["path"]
+                .as_str()
+                .unwrap_or(data["path"].as_str().unwrap_or("")),
+        );
+        let committed_path = committed_path.canonicalize().unwrap_or(committed_path);
+        let profile = committed_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("PersistentDataList.sav");
+        data["path"] = json!(committed_path);
+        if consumed_sync || data["syncPersistentDataList"] != true {
+            data["expectedPersistentSha1"] = json!(api::file_sha1(&profile).ok());
+        }
+        data.as_object_mut().unwrap().remove("outputPath");
+    }
+    data.as_object_mut().unwrap().remove("dryRun");
+    if !committed.is_empty() {
+        gore_save::workflow::retain_pending_placement_sidecars(&mut data);
+        if consumed_sync || data["edits"].as_array().is_some_and(Vec::is_empty) {
+            data.as_object_mut()
+                .unwrap()
+                .remove("syncPersistentDataList");
+        }
+    }
+    Ok(data)
 }
 
 pub(super) fn difficulty(v: &str, o: &Options) -> Result<Value> {
@@ -1284,6 +1297,71 @@ mod tests {
                 .contains("profile changed since draft creation")
         );
         assert_eq!(fs::read(&save).unwrap(), bytes);
+    }
+
+    #[test]
+    fn partial_draft_apply_preserves_an_independent_profile_snapshot_for_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        let save = temp.path().join("G1R-001.sav");
+        let file = temp.path().join("draft.json");
+        let profile = temp.path().join("PersistentDataList.sav");
+        let bytes = include_bytes!("../../../../gore-save/assets/start_saves/resources_gothic.sav");
+        fs::write(&save, bytes).unwrap();
+        fs::write(&profile, b"initial profile").unwrap();
+        let reset = json!({"path":"private.inventory.reset","value":{}});
+        let story = json!({"path":"private.story.apply","value":{"changes":[{
+            "id":"CLI_Profile_Guard_Test","present":true,"rawValue":1,
+            "expected":{"stored":false},"allowUnknownCreate":true
+        }]}});
+        stage(
+            &file,
+            &json!({"path":save,"edits":[reset,story],"syncPersistentDataList":true}),
+            false,
+        )
+        .unwrap();
+        let original = read_json(&file).unwrap();
+        let result = gore_save::workflow::apply_with_progress(&original, |progress| {
+            assert_eq!(progress["committed"], json!([0]));
+            // A concurrent writer invalidates the second group and changes the
+            // profile before the remaining draft is published.
+            api::execute(&api::Request {
+                command: "write_save".into(),
+                payload: json!({"path":save,"backup":false,
+                    "edits":[{"path":"public.m_PlayerSaveName","value":"Concurrent save change"}]}),
+            })
+            .unwrap();
+            fs::write(&profile, b"changed profile difficulty").unwrap();
+        })
+        .unwrap();
+        assert_eq!(result["complete"], false);
+        assert_eq!(result["committed"], json!([0]));
+        let remaining = draft_after_apply(original.clone(), &result).unwrap();
+        assert_eq!(remaining["edits"], json!([story]));
+        assert_eq!(remaining["syncPersistentDataList"], true);
+        assert_eq!(
+            remaining["expectedPersistentSha1"],
+            original["expectedPersistentSha1"]
+        );
+        api::update_json_file(&file, |_| Ok(remaining)).unwrap();
+        let before_retry = api::file_sha1(&save).unwrap();
+        let options = Options {
+            save: Some(file),
+            ..Default::default()
+        };
+        assert!(
+            draft("validate", &options)
+                .unwrap_err()
+                .to_string()
+                .contains("profile changed since draft creation")
+        );
+        assert!(
+            draft("apply", &options)
+                .unwrap_err()
+                .to_string()
+                .contains("profile changed since draft creation")
+        );
+        assert_eq!(api::file_sha1(&save).unwrap(), before_retry);
+        assert_eq!(fs::read(&profile).unwrap(), b"changed profile difficulty");
     }
 
     #[test]
