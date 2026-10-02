@@ -700,7 +700,7 @@
   "editorRelationshipConflict": "Egy kapcsolati felülírás és egy másik, nem mentett Összes adat szerkesztés ugyanarra az NPC kapcsolati bejegyzésre ({path}) mutat. A strukturált kapcsolati változás felülírhatja a módosítókat abban a bejegyzésben, ezért együtt nem menthetők — állítsd vissza vagy vedd vissza az egyiket, majd ments újra.",
   "editorMultipleStructuralArrayEdits": "Több mint egy nem mentett strukturális szerkesztés ugyanarra a tömbre ({path}) mutat. Mentsd vagy állítsd vissza az első változást, mielőtt másikat állítanál sorba.",
   "editorStructuralArrayConflict": "Egy strukturális eseményváltozás és egy másik, nem mentett Összes adat szerkesztés is a(z) {path} útvonalra mutat. Mentsd vagy állítsd vissza az egyiket a folytatás előtt.",
-  "editorSkillsEffectConflict": "Egy Képességek változás és egy Összes adat szerkesztés ugyanarra az aktor effektjére (ActiveEffects › EffectSpec › Def) is sorban áll. Együtt nem menthetők — állítsd vissza vagy vedd vissza az egyiket, majd ments újra.",
+  "editorSkillsEffectConflict": "Egy Képességek változás és egy Összes adat szerkesztés ugyanarra az aktor effektjére (ActiveEffects) is sorban áll. Együtt nem menthetők — állítsd vissza vagy vedd vissza az egyiket, majd ments újra.",
   "editorInventoryResetConflict": "Egy leltár-visszaállítás és egy másik, ugyanarra a leltárra vonatkozó szerkesztés is sorban áll. A visszaállítás az egész leltárt cseréli, és elvetné a másik szerkesztést — állítsd vissza vagy vedd vissza az egyiket, majd ments újra.",
   "editorUseFolder": "Mappa használata",
   "editorGothicSavegameFileType": "Gothic mentés",

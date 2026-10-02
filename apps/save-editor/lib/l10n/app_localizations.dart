@@ -4330,7 +4330,7 @@ abstract class AppLocalizations {
   /// No description provided for @editorSkillsEffectConflict.
   ///
   /// In en, this message translates to:
-  /// **'A Skills change and an All-data edit to the same actor’s effect (ActiveEffects › EffectSpec › Def) are both queued. They cannot be saved together — reset or revert one of them, then save again.'**
+  /// **'A Skills change and an All-data edit to the same actor’s effect (ActiveEffects) are both queued. They cannot be saved together — reset or revert one of them, then save again.'**
   String get editorSkillsEffectConflict;
 
   /// No description provided for @editorInventoryResetConflict.

@@ -2424,7 +2424,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get editorSkillsEffectConflict =>
-      '“技能”中的更改和“全部数据”中针对同一角色效果 (ActiveEffects › EffectSpec › Def) 的修改都在等待保存。两项修改无法同时保存。请重置或撤销其中一项，然后再次保存。';
+      '“技能”中的更改和“全部数据”中针对同一角色效果 (ActiveEffects) 的修改都在等待保存。两项修改无法同时保存。请重置或撤销其中一项，然后再次保存。';
 
   @override
   String get editorInventoryResetConflict =>
@@ -5599,7 +5599,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get editorSkillsEffectConflict =>
-      '“技能”中的更改和“全部数据”中针对同一角色效果 (ActiveEffects › EffectSpec › Def) 的修改都在等待保存。两项修改无法同时保存。请重置或撤销其中一项，然后再次保存。';
+      '“技能”中的更改和“全部数据”中针对同一角色效果 (ActiveEffects) 的修改都在等待保存。两项修改无法同时保存。请重置或撤销其中一项，然后再次保存。';
 
   @override
   String get editorInventoryResetConflict =>
@@ -8780,7 +8780,7 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get editorSkillsEffectConflict =>
-      '“技能”中的更改和“全部資料”中針對同一角色效果 (ActiveEffects › EffectSpec › Def) 的修改都在等待儲存。兩項修改無法同時儲存。請重置或撤銷其中一項，然後再次儲存。';
+      '“技能”中的更改和“全部資料”中針對同一角色效果 (ActiveEffects) 的修改都在等待儲存。兩項修改無法同時儲存。請重置或撤銷其中一項，然後再次儲存。';
 
   @override
   String get editorInventoryResetConflict =>

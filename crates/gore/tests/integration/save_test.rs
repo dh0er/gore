@@ -711,6 +711,99 @@ fn hero_transform_raw_collisions_reject_core_writes_and_keep_staged_drafts() {
 }
 
 #[test]
+fn inventory_reset_and_skill_unlearning_refuse_raw_changes_they_would_discard() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let actor = "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN";
+    let inventory = execute_core(
+        "search_typed_properties",
+        json!({"path":save,"query":format!("InventoryByGlobalId {actor}"),"includeNodes":true,"limit":1000}),
+    );
+    let count = inventory["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| {
+            row["path"]
+                .as_array()
+                .unwrap()
+                .last()
+                .and_then(Value::as_str)
+                == Some("m_ItemCount")
+        })
+        .unwrap();
+    execute_core(
+        "write_save",
+        json!({"path":save,"backup":false,"edits":[{"path":"private.skills.set","value":{"actor":"Hero","base":"Hunting_Scutes","tier":"Trained"}}]}),
+    );
+    let effects = execute_core(
+        "search_typed_properties",
+        json!({"path":save,"query":"Hero ActiveEffects","includeNodes":true,"limit":1000}),
+    );
+    let rows = effects["results"].as_array().unwrap();
+    let definition = rows
+        .iter()
+        .find(|row| {
+            row["path"]
+                .as_array()
+                .unwrap()
+                .last()
+                .and_then(Value::as_str)
+                == Some("Def")
+                && row["value"]
+                    .as_str()
+                    .is_some_and(|value| value.ends_with("GE_Skill_Hunting_Scutes_Trained"))
+        })
+        .expect("learned effect is present");
+    let mut duration_path = definition["path"].as_array().unwrap().clone();
+    *duration_path.last_mut().unwrap() = json!("Duration");
+    let duration = rows
+        .iter()
+        .find(|row| row["path"] == json!(duration_path))
+        .unwrap();
+    let source_hash = gore_save::api::file_sha1(&save).unwrap();
+    for (structured, raw, kind) in [
+        (
+            json!({"path":"private.inventory.reset","value":{"actorId":actor,"resourcesLevel":"gothic"}}),
+            json!({"path":"private.typed.setValue","value":{"path":count["path"],"value":count["editValue"].as_i64().unwrap()+7}}),
+            "inventoryReset",
+        ),
+        (
+            json!({"path":"private.skills.set","value":{"actor":"Hero","base":"Hunting_Scutes","tier":"Untrained"}}),
+            json!({"path":"private.typed.setValue","value":{"path":duration_path,"value":duration["editValue"].as_f64().unwrap()+7.0}}),
+            "skillsEffect",
+        ),
+    ] {
+        for edit in [&structured, &raw] {
+            execute_core(
+                "apply_edits",
+                json!({"path":save,"edits":[edit],"dryRun":true}),
+            );
+        }
+        for edits in [vec![structured.clone(), raw.clone()], vec![raw, structured]] {
+            for command in ["write_save", "apply_edits"] {
+                let error = gore_save::api::execute(&gore_save::api::Request {
+                    command: command.into(),
+                    payload: json!({"path":save,"edits":edits,"backup":true}),
+                })
+                .unwrap_err();
+                if command == "apply_edits" {
+                    assert!(
+                        matches!(error,gore_save::CoreError::PlanConflict {kind:found,..} if found==kind)
+                    );
+                } else {
+                    assert!(matches!(error, gore_save::CoreError::UnsupportedEdit(_)));
+                }
+                assert_eq!(gore_save::api::file_sha1(&save).unwrap(), source_hash);
+                assert!(!home.join("goresave_backups").exists());
+            }
+        }
+    }
+}
+
+#[test]
 fn slot_checks_and_repairs_cover_other_npcs_regardless_of_the_actor_selector() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
@@ -718,6 +811,10 @@ fn slot_checks_and_repairs_cover_other_npcs_regardless_of_the_actor_selector() {
     fs::copy(fixture(), &save).unwrap();
     let save_arg = save.to_str().unwrap();
     let actor = "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN";
+    execute_core(
+        "write_save",
+        json!({"path":save,"backup":false,"edits":[{"path":"private.inventory.addItem","value":{"actorId":actor,"path":"/Script/Angelscript.ItMi_Orenugget","count":7}}]}),
+    );
     let properties = execute_core(
         "search_typed_properties",
         json!({"path":save,"query":"m_Slots m_Id","includeNodes":true,"limit":1000}),
@@ -746,22 +843,43 @@ fn slot_checks_and_repairs_cover_other_npcs_regardless_of_the_actor_selector() {
     let damaged_hash = gore_save::api::file_sha1(&save).unwrap();
     let global = run(home, &["inventory", "check-slots", save_arg]);
     assert!(global["slotIntegrity"]["misalignedSlots"].as_u64().unwrap() > 0);
-    for selected in [actor, "unresolved actor is irrelevant to a global repair"] {
-        let checked = run(
-            home,
-            &[
-                "inventory",
-                "check-slots",
-                save_arg,
-                "--actor",
-                selected,
-                "--container",
-                "MainContainer",
-                "--slot",
-                "0",
-            ],
-        );
+    let npc_inventory = run(
+        home,
+        &["inventory", "list", save_arg, "--actor", actor, "--all"],
+    );
+    let added = npc_inventory["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "ItMi_Orenugget" && row["count"] == 7)
+        .expect("NPC contains the added item");
+    let slot = added["slotId"].as_i64().unwrap().to_string();
+    for selectors in [
+        vec![],
+        vec!["--container", "MainContainer", "--slot", slot.as_str()],
+    ] {
+        let mut list_args = vec!["inventory", "list", save_arg, "--actor", actor, "--all"];
+        list_args.extend_from_slice(&selectors);
+        let listed = run(home, &list_args);
+        assert!(!listed["items"].as_array().unwrap().is_empty());
+        list_args[1] = "check-slots";
+        let checked = run(home, &list_args);
+        assert_eq!(checked["items"], listed["items"]);
+        assert_eq!(checked["id"], listed["id"]);
         assert_eq!(checked["slotIntegrity"], global["slotIntegrity"]);
+    }
+    let unknown_actor = "unresolved actor is irrelevant to a global repair";
+    run_failure(
+        home,
+        &[
+            "inventory",
+            "check-slots",
+            save_arg,
+            "--actor",
+            unknown_actor,
+        ],
+    );
+    for selected in [actor, unknown_actor] {
         run(
             home,
             &[

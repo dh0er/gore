@@ -714,7 +714,7 @@
   "editorRelationshipConflict": "Un cambio de relación y otro cambio pendiente de Todos los datos afectan a la misma entrada de relación de un PNJ ({path}). El cambio de relación estructurado puede sustituir modificadores de esa entrada, por lo que no se pueden guardar juntos. Restablece o deshaz uno de ellos y vuelve a guardar.",
   "editorMultipleStructuralArrayEdits": "Hay más de un cambio estructural pendiente para la misma matriz ({path}). Guarda o restablece el primer cambio antes de añadir otro.",
   "editorStructuralArrayConflict": "Un cambio estructural de evento y otro cambio pendiente de Todos los datos afectan a {path}. Guarda o restablece uno de ellos antes de continuar.",
-  "editorSkillsEffectConflict": "Hay pendientes un cambio de Habilidades y otro de Todos los datos para el mismo efecto del personaje (ActiveEffects › EffectSpec › Def). No se pueden guardar juntos. Restablece o deshaz uno de ellos y vuelve a guardar.",
+  "editorSkillsEffectConflict": "Hay pendientes un cambio de Habilidades y otro de Todos los datos para el mismo efecto del personaje (ActiveEffects). No se pueden guardar juntos. Restablece o deshaz uno de ellos y vuelve a guardar.",
   "editorInventoryResetConflict": "Hay pendientes un restablecimiento del inventario y otro cambio en el mismo inventario. El restablecimiento sustituye todo el inventario y descartaría el otro cambio. Restablece o deshaz uno de ellos y vuelve a guardar.",
   "editorUseFolder": "Usar carpeta",
   "editorGothicSavegameFileType": "Partida de Gothic",

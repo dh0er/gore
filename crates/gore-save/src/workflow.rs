@@ -271,9 +271,11 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
                     && ((e.path.starts_with("private.inventory.")
                         && e.path != "private.inventory.repairSlots"
                         && actor(e) == actor(edit))
-                        || paths[j]
-                            .as_ref()
-                            .is_some_and(|p| crate::path_has_name(p, "m_Inventory")))
+                        || paths[j].as_ref().is_some_and(|p| {
+                            specs[i]
+                                .as_ref()
+                                .is_some_and(|spec| crate::structured_edit_rewrites(spec, p))
+                        }))
             }) {
                 return Err(pending("inventoryReset", None));
             }
@@ -340,11 +342,8 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
                         return Err(pending("glossaryQuest", Some(path)));
                     }
                 }
-                PrivateEdit::SkillSet(skill) => {
-                    if crate::path_has_name(path, "ActiveEffects")
-                        && crate::path_has_key(path, &skill.actor)
-                        && matches!(path.as_slice(),[..,PathSeg::Name(effect),PathSeg::Name(name)] if effect=="EffectSpec" && name == "Def")
-                    {
+                PrivateEdit::SkillSet(_) => {
+                    if crate::structured_edit_rewrites(spec, path) {
                         return Err(pending("skillsEffect", None));
                     }
                 }
@@ -737,6 +736,105 @@ mod tests {
                 assert!(plan(&[edit, npc("NPC-Gorn")]).is_ok());
             }
         }
+    }
+
+    #[test]
+    fn inventory_resets_guard_the_selected_actor_entire_inventory() {
+        let hero = json!({"path":"private.inventory.reset","value":{}});
+        let npc = json!({"path":"private.inventory.reset","value":{"actorId":"NPC-Diego"}});
+        let hero_path = raw(&["m_SavedPlayers", "[0]", "m_Inventory", "m_Keys"]);
+        let npc_path = |actor: &str, map: &str, field: &str| {
+            raw(&[map, &format!("{{{actor}}}"), "InventoryItems", field])
+        };
+        for (reset, paths) in [
+            (
+                hero.clone(),
+                vec![hero_path.clone(), raw(&["m_Inventory", "m_Slots"])],
+            ),
+            (
+                npc.clone(),
+                vec![
+                    npc_path("NPC-Diego", "InventoryByGlobalId", "m_Keys"),
+                    npc_path(
+                        "NPC-Diego",
+                        "CharacterStateSaveGameData_Inventory",
+                        "m_Values",
+                    ),
+                    npc_path("NPC-Diego", "_Inventory", "m_Slots"),
+                    raw(&["InventoryByGlobalId"]),
+                ],
+            ),
+        ] {
+            for raw in paths {
+                for edits in [vec![reset.clone(), raw.clone()], vec![raw, reset.clone()]] {
+                    assert!(matches!(
+                        plan(&edits),
+                        Err(CoreError::PlanConflict {
+                            kind: "inventoryReset",
+                            ..
+                        })
+                    ));
+                }
+            }
+        }
+        for (reset, other) in [
+            (hero, npc_path("NPC-Diego", "InventoryByGlobalId", "m_Keys")),
+            (npc.clone(), hero_path),
+            (
+                npc.clone(),
+                npc_path("NPC-Gorn", "InventoryByGlobalId", "m_Keys"),
+            ),
+            (
+                npc,
+                raw(&["AttributesByGlobalId", "{NPC-Diego}", "BaseValue"]),
+            ),
+        ] {
+            assert!(plan(&[reset.clone(), other.clone()]).is_ok());
+            assert!(plan(&[other, reset]).is_ok());
+        }
+    }
+
+    #[test]
+    fn skill_transitions_guard_effect_descendants_and_structural_edits() {
+        let skill = json!({"path":"private.skills.set","value":{"actor":"Hero","base":"Skill_Bow","tier":"Untrained"}});
+        for raw in [
+            raw(&[
+                "ActiveEffectsByGlobalId",
+                "{Hero}",
+                "ActiveEffects",
+                "[2]",
+                "EffectSpec",
+                "Duration",
+            ]),
+            raw(&[
+                "ActiveEffectsByGlobalId",
+                "{Hero}",
+                "ActiveEffects",
+                "[2]",
+                "StackCount",
+            ]),
+            json!({"path":"private.typed.arrayRemove","value":{"path":["ActiveEffectsByGlobalId","{Hero}","ActiveEffects"],"index":2}}),
+        ] {
+            for edits in [vec![skill.clone(), raw.clone()], vec![raw, skill.clone()]] {
+                assert!(matches!(
+                    plan(&edits),
+                    Err(CoreError::PlanConflict {
+                        kind: "skillsEffect",
+                        ..
+                    })
+                ));
+            }
+        }
+        let peer = raw(&[
+            "ActiveEffectsByGlobalId",
+            "{NPC-Diego}",
+            "ActiveEffects",
+            "[2]",
+            "EffectSpec",
+            "Duration",
+        ]);
+        assert!(plan(&[skill.clone(), peer.clone()]).is_ok());
+        assert!(plan(&[peer, skill]).is_ok());
     }
 
     #[test]

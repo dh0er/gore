@@ -2556,7 +2556,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get editorSkillsEffectConflict =>
-      'Estão pendentes uma alteração em «Aptidões» e uma alteração em «Todos os dados» no mesmo efeito da personagem (ActiveEffects › EffectSpec › Def). Não podem ser guardadas em conjunto. Reponha ou anule uma delas e volte a guardar.';
+      'Estão pendentes uma alteração em «Aptidões» e uma alteração em «Todos os dados» no mesmo efeito da personagem (ActiveEffects). Não podem ser guardadas em conjunto. Reponha ou anule uma delas e volte a guardar.';
 
   @override
   String get editorInventoryResetConflict =>
@@ -5878,7 +5878,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get editorSkillsEffectConflict =>
-      'Há uma alteração em “Habilidades” e outra em “Todos os dados” para o mesmo efeito do personagem (ActiveEffects › EffectSpec › Def) pendentes. Elas não podem ser salvas juntas. Redefina ou desfaça uma delas e salve novamente.';
+      'Há uma alteração em “Habilidades” e outra em “Todos os dados” para o mesmo efeito do personagem (ActiveEffects) pendentes. Elas não podem ser salvas juntas. Redefina ou desfaça uma delas e salve novamente.';
 
   @override
   String get editorInventoryResetConflict =>

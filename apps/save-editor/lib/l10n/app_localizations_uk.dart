@@ -2559,7 +2559,7 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get editorSkillsEffectConflict =>
-      'Зміна в «Навичках» і зміна в «Усі дані» для того самого ефекта персонажа (ActiveEffects › EffectSpec › Def) очікують збереження. Їх не можна зберегти разом — скинь або відкоти одну з них і знову збережи.';
+      'Зміна в «Навичках» і зміна в «Усі дані» для того самого ефекта персонажа (ActiveEffects) очікують збереження. Їх не можна зберегти разом — скинь або відкоти одну з них і знову збережи.';
 
   @override
   String get editorInventoryResetConflict =>

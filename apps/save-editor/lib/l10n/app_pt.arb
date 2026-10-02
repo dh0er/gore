@@ -714,7 +714,7 @@
   "editorRelationshipConflict": "Uma alteração de relação e outra alteração pendente em «Todos os dados» afetam a mesma entrada de relação de um NPC ({path}). A alteração estruturada da relação pode substituir modificadores nessa entrada, pelo que não podem ser guardadas em conjunto. Reponha ou anule uma delas e volte a guardar.",
   "editorMultipleStructuralArrayEdits": "Há mais do que uma alteração estrutural pendente para a mesma matriz ({path}). Guarde ou reponha a primeira alteração antes de adicionar outra.",
   "editorStructuralArrayConflict": "Uma alteração estrutural de evento e outra alteração pendente em «Todos os dados» afetam {path}. Guarde ou reponha uma delas antes de continuar.",
-  "editorSkillsEffectConflict": "Estão pendentes uma alteração em «Aptidões» e uma alteração em «Todos os dados» no mesmo efeito da personagem (ActiveEffects › EffectSpec › Def). Não podem ser guardadas em conjunto. Reponha ou anule uma delas e volte a guardar.",
+  "editorSkillsEffectConflict": "Estão pendentes uma alteração em «Aptidões» e uma alteração em «Todos os dados» no mesmo efeito da personagem (ActiveEffects). Não podem ser guardadas em conjunto. Reponha ou anule uma delas e volte a guardar.",
   "editorInventoryResetConflict": "Estão pendentes uma reposição do inventário e outra alteração ao mesmo inventário. A reposição substitui todo o inventário e descartaria a outra alteração. Reponha ou anule uma delas e volte a guardar.",
   "editorUseFolder": "Usar pasta",
   "editorGothicSavegameFileType": "Jogo guardado de Gothic",

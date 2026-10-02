@@ -12017,6 +12017,28 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
             slot_edit_targets_actor(path, count.actor_id.as_deref())
                 && path_has_name(path, "m_ItemCount")
         }
+        PrivateEdit::InventoryReset(reset) => match reset.actor_id.as_deref() {
+            Some(id) => {
+                [
+                    "InventoryByGlobalId",
+                    "CharacterStateSaveGameData_Inventory",
+                    "_Inventory",
+                ]
+                .iter()
+                .any(|map| path_enters_map_entry(path, map, id))
+                    || (path_has_key(path, id)
+                        && (path_has_name(path, "InventoryItems")
+                            || path_has_name(path, "m_Inventory")
+                            || path_reaches_inventory_slot(path)))
+            }
+            None => {
+                path_has_name(path, "m_Inventory")
+                    && (path_has_name(path, "m_SavedPlayers")
+                        || !path
+                            .iter()
+                            .any(|segment| matches!(segment, properties::PathSeg::MapKey(_))))
+            }
+        },
         PrivateEdit::StoryApply(changes) => {
             path_has_name(path, "StoryPropertyValues")
                 && changes.iter().any(|change| path_has_key(path, &change.id))

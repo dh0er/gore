@@ -714,7 +714,7 @@
   "editorRelationshipConflict": "Zmiana relacji i inna niezapisana zmiana w sekcji „Wszystkie dane” dotyczą tego samego wpisu relacji NPC ({path}). Strukturalna zmiana relacji może zastąpić modyfikatory w tym wpisie, dlatego nie można zapisać obu zmian razem. Zresetuj lub cofnij jedną z nich, a następnie ponownie zapisz.",
   "editorMultipleStructuralArrayEdits": "Więcej niż jedna niezapisana zmiana struktury dotyczy tej samej tablicy ({path}). Zapisz lub zresetuj pierwszą zmianę przed dodaniem kolejnej.",
   "editorStructuralArrayConflict": "Strukturalna zmiana zdarzenia i inna niezapisana zmiana w sekcji „Wszystkie dane” dotyczą {path}. Zapisz lub zresetuj jedną z nich przed kontynuowaniem.",
-  "editorSkillsEffectConflict": "Zmiana w sekcji „Umiejętności” i zmiana w sekcji „Wszystkie dane” dotycząca tego samego efektu postaci (ActiveEffects › EffectSpec › Def) oczekują na zapis. Nie można ich zapisać razem. Zresetuj lub cofnij jedną z nich, a następnie ponownie zapisz.",
+  "editorSkillsEffectConflict": "Zmiana w sekcji „Umiejętności” i zmiana w sekcji „Wszystkie dane” dotycząca tego samego efektu postaci (ActiveEffects) oczekują na zapis. Nie można ich zapisać razem. Zresetuj lub cofnij jedną z nich, a następnie ponownie zapisz.",
   "editorInventoryResetConflict": "Reset ekwipunku i inna zmiana tego samego ekwipunku oczekują na zapis. Reset zastępuje cały ekwipunek i odrzuciłby drugą zmianę. Zresetuj lub cofnij jedną z nich, a następnie ponownie zapisz.",
   "editorUseFolder": "Użyj folderu",
   "editorGothicSavegameFileType": "Zapis gry Gothic",

@@ -1343,7 +1343,7 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
 }
 fn inventory(v: &str, o: &Options) -> Result<Value> {
     if matches!(v, "list" | "show" | "check-slots") {
-        let mut data = if v == "check-slots" || o.actor.eq_ignore_ascii_case("hero") {
+        let mut data = if o.actor.eq_ignore_ascii_case("hero") {
             let mut summary = call(
                 "inspect_save",
                 json!({"path":save(o)?,"includePrivate":true}),
@@ -1369,10 +1369,18 @@ fn inventory(v: &str, o: &Options) -> Result<Value> {
             }
             summary
         } else {
-            call(
+            let mut inventory = call(
                 "private.npc.inventory",
                 json!({"path":save(o)?,"id":npc_id(o)?}),
-            )?
+            )?;
+            if v == "check-slots" {
+                inventory["slotIntegrity"] = call(
+                    "inspect_save",
+                    json!({"path":save(o)?,"includePrivate":true}),
+                )?["private"]["inventory"]["slotIntegrity"]
+                    .clone();
+            }
+            inventory
         };
         let catalog = display::catalog("items")?;
         let stats = display::catalog("item-stats")?;

@@ -2567,7 +2567,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get editorSkillsEffectConflict =>
-      'Zmiana w sekcji „Umiejętności” i zmiana w sekcji „Wszystkie dane” dotycząca tego samego efektu postaci (ActiveEffects › EffectSpec › Def) oczekują na zapis. Nie można ich zapisać razem. Zresetuj lub cofnij jedną z nich, a następnie ponownie zapisz.';
+      'Zmiana w sekcji „Umiejętności” i zmiana w sekcji „Wszystkie dane” dotycząca tego samego efektu postaci (ActiveEffects) oczekują na zapis. Nie można ich zapisać razem. Zresetuj lub cofnij jedną z nich, a następnie ponownie zapisz.';
 
   @override
   String get editorInventoryResetConflict =>

@@ -1217,7 +1217,7 @@
   "@editorMultipleStructuralArrayEdits": {"placeholders": {"path": {"type": "String"}}},
   "editorStructuralArrayConflict": "A structural event change and another unsaved All-data edit both target {path}. Save or reset one of them before continuing.",
   "@editorStructuralArrayConflict": {"placeholders": {"path": {"type": "String"}}},
-  "editorSkillsEffectConflict": "A Skills change and an All-data edit to the same actor’s effect (ActiveEffects › EffectSpec › Def) are both queued. They cannot be saved together — reset or revert one of them, then save again.",
+  "editorSkillsEffectConflict": "A Skills change and an All-data edit to the same actor’s effect (ActiveEffects) are both queued. They cannot be saved together — reset or revert one of them, then save again.",
   "editorInventoryResetConflict": "An inventory reset and another edit to the same inventory are both queued. The reset replaces the entire inventory and would discard the other edit — reset or revert one of them, then save again.",
   "editorUseFolder": "Use folder",
   "editorGothicSavegameFileType": "Gothic savegame",

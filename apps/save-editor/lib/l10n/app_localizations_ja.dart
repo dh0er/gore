@@ -2462,7 +2462,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get editorSkillsEffectConflict =>
-      'スキルの変更と、同じキャラクターのエフェクト (ActiveEffects › EffectSpec › Def) に対する全データでの変更が両方とも保留中です。両方を一緒に保存できません。一方をリセットするか元に戻してから、もう一度保存してください。';
+      'スキルの変更と、同じキャラクターのエフェクト (ActiveEffects) に対する全データでの変更が両方とも保留中です。両方を一緒に保存できません。一方をリセットするか元に戻してから、もう一度保存してください。';
 
   @override
   String get editorInventoryResetConflict =>

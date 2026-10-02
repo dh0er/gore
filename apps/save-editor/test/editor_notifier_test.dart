@@ -2195,7 +2195,7 @@ void main() {
       // Refused: no write at all, and an explanatory error is surfaced.
       expect(ok, isFalse);
       expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
-      expect(notifier.state.error, contains('EffectSpec'));
+      expect(notifier.state.error, contains('ActiveEffects'));
     },
   );
 
@@ -2437,6 +2437,76 @@ void main() {
   // sequential writes can silently discard the raw operation's result. Keep
   // both pending intents so the user can resolve the conflict before saving.
   // ---------------------------------------------------------------------------
+
+  for (final scenario in [
+    (
+      name: 'NPC inventory reset',
+      edit: <String, Object?>{
+        'path': 'private.inventory.reset',
+        'value': {'actorId': 'NPC-Diego'},
+      },
+      path: [
+        'InventoryByGlobalId',
+        '{NPC-Diego}',
+        'InventoryItems',
+        'm_Values',
+        'Items',
+        '[0]',
+        'm_Slots',
+        '[0]',
+        'm_SlotData',
+        'm_ItemCount',
+      ],
+    ),
+    (
+      name: 'skill unlearning',
+      edit: <String, Object?>{
+        'path': 'private.skills.set',
+        'value': {
+          'actor': 'Hero',
+          'base': 'Hunting_Scutes',
+          'tier': 'Untrained',
+        },
+      },
+      path: [
+        'ActiveEffectsByGlobalId',
+        '{Hero}',
+        'ActiveEffects',
+        '[2]',
+        'EffectSpec',
+        'Duration',
+      ],
+    ),
+  ]) {
+    test(
+      'saveAllPending preserves raw changes conflicting with ${scenario.name}',
+      () async {
+        final core = _RecordingCoreService();
+        final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+        await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+        notifier.setPendingEdit(
+          'structured',
+          PendingSaveEdit(edits: [scenario.edit]),
+        );
+        notifier.setPendingEdit(
+          'typed:descendant',
+          PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.typed.setValue',
+                'value': {'path': scenario.path, 'value': 7},
+              },
+            ],
+          ),
+        );
+
+        expect(await notifier.saveAllPending(), isFalse);
+        expect(notifier.state.error, isNotEmpty);
+        expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+        expect(notifier.state.pendingEdits, hasLength(2));
+      },
+    );
+  }
 
   test(
     'saveAllPending refuses raw edits that overwrite a pending Hero transform',
@@ -2693,16 +2763,14 @@ void main() {
   );
 
   test(
-    'saveAllPending splits a non-Def ActiveEffects edit from a same-actor skill edit',
+    'saveAllPending refuses a non-Def ActiveEffects edit with a same-actor skill edit',
     () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-      // A leaf of the hero's ActiveEffects that is NOT EffectSpec/Def, so the
-      // same-actor Def refusal does not fire — but the core still rejects the
-      // pair in one write, because a skill edit rewrites that actor's effect
-      // elements wholesale.
+      // Skill transitions can remove effect elements, including their Level
+      // field. Splitting the writes would still discard the raw change.
       notifier.setPendingEdit(
         'typed:effect-level',
         const PendingSaveEdit(
@@ -2742,22 +2810,10 @@ void main() {
 
       final ok = await notifier.saveAllPending();
 
-      // Not refused — split. The old Def-only check would have let this ride
-      // one write, which the core now rejects outright.
-      expect(ok, isTrue);
-      expect(notifier.state.error, isNull);
-      final writes = core.requests
-          .where((r) => r.command == 'write_save')
-          .toList();
-      expect(writes, hasLength(2));
-      expect(
-        (writes[0].payload['edits'] as List).map((e) => (e as Map)['path']),
-        ['private.typed.setValue'],
-      );
-      expect(
-        (writes[1].payload['edits'] as List).map((e) => (e as Map)['path']),
-        ['private.skills.set'],
-      );
+      expect(ok, isFalse);
+      expect(notifier.state.error, isNotEmpty);
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      expect(notifier.state.pendingEdits, hasLength(2));
     },
   );
 
