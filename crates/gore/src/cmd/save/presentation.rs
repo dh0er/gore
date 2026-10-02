@@ -57,7 +57,7 @@ pub(super) struct Characters {
     stripped: BTreeMap<String, String>,
     compact: BTreeMap<String, String>,
     unnumbered: BTreeMap<String, String>,
-    teachers: BTreeSet<String>,
+    roles: BTreeMap<String, BTreeSet<String>>,
 }
 fn fold(s: &str) -> String {
     s.chars()
@@ -115,7 +115,7 @@ impl Characters {
             stripped: BTreeMap::new(),
             compact: BTreeMap::new(),
             unnumbered: BTreeMap::new(),
-            teachers: BTreeSet::new(),
+            roles: BTreeMap::new(),
         };
         for row in display::catalog("npc")?
             .as_array()
@@ -157,17 +157,20 @@ impl Characters {
             .as_array()
             .context("invalid role catalog")?
         {
-            if row["segments"].as_array().is_some_and(|segments| {
-                segments.iter().any(|s| {
-                    s["roles"]
-                        .as_array()
-                        .is_some_and(|r| r.contains(&json!("teacher")))
-                })
-            }) {
-                for key in ["id", "uniqueName"] {
-                    if let Some(id) = row[key].as_str() {
-                        this.teachers.insert(id.to_lowercase());
-                    }
+            let roles: BTreeSet<String> = row["segments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|segment| segment["roles"].as_array().into_iter().flatten())
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect();
+            for key in ["id", "uniqueName"] {
+                if let Some(id) = row[key].as_str().filter(|id| !id.is_empty()) {
+                    this.roles
+                        .entry(id.to_lowercase())
+                        .or_default()
+                        .extend(roles.iter().cloned());
                 }
             }
         }
@@ -195,9 +198,15 @@ impl Characters {
         None
     }
     pub fn teacher(&self, raw: &str) -> bool {
+        self.roles(raw).contains("teacher")
+    }
+    fn roles(&self, raw: &str) -> BTreeSet<String> {
         candidates(raw)
             .iter()
-            .any(|name| self.teachers.contains(&name.to_lowercase()))
+            .filter_map(|name| self.roles.get(&name.to_lowercase()))
+            .flatten()
+            .cloned()
+            .collect()
     }
     pub fn annotate(&self, row: &mut Value) {
         let name = row["uniqueName"]
@@ -206,7 +215,9 @@ impl Characters {
             .unwrap_or("")
             .to_string();
         row["category"] = json!(self.category(&name));
-        row["teacher"] = json!(self.teacher(&name));
+        let roles = self.roles(&name);
+        row["teacher"] = json!(roles.contains("teacher"));
+        row["roles"] = json!(roles);
     }
 }
 
@@ -432,6 +443,19 @@ mod tests {
             Some("creature")
         );
         assert_eq!(catalog.category("unknown-species"), None);
+        let roles = BTreeSet::from_iter(
+            ["armorer", "dead", "portrait", "teacher", "trader"].map(String::from),
+        );
+        for identity in [
+            "NC_ORG_WOLF",
+            "NC_ORG_Wolf_855",
+            "NC_ORG_Wolf_855-WorldPointActor_wolf",
+        ] {
+            assert_eq!(catalog.roles(identity), roles);
+            assert!(catalog.teacher(identity));
+        }
+        assert!(catalog.roles("Wolf-WP_SPAWN_01-1").is_empty());
+        assert!(catalog.roles("unknown-character").is_empty());
     }
     #[test]
     fn generated_tables_remain_identical_to_the_editor_sources() {

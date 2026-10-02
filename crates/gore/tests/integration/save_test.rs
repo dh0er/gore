@@ -177,6 +177,99 @@ fn profile_fixture(preset: &str) -> Vec<u8> {
 }
 
 #[test]
+fn character_roles_include_every_catalog_assignment_before_pagination() {
+    let temp = tempfile::tempdir().unwrap();
+    let save = temp.path().join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let save = save.to_str().unwrap();
+    let all = run(temp.path(), &["characters", "list", save, "--all"]);
+    let rows = all["characters"].as_array().unwrap();
+    let armorers = run(
+        temp.path(),
+        &["characters", "list", save, "--role", "armorer", "--all"],
+    );
+    let selected = armorers["characters"].as_array().unwrap();
+    let expected_names = std::collections::BTreeSet::from([
+        "nc_org_wolf_855",
+        "nc_sld_torlof_737",
+        "oc_stt_fisk_311",
+        "ocr_grd_stone_219",
+        "sc_gur_baalnamib_1204",
+        "sc_nov_darrion_1312",
+        "sc_tpl_gornatoth_1402",
+    ]);
+    assert_eq!(selected.len(), 7);
+    assert_eq!(armorers["total"], 7);
+    assert_eq!(
+        selected
+            .iter()
+            .map(|row| row["uniqueName"].as_str().unwrap().to_lowercase())
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected_names.into_iter().map(String::from).collect()
+    );
+    let wolf = selected
+        .iter()
+        .find(|row| row["uniqueName"] == "NC_ORG_Wolf_855")
+        .unwrap();
+    assert_eq!(
+        wolf["roles"],
+        json!(["armorer", "dead", "portrait", "teacher", "trader"])
+    );
+    assert_eq!(wolf["teacher"], true);
+    assert_eq!(wolf["isDead"], false);
+    assert!(
+        rows.iter()
+            .filter(|row| row["uniqueName"] == "Wolf")
+            .all(|row| row["roles"] == json!([]))
+    );
+    assert_eq!(
+        run(
+            temp.path(),
+            &["characters", "show", save, "--id", "NC_ORG_Wolf_855"]
+        )["roles"],
+        wolf["roles"]
+    );
+    let page = run(
+        temp.path(),
+        &[
+            "characters",
+            "list",
+            save,
+            "--role",
+            "armorer",
+            "--offset",
+            "2",
+            "--limit",
+            "2",
+        ],
+    );
+    assert_eq!(page["total"], 7);
+    assert_eq!(page["count"], 2);
+    assert_eq!(page["offset"], 2);
+    assert_eq!(page["characters"], json!(selected[2..4]));
+    for role in ["dead", "portrait", "teacher", "trader"] {
+        let filtered = run(
+            temp.path(),
+            &["characters", "list", save, "--role", role, "--all"],
+        );
+        let expected: Vec<_> = rows
+            .iter()
+            .filter(|row| match role {
+                "teacher" => row["teacher"] == true,
+                "trader" => row["isTrader"] == true,
+                _ => row["roles"].as_array().unwrap().contains(&json!(role)),
+            })
+            .cloned()
+            .collect();
+        assert!(!expected.is_empty());
+        assert_eq!(filtered["characters"], json!(expected));
+    }
+    assert_eq!(fs::read(save).unwrap(), before);
+    assert!(!temp.path().join("goresave_backups").exists());
+}
+
+#[test]
 fn knowledge_filters_select_all_core_pages_before_pagination() {
     use gore_save::codec_backend::{CodecBackend, KrakenBackend};
 
