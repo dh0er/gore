@@ -51,6 +51,8 @@ In MCP, pass `dry_run: true` to preview Save Editor commands without write conse
 | `overview`, `statistics`, `report` | Save-backed metrics and an offline HTML report with optional images |
 | `codec`, `validate`, `about`, `licenses`, `updates` | Codec/roundtrip, product information and the Save Editor update channel |
 
+`inventory remove --item <id-or-path>` searches every container and requires exactly one matching stack. If an item has multiple stacks, list the chosen actor's inventory with `--all` and supply `--container` and `--slot`. Previews and drafts use the same selection.
+
 NPC pinning records the original pose/routine and refuses stale undo. Merchant forecasts expose calendar and elapsed boundaries separately; the game performs maintenance lazily. Detached saves use their own difficulty or an explicit `--resources-level`. Unknown data stays unknown instead of becoming a zero count.
 
 ## Raw access

@@ -3882,6 +3882,243 @@ fn skill_story_event_selectors_and_attribute_offsets_select_the_requested_record
 }
 
 #[test]
+fn inventory_item_only_removals_resolve_unique_stacks_and_preserve_ambiguous_drafts() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let actor = "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN";
+    let original = run(
+        home,
+        &["inventory", "list", save_arg, "--actor", actor, "--all"],
+    );
+    let items = original["items"].as_array().unwrap();
+    let duplicate = items
+        .iter()
+        .find(|row| {
+            row["removable"] == true
+                && items
+                    .iter()
+                    .filter(|other| other["path"] == row["path"])
+                    .count()
+                    > 1
+        })
+        .unwrap();
+    let pouch = items
+        .iter()
+        .find(|row| row["containerType"] == "Pouch")
+        .unwrap();
+    let melee = items
+        .iter()
+        .find(|row| row["containerType"] == "MeleeSlot")
+        .unwrap();
+    assert_eq!(
+        items
+            .iter()
+            .filter(|row| row["path"] == pouch["path"])
+            .count(),
+        1
+    );
+    assert_eq!(
+        items
+            .iter()
+            .filter(|row| row["path"] == melee["path"])
+            .count(),
+        1
+    );
+    let hash = gore_save::api::file_sha1(&save).unwrap();
+    let draft = home.join("inventory.json");
+    let draft_arg = draft.to_str().unwrap();
+    let empty_draft = serde_json::to_vec(&json!({
+        "format":"gore.save.draft.v1","path":save.canonicalize().unwrap(),
+        "expectedSha1":hash,"edits":[]
+    }))
+    .unwrap();
+    fs::write(&draft, &empty_draft).unwrap();
+    for item in [
+        duplicate["id"].as_str().unwrap(),
+        duplicate["path"].as_str().unwrap(),
+        "/Script/Angelscript.ItWr_Scroll_Letter_01",
+        "Pouch",
+    ] {
+        for flags in [
+            vec![],
+            vec!["--dry-run"],
+            vec!["--draft", draft_arg],
+            vec!["--draft", draft_arg, "--dry-run"],
+        ] {
+            let mut args = vec![
+                "inventory",
+                "remove",
+                save_arg,
+                "--actor",
+                actor,
+                "--item",
+                item,
+                "--offset",
+                "100000",
+                "--limit",
+                "1",
+                "--query",
+                "unmatched",
+            ];
+            args.extend(flags);
+            let error = run_failure(home, &args);
+            assert!(error.to_string().contains("exactly one stack"), "{error}");
+            assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+            assert_eq!(fs::read(&draft).unwrap(), empty_draft);
+            assert!(!home.join("goresave_backups").exists());
+        }
+    }
+    let no_selector = run_failure(home, &["inventory", "remove", save_arg, "--actor", actor]);
+    assert!(
+        no_selector
+            .to_string()
+            .contains("--item or a container/slot selector required")
+    );
+    let lower_id = pouch["id"].as_str().unwrap().to_ascii_lowercase();
+    for (option, item) in [
+        ("--item", pouch["id"].as_str().unwrap()),
+        ("--item", pouch["path"].as_str().unwrap()),
+        ("--item", lower_id.as_str()),
+        ("--id", pouch["id"].as_str().unwrap()),
+    ] {
+        let preview = run(
+            home,
+            &[
+                "inventory",
+                "remove",
+                save_arg,
+                "--actor",
+                actor,
+                option,
+                item,
+                "--draft",
+                draft_arg,
+                "--dry-run",
+                "--offset",
+                "100000",
+                "--limit",
+                "1",
+            ],
+        );
+        let value = &preview["data"]["edits"][0]["value"];
+        assert_eq!(value["path"], pouch["path"]);
+        assert_eq!(value["slotId"], pouch["slotId"]);
+        assert_eq!(value["containerType"], "Pouch");
+        assert!(value["actorId"].is_string());
+        assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+        assert_eq!(fs::read(&draft).unwrap(), empty_draft);
+        assert!(!home.join("goresave_backups").exists());
+    }
+    run(
+        home,
+        &[
+            "inventory",
+            "remove",
+            save_arg,
+            "--actor",
+            actor,
+            "--item",
+            pouch["id"].as_str().unwrap(),
+            "--dry-run",
+        ],
+    );
+    assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+    assert!(!home.join("goresave_backups").exists());
+    run(
+        home,
+        &[
+            "inventory",
+            "remove",
+            save_arg,
+            "--actor",
+            actor,
+            "--item",
+            pouch["id"].as_str().unwrap(),
+            "--draft",
+            draft_arg,
+        ],
+    );
+    assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+    run(home, &["draft", "validate", draft_arg]);
+    run(home, &["draft", "apply", draft_arg]);
+    let after_pouch = run(
+        home,
+        &["inventory", "list", save_arg, "--actor", actor, "--all"],
+    );
+    let expected = items
+        .iter()
+        .filter(|row| row["path"] != pouch["path"])
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(after_pouch["items"], json!(expected));
+    run(
+        home,
+        &[
+            "inventory",
+            "remove",
+            save_arg,
+            "--actor",
+            actor,
+            "--item",
+            melee["path"].as_str().unwrap(),
+        ],
+    );
+    let after_melee = run(
+        home,
+        &["inventory", "list", save_arg, "--actor", actor, "--all"],
+    );
+    let expected = expected
+        .into_iter()
+        .filter(|row| row["path"] != melee["path"])
+        .collect::<Vec<_>>();
+    assert_eq!(after_melee["items"], json!(expected));
+
+    let hero = run(home, &["inventory", "list", save_arg, "--all"]);
+    let hero_items = hero["items"].as_array().unwrap();
+    let selected = &hero_items[0];
+    assert_eq!(
+        hero_items
+            .iter()
+            .filter(|row| row["path"] == selected["path"])
+            .count(),
+        1
+    );
+    let hash = gore_save::api::file_sha1(&save).unwrap();
+    run(
+        home,
+        &[
+            "inventory",
+            "remove",
+            save_arg,
+            "--item",
+            selected["id"].as_str().unwrap(),
+            "--dry-run",
+        ],
+    );
+    assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+    run(
+        home,
+        &[
+            "inventory",
+            "remove",
+            save_arg,
+            "--item",
+            selected["id"].as_str().unwrap(),
+        ],
+    );
+    let remaining = run(home, &["inventory", "list", save_arg, "--all"]);
+    let expected = hero_items
+        .iter()
+        .filter(|row| row["path"] != selected["path"])
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(remaining["items"], json!(expected));
+}
+
+#[test]
 fn inventory_container_and_slot_selectors_resolve_the_stack_before_editing() {
     let home = tempfile::tempdir().unwrap();
     let save = home.path().join("G1R-001.sav");

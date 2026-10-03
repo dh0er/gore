@@ -1461,10 +1461,10 @@ fn inventory(v: &str, o: &Options) -> Result<Value> {
         data["actorId"] = json!(npc_id(o)?);
     }
     let item = o.item.as_ref().or(o.id.as_ref());
-    if matches!(v, "set-count" | "remove")
-        && (item.is_none() || o.slot.is_some() || o.container.is_some())
+    if v == "remove"
+        || (v == "set-count" && (item.is_none() || o.slot.is_some() || o.container.is_some()))
     {
-        if o.slot.is_none() && o.container.is_none() {
+        if item.is_none() && o.slot.is_none() && o.container.is_none() {
             bail!("--item or a container/slot selector required");
         }
         let rows = inventory(
@@ -1475,15 +1475,30 @@ fn inventory(v: &str, o: &Options) -> Result<Value> {
                 query: None,
                 category: None,
                 state: None,
+                role: None,
+                item: None,
+                id: None,
                 ..o.clone()
             },
         )?;
         let rows = rows["items"]
             .as_array()
             .context("inventory is unavailable")?;
+        let rows: Vec<_> = rows
+            .iter()
+            .filter(|row| {
+                item.is_none_or(|item| {
+                    ["id", "path"].iter().any(|key| {
+                        row[*key]
+                            .as_str()
+                            .is_some_and(|value| value.eq_ignore_ascii_case(item))
+                    })
+                })
+            })
+            .collect();
         if rows.len() != 1 {
             bail!(
-                "container/slot selector must match exactly one stack; provide --container and --slot"
+                "inventory selector must match exactly one stack; provide --container and --slot"
             );
         }
         data["path"] = json!(
@@ -1517,6 +1532,7 @@ fn inventory(v: &str, o: &Options) -> Result<Value> {
     }
     write(o, vec![edit(op, data)], json!({}))
 }
+
 fn reset_template(o: &Options) -> Result<Value> {
     let mut template = json!({});
     if o.resources_level.is_none() {
