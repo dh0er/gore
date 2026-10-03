@@ -3486,6 +3486,160 @@ fn corrupt_ui_preferences_do_not_block_commands_or_a_full_reset() {
 }
 
 #[test]
+fn import_previews_copy_requested_gsav_sources_with_arbitrary_filenames() {
+    for name in [
+        "export.backup",
+        "without-extension",
+        "G1R-010.SAV",
+        "nested/export.backup",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let destination = home.join("saves");
+        let source_root = if name.starts_with("nested/") {
+            destination.clone()
+        } else {
+            home.join("downloads")
+        };
+        fs::create_dir_all(&destination).unwrap();
+        let source = source_root.join(name);
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::copy(fixture(), &source).unwrap();
+        let source_hash = gore_save::api::file_sha1(&source).unwrap();
+        let profile = destination.join("PersistentDataList.sav");
+        let profile_bytes = profile_fixture("Gothic");
+        fs::write(&profile, &profile_bytes).unwrap();
+        for relative in [false, true] {
+            let input = if relative {
+                source.file_name().unwrap().to_str().unwrap()
+            } else {
+                source.to_str().unwrap()
+            };
+            let result = run_from(
+                home,
+                relative.then(|| source.parent().unwrap()),
+                &[
+                    "import",
+                    input,
+                    "--root",
+                    destination.to_str().unwrap(),
+                    "--profile",
+                    "0",
+                    "--dry-run",
+                ],
+            );
+            assert_eq!(result["validated"], true);
+            assert_eq!(gore_save::api::file_sha1(&source).unwrap(), source_hash);
+            assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+            assert!(!destination.join("G1R-002.sav").exists());
+            assert!(!destination.join("G1R-010.sav").exists());
+            assert!(!destination.join("goresave_backups").exists());
+            assert!(!source_root.join("goresave_backups").exists());
+        }
+        run(
+            home,
+            &[
+                "import",
+                source.to_str().unwrap(),
+                "--root",
+                destination.to_str().unwrap(),
+                "--profile",
+                "0",
+            ],
+        );
+        let imported = destination.join(if name == "G1R-010.SAV" {
+            "G1R-010.sav"
+        } else {
+            "G1R-002.sav"
+        });
+        assert!(imported.is_file(), "{imported:?}");
+        assert_eq!(
+            run(home, &["inspect", imported.to_str().unwrap()])["format"],
+            "GSAV"
+        );
+        assert_eq!(gore_save::api::file_sha1(&source).unwrap(), source_hash);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn administrative_previews_ignore_unrelated_symlinks_without_changing_live_files() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let hash = gore_save::api::file_sha1(&save).unwrap();
+    let profile = home.join("PersistentDataList.sav");
+    let profile_bytes = profile_fixture("Gothic");
+    fs::write(&profile, &profile_bytes).unwrap();
+    let external = tempfile::tempdir().unwrap();
+    let outside = external.path().join("outside.txt");
+    fs::write(&outside, b"outside bytes").unwrap();
+    let link = home.join("shortcut");
+    symlink(&outside, &link).unwrap();
+    symlink(external.path(), home.join("directory-shortcut")).unwrap();
+    for args in [
+        vec![
+            "profile",
+            "assign",
+            save.to_str().unwrap(),
+            "--profile",
+            "0",
+            "--dry-run",
+        ],
+        vec![
+            "difficulty",
+            "set",
+            save.to_str().unwrap(),
+            "--profile",
+            "0",
+            "--preset",
+            "Hard",
+            "--dry-run",
+        ],
+        vec![
+            "delete",
+            save.to_str().unwrap(),
+            "--profile",
+            "0",
+            "--yes",
+            "--dry-run",
+        ],
+        vec![
+            "recovery",
+            "repair",
+            "--root",
+            home.to_str().unwrap(),
+            "--dry-run",
+        ],
+    ] {
+        run(home, &args);
+        assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+        assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+        assert_eq!(fs::read(&outside).unwrap(), b"outside bytes");
+        assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert!(!home.join("goresave_backups").exists());
+    }
+    run(
+        home,
+        &[
+            "difficulty",
+            "set",
+            save.to_str().unwrap(),
+            "--profile",
+            "0",
+            "--preset",
+            "Hard",
+        ],
+    );
+    assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+    assert_ne!(fs::read(&profile).unwrap(), profile_bytes);
+    assert_eq!(fs::read(&outside).unwrap(), b"outside bytes");
+    assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+}
+
+#[test]
 fn import_discovers_the_destination_without_using_the_external_source_parent() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");

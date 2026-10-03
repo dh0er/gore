@@ -902,6 +902,42 @@ pub(super) fn difficulty(v: &str, o: &Options) -> Result<Value> {
     admin_write("write_difficulty", p, o)
 }
 
+fn copy_admin_file(path: &Path, to: &Path, remap: &impl Fn(&mut Value)) -> Result<()> {
+    if path.extension().is_some_and(|e| e == "json") {
+        let bytes = fs::read(path)?;
+        if let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) {
+            remap(&mut value);
+            fs::write(to, serde_json::to_vec_pretty(&value)?)?;
+        } else {
+            fs::write(to, bytes)?;
+        }
+    } else {
+        fs::copy(path, to)?;
+    }
+    Ok(())
+}
+
+fn copy_admin_requested_file(path: &Path, to: &Path, remap: &impl Fn(&mut Value)) -> Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.is_symlink() {
+        bail!(
+            "cannot simulate transactions through a symlink: {}",
+            path.display()
+        );
+    }
+    if metadata.is_file() && !to.exists() {
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        copy_admin_file(path, to, remap)?;
+    }
+    Ok(())
+}
+
 fn copy_admin_files(
     src: &Path,
     dst: &Path,
@@ -917,33 +953,26 @@ fn copy_admin_files(
         let path = entry.path();
         let to = dst.join(entry.file_name());
         let ty = entry.file_type()?;
+        let file_needed = backup
+            || path.extension().is_some_and(|e| e == "sav")
+            || entry.file_name().to_str().is_some_and(|name| {
+                let name = name.to_ascii_lowercase();
+                name.contains(".sav.assign-final-goresave-") || name.contains(".sav.bak.")
+            });
+        let directory_needed = backup || entry.file_name() == "goresave_backups";
         if ty.is_symlink() {
-            bail!(
-                "cannot simulate transactions through a symlink: {}",
-                path.display()
-            );
-        }
-        if ty.is_dir() && (backup || entry.file_name() == "goresave_backups") {
-            copy_admin_files(&path, &to, true, remap)?;
-        } else if ty.is_file()
-            && (backup
-                || path.extension().is_some_and(|e| e == "sav")
-                || entry.file_name().to_str().is_some_and(|name| {
-                    let name = name.to_ascii_lowercase();
-                    name.contains(".sav.assign-final-goresave-") || name.contains(".sav.bak.")
-                }))
-        {
-            if path.extension().is_some_and(|e| e == "json") {
-                let bytes = fs::read(&path)?;
-                if let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) {
-                    remap(&mut value);
-                    fs::write(to, serde_json::to_vec_pretty(&value)?)?;
-                } else {
-                    fs::write(to, bytes)?;
-                }
-            } else {
-                fs::copy(path, to)?;
+            if file_needed || directory_needed {
+                bail!(
+                    "cannot simulate transactions through a symlink: {}",
+                    path.display()
+                );
             }
+            continue;
+        }
+        if ty.is_dir() && directory_needed {
+            copy_admin_files(&path, &to, true, remap)?;
+        } else if ty.is_file() && file_needed {
+            copy_admin_file(&path, &to, remap)?;
         }
     }
     Ok(())
@@ -1039,6 +1068,13 @@ fn admin_write(command: &str, p: Value, o: &Options) -> Result<Value> {
     for (src, dst) in &mappings {
         copy_admin_files(src, dst, false, &|value| remap(value, &mappings))?;
     }
+    // Explicit inputs can have any filename and can live in otherwise ignored
+    // subdirectories. Preserve already remapped manifests copied above.
+    visit_request_paths(&mut request, &mut |raw| {
+        let source = absolute(Path::new(raw))?;
+        let target = mapped(raw, &mappings).context("request path has no simulation mapping")?;
+        copy_admin_requested_file(&source, &target, &|value| remap(value, &mappings))
+    })?;
     visit_request_paths(&mut request, &mut |raw| {
         if let Some(path) = mapped(raw, &mappings) {
             *raw = path.to_string_lossy().into_owned();
@@ -1254,6 +1290,76 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn simulation_copies_requested_files_without_extensions_and_preserves_remapped_manifests() {
+        let source = tempfile::tempdir().unwrap();
+        let simulation = tempfile::tempdir().unwrap();
+        let nested = source.path().join("nested/export.backup");
+        fs::create_dir(nested.parent().unwrap()).unwrap();
+        fs::write(&nested, b"explicit save input").unwrap();
+        copy_admin_files(source.path(), simulation.path(), false, &|_| {}).unwrap();
+        let copied = simulation.path().join("nested/export.backup");
+        assert!(!copied.exists());
+        copy_admin_requested_file(&nested, &copied, &|_| {}).unwrap();
+        assert_eq!(fs::read(&copied).unwrap(), b"explicit save input");
+        let missing = source.path().join("missing.backup");
+        copy_admin_requested_file(&missing, &simulation.path().join("missing.backup"), &|_| {})
+            .unwrap();
+        assert!(!simulation.path().join("missing.backup").exists());
+
+        let backups = source.path().join("goresave_backups");
+        fs::create_dir(&backups).unwrap();
+        let manifest = backups.join("recovery.json");
+        fs::write(&manifest, br#"{"backupPath":"live path"}"#).unwrap();
+        copy_admin_files(source.path(), simulation.path(), false, &|value| {
+            value["backupPath"] = json!("mapped path")
+        })
+        .unwrap();
+        let copied_manifest = simulation.path().join("goresave_backups/recovery.json");
+        copy_admin_requested_file(&manifest, &copied_manifest, &|_| {
+            panic!("already remapped inputs must be preserved")
+        })
+        .unwrap();
+        assert_eq!(
+            read_json(&copied_manifest).unwrap()["backupPath"],
+            "mapped path"
+        );
+        assert_eq!(read_json(&manifest).unwrap()["backupPath"], "live path");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn simulation_ignores_unselected_symlinks_and_rejects_needed_entries() {
+        use std::os::unix::fs::symlink;
+        let source = tempfile::tempdir().unwrap();
+        let simulation = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let outside = external.path().join("outside.txt");
+        fs::write(&outside, b"outside bytes").unwrap();
+        let link = source.path().join("shortcut");
+        symlink(&outside, &link).unwrap();
+        symlink(external.path(), source.path().join("directory-shortcut")).unwrap();
+        symlink(
+            external.path().join("missing"),
+            source.path().join("broken-shortcut"),
+        )
+        .unwrap();
+        fs::write(source.path().join("G1R-001.sav"), b"regular save").unwrap();
+        copy_admin_files(source.path(), simulation.path(), false, &|_| {}).unwrap();
+        assert_eq!(
+            fs::read(simulation.path().join("G1R-001.sav")).unwrap(),
+            b"regular save"
+        );
+        assert_eq!(fs::read_dir(simulation.path()).unwrap().count(), 1);
+        assert!(
+            copy_admin_requested_file(&link, &simulation.path().join("shortcut"), &|_| {}).is_err()
+        );
+        symlink(&outside, source.path().join("G1R-002.sav")).unwrap();
+        assert!(copy_admin_files(source.path(), simulation.path(), false, &|_| {}).is_err());
+        assert_eq!(fs::read(&outside).unwrap(), b"outside bytes");
+        assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+    }
 
     #[test]
     fn draft_staleness_checks_only_consumed_profile_snapshots() {
