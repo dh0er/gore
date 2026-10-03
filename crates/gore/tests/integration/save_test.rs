@@ -1089,6 +1089,118 @@ fn hero_transform_raw_collisions_reject_core_writes_and_keep_staged_drafts() {
 }
 
 #[test]
+fn inventory_counts_and_removals_of_the_same_stack_fail_before_publication() {
+    for actor in ["hero", "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN"] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let save = home.join("G1R-001.sav");
+        fs::copy(fixture(), &save).unwrap();
+        let save_arg = save.to_str().unwrap();
+        let inventory = run(
+            home,
+            &["inventory", "list", save_arg, "--actor", actor, "--all"],
+        );
+        let items = inventory["items"].as_array().unwrap();
+        let selected = items
+            .iter()
+            .find(|row| {
+                row["removable"] == true
+                    && row["slotId"].is_i64()
+                    && row["count"].as_i64().is_some_and(|n| n > 0)
+            })
+            .unwrap();
+        let mut value = json!({"path":selected["path"],"containerType":selected["containerType"],"slotId":selected["slotId"]});
+        if actor != "hero" {
+            value["actorId"] = json!(actor);
+        }
+        let remove = json!({"path":"private.inventory.removeItem","value":value});
+        value["count"] = json!(selected["count"].as_i64().unwrap() + 7);
+        let count = json!({"path":"private.inventory.setItemCount","value":value});
+        for edit in [&count, &remove] {
+            execute_core(
+                "apply_edits",
+                json!({"path":save,"edits":[edit],"dryRun":true}),
+            );
+        }
+        let hash = gore_save::api::file_sha1(&save).unwrap();
+        for edits in [
+            vec![count.clone(), remove.clone()],
+            vec![remove.clone(), count.clone()],
+        ] {
+            for command in ["write_save", "apply_edits"] {
+                let error = gore_save::api::execute(&gore_save::api::Request {
+                    command: command.into(),
+                    payload: json!({"path":save,"edits":edits,"backup":true}),
+                })
+                .unwrap_err();
+                assert!(
+                    matches!(
+                        error,
+                        gore_save::CoreError::UnsupportedEdit(_)
+                            | gore_save::CoreError::PlanConflict {
+                                kind: "inventorySlot",
+                                ..
+                            }
+                    ),
+                    "{error}"
+                );
+                assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+                assert!(!home.join("goresave_backups").exists());
+            }
+            let draft = home.join("inventory.json");
+            fs::write(&draft,serde_json::to_vec(&json!({"format":"gore.save.draft.v1","path":save,"expectedSha1":hash,"edits":edits})).unwrap()).unwrap();
+            let pending = fs::read(&draft).unwrap();
+            for command in ["validate", "apply"] {
+                let error = run_failure(home, &["draft", command, draft.to_str().unwrap()]);
+                assert!(
+                    error.to_string().contains("pending edit conflict"),
+                    "{error}"
+                );
+                assert_eq!(fs::read(&draft).unwrap(), pending);
+                assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+                assert!(!home.join("goresave_backups").exists());
+            }
+        }
+        // Both operations still commit when they address separate stacks.
+        let other = items
+            .iter()
+            .find(|row| {
+                row["removable"] == true
+                    && row["slotId"].is_i64()
+                    && row["path"] != selected["path"]
+            })
+            .unwrap();
+        let mut remove_other = remove.clone();
+        remove_other["value"]["path"] = other["path"].clone();
+        remove_other["value"]["slotId"] = other["slotId"].clone();
+        remove_other["value"]["containerType"] = other["containerType"].clone();
+        let result = execute_core(
+            "apply_edits",
+            json!({"path":save,"edits":[count.clone(),remove_other],"backup":false}),
+        );
+        assert_eq!(result["complete"], true);
+        assert_eq!(result["committed"], json!([0, 1]));
+        let after = run(
+            home,
+            &["inventory", "list", save_arg, "--actor", actor, "--all"],
+        );
+        let rows = after["items"].as_array().unwrap();
+        let kept = rows
+            .iter()
+            .find(|row| {
+                row["path"] == selected["path"]
+                    && row["slotId"] == selected["slotId"]
+                    && row["containerType"] == selected["containerType"]
+            })
+            .unwrap();
+        assert_eq!(kept["count"], count["value"]["count"]);
+        assert!(!rows.iter().any(|row| row["path"] == other["path"]
+            && row["slotId"] == other["slotId"]
+            && row["containerType"] == other["containerType"]));
+    }
+}
+
+#[test]
 fn inventory_reset_and_skill_unlearning_refuse_raw_changes_they_would_discard() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

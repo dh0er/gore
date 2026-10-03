@@ -11676,6 +11676,17 @@ fn apply_private_edits(
             }
         }
     }
+    for (first_at, first) in edit_specs.iter().enumerate() {
+        for (second_at, second) in edit_specs.iter().enumerate().skip(first_at + 1) {
+            if inventory_count_removal_conflict(first, second) {
+                return Err(CoreError::UnsupportedEdit(format!(
+                    "{} (edit {first_at}) and {} (edit {second_at}) change and remove \
+                     the same inventory stack; save them separately",
+                    edits[first_at].path, edits[second_at].path
+                )));
+            }
+        }
+    }
     // The same applies to two STRUCTURED edits that resolve the same target: each
     // replaces whatever is there, so the second discards the first's work while the
     // write reports both. They are not addressed by a path, so the rule above never
@@ -11921,6 +11932,33 @@ fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> 
         )),
         _ => None,
     }
+}
+
+/// Removing a stack discards a pending count for it. An omitted slot selector
+/// can resolve the same stack as a pinned selector, so compare the overlapping
+/// selectors rather than registry keys. Keep the two pending intents distinct.
+fn inventory_count_removal_conflict(first: &PrivateEdit, second: &PrivateEdit) -> bool {
+    let (count, remove) = match (first, second) {
+        (PrivateEdit::InventoryItemCount(count), PrivateEdit::InventoryRemoveItem(remove))
+        | (PrivateEdit::InventoryRemoveItem(remove), PrivateEdit::InventoryItemCount(count)) => {
+            (count, remove)
+        }
+        _ => return false,
+    };
+    // Legacy player counts scan every container when no typed selectors are
+    // supplied. NPC counts and pinned player counts resolve one typed container.
+    let legacy_player = count.actor_id.is_none()
+        && count.container_type.is_none()
+        && count.slot_id.is_none();
+    count.actor_id == remove.actor_id
+        && (legacy_player
+            || container_enum_label(count.container_type.as_deref())
+                == container_enum_label(remove.container_type.as_deref()))
+        && count
+            .slot_id
+            .zip(remove.slot_id)
+            .is_none_or(|(count_slot, remove_slot)| count_slot == remove_slot)
+        && inventory_edit_matches_item(count, &remove.path)
 }
 
 /// Whether a raw typed edit at `path` addresses something the structured `edit`

@@ -1849,6 +1849,59 @@ void main() {
   });
 
   test(
+    'saveAllPending preserves count and removal intents for the same stack',
+    () async {
+      for (final actor in [null, 'NPC-Diego']) {
+        for (final removalFirst in [false, true]) {
+          final core = _RecordingCoreService();
+          final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+          await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+          final target = <String, dynamic>{
+            'actorId': ?actor,
+            'containerType': 'MainContainer',
+            'slotId': 7,
+            'path': '/Script/Angelscript.ItMi_Orenugget',
+          };
+          final count = PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.inventory.setItemCount',
+                'value': {...target, 'count': 9},
+              },
+            ],
+          );
+          final remove = PendingSaveEdit(
+            edits: [
+              {'path': 'private.inventory.removeItem', 'value': target},
+            ],
+          );
+          notifier.setPendingEdit(
+            removalFirst ? 'remove' : 'count',
+            removalFirst ? remove : count,
+          );
+          notifier.setPendingEdit(
+            removalFirst ? 'count' : 'remove',
+            removalFirst ? count : remove,
+          );
+
+          expect(await notifier.saveAllPending(), isFalse);
+          expect(
+            notifier.state.error,
+            AppLocalizationsEn().editorInventorySlotEditConflict,
+          );
+          expect(
+            core.requests.where((r) => r.command == 'write_save'),
+            isEmpty,
+          );
+          expect(notifier.state.pendingEdits, hasLength(2));
+          expect(notifier.state.pendingEdits['count']!.edits, count.edits);
+          expect(notifier.state.pendingEdits['remove']!.edits, remove.edits);
+        }
+      }
+    },
+  );
+
+  test(
     'saveAllPending orders a typed edit ahead of a splicing edit in one write',
     () async {
       final core = _RecordingCoreService();

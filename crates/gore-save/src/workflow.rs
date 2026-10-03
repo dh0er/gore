@@ -258,6 +258,15 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
     }
     for (i, edit) in edits.iter().enumerate() {
         for j in i + 1..edits.len() {
+            if specs[i]
+                .as_ref()
+                .zip(specs[j].as_ref())
+                .is_some_and(|(first, second)| {
+                    crate::inventory_count_removal_conflict(first, second)
+                })
+            {
+                return Err(pending("inventorySlot", None));
+            }
             if edit.path == "private.typed.setValue"
                 && edits[j].path == edit.path
                 && paths[i] == paths[j]
@@ -736,6 +745,84 @@ mod tests {
                 );
                 assert!(plan(&[edit, npc("NPC-Gorn")]).is_ok());
             }
+        }
+    }
+
+    #[test]
+    fn inventory_counts_conflict_with_removal_only_for_overlapping_stack_selectors() {
+        for actor in [Value::Null, json!("NPC-Diego")] {
+            let count = json!({"path":"private.inventory.setItemCount","value":{
+                "actorId":actor,"path":"/Script/Angelscript.ItMi_Orenugget",
+                "containerType":"MainContainer","slotId":7,"count":2
+            }});
+            let remove = json!({"path":"private.inventory.removeItem","value":{
+                "actorId":actor,"path":"/Script/Angelscript.ItMi_Orenugget",
+                "containerType":"EInventoryTypes::MainContainer","slotId":7
+            }});
+            for (omit_count_slot, omit_remove_slot, id_only) in [
+                (false, false, false),
+                (true, false, false),
+                (false, true, false),
+                (true, true, false),
+                (false, false, true),
+            ] {
+                let mut count = count.clone();
+                let mut remove = remove.clone();
+                if omit_count_slot {
+                    count["value"].as_object_mut().unwrap().remove("slotId");
+                }
+                if omit_remove_slot {
+                    remove["value"].as_object_mut().unwrap().remove("slotId");
+                }
+                if id_only {
+                    count["value"].as_object_mut().unwrap().remove("path");
+                    count["value"]["id"] = json!("ItMi_Orenugget");
+                }
+                for edits in [vec![count.clone(), remove.clone()], vec![remove, count]] {
+                    assert!(matches!(
+                        plan(&edits),
+                        Err(CoreError::PlanConflict {
+                            kind: "inventorySlot",
+                            ..
+                        })
+                    ));
+                }
+            }
+            for (key, value) in [
+                ("actorId", json!("NPC-Other")),
+                ("containerType", json!("Pouch")),
+                ("slotId", json!(8)),
+                ("path", json!("/Script/Angelscript.ItFo_Loaf")),
+            ] {
+                let mut other = remove.clone();
+                other["value"][key] = value;
+                for edits in [
+                    vec![count.clone(), other.clone()],
+                    vec![other, count.clone()],
+                ] {
+                    assert!(plan(&edits).is_ok());
+                }
+            }
+            assert_ne!(replacement_key(&count), replacement_key(&remove));
+            let add = json!({"path":"private.inventory.addItem","value":{
+                "actorId":actor,"path":"/Script/Angelscript.ItMi_Orenugget","count":1
+            }});
+            assert!(plan(&[count, add]).is_ok());
+        }
+        let legacy = json!({"path":"private.inventory.setItemCount","value":{
+            "id":"ItMi_Orenugget","count":2
+        }});
+        let pouch = json!({"path":"private.inventory.removeItem","value":{
+            "path":"/Script/Angelscript.ItMi_Orenugget","containerType":"Pouch","slotId":7
+        }});
+        for edits in [vec![legacy.clone(), pouch.clone()], vec![pouch, legacy]] {
+            assert!(matches!(
+                plan(&edits),
+                Err(CoreError::PlanConflict {
+                    kind: "inventorySlot",
+                    ..
+                })
+            ));
         }
     }
 
