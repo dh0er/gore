@@ -965,20 +965,48 @@ fn admin_write(command: &str, p: Value, o: &Options) -> Result<Value> {
     };
     let live = absolute(&root(o)?)?;
     let mut mappings = vec![(live, temporary.path().join("saves"))];
-    for key in ["path", "persistentPath", "backupPath", "destinationPath"] {
-        if let Some(raw) = p[key].as_str() {
-            let path = absolute(Path::new(raw))?;
-            if !mappings.iter().any(|(src, _)| path.starts_with(src)) {
-                let parent = path.parent().context("path has no parent")?.to_owned();
-                mappings.push((
-                    parent,
-                    temporary
-                        .path()
-                        .join(format!("external-{}", mappings.len())),
-                ));
+    fn visit_request_paths(
+        value: &mut Value,
+        visit: &mut impl FnMut(&mut String) -> Result<()>,
+    ) -> Result<()> {
+        match value {
+            Value::Object(fields) => {
+                for (key, value) in fields {
+                    if matches!(
+                        key.as_str(),
+                        "path" | "persistentPath" | "backupPath" | "destinationPath"
+                    ) {
+                        if let Value::String(path) = value {
+                            visit(path)?;
+                            continue;
+                        }
+                    }
+                    visit_request_paths(value, visit)?;
+                }
             }
+            Value::Array(values) => {
+                for value in values {
+                    visit_request_paths(value, visit)?;
+                }
+            }
+            _ => {}
         }
+        Ok(())
     }
+    let mut request = p.clone();
+    visit_request_paths(&mut request, &mut |raw| {
+        let path = absolute(Path::new(raw))?;
+        if !mappings.iter().any(|(src, _)| path.starts_with(src)) {
+            let parent = path.parent().context("path has no parent")?.to_owned();
+            mappings.push((
+                parent,
+                temporary
+                    .path()
+                    .join(format!("external-{}", mappings.len())),
+            ));
+        }
+        Ok(())
+    })?;
     fn mapped(raw: &str, mappings: &[(PathBuf, PathBuf)]) -> Option<PathBuf> {
         let path = Path::new(raw);
         let path = if path.is_absolute() {
@@ -1011,12 +1039,12 @@ fn admin_write(command: &str, p: Value, o: &Options) -> Result<Value> {
     for (src, dst) in &mappings {
         copy_admin_files(src, dst, false, &|value| remap(value, &mappings))?;
     }
-    let mut request = p.clone();
-    for key in ["path", "persistentPath", "backupPath", "destinationPath"] {
-        if let Some(value) = request.get_mut(key) {
-            remap(value, &mappings);
+    visit_request_paths(&mut request, &mut |raw| {
+        if let Some(path) = mapped(raw, &mappings) {
+            *raw = path.to_string_lossy().into_owned();
         }
-    }
+        Ok(())
+    })?;
     let result = call(command, request)?;
     Ok(json!({"dryRun":true,"command":command,"request":p,"validated":true,"simulation":result}))
 }

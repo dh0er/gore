@@ -237,6 +237,9 @@ impl Derived {
 #[derive(Clone, Copy, Debug)]
 pub struct Safety {
     pub base: Class,
+    /// A switch whose explicit `true` value makes the entire call read-only.
+    /// Register only previews that skip every write and external side effect.
+    pub read_only_when: Option<&'static str>,
     /// A [`Class::GameLaunch`] command may have one explicitly offline mode.
     ///
     /// `as compile` and `as compile-module` default to a policy that may fall back to the game's
@@ -335,6 +338,7 @@ impl Safety {
     const fn of(base: Class) -> Self {
         Self {
             base,
+            read_only_when: None,
             offline_when: None,
             in_place_without: None,
             mutates_when_switch_without: None,
@@ -418,6 +422,11 @@ impl Safety {
         self
     }
 
+    pub const fn read_only_when(mut self, switch: &'static str) -> Self {
+        self.read_only_when = Some(switch);
+        self
+    }
+
     /// Register arguments that make this an installation change when they point into the game
     /// tree. See [`Safety::installs_via`].
     pub const fn installs_via(mut self, args: &'static [&'static str]) -> Self {
@@ -458,6 +467,9 @@ impl Safety {
 
     /// The class this specific call falls into.
     pub fn effective(&self, args: &Map<String, Value>) -> Class {
+        if self.is_explicitly_read_only(args) {
+            return Class::Read;
+        }
         if self.mutates_shared_state(args) {
             return self.base.max(Class::Mutate);
         }
@@ -492,6 +504,13 @@ impl Safety {
     /// driving the game's own compiler stages a source tree into the installation and restores it
     /// afterwards, so the installation is touched either way.
     pub fn requirements(&self, args: &Map<String, Value>) -> Requirements {
+        if self.is_explicitly_read_only(args) {
+            return Requirements {
+                write: false,
+                game_launch: false,
+                rewrites_in_place: false,
+            };
+        }
         let rewrites_in_place = self
             .in_place_without
             .is_some_and(|escape| !args.contains_key(escape));
@@ -508,6 +527,11 @@ impl Safety {
             game_launch: launches_game,
             rewrites_in_place,
         }
+    }
+
+    pub fn is_explicitly_read_only(&self, args: &Map<String, Value>) -> bool {
+        self.read_only_when
+            .is_some_and(|switch| args.get(switch).and_then(Value::as_bool) == Some(true))
     }
 
     fn is_explicitly_offline(&self, args: &Map<String, Value>) -> bool {

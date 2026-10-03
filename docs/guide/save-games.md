@@ -28,6 +28,8 @@ gore save draft apply changes.json --json
 
 Immediate domain writes and draft application use the same conflict planner as the Editor. They simulate every write before publishing, back up the pristine input once, preserve companion and placement notes, and report committed and remaining original operation indices after a partial failure. The draft retains the remaining operations and advances its input hash. A changed source blocks replay. Adds retain their individual identities; setting a declarative target again replaces its pending intent. `--dry-run` validates without changing saves, drafts, settings, backups or caches.
 
+In MCP, pass `dry_run: true` to preview Save Editor commands without write consent, including on servers started with `--no-consent-prompts`. Previews also skip output writes, icon-cache preparation and system viewers. Live changes still require write consent.
+
 ## Domain commands
 
 | Family | Operations |

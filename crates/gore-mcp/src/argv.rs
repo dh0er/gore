@@ -548,6 +548,9 @@ fn check_argument_sets(command: &CommandSpec, args: &Map<String, Value>) -> Resu
 /// would also trip arm four, but what the command itself does is the truer sentence than "the
 /// output file already exists", and only one question gets asked.
 fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> Option<Consent> {
+    if command.safety.is_explicitly_read_only(args) {
+        return None;
+    }
     let required = command.safety.requirements(args);
     let question = |reason: String, remedy: Option<String>, needs: Needs| {
         Some(Consent {
@@ -1420,6 +1423,92 @@ mod tests {
         let args=invocation.argv.iter().map(|s|s.to_string_lossy().into_owned()).collect::<Vec<_>>();
         assert!(args.windows(2).any(|pair|pair==["--flow-helper","false"]));
         assert!(build_with("gore_save","position set",json!({"x":"wrong"}),&permissive()).is_err());
+    }
+
+    #[test]
+    fn all_save_previews_run_without_write_consent_and_keep_live_gates() {
+        let group = spec::group("gore_save").unwrap();
+        let dry = json!({"dry_run":true});
+        for command in group.commands {
+            let invocation = build(group, command.sub, &dry, &options()).unwrap();
+            assert!(invocation.consent.is_none(), "{}", command.sub);
+            assert!(invocation.argv.iter().any(|arg| arg == "--dry-run"));
+            if command.safety.base == spec::Class::Mutate {
+                assert_eq!(
+                    command.safety.effective(dry.as_object().unwrap()),
+                    spec::Class::Read
+                );
+                assert!(!command.safety.requirements(dry.as_object().unwrap()).write);
+                assert_eq!(command.safety.worst_case(), spec::Class::Mutate);
+                for live in [json!({}), json!({"dry_run":false})] {
+                    assert!(
+                        asks_about_a_write(question("gore_save", command.sub, live, &options())),
+                        "{}",
+                        command.sub
+                    );
+                }
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let game = temp.path().join("G1R");
+        std::fs::create_dir(&game).unwrap();
+        let out = game.join("existing.out");
+        std::fs::write(&out, b"existing output").unwrap();
+        for sub in ["report", "assets export", "screenshot export"] {
+            let mut args = json!({"save":"fixture.sav","out":out,"game":game,"open":true,"with_assets":true,"dry_run":true});
+            assert!(
+                question("gore_save", sub, args.clone(), &options()).is_none(),
+                "{sub}"
+            );
+            args["dry_run"] = json!(false);
+            assert!(
+                asks_about_a_write(question("gore_save", sub, args, &options())),
+                "{sub}"
+            );
+        }
+        assert_eq!(std::fs::read(&out).unwrap(), b"existing output");
+    }
+
+    #[test]
+    fn save_preview_consent_exemption_requires_a_boolean_and_is_opt_in() {
+        for invalid in [json!("true"), json!(1), Value::Null] {
+            assert!(matches!(
+                build_with(
+                    "gore_save",
+                    "rename",
+                    json!({"save":"fixture.sav","name":"preview","dry_run":invalid}),
+                    &options()
+                ),
+                Err(BuildError::WrongType {
+                    name: "dry_run",
+                    ..
+                })
+            ));
+        }
+        let args = json!({"dry_run":true});
+        let default_mutation = spec::Safety::mutate();
+        assert_eq!(
+            default_mutation.effective(args.as_object().unwrap()),
+            spec::Class::Mutate
+        );
+        assert!(
+            default_mutation
+                .requirements(args.as_object().unwrap())
+                .write
+        );
+        for group in spec::GROUPS {
+            if group.tool != "gore_save" {
+                assert!(
+                    group
+                        .commands
+                        .iter()
+                        .all(|command| command.safety.read_only_when.is_none()),
+                    "{}",
+                    group.tool
+                );
+            }
+        }
     }
 
     #[test]

@@ -1036,6 +1036,86 @@ fn edited_save_exports_refuse_source_aliases_without_writing_or_staging() {
 }
 
 #[test]
+fn difficulty_dry_runs_remap_nested_profile_paths_and_preserve_live_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let profile = home.join("PersistentDataList.sav");
+    let profile_bytes = profile_fixture("Gothic");
+    fs::write(&profile, &profile_bytes).unwrap();
+    for directory in [None, Some(home)] {
+        let input = if directory.is_some() {
+            "G1R-001.sav"
+        } else {
+            save.to_str().unwrap()
+        };
+        let preview = run_from(
+            home,
+            directory,
+            &[
+                "difficulty",
+                "set",
+                input,
+                "--profile",
+                "0",
+                "--preset",
+                "Hard",
+                "--dry-run",
+            ],
+        );
+        assert_eq!(preview["validated"], true);
+        assert_eq!(preview["request"]["profile"]["profileId"], 0);
+        assert_eq!(preview["request"]["difficulty"]["preset"], "Hard");
+        assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+        assert_eq!(fs::read(&save).unwrap(), before);
+        assert!(!home.join("goresave_backups").exists());
+        assert_eq!(
+            run(
+                home,
+                &[
+                    "difficulty",
+                    "show",
+                    save.to_str().unwrap(),
+                    "--profile",
+                    "0"
+                ]
+            )["difficultyPreset"],
+            "/Script/Angelscript.DifficultyPreset_Gothic"
+        );
+    }
+    run(
+        home,
+        &[
+            "difficulty",
+            "set",
+            save.to_str().unwrap(),
+            "--profile",
+            "0",
+            "--preset",
+            "Hard",
+        ],
+    );
+    assert_ne!(fs::read(&profile).unwrap(), profile_bytes);
+    assert_eq!(fs::read(&save).unwrap(), before);
+    assert_eq!(
+        run(
+            home,
+            &[
+                "difficulty",
+                "show",
+                save.to_str().unwrap(),
+                "--profile",
+                "0"
+            ]
+        )["difficultyPreset"],
+        "/Script/Angelscript.DifficultyPreset_Hard"
+    );
+    assert!(home.join("goresave_backups").exists());
+}
+
+#[test]
 fn administrative_dry_runs_keep_slot_values_when_launched_from_the_save_directory() {
     for operation in [vec!["profile", "detach"], vec!["delete"]] {
         let temp = tempfile::tempdir().unwrap();

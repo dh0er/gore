@@ -417,7 +417,7 @@ const COMMANDS: &[CommandSpec] = &[
         "rename",
         "Save Editor: rename",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -428,7 +428,7 @@ const COMMANDS: &[CommandSpec] = &[
         "import",
         "Save Editor: import",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -439,7 +439,7 @@ const COMMANDS: &[CommandSpec] = &[
         "delete",
         "Save Editor: delete",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -470,7 +470,7 @@ const COMMANDS: &[CommandSpec] = &[
         "report",
         "Save Editor: report",
         OPTIONS,
-        Safety::write_truncating(&["out"])
+        Safety::write_truncating(&["out"]).read_only_when("dry_run")
             .mutates_when_switch_without("with_assets", "manifest")
             .mutates_when_switch("open"),
         T_LONG,
@@ -533,7 +533,7 @@ const COMMANDS: &[CommandSpec] = &[
         "profile assign",
         "Save Editor: profile assign",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -544,7 +544,7 @@ const COMMANDS: &[CommandSpec] = &[
         "profile detach",
         "Save Editor: profile detach",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -595,7 +595,7 @@ const COMMANDS: &[CommandSpec] = &[
         "attributes set",
         "Save Editor: attributes set",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -626,7 +626,7 @@ const COMMANDS: &[CommandSpec] = &[
         "skills set",
         "Save Editor: skills set",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -657,7 +657,7 @@ const COMMANDS: &[CommandSpec] = &[
         "inventory set-count",
         "Save Editor: inventory set-count",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -668,7 +668,7 @@ const COMMANDS: &[CommandSpec] = &[
         "inventory add",
         "Save Editor: inventory add",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -679,7 +679,7 @@ const COMMANDS: &[CommandSpec] = &[
         "inventory remove",
         "Save Editor: inventory remove",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -690,7 +690,7 @@ const COMMANDS: &[CommandSpec] = &[
         "inventory reset",
         "Save Editor: inventory reset",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -711,7 +711,7 @@ const COMMANDS: &[CommandSpec] = &[
         "inventory repair-slots",
         "Save Editor: inventory repair-slots",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -732,7 +732,7 @@ const COMMANDS: &[CommandSpec] = &[
         "position set",
         "Save Editor: position set",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -743,7 +743,7 @@ const COMMANDS: &[CommandSpec] = &[
         "position reset-to-spawn",
         "Save Editor: position reset-to-spawn",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -764,7 +764,7 @@ const COMMANDS: &[CommandSpec] = &[
         "position resume-routine",
         "Save Editor: position resume-routine",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -775,7 +775,7 @@ const COMMANDS: &[CommandSpec] = &[
         "position undo",
         "Save Editor: position undo",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -796,7 +796,7 @@ const COMMANDS: &[CommandSpec] = &[
         "time set",
         "Save Editor: time set",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -817,7 +817,7 @@ const COMMANDS: &[CommandSpec] = &[
         "difficulty set",
         "Save Editor: difficulty set",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -848,7 +848,7 @@ const COMMANDS: &[CommandSpec] = &[
         "quests set-state",
         "Save Editor: quests set-state",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -879,7 +879,7 @@ const COMMANDS: &[CommandSpec] = &[
         "tutorials set-state",
         "Save Editor: tutorials set-state",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -910,7 +910,7 @@ const COMMANDS: &[CommandSpec] = &[
         "story set",
         "Save Editor: story set",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -921,7 +921,7 @@ const COMMANDS: &[CommandSpec] = &[
         "story unset",
         "Save Editor: story unset",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -942,7 +942,7 @@ const COMMANDS: &[CommandSpec] = &[
         "knowledge add",
         "Save Editor: knowledge add",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -953,7 +953,7 @@ const COMMANDS: &[CommandSpec] = &[
         "knowledge remove",
         "Save Editor: knowledge remove",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -964,7 +964,7 @@ const COMMANDS: &[CommandSpec] = &[
         "knowledge create-character",
         "Save Editor: knowledge create-character",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -995,7 +995,7 @@ const COMMANDS: &[CommandSpec] = &[
         "events remove",
         "Save Editor: events remove",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1006,7 +1006,7 @@ const COMMANDS: &[CommandSpec] = &[
         "events duplicate",
         "Save Editor: events duplicate",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1037,7 +1037,7 @@ const COMMANDS: &[CommandSpec] = &[
         "factions forgive",
         "Save Editor: factions forgive",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1068,7 +1068,7 @@ const COMMANDS: &[CommandSpec] = &[
         "locks unlock",
         "Save Editor: locks unlock",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1079,7 +1079,7 @@ const COMMANDS: &[CommandSpec] = &[
         "locks lock",
         "Save Editor: locks lock",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1100,7 +1100,7 @@ const COMMANDS: &[CommandSpec] = &[
         "backups rename",
         "Save Editor: backups rename",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1111,7 +1111,7 @@ const COMMANDS: &[CommandSpec] = &[
         "backups restore",
         "Save Editor: backups restore",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1122,7 +1122,7 @@ const COMMANDS: &[CommandSpec] = &[
         "backups delete",
         "Save Editor: backups delete",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1153,7 +1153,7 @@ const COMMANDS: &[CommandSpec] = &[
         "recovery restore",
         "Save Editor: recovery restore",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1164,7 +1164,7 @@ const COMMANDS: &[CommandSpec] = &[
         "recovery dismiss",
         "Save Editor: recovery dismiss",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1175,7 +1175,7 @@ const COMMANDS: &[CommandSpec] = &[
         "recovery repair",
         "Save Editor: recovery repair",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1196,7 +1196,7 @@ const COMMANDS: &[CommandSpec] = &[
         "library add",
         "Save Editor: library add",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1207,7 +1207,7 @@ const COMMANDS: &[CommandSpec] = &[
         "library remove",
         "Save Editor: library remove",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1218,7 +1218,7 @@ const COMMANDS: &[CommandSpec] = &[
         "library hide",
         "Save Editor: library hide",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1229,7 +1229,7 @@ const COMMANDS: &[CommandSpec] = &[
         "library unhide",
         "Save Editor: library unhide",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1260,7 +1260,7 @@ const COMMANDS: &[CommandSpec] = &[
         "settings set",
         "Save Editor: settings set",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1271,7 +1271,7 @@ const COMMANDS: &[CommandSpec] = &[
         "settings reset",
         "Save Editor: settings reset",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1292,7 +1292,7 @@ const COMMANDS: &[CommandSpec] = &[
         "localization prepare",
         "Save Editor: localization prepare",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1313,7 +1313,7 @@ const COMMANDS: &[CommandSpec] = &[
         "assets prepare",
         "Save Editor: assets prepare",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1344,7 +1344,7 @@ const COMMANDS: &[CommandSpec] = &[
         "assets export",
         "Save Editor: assets export",
         OPTIONS,
-        Safety::write_truncating(&["out"]).mutates_when_switch("open"),
+        Safety::write_truncating(&["out"]).read_only_when("dry_run").mutates_when_switch("open"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1355,7 +1355,7 @@ const COMMANDS: &[CommandSpec] = &[
         "assets open",
         "Save Editor: assets open",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1366,7 +1366,7 @@ const COMMANDS: &[CommandSpec] = &[
         "assets release",
         "Save Editor: assets release",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1397,7 +1397,7 @@ const COMMANDS: &[CommandSpec] = &[
         "data set",
         "Save Editor: data set",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1408,7 +1408,7 @@ const COMMANDS: &[CommandSpec] = &[
         "data set-add",
         "Save Editor: data set-add",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1419,7 +1419,7 @@ const COMMANDS: &[CommandSpec] = &[
         "data set-remove",
         "Save Editor: data set-remove",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1430,7 +1430,7 @@ const COMMANDS: &[CommandSpec] = &[
         "data array-remove",
         "Save Editor: data array-remove",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1441,7 +1441,7 @@ const COMMANDS: &[CommandSpec] = &[
         "data array-duplicate",
         "Save Editor: data array-duplicate",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1462,7 +1462,7 @@ const COMMANDS: &[CommandSpec] = &[
         "core exec",
         "Save Editor: core exec",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1483,7 +1483,7 @@ const COMMANDS: &[CommandSpec] = &[
         "draft create",
         "Save Editor: draft create",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1504,7 +1504,7 @@ const COMMANDS: &[CommandSpec] = &[
         "draft stage",
         "Save Editor: draft stage",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1515,7 +1515,7 @@ const COMMANDS: &[CommandSpec] = &[
         "draft remove",
         "Save Editor: draft remove",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1526,7 +1526,7 @@ const COMMANDS: &[CommandSpec] = &[
         "draft reset",
         "Save Editor: draft reset",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1547,7 +1547,7 @@ const COMMANDS: &[CommandSpec] = &[
         "draft apply",
         "Save Editor: draft apply",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1648,7 +1648,7 @@ const COMMANDS: &[CommandSpec] = &[
         "screenshot export",
         "Save Editor: screenshot export",
         OPTIONS,
-        Safety::write_truncating(&["out"]).mutates_when_switch("open"),
+        Safety::write_truncating(&["out"]).read_only_when("dry_run").mutates_when_switch("open"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1669,7 +1669,7 @@ const COMMANDS: &[CommandSpec] = &[
         "updates open-release",
         "Save Editor: updates open-release",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1680,7 +1680,7 @@ const COMMANDS: &[CommandSpec] = &[
         "updates install",
         "Save Editor: updates install",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1701,7 +1701,7 @@ const COMMANDS: &[CommandSpec] = &[
         "npc relationship set",
         "Save Editor: npc relationship set",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1712,7 +1712,7 @@ const COMMANDS: &[CommandSpec] = &[
         "glossary segment unlock",
         "Save Editor: glossary segment unlock",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1723,7 +1723,7 @@ const COMMANDS: &[CommandSpec] = &[
         "glossary segment lock",
         "Save Editor: glossary segment lock",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1734,7 +1734,7 @@ const COMMANDS: &[CommandSpec] = &[
         "traders stock set",
         "Save Editor: traders stock set",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1745,7 +1745,7 @@ const COMMANDS: &[CommandSpec] = &[
         "traders stock add",
         "Save Editor: traders stock add",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1756,7 +1756,7 @@ const COMMANDS: &[CommandSpec] = &[
         "traders stock remove",
         "Save Editor: traders stock remove",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1777,7 +1777,7 @@ const COMMANDS: &[CommandSpec] = &[
         "traders timing set",
         "Save Editor: traders timing set",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1788,7 +1788,7 @@ const COMMANDS: &[CommandSpec] = &[
         "traders timing make-due",
         "Save Editor: traders timing make-due",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1819,7 +1819,7 @@ const COMMANDS: &[CommandSpec] = &[
         "npc revive",
         "Save Editor: npc revive",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
@@ -1850,7 +1850,7 @@ const COMMANDS: &[CommandSpec] = &[
         "glossary set-state",
         "Save Editor: glossary set-state",
         OPTIONS,
-        Safety::mutate(),
+        Safety::mutate().read_only_when("dry_run"),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
