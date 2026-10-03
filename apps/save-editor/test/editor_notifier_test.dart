@@ -883,7 +883,7 @@ void main() {
 
   for (final clear in [false, true]) {
     test(
-      'placement ${clear ? "clears" : "notes"} follow their write group and stay pending on failure',
+      'placement ${clear ? "clears" : "notes"} commit with their group before a later failure',
       () async {
         for (final earlierPose in [false, true]) {
           final core = _FailSecondWriteCoreService(
@@ -925,7 +925,10 @@ void main() {
               'written_location': [1.0, 2.0, 3.0],
             },
           };
-          final laterStock = stock(101);
+          const laterReset = <String, Object?>{
+            'path': 'private.inventory.reset',
+            'value': {'resourcesLevel': 'Gothic'},
+          };
           final laterPose = pose('B');
           notifier.setPendingEdit(
             'mixed',
@@ -933,7 +936,7 @@ void main() {
               edits: [
                 stock(100),
                 if (earlierPose) pose('A'),
-                laterStock,
+                laterReset,
                 laterPose,
               ],
               placementNotes: clear
@@ -950,21 +953,21 @@ void main() {
               .toList();
           expect(writes, hasLength(2));
           final key = clear ? 'clearPlacementNotes' : 'placementNotes';
-          expect(
-            writes.first.payload[key],
-            earlierPose ? [clear ? 'A' : note('A')] : isNull,
-          );
-          expect(writes.last.payload[key], [clear ? 'B' : note('B')]);
+          expect(writes.first.payload[key], [
+            if (earlierPose) clear ? 'A' : note('A'),
+            clear ? 'B' : note('B'),
+          ]);
+          expect(writes.last.payload[key], isNull);
           final pending = notifier.state.pendingEdits['mixed']!;
-          expect(pending.edits, [laterStock, laterPose]);
-          expect(pending.placementNotes, clear ? isEmpty : [note('B')]);
-          expect(pending.clearPlacementNotes, clear ? ['B'] : isEmpty);
-          // A retry must carry only the still-uncommitted NPC's sidecar.
+          expect(pending.edits, [laterReset]);
+          expect(pending.placementNotes, isEmpty);
+          expect(pending.clearPlacementNotes, isEmpty);
+          // A retry must not replay already committed NPC placement sidecars.
           expect(await notifier.saveAllPending(), isFalse);
           final retry = core.requests.lastWhere(
             (r) => r.command == 'write_save',
           );
-          expect(retry.payload[key], [clear ? 'B' : note('B')]);
+          expect(retry.payload[key], isNull);
         }
       },
     );
@@ -1538,6 +1541,46 @@ void main() {
           expect(notifier.state.pendingEdits, hasLength(2));
           expect(notifier.state.pendingEdits[reviveKey]!.edits, [revive]);
           expect(notifier.state.pendingEdits[healthKey]!.edits, [health]);
+        }
+      }
+    },
+  );
+
+  test(
+    'saveAllPending preserves repeated structured targets instead of splitting them',
+    () async {
+      for (final relationship in [true, false]) {
+        for (final secondFirst in [false, true]) {
+          final core = _RecordingCoreService();
+          final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+          await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+          final first = <String, Object?>{
+            'path': relationship
+                ? 'private.npc.setRelationship'
+                : 'private.knowledge.setEntry',
+            'value': relationship
+                ? {'id': 'NPC-A', 'relationship': 'friend'}
+                : {'character': 'Hero', 'entry': 'Info_Test', 'present': true},
+          };
+          final second = <String, Object?>{
+            'path': first['path'],
+            'value': relationship
+                ? {'id': 'npc-a', 'relationship': 'enemy'}
+                : {'character': 'hero', 'entry': 'INFO_TEST', 'present': false},
+          };
+          final firstKey = secondFirst ? 'b-first' : 'a-first';
+          final secondKey = secondFirst ? 'a-second' : 'b-second';
+          notifier.setPendingEdit(firstKey, PendingSaveEdit(edits: [first]));
+          notifier.setPendingEdit(secondKey, PendingSaveEdit(edits: [second]));
+          expect(await notifier.saveAllPending(), isFalse);
+          expect(notifier.state.error, contains('same property'));
+          expect(
+            core.requests.where((r) => r.command == 'write_save'),
+            isEmpty,
+          );
+          expect(notifier.state.pendingEdits, hasLength(2));
+          expect(notifier.state.pendingEdits[firstKey]!.edits, [first]);
+          expect(notifier.state.pendingEdits[secondKey]!.edits, [second]);
         }
       }
     },
@@ -3096,7 +3139,7 @@ void main() {
     },
   );
 
-  group('the same-target predicate the packer splits on', () {
+  group('the same-target predicate', () {
     Map<String, Object?> typedEdit(List<String> path) => {
       'path': 'private.typed.setValue',
       'value': {'path': path, 'value': 1},
@@ -3260,21 +3303,17 @@ void main() {
       );
     });
 
-    test('the packer really splits such a pair into two writes', () async {
+    test('the shared planner refuses such a pair before writing', () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(core, saveDir: r'C:	mp\saves');
       await notifier.inspect(r'C:	mp\saves\G1R-001.sav');
 
-      Map<String, Object?> entry(
-        String character,
-        String name,
-        bool present,
-      ) => {
+      Map<String, Object?> entry(String character, String name, bool present) => {
         'path': 'private.knowledge.setEntry',
         'value': {'character': character, 'entry': name, 'present': present},
       };
-      // Two registry entries the core folds into one target. It refuses the
-      // pair, so both have to reach it in writes of their own.
+      // Two registry entries address one normalized target. The planner must
+      // preserve both pending intents and refuse the pair before writing.
       notifier.setPendingEdit(
         'knowledge:a',
         PendingSaveEdit(edits: [entry('Diego', 'Info_Ore ', false)]),
@@ -3286,14 +3325,19 @@ void main() {
 
       final ok = await notifier.saveAllPending();
 
-      expect(ok, isTrue);
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('same property'));
       final writes = core.requests
           .where((request) => request.command == 'write_save')
           .toList();
-      expect(writes, hasLength(2));
-      for (final write in writes) {
-        expect((write.payload['edits'] as List), hasLength(1));
-      }
+      expect(writes, isEmpty);
+      expect(notifier.state.pendingEdits, hasLength(2));
+      expect(notifier.state.pendingEdits['knowledge:a']!.edits, [
+        entry('Diego', 'Info_Ore ', false),
+      ]);
+      expect(notifier.state.pendingEdits['knowledge:b']!.edits, [
+        entry('diego', 'Info_Ore', true),
+      ]);
     });
 
     test(

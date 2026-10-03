@@ -799,6 +799,77 @@ fn screenshot_export_rejects_invalid_sources_without_creating_or_truncating_outp
 }
 
 #[test]
+fn reports_embed_readonly_screenshot_sidecars_without_repairing_save_state() {
+    use base64::Engine;
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let hash = gore_save::api::file_sha1(&save).unwrap();
+    let profile = home.join("PersistentDataList.sav");
+    let profile_bytes = profile_fixture("Gothic");
+    fs::write(&profile, &profile_bytes).unwrap();
+    let claim = home.join("G1R-001.sav.assign-final-goresave-1-2-3");
+    fs::copy(&save, &claim).unwrap();
+    let unrelated = home.join("G1R-999.sav");
+    fs::create_dir(&unrelated).unwrap();
+    let jpeg = [0xff, 0xd8, 0xaa, 0xbb, 0xff, 0xd9];
+    let screenshot_bytes = screenshot_fixture("G1R-001", &jpeg);
+    let sidecar = home.join("Profile_0_Screenshots.sav");
+    fs::write(&sidecar, &screenshot_bytes).unwrap();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(jpeg);
+    let overview = run(home, &["overview", save_arg]);
+    assert_eq!(
+        overview["inspection"]["screenshot"]["mimeType"],
+        "image/jpeg"
+    );
+    assert_eq!(overview["inspection"]["screenshot"]["bytesBase64"], encoded);
+    let report = home.join("report.html");
+    fs::write(&report, b"existing report").unwrap();
+    for dry in [true, false] {
+        let mut args = vec!["report", save_arg, "--out", report.to_str().unwrap()];
+        if dry {
+            args.push("--dry-run");
+        }
+        run(home, &args);
+        if dry {
+            assert_eq!(fs::read(&report).unwrap(), b"existing report");
+        } else {
+            let html = fs::read_to_string(&report).unwrap();
+            assert!(html.contains(&format!(
+                "alt=\"Save screenshot\" src=\"data:image/jpeg;base64,{encoded}\""
+            )));
+            assert_eq!(html.matches("data:image/jpeg;base64,").count(), 1);
+        }
+        assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+        assert_eq!(gore_save::api::file_sha1(&claim).unwrap(), hash);
+        assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+        assert_eq!(fs::read(&sidecar).unwrap(), screenshot_bytes);
+        assert!(unrelated.is_dir());
+        assert!(!home.join("goresave_backups").exists());
+    }
+    fs::write(&sidecar, b"unavailable optional screenshot").unwrap();
+    run(
+        home,
+        &["report", save_arg, "--out", report.to_str().unwrap()],
+    );
+    assert!(
+        !fs::read_to_string(&report)
+            .unwrap()
+            .contains("alt=\"Save screenshot\"")
+    );
+    assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+    assert_eq!(gore_save::api::file_sha1(&claim).unwrap(), hash);
+    assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+    assert_eq!(
+        fs::read(&sidecar).unwrap(),
+        b"unavailable optional screenshot"
+    );
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
 fn screenshot_export_reads_only_thumbnail_sidecars_and_preserves_recovery_claims() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
@@ -2548,6 +2619,105 @@ fn hero_transform_raw_collisions_reject_core_writes_and_keep_staged_drafts() {
         assert!(!home.join("goresave_backups").exists());
         fs::write(&draft, &draft_bytes).unwrap();
     }
+}
+
+#[test]
+fn repeated_structured_targets_refuse_manual_drafts_and_raw_core_requests() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let characters = execute_core("private.characters.list", json!({"path":save}));
+    let rows = characters["characters"].as_array().unwrap();
+    let actor = |name: &str| {
+        rows.iter()
+            .find(|row| {
+                row["uniqueName"]
+                    .as_str()
+                    .is_some_and(|value| value.contains(name))
+            })
+            .unwrap()["globalId"]
+            .as_str()
+            .unwrap()
+    };
+    let diego = actor("Diego");
+    let buster = actor("Buster");
+    let first =
+        json!({"path":"private.npc.setRelationship","value":{"id":diego,"relationship":"friend"}});
+    let second =
+        json!({"path":"private.npc.setRelationship","value":{"id":diego,"relationship":"enemy"}});
+    for edit in [&first, &second] {
+        execute_core(
+            "apply_edits",
+            json!({"path":save,"edits":[edit],"dryRun":true}),
+        );
+    }
+    let hash = gore_save::api::file_sha1(&save).unwrap();
+    let draft = home.join("repeated.json");
+    let request = home.join("request.json");
+    for edits in [
+        vec![first.clone(), second.clone()],
+        vec![second.clone(), first.clone()],
+    ] {
+        for command in ["plan_edits", "write_save", "apply_edits"] {
+            for dry in [true, false] {
+                let error = gore_save::api::execute(&gore_save::api::Request {
+                    command: command.into(),
+                    payload: json!({"path":save,"edits":edits,"dryRun":dry,"backup":true}),
+                })
+                .unwrap_err();
+                assert!(
+                    matches!(
+                        error,
+                        gore_save::CoreError::PlanConflict {
+                            kind: "property",
+                            ..
+                        } | gore_save::CoreError::UnsupportedEdit(_)
+                    ),
+                    "{error}"
+                );
+                assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+                assert!(!home.join("goresave_backups").exists());
+            }
+        }
+        let pending = serde_json::to_vec(&json!({"format":"gore.save.draft.v1","path":save.canonicalize().unwrap(),"expectedSha1":hash,"edits":edits})).unwrap();
+        fs::write(&draft, &pending).unwrap();
+        for flags in [vec!["validate"], vec!["apply"], vec!["apply", "--dry-run"]] {
+            let mut args = vec!["draft", flags[0], draft.to_str().unwrap()];
+            args.extend_from_slice(&flags[1..]);
+            let error = run_failure(home, &args);
+            assert!(
+                error.to_string().contains("pending edit conflict"),
+                "{error}"
+            );
+            assert_eq!(fs::read(&draft).unwrap(), pending);
+            assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+            assert!(!home.join("goresave_backups").exists());
+        }
+        for dry in [true, false] {
+            fs::write(&request,serde_json::to_vec(&json!({"command":"apply_edits","payload":{"path":save,"edits":edits,"dryRun":dry,"backup":true}})).unwrap()).unwrap();
+            let error = run_failure(
+                home,
+                &["core", "exec", "--request-file", request.to_str().unwrap()],
+            );
+            assert!(
+                error.to_string().contains("pending edit conflict"),
+                "{error}"
+            );
+            assert_eq!(fs::read(&draft).unwrap(), pending);
+            assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+            assert!(!home.join("goresave_backups").exists());
+        }
+    }
+    let other =
+        json!({"path":"private.npc.setRelationship","value":{"id":buster,"relationship":"enemy"}});
+    let result = execute_core(
+        "apply_edits",
+        json!({"path":save,"edits":[first,other],"backup":true}),
+    );
+    assert_eq!(result["complete"], true);
+    assert_eq!(result["committed"], json!([0, 1]));
+    assert_ne!(gore_save::api::file_sha1(&save).unwrap(), hash);
 }
 
 #[test]

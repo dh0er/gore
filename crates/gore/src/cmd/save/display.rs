@@ -944,6 +944,8 @@ fn overview(o: &Options) -> Result<Value> {
         json!({"path":save(o)?,"includePrivate":true}),
     )?;
     let mut data = json!({"inspection":inspection});
+    data["inspection"]["screenshot"] =
+        serde_json::to_value(gore_save::screenshot_for_save(save(o)?)?)?;
     for (key, command) in [
         ("characters", "private.characters.list"),
         ("factions", "private.factions.list"),

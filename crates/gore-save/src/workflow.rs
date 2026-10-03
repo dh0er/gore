@@ -212,6 +212,10 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
         })
         .collect::<Result<Vec<_>, _>>()?;
     let paths = edits.iter().map(typed).collect::<Result<Vec<_>, _>>()?;
+    let targets = specs
+        .iter()
+        .map(|spec| spec.as_ref().and_then(crate::structured_edit_target))
+        .collect::<Vec<_>>();
     let mut arrays: Vec<(Vec<PathSeg>, Vec<usize>)> = Vec::new();
     for (i, edit) in edits.iter().enumerate() {
         if !is_array(edit) {
@@ -259,6 +263,16 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
     }
     for (i, edit) in edits.iter().enumerate() {
         for j in i + 1..edits.len() {
+            if targets[i].is_some() && targets[i] == targets[j] {
+                let (description, key) = targets[i].as_ref().unwrap();
+                let key = key
+                    .split(['\u{1f}', '\u{1e}'])
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" › ");
+                let path = [PathSeg::Name((*description).into()), PathSeg::Name(key)];
+                return Err(pending("property", Some(&path)));
+            }
             if specs[i]
                 .as_ref()
                 .zip(specs[j].as_ref())
@@ -455,10 +469,7 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
         let ordinal = specs[i].as_ref().is_some_and(crate::carries_caller_ordinal);
         let overlap = current.iter().any(|j| match (&specs[i], &specs[*j]) {
             (Some(a), Some(b)) => {
-                (crate::structured_edit_target(a).is_some()
-                    && crate::structured_edit_target(a) == crate::structured_edit_target(b))
-                    || crate::raw_typed_path(a)
-                        .is_some_and(|p| crate::structured_edit_rewrites(b, p))
+                crate::raw_typed_path(a).is_some_and(|p| crate::structured_edit_rewrites(b, p))
                     || crate::raw_typed_path(b)
                         .is_some_and(|p| crate::structured_edit_rewrites(a, p))
             }
@@ -652,6 +663,112 @@ pub fn apply_with_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repeated_structured_targets_are_refused_before_grouping() {
+        let relationship = json!({"path":"private.npc.setRelationship","value":{"id":"NPC-A","relationship":"friend"}});
+        let skill = json!({"path":"private.skills.set","value":{"actor":"Hero","base":"Melee_OneHanded","tier":"Trained"}});
+        let knowledge = json!({"path":"private.knowledge.setEntry","value":{"character":"Hero","entry":"Info_Test","present":true}});
+        let lock = json!({"path":"private.locks.setUnlocked","value":{"lock":"Lock_Test","unlocked":true}});
+        let glossary = json!({"path":"private.glossary.setSegment","value":{
+            "documentClass":"/Script/Angelscript.Document_Glossary_Bloodfly",
+            "segmentClass":"/Script/Angelscript.DocumentSegment_Glossary_Bloodfly_01","unlocked":true
+        }});
+        let stock = json!({"path":"private.traders.setStock","value":{"index":0,"path":crate::traders::ORE_PATH,"count":100}});
+        let removal = json!({"path":"private.traders.removeItem","value":{"index":0,"path":crate::traders::ORE_PATH}});
+        for (first, value_field, second_value, target_field, other_target, kind) in [
+            (
+                relationship,
+                "relationship",
+                json!("enemy"),
+                "id",
+                json!("NPC-B"),
+                "property",
+            ),
+            (
+                skill,
+                "tier",
+                json!("Master"),
+                "base",
+                json!("Ranged_Bow"),
+                "property",
+            ),
+            (
+                knowledge,
+                "present",
+                json!(false),
+                "entry",
+                json!("Info_Other"),
+                "property",
+            ),
+            (
+                lock,
+                "unlocked",
+                json!(false),
+                "lock",
+                json!("Lock_Other"),
+                "property",
+            ),
+            (
+                glossary,
+                "unlocked",
+                json!(false),
+                "segmentClass",
+                json!("/Script/Angelscript.DocumentSegment_Glossary_Bloodfly_02"),
+                "property",
+            ),
+            (
+                stock.clone(),
+                "count",
+                json!(101),
+                "index",
+                json!(1),
+                "property",
+            ),
+            (removal, "index", json!(0), "index", json!(1), "property"),
+        ] {
+            let mut second = first.clone();
+            second["value"][value_field] = second_value;
+            assert!(plan(&[first.clone()]).is_ok(), "{first}");
+            assert!(plan(&[second.clone()]).is_ok(), "{second}");
+            for edits in [
+                vec![first.clone(), second.clone()],
+                vec![second.clone(), first.clone()],
+            ] {
+                assert!(
+                    matches!(plan(&edits),Err(CoreError::PlanConflict{kind:actual,..}) if actual==kind),
+                    "{edits:?}"
+                );
+            }
+            let mut alias = second.clone();
+            if matches!(target_field, "id" | "entry" | "lock") {
+                let value = alias["value"][target_field].as_str().unwrap();
+                alias["value"][target_field] = json!(value.to_ascii_lowercase());
+                assert!(plan(&[alias.clone()]).is_ok());
+                assert!(matches!(
+                    plan(&[first.clone(), alias]),
+                    Err(CoreError::PlanConflict {
+                        kind: "property",
+                        ..
+                    })
+                ));
+            }
+            second["value"][target_field] = other_target;
+            assert!(
+                plan(&[first.clone(), second.clone()]).is_ok(),
+                "{first}, {second}"
+            );
+        }
+        let removal = json!({"path":"private.traders.removeItem","value":{"index":0,"path":crate::traders::ORE_PATH}});
+        for edits in [vec![stock.clone(), removal.clone()], vec![removal, stock]] {
+            assert!(matches!(
+                plan(&edits),
+                Err(CoreError::PlanConflict {
+                    kind: "property",
+                    ..
+                })
+            ));
+        }
+    }
     #[test]
     fn removal_indices_descend_and_keep_equal_adds_distinct() {
         let raw = vec![
@@ -1478,13 +1595,14 @@ mod tests {
 
     #[test]
     fn interleaved_npc_pose_and_routine_edits_stay_in_one_write_group() {
-        let stock = |count| json!({"path":"private.traders.setStock","value":{"index":0,"path":crate::traders::ORE_PATH,"count":count}});
+        let stock = |index, count| json!({"path":"private.traders.setStock","value":{"index":index,"path":crate::traders::ORE_PATH,"count":count}});
         let edits = [
-            stock(100),
+            stock(0, 100),
             raw(&["PositionByGlobalId", "{NPC-A}", "CharacterLocation"]),
-            stock(101),
+            stock(1, 101),
             raw(&["DailyRoutineByGlobalId", "{NPC-A}", "DailyRoutineClass"]),
             raw(&["PositionByGlobalId", "{NPC-B}", "CharacterLocation"]),
+            json!({"path":"private.inventory.reset","value":{"resourcesLevel":"Gothic"}}),
         ];
         let groups = plan(&edits).unwrap();
         assert_eq!(groups.len(), 2);
@@ -1492,7 +1610,7 @@ mod tests {
             groups
                 .iter()
                 .any(|group| group.contains(&1) && group.contains(&3)),
-            "another overlapping edit must not separate an NPC's pose and routine"
+            "an unrelated declarative edit must not separate an NPC's pose and routine"
         );
     }
 
@@ -1501,7 +1619,7 @@ mod tests {
         let stock = |count| json!({"path":"private.traders.setStock","value":{"index":0,"path":crate::traders::ORE_PATH,"count":count}});
         let edits = json!([
             stock(100),
-            stock(101),
+            {"path":"private.inventory.reset","value":{"resourcesLevel":"Gothic"}},
             raw(&["PositionByGlobalId", "{NPC-A}", "CharacterLocation"])
         ]);
         let notes = json!([{"npc":"npc-a","note":{
@@ -1509,12 +1627,12 @@ mod tests {
         }}]);
         let payload = json!({"edits":edits,"placementNotes":notes,"clearPlacementNotes":["NPC-A"]});
         let planned = plan_request(&payload).unwrap();
-        assert_eq!(planned["groups"], json!([[0], [1, 2]]));
+        assert_eq!(planned["groups"], json!([[0, 2], [1]]));
         assert_eq!(
             planned["sidecars"],
-            json!([{}, {
+            json!([{
                 "placementNotes":notes,"clearPlacementNotes":["NPC-A"]
-            }])
+            }, {}])
         );
         let mut orphan = payload;
         orphan["clearPlacementNotes"] = json!(["NPC-B"]);
@@ -1542,7 +1660,7 @@ mod tests {
     }
 
     #[test]
-    fn placement_sidecars_wait_for_the_associated_write_and_survive_partial_failure() {
+    fn placement_sidecars_commit_with_their_write_before_a_later_group_fails() {
         for clear in [false, true] {
             let temp = tempfile::tempdir().unwrap();
             let path = temp.path().join("G1R-001.sav");
@@ -1596,7 +1714,7 @@ mod tests {
             drop(root);
             let raw = json!([
                 {"path":"private.traders.setStock","value":{"index":index,"path":crate::traders::ORE_PATH,"count":100}},
-                {"path":"private.traders.setStock","value":{"index":index,"path":crate::traders::ORE_PATH,"count":101}},
+                {"path":"private.inventory.reset","value":{"resourcesLevel":"Gothic"}},
                 {"path":"private.typed.setValue","value":{"path":pose["locationPath"],"value":next}}
             ]);
             let mut request = json!({"path":path,"edits":raw,"backup":false});
@@ -1608,18 +1726,18 @@ mod tests {
             let interrupted = apply_with_progress(&request, |progress| {
                 assert_eq!(progress["step"], 1);
                 assert_eq!(
-                    crate::placement::read_notes(&path),
-                    initial,
-                    "an unrelated committed group must not publish or clear the NPC's sidecar"
+                    crate::placement::read_notes(&path).get(npc),
+                    if clear { None } else { Some(&note) },
+                    "the committed NPC group must publish or clear its own sidecar"
                 );
                 fs::write(&path, b"external change").unwrap();
             })
             .unwrap();
-            assert_eq!(interrupted["committed"], json!([0]));
-            assert_eq!(interrupted["remaining"], json!([1, 2]));
-            assert_eq!(crate::placement::read_notes(&path), initial);
+            assert_eq!(interrupted["committed"], json!([0, 2]));
+            assert_eq!(interrupted["remaining"], json!([1]));
+            assert_ne!(crate::placement::read_notes(&path), initial);
             let mut remaining = request.clone();
-            remaining["edits"] = json!([raw[1], raw[2]]);
+            remaining["edits"] = json!([raw[1]]);
             retain_pending_placement_sidecars(&mut remaining);
             assert!(
                 remaining
@@ -1628,7 +1746,7 @@ mod tests {
                     } else {
                         "placementNotes"
                     })
-                    .is_some()
+                    .is_none()
             );
             fs::write(&path, bytes).unwrap();
             let complete = apply_request(&request).unwrap();

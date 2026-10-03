@@ -23241,8 +23241,8 @@ mod tests {
             }})
         };
         let edits = vec![
-            stock(100),
             stock(200),
+            json!({"path":"private.inventory.reset","value":{"resourcesLevel":"Gothic"}}),
             json!({
                 "path":"public.m_PlayerSaveName","value":"Synced workflow name"
             }),

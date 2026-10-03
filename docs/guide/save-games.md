@@ -72,6 +72,8 @@ The CLI reads the same `gore/gore-save/settings.json` and `ui_settings.json` as 
 
 `assets prepare --game <installation>` returns an icon manifest used by `assets list/export/open/release --manifest <file>`. `assets … --kind portraits --game <installation>` reads loose glossary artwork. `report <SAVE> --out report.html --with-assets --game <installation> --open` produces a local report. Missing optional image/text sources remain visible as unavailable.
 
+Reports embed the selected save's screenshot from its profile sidecar without repairing save metadata. A missing or invalid screenshot sidecar leaves the rest of the report available.
+
 Each `assets prepare` retains its cache generation across CLI and MCP invocations until a matching `assets release`. Release the manifest once per preparation after its consumers have finished; this allows later cache cleanup or repair. These leases are separate from the Editor's live leases. Export previews require an existing output parent directory and never create it.
 
 On Windows, `updates check/install --kind installed --target <directory>` requires `goresave.exe`, its Save Editor product metadata and the installation's `unins000.exe`. The feed is compared with that executable's version; JSON reports `installedEditorVersion`, `currentEditorVersion` and the CLI's `bundledEditorVersion` separately. Portable copies use the bundled version and open the release download page for manual replacement.
