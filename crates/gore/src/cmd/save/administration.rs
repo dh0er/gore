@@ -1025,7 +1025,10 @@ fn admin_write(command: &str, p: Value, o: &Options) -> Result<Value> {
     let mut request = p.clone();
     visit_request_paths(&mut request, &mut |raw| {
         let path = absolute(Path::new(raw))?;
-        if !mappings.iter().any(|(src, _)| path.starts_with(src)) {
+        if !mappings
+            .iter()
+            .any(|(src, _)| normalized_path(&path).starts_with(normalized_path(src)))
+        {
             let parent = path.parent().context("path has no parent")?.to_owned();
             mappings.push((
                 parent,
@@ -1037,16 +1040,14 @@ fn admin_write(command: &str, p: Value, o: &Options) -> Result<Value> {
         Ok(())
     })?;
     fn mapped(raw: &str, mappings: &[(PathBuf, PathBuf)]) -> Option<PathBuf> {
-        let path = Path::new(raw);
-        let path = if path.is_absolute() {
-            path.to_owned()
-        } else {
-            std::env::current_dir().ok()?.join(path)
-        };
+        let path = normalized_path(Path::new(raw));
         mappings
             .iter()
             .filter_map(|(src, dst)| {
-                path.strip_prefix(src)
+                // Canonical manifests may use Windows verbatim prefixes while
+                // the requested root uses its ordinary spelling.
+                let src = normalized_path(src);
+                path.strip_prefix(&src)
                     .ok()
                     .map(|tail| (src.components().count(), dst.join(tail)))
             })
@@ -1054,15 +1055,18 @@ fn admin_write(command: &str, p: Value, o: &Options) -> Result<Value> {
             .map(|(_, p)| p)
     }
     fn remap(value: &mut Value, mappings: &[(PathBuf, PathBuf)]) {
-        match value {
-            Value::String(s) => {
+        // Recovery hashes and placement-note values are data, not paths.
+        for key in [
+            "targetPath",
+            "backupPath",
+            "persistentPath",
+            "persistentBackupPath",
+        ] {
+            if let Some(Value::String(s)) = value.get_mut(key) {
                 if let Some(p) = mapped(s, mappings) {
                     *s = p.to_string_lossy().into_owned();
                 }
             }
-            Value::Array(a) => a.iter_mut().for_each(|v| remap(v, mappings)),
-            Value::Object(m) => m.values_mut().for_each(|v| remap(v, mappings)),
-            _ => {}
         }
     }
     for (src, dst) in &mappings {

@@ -3799,7 +3799,9 @@ fn validate_discovered_deleted_save_recovery(
     manifest: &DeletedSaveRecoveryManifest,
     repair: bool,
 ) -> Result<Option<String>, CoreError> {
-    if deleted_save_recovery_manifest_path(&manifest.backup_path)? != manifest_path {
+    if fs::canonicalize(deleted_save_recovery_manifest_path(&manifest.backup_path)?)?
+        != fs::canonicalize(manifest_path)?
+    {
         return Err(CoreError::Validation(
             "recovery manifest name does not match its slot backup".to_string(),
         ));

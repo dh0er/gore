@@ -4093,6 +4093,111 @@ fn npc_restores_require_the_original_pinned_routine_and_preserve_its_note() {
 }
 
 #[test]
+fn recovery_previews_preserve_manifest_hashes_when_run_from_the_save_directory() {
+    for operation in ["restore", "dismiss"] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let save = home.join("G1R-001.sav");
+        fs::copy(fixture(), &save).unwrap();
+        let original_save = fs::read(&save).unwrap();
+        let profile = home.join("PersistentDataList.sav");
+        let original_profile = profile_fixture("Recovery");
+        fs::write(&profile, &original_profile).unwrap();
+        run_from(
+            home,
+            Some(home),
+            &["delete", "G1R-001.sav", "--profile", "0"],
+        );
+        assert!(!save.exists());
+        let deleted_profile = fs::read(&profile).unwrap();
+        let backups = home.join("goresave_backups");
+        let snapshots = fs::read_dir(&backups)
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                let bytes = fs::read(&path).unwrap();
+                (path, bytes)
+            })
+            .collect::<Vec<_>>();
+        assert!(snapshots.iter().any(|(path, _)| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        }));
+        let repair = run_from(
+            home,
+            Some(home),
+            &[
+                "recovery",
+                "repair",
+                "--root",
+                home.to_str().unwrap(),
+                "--dry-run",
+            ],
+        );
+        assert_eq!(
+            repair["simulation"]["deletedSaveRecovery"]["persistentPostDeleteSha1"],
+            gore_save::api::file_sha1(&profile).unwrap(),
+            "repair={repair:#}, manifests={:?}",
+            snapshots
+                .iter()
+                .filter(|(path, _)| path
+                    .extension()
+                    .is_some_and(|extension| extension == "json"))
+                .map(|(_, bytes)| String::from_utf8_lossy(bytes))
+                .collect::<Vec<_>>()
+        );
+        for relative in [false, true] {
+            let root_arg = if relative {
+                "."
+            } else {
+                home.to_str().unwrap()
+            };
+            let preview = run_from(
+                home,
+                Some(home),
+                &["recovery", operation, "--root", root_arg, "--dry-run"],
+            );
+            assert_eq!(preview["validated"], true);
+            assert_eq!(
+                preview["request"]["expectedPersistentSha1"],
+                gore_save::api::file_sha1(&profile).unwrap()
+            );
+            if operation == "dismiss" {
+                assert_eq!(preview["simulation"]["dismissed"], true);
+            } else {
+                assert_eq!(preview["simulation"]["bytesChanged"], true);
+            }
+            assert!(!save.exists());
+            assert_eq!(fs::read(&profile).unwrap(), deleted_profile);
+            assert_eq!(fs::read_dir(&backups).unwrap().count(), snapshots.len());
+            for (path, bytes) in &snapshots {
+                assert_eq!(fs::read(path).unwrap(), *bytes);
+            }
+        }
+        let result = run_from(home, Some(home), &["recovery", operation, "--root", "."]);
+        if operation == "restore" {
+            assert_eq!(result["bytesChanged"], true);
+            assert_eq!(fs::read(&save).unwrap(), original_save);
+            assert_eq!(fs::read(&profile).unwrap(), original_profile);
+        } else {
+            assert_eq!(result["dismissed"], true);
+            assert!(!save.exists());
+            assert_eq!(fs::read(&profile).unwrap(), deleted_profile);
+        }
+        for (path, bytes) in snapshots {
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                assert!(!path.exists());
+            } else {
+                assert_eq!(fs::read(path).unwrap(), bytes);
+            }
+        }
+    }
+}
+
+#[test]
 fn recovery_show_selects_one_record_without_changing_recovery_files() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
