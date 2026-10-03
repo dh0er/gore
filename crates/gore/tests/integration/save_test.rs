@@ -231,6 +231,162 @@ fn nested_container_fixture(save: &Path) {
 }
 
 #[test]
+fn opposing_set_elements_preserve_drafts_and_allow_independent_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    nested_container_fixture(&save);
+    let original = fs::read(&save).unwrap();
+    let hash = gore_save::api::file_sha1(&save).unwrap();
+    let draft = home.join("opposing.json");
+    let request = home.join("request.json");
+    let path_file = home.join("set-path.json");
+    fs::write(&path_file, br#"["Events","[01]","Knowledge"]"#).unwrap();
+    for (add_first, value) in [(true, "ChoiceB"), (false, "ChoiceA")] {
+        let first_op = if add_first {
+            "private.typed.setAdd"
+        } else {
+            "private.typed.setRemove"
+        };
+        let second_op = if add_first {
+            "private.typed.setRemove"
+        } else {
+            "private.typed.setAdd"
+        };
+        let first =
+            json!({"path":first_op,"value":{"path":["Events","[01]","Knowledge"],"value":value}});
+        let second =
+            json!({"path":second_op,"value":{"path":["Events","[1]","Knowledge"],"value":value}});
+        execute_core(
+            "apply_edits",
+            json!({"path":save,"edits":[first.clone()],"dryRun":true}),
+        );
+        let edits = vec![first.clone(), second];
+        for command in ["plan_edits", "write_save", "apply_edits"] {
+            for dry in [false, true] {
+                let payload = json!({"path":save,"edits":edits,"dryRun":dry,"backup":true});
+                let error = gore_save::api::execute(&gore_save::api::Request {
+                    command: command.into(),
+                    payload: payload.clone(),
+                })
+                .unwrap_err();
+                assert!(
+                    matches!(
+                        error,
+                        gore_save::CoreError::PlanConflict {
+                            kind: "property",
+                            ..
+                        } | gore_save::CoreError::UnsupportedEdit(_)
+                    ),
+                    "{error}"
+                );
+                if command == "apply_edits" {
+                    fs::write(
+                        &request,
+                        serde_json::to_vec(&json!({"command":command,"payload":payload})).unwrap(),
+                    )
+                    .unwrap();
+                    let error = run_failure(
+                        home,
+                        &["core", "exec", "--request-file", request.to_str().unwrap()],
+                    );
+                    assert_eq!(error["code"], "PLAN_CONFLICT", "{error}");
+                }
+                assert_eq!(fs::read(&save).unwrap(), original);
+                assert!(!home.join("goresave_backups").exists());
+            }
+        }
+        let pending = serde_json::to_vec(&json!({"format":"gore.save.draft.v1","path":save.canonicalize().unwrap(),"expectedSha1":hash,"edits":edits})).unwrap();
+        fs::write(&draft, &pending).unwrap();
+        for flags in [vec!["validate"], vec!["apply"], vec!["apply", "--dry-run"]] {
+            let mut args = vec!["draft", flags[0], draft.to_str().unwrap()];
+            args.extend_from_slice(&flags[1..]);
+            let error = run_failure(home, &args);
+            assert!(
+                error.to_string().contains("pending edit conflict"),
+                "{error}"
+            );
+            assert_eq!(fs::read(&draft).unwrap(), pending);
+            assert_eq!(fs::read(&save).unwrap(), original);
+            assert!(!home.join("goresave_backups").exists());
+        }
+        fs::remove_file(&draft).unwrap();
+        let value_arg = serde_json::to_string(value).unwrap();
+        run(
+            home,
+            &[
+                "data",
+                if add_first { "set-add" } else { "set-remove" },
+                save.to_str().unwrap(),
+                "--path-file",
+                path_file.to_str().unwrap(),
+                "--value-json",
+                &value_arg,
+                "--draft",
+                draft.to_str().unwrap(),
+            ],
+        );
+        run(
+            home,
+            &[
+                "data",
+                if add_first { "set-remove" } else { "set-add" },
+                save.to_str().unwrap(),
+                "--path-file",
+                path_file.to_str().unwrap(),
+                "--value-json",
+                &value_arg,
+                "--draft",
+                draft.to_str().unwrap(),
+            ],
+        );
+        let opposed = fs::read(&draft).unwrap();
+        let pending: Value = serde_json::from_slice(&opposed).unwrap();
+        assert_eq!(pending["edits"].as_array().unwrap().len(), 2);
+        for flags in [vec!["validate"], vec!["apply"], vec!["apply", "--dry-run"]] {
+            let mut args = vec!["draft", flags[0], draft.to_str().unwrap()];
+            args.extend_from_slice(&flags[1..]);
+            let error = run_failure(home, &args);
+            assert!(
+                error.to_string().contains("pending edit conflict"),
+                "{error}"
+            );
+            assert_eq!(fs::read(&draft).unwrap(), opposed);
+        }
+        assert_eq!(fs::read(&save).unwrap(), original);
+        assert!(!home.join("goresave_backups").exists());
+    }
+    let result = execute_core(
+        "apply_edits",
+        json!({"path":save,"backup":false,"edits":[
+            {"path":"private.typed.setAdd","value":{"path":["Events","[1]","Knowledge"],"value":"ChoiceB"}},
+            {"path":"private.typed.setRemove","value":{"path":["Events","[1]","Knowledge"],"value":"ChoiceA"}}
+        ]}),
+    );
+    assert_eq!(result["complete"], true, "{result}");
+    assert_eq!(result["committed"], json!([0, 1]));
+    let inspected = execute_core("inspect_save", json!({"path":save,"includePrivate":true}));
+    assert!(
+        inspected["private"]["strings"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("ChoiceB"))
+    );
+    let properties = execute_core(
+        "search_typed_properties",
+        json!({"path":save,"query":"Knowledge","includeNodes":true}),
+    );
+    let selected = properties["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["path"] == json!(["Events", "[1]", "Knowledge"]))
+        .unwrap();
+    assert_eq!(selected["childCount"], 1);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
 fn structural_array_conflicts_preserve_nested_container_edits_in_drafts() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

@@ -280,6 +280,15 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
     }
     for (i, edit) in edits.iter().enumerate() {
         for j in i + 1..edits.len() {
+            if let Some((path, value)) = specs[i]
+                .as_ref()
+                .zip(specs[j].as_ref())
+                .and_then(|(first, second)| crate::opposing_set_element(first, second))
+            {
+                let mut path = path.to_vec();
+                path.push(PathSeg::MapKey(value.into()));
+                return Err(pending("property", Some(&path)));
+            }
             let overlap = if targets[i].is_some() && targets[i] == targets[j] {
                 targets[i].clone()
             } else {
@@ -687,6 +696,34 @@ pub fn apply_with_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn opposing_set_elements_conflict_but_independent_elements_batch() {
+        let add = json!({"path":"private.typed.setAdd","value":{"path":["Events","[01]","Knowledge"],"value":"ChoiceB"}});
+        let remove = json!({"path":"private.typed.setRemove","value":{"path":["Events","[1]","Knowledge"],"value":"ChoiceB"}});
+        for edits in [
+            vec![add.clone(), remove.clone()],
+            vec![remove.clone(), add.clone()],
+        ] {
+            assert!(
+                matches!(
+                    plan(&edits),
+                    Err(CoreError::PlanConflict {
+                        kind: "property",
+                        ..
+                    })
+                ),
+                "{edits:?}"
+            );
+        }
+        let mut other_element = remove.clone();
+        other_element["value"]["value"] = json!("ChoiceA");
+        assert!(plan(&[add.clone(), other_element]).is_ok());
+        let mut other_set = remove.clone();
+        other_set["value"]["path"] = json!(["Other"]);
+        assert!(plan(&[add.clone(), other_set]).is_ok());
+        assert!(plan(&[add.clone(), add]).is_ok());
+        assert!(plan(&[remove.clone(), remove]).is_ok());
+    }
     #[test]
     fn repeated_private_names_are_refused_in_either_order() {
         for path in [

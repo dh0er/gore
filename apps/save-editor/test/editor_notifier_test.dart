@@ -1546,6 +1546,38 @@ void main() {
     },
   );
 
+  test('saveAllPending preserves opposing edits to one set element', () async {
+    for (final addFirst in [false, true]) {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      final add = <String, Object?>{
+        'path': 'private.typed.setAdd',
+        'value': {
+          'path': ['Events', '[01]', 'Knowledge'],
+          'value': 'ChoiceB',
+        },
+      };
+      final remove = <String, Object?>{
+        'path': 'private.typed.setRemove',
+        'value': {
+          'path': ['Events', '[1]', 'Knowledge'],
+          'value': 'ChoiceB',
+        },
+      };
+      final addKey = addFirst ? 'a-add' : 'b-add';
+      final removeKey = addFirst ? 'b-remove' : 'a-remove';
+      notifier.setPendingEdit(addKey, PendingSaveEdit(edits: [add]));
+      notifier.setPendingEdit(removeKey, PendingSaveEdit(edits: [remove]));
+      expect(await notifier.saveAllPending(), isFalse);
+      expect(notifier.state.error, contains('same property'));
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      expect(notifier.state.pendingEdits, hasLength(2));
+      expect(notifier.state.pendingEdits[addKey]!.edits, [add]);
+      expect(notifier.state.pendingEdits[removeKey]!.edits, [remove]);
+    }
+  });
+
   test(
     'saveAllPending preserves overlapping player and profile fields',
     () async {

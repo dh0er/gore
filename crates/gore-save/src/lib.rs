@@ -11711,6 +11711,12 @@ fn apply_private_edits(
     }
     for (first_at, first) in edit_specs.iter().enumerate() {
         for (second_at, second) in edit_specs.iter().enumerate().skip(first_at + 1) {
+            if opposing_set_element(first, second).is_some() {
+                return Err(CoreError::UnsupportedEdit(format!(
+                    "{} (edit {first_at}) and {} (edit {second_at}) add and remove the same set element; save them separately",
+                    edits[first_at].path, edits[second_at].path
+                )));
+            }
             if let Some((field, _)) = player_field_overlap(first, second) {
                 return Err(CoreError::UnsupportedEdit(format!(
                     "{} (edit {first_at}) and {} (edit {second_at}) rewrite the same {field}; save them separately",
@@ -11971,6 +11977,31 @@ fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> 
                 line.path.as_str(),
             ]),
         )),
+        _ => None,
+    }
+}
+
+/// Opposing operations for one value discard an intent, even though each succeeds in sequence.
+fn opposing_set_element<'a>(
+    first: &'a PrivateEdit,
+    second: &'a PrivateEdit,
+) -> Option<(&'a [properties::PathSeg], &'a str)> {
+    let (PrivateEdit::TypedContainer(first), PrivateEdit::TypedContainer(second)) = (first, second)
+    else {
+        return None;
+    };
+    if first.path != second.path {
+        return None;
+    }
+    match (&first.edit, &second.edit) {
+        (
+            properties::ContainerEdit::SetAdd(first_value),
+            properties::ContainerEdit::SetRemove(second_value),
+        )
+        | (
+            properties::ContainerEdit::SetRemove(first_value),
+            properties::ContainerEdit::SetAdd(second_value),
+        ) if first_value == second_value => Some((&first.path, first_value)),
         _ => None,
     }
 }
