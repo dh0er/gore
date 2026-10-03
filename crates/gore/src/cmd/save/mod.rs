@@ -12,9 +12,12 @@ use std::{
 mod administration;
 mod display;
 mod presentation;
+mod progression_filters;
 mod report;
 mod text;
 mod updates;
+
+use progression_filters::{annotate_glossary, filter_glossary, filter_quests};
 
 /// Options are shared so an operation staged in a draft has the same arguments
 /// and selection rules as its immediate counterpart.
@@ -668,11 +671,31 @@ fn progression(section: &str, o: &Options) -> Result<Value> {
             character(o)?
         });
     }
-    let knowledge_query = p["query"].as_str().map(str::to_owned);
-    let mut data = if section == "knowledge" {
-        // Knowledge categories and localized labels exist only after enrichment.
-        // Read every core page before filtering and slicing the display rows.
-        p.as_object_mut().unwrap().remove("query");
+    let filters = Options {
+        query: p["query"].as_str().map(str::to_owned),
+        state: p["state"].as_str().map(str::to_owned),
+        group: p["group"].as_str().map(str::to_owned),
+        category: p["category"].as_str().map(str::to_owned),
+        role: o
+            .role
+            .clone()
+            .or_else(|| p["role"].as_str().map(str::to_owned)),
+        relationship: o
+            .relationship
+            .clone()
+            .or_else(|| p["relationship"].as_str().map(str::to_owned)),
+        ..o.clone()
+    };
+    let mut data = if matches!(section, "quests" | "tutorials" | "glossary" | "knowledge") {
+        // The Editor loads complete rows before localization, search and facets.
+        // The core caps each page at 1000, so collect every page unfiltered.
+        let object = p.as_object_mut().unwrap();
+        object.remove("query");
+        if matches!(section, "quests" | "tutorials" | "glossary") {
+            object.remove("state");
+            object.remove("group");
+            object.remove("category");
+        }
         p["offset"] = json!(0);
         p["limit"] = json!(1000);
         paged(
@@ -688,28 +711,68 @@ fn progression(section: &str, o: &Options) -> Result<Value> {
     } else {
         paged("query_progression", p, o)?
     };
+    if section == "glossary" {
+        let characters = match call("private.characters.list", json!({"path":save(o)?})) {
+            Ok(characters) => characters,
+            Err(error) => {
+                if filters.relationship.is_some()
+                    || [&filters.role, &filters.state].iter().any(|filter| {
+                        filter
+                            .as_deref()
+                            .is_some_and(|s| s.trim().eq_ignore_ascii_case("hostile"))
+                    })
+                {
+                    return Err(error)
+                        .context("glossary relationship filter requires character status");
+                }
+                data["relationshipWarning"] = json!(error.to_string());
+                json!({"characters":[]})
+            }
+        };
+        annotate_glossary(&mut data, &display::catalog("glossary")?, &characters)?;
+    }
+    let mut data = progression_page(section, data, &filters, &text::Texts::load_options(o)?)?;
+    if section == "glossary" && o.with_assets {
+        display::attach_artwork(&mut data, o);
+    }
+    Ok(data)
+}
+
+fn progression_page(
+    section: &str,
+    mut data: Value,
+    o: &Options,
+    texts: &text::Texts,
+) -> Result<Value> {
     if section == "story" {
         presentation::annotate_story(&mut data);
     }
-    display::localize(&mut data, o)?;
-    if section == "knowledge" {
-        display::filter(
-            &mut data,
-            "entries",
-            &Options {
-                query: knowledge_query,
+    texts.apply(&mut data)?;
+    match section {
+        "quests" | "tutorials" => {
+            filter_quests(&mut data, o);
+            let page = Options {
+                limit: o.limit.clamp(1, 1000),
                 ..o.clone()
-            },
-        );
-        display::paginate(&mut data, "entries", o);
-        data["limit"] = if o.all {
-            data["count"].clone()
-        } else {
-            json!(o.limit)
-        };
-    }
-    if section == "glossary" && o.with_assets {
-        display::attach_artwork(&mut data, o);
+            };
+            display::paginate(&mut data, "quests", &page);
+            data["limit"] = if o.all {
+                data["count"].clone()
+            } else {
+                json!(page.limit)
+            };
+        }
+        "glossary" => filter_glossary(&mut data, o),
+        "knowledge" => {
+            display::filter(&mut data, "entries", o);
+            display::paginate(&mut data, "entries", o);
+            data["limit"] = if o.all {
+                data["count"].clone()
+            } else {
+                json!(o.limit)
+            };
+        }
+        _ => {}
     }
     Ok(data)
 }
@@ -962,7 +1025,7 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                     query: Some(id.to_owned()),
                     offset: 0,
                     all: true,
-                    include_unset: o.include_unset || g == "story",
+                    include_unset: o.include_unset || matches!(g, "story" | "glossary"),
                     ..o.clone()
                 },
             )?;
@@ -1600,6 +1663,200 @@ fn time(v: &str, o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glossary_filters_hide_locked_resource_entries() {
+        let options = Options {
+            save: Some(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../gore-save/assets/start_saves/resources_gothic.sav"),
+            ),
+            lang: "en".into(),
+            game_lang: "en".into(),
+            limit: 100,
+            ..Options::default()
+        };
+        // The fixture remembers Diego's Introduction, but no creature/location
+        // entries or teaching segments. Discovery must include that NPC join.
+        for (state, role, expected) in [
+            (None, None, 1),
+            (Some("unlocked"), None, 1),
+            (None, Some("teacher"), 0),
+        ] {
+            let page = progression(
+                "glossary",
+                &Options {
+                    state: state.map(str::to_owned),
+                    role: role.map(str::to_owned),
+                    ..options.clone()
+                },
+            )
+            .unwrap();
+            assert_eq!(page["total"], expected, "state={state:?}, role={role:?}");
+            assert_eq!(page["count"], expected);
+            for row in page["categories"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|category| category["entries"].as_array().unwrap())
+            {
+                assert_eq!(row["id"], "OC_STT_DIEGO");
+                assert_eq!(row["unlocked"], true);
+                assert_eq!(row["roles"], json!(["portrait"]));
+            }
+        }
+        let page = progression(
+            "glossary",
+            &Options {
+                state: Some("locked".into()),
+                category: Some("creature".into()),
+                all: true,
+                ..options
+            },
+        )
+        .unwrap();
+        assert!(page["total"].as_u64().unwrap() > 0);
+        for category in page["categories"].as_array().unwrap() {
+            for row in category["entries"].as_array().unwrap() {
+                assert_eq!(row["category"], "creatures");
+                assert_eq!(row["unlocked"], false);
+            }
+        }
+    }
+
+    #[test]
+    fn quests_state_filters_and_facets_keep_core_semantics() {
+        let rows = json!({"quests":[
+            {"questClass":"Quest_A","group":"OldCamp","currentState":"EQuestState::Running"},
+            {"questClass":"Quest_B","group":"NewCamp","currentState":"EQuestState::Available"},
+            {"questClass":"Quest_C","group":"NewCamp","currentState":null}
+        ]});
+        for state in ["Running", " EQUESTSTATE::RUNNING ", "running"] {
+            let mut page = rows.clone();
+            filter_quests(
+                &mut page,
+                &Options {
+                    state: Some(state.into()),
+                    group: Some(" newcamp ".into()),
+                    ..Options::default()
+                },
+            );
+            assert_eq!(page["quests"], json!([]));
+            assert_eq!(page["stateCounts"], json!({"Available":1,"unknown":1}));
+            assert_eq!(page["groupCounts"], json!({"OldCamp":1}));
+        }
+        // The core labels non-enum values unknown in the facet, but its state
+        // predicate compares the raw enum/short enum only: unknown is no match.
+        for state in ["unknown", "invalid", "unlocked"] {
+            let mut page = rows.clone();
+            filter_quests(
+                &mut page,
+                &Options {
+                    state: Some(state.into()),
+                    ..Options::default()
+                },
+            );
+            assert_eq!(page["quests"], json!([]));
+            assert_eq!(
+                page["stateCounts"],
+                json!({"Running":1,"Available":1,"unknown":1})
+            );
+            assert_eq!(page["groupCounts"], json!({}));
+        }
+        let mut page = rows;
+        filter_quests(
+            &mut page,
+            &Options {
+                state: Some("  ".into()),
+                ..Options::default()
+            },
+        );
+        assert_eq!(page["quests"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn glossary_roles_and_relationships_follow_unlocked_segments() {
+        let catalog = json!([
+            {"id":"Diego","uniqueName":"Diego_1","documentClass":"Document_Diego","camp":"oldCamp","segments":[
+                {"id":"Introduction","class":"Segment_Portrait","label":"Introduction","roles":["portrait"]},
+                {"id":"Teacher","class":"Segment_Teacher","label":"Teacher","roles":["teacher"]},
+                {"id":"Trader","class":"Segment_Trader","label":"Trader","roles":["trader"]},
+                {"id":"Dead","class":"Segment_Dead","label":"Dead","roles":["dead"]}
+            ]},
+            {"id":"Mud","uniqueName":"Mud_2","documentClass":"Document_Mud","camp":"outsiders","segments":[
+                {"id":"Introduction","class":"Segment_Mud","label":"Introduction","roles":["portrait"]}
+            ]}
+        ]);
+        let characters = json!({"characters":[
+            {"uniqueName":"DIEGO_1","globalId":"Diego-global","isDead":true,"isTrader":true,"personalRelationship":"Enemy"},
+            {"uniqueName":"Mud_2","globalId":"Mud-global","personalRelationship":null}
+        ]});
+        let mut data = json!({"categories":[{"id":"creatures","entries":[]}],"segmentUnlocks":[
+            {"documentClass":"document_diego","segmentClass":"segment_teacher","unlockedEventIndices":[7],"viewedEventIndices":[]},
+            {"documentClass":"Document_Diego","segmentClass":"Segment_Dead","unlockedEventIndices":[],"viewedEventIndices":[8]},
+            {"documentClass":"Document_Mud","segmentClass":"Segment_Mud","unlockedEventIndices":[9],"viewedEventIndices":[]}
+        ]});
+        annotate_glossary(&mut data, &catalog, &characters).unwrap();
+        for (role, relationship, state, expected) in [
+            (Some("TEACHER"), None, None, 1),
+            (Some("trader"), None, None, 0),
+            (Some("dead"), None, None, 0),
+            (Some("hostile"), None, None, 1),
+            (None, Some("enemy"), None, 1),
+            (None, Some("neutral"), None, 0),
+            (None, None, Some("dead"), 0),
+            (None, None, Some("unlocked"), 2),
+        ] {
+            let mut page = data.clone();
+            filter_glossary(
+                &mut page,
+                &Options {
+                    role: role.map(str::to_owned),
+                    relationship: relationship.map(str::to_owned),
+                    state: state.map(str::to_owned),
+                    limit: 1,
+                    ..Options::default()
+                },
+            );
+            assert_eq!(
+                page["total"], expected,
+                "role={role:?}, relationship={relationship:?}, state={state:?}"
+            );
+            if expected == 1 {
+                let category = page["categories"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|category| category["id"] == "oldCamp")
+                    .unwrap();
+                let row = &category["entries"][0];
+                assert_eq!(row["id"], "Diego");
+                assert_eq!(row["unlocked"], true);
+                assert_eq!(row["roles"], json!(["teacher"]));
+                assert_eq!(row["segments"][1]["eventIndices"], json!([7]));
+            }
+        }
+        let mut page = data;
+        filter_glossary(
+            &mut page,
+            &Options {
+                offset: 1,
+                limit: 1,
+                ..Options::default()
+            },
+        );
+        assert_eq!(page["total"], 2);
+        assert_eq!(page["count"], 1);
+        assert_eq!(page["offset"], 1);
+        let outsiders = page["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|category| category["id"] == "outsiders")
+            .unwrap();
+        assert_eq!(outsiders["entries"][0]["id"], "Mud");
+        assert_eq!(page["categoryCounts"], json!({"oldCamp":1,"outsiders":1}));
+    }
 
     #[test]
     fn inventory_uses_editor_categories_without_requiring_details() {

@@ -215,6 +215,29 @@ impl Texts {
                             }
                         }
                     }
+                    if snapshot.contains_key("documentClass") && snapshot.contains_key("segments") {
+                        let name = snapshot.get("name").and_then(Value::as_str).unwrap_or("");
+                        let npc = snapshot.get("isNpc") == Some(&Value::Bool(true));
+                        let label = snapshot
+                            .get("uniqueName")
+                            .and_then(Value::as_str)
+                            .and_then(|id| texts.get(id))
+                            .or_else(|| {
+                                snapshot
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .and_then(|id| texts.get(id))
+                            })
+                            .or_else(|| texts.get(name))
+                            .unwrap_or_else(|| {
+                                readable(if npc {
+                                    name.rsplit('_').next().unwrap_or(name)
+                                } else {
+                                    name
+                                })
+                            });
+                        map.insert("label".into(), json!(label));
+                    }
                     if let Some(id) = snapshot
                         .get("attributeId")
                         .or_else(|| snapshot.get("key"))
@@ -326,6 +349,156 @@ impl Texts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quests_search_localized_titles_and_descriptions_before_pagination() {
+        let texts = Texts {
+            catalog: json!({
+                "quest-oldcamp_first-name":{"german":"Übersetzter Titel"},
+                "quest-oldcamp_second-name":{"german":"Anderer Titel"},
+                "quest-oldcamp_first-description":{"german":"Gesuchte Beschreibung"},
+                "quest-oldcamp_second-description":{"german":"Gesuchte Beschreibung"}
+            }),
+            sets: vec!["german"],
+            lang: "en".into(),
+        };
+        let rows = json!({"section":"quests","quests":[
+            {"questClass":"/Script/Angelscript.Quest_OldCamp_First","id":"Quest_OldCamp_First","group":"OldCamp","name":"First","currentState":"EQuestState::Running","statePath":["first"],"writable":true},
+            {"questClass":"/Script/Angelscript.Quest_OldCamp_Second","id":"Quest_OldCamp_Second","group":"OldCamp","name":"Second","currentState":"EQuestState::Available","statePath":["second"],"writable":true},
+            {"questClass":"/Script/Angelscript.Quest_NewCamp_Third","id":"Quest_NewCamp_Third","group":"NewCamp","name":"Third","currentState":null,"statePath":["third"],"writable":false}
+        ]});
+        let options = Options {
+            query: Some("  ÜBERSETZTER TITEL  ".into()),
+            limit: 1,
+            ..Options::default()
+        };
+        let page = progression_page("quests", rows.clone(), &options, &texts).unwrap();
+        assert_eq!(page["total"], 1);
+        assert_eq!(page["quests"][0]["id"], "Quest_OldCamp_First");
+        assert_eq!(page["quests"][0]["label"], "Übersetzter Titel");
+        assert_eq!(page["quests"][0]["statePath"], json!(["first"]));
+
+        let page = progression_page(
+            "quests",
+            rows.clone(),
+            &Options {
+                query: Some("gesuchte beschreibung".into()),
+                offset: 1,
+                ..options.clone()
+            },
+            &texts,
+        )
+        .unwrap();
+        assert_eq!(page["total"], 2);
+        assert_eq!(page["count"], 1);
+        assert_eq!(page["offset"], 1);
+        assert_eq!(page["limit"], 1);
+        assert_eq!(page["quests"][0]["id"], "Quest_OldCamp_Second");
+        assert_eq!(page["stateCounts"], json!({"Running":1,"Available":1}));
+        assert_eq!(page["groupCounts"], json!({"OldCamp":2}));
+
+        let page = progression_page(
+            "quests",
+            rows.clone(),
+            &Options {
+                query: Some("gesuchte beschreibung".into()),
+                state: Some("equeststate::running".into()),
+                group: Some("oldcamp".into()),
+                ..options.clone()
+            },
+            &texts,
+        )
+        .unwrap();
+        assert_eq!(page["total"], 1);
+        assert_eq!(page["quests"][0]["id"], "Quest_OldCamp_First");
+        assert_eq!(page["stateCounts"], json!({"Running":1,"Available":1}));
+        assert_eq!(page["groupCounts"], json!({"OldCamp":1}));
+
+        let page = progression_page(
+            "quests",
+            rows,
+            &Options {
+                query: Some("quest_newcamp_third".into()),
+                ..options
+            },
+            &texts,
+        )
+        .unwrap();
+        assert_eq!(page["total"], 1);
+        assert_eq!(page["quests"][0]["writable"], false);
+        assert_eq!(page["stateCounts"], json!({"unknown":1}));
+    }
+
+    #[test]
+    fn glossary_search_and_category_facets_use_discovered_localized_documents() {
+        let texts = Texts {
+            catalog: json!({
+                "scavenger":{"german":"Übersetzter Begriff A"},
+                "bloodfly":{"german":"Übersetzter Begriff B"},
+                "wolf":{"german":"Übersetzter Begriff C"}
+            }),
+            sets: vec!["german"],
+            lang: "en".into(),
+        };
+        let mut rows = json!({"section":"glossary","categories":[
+            {"id":"creatures","entries":[
+                {"id":"BloodflyGlossary","name":"Bloodfly","category":"creatures","group":"CreaturesGlossary","documentClass":"Document_Bloodfly","currentState":null,"segments":[{"unlocked":true}]},
+                {"id":"ScavengerGlossary","name":"Scavenger","category":"creatures","group":"CreaturesGlossary","documentClass":"Document_Scavenger","currentState":"EQuestState::NotAvailable","segments":[{"unlocked":true}]},
+                {"id":"WolfGlossary","name":"Wolf","category":"creatures","group":"CreaturesGlossary","documentClass":"Document_Wolf","currentState":"EQuestState::Running","segments":[{"unlocked":false}]}
+            ]}
+        ]});
+        annotate_glossary(&mut rows, &json!([]), &json!({"characters":[]})).unwrap();
+        let options = Options {
+            query: Some(" ÜBERSETZTER BEGRIFF ".into()),
+            category: Some("CREATURE".into()),
+            offset: 1,
+            limit: 1,
+            ..Options::default()
+        };
+        let page = progression_page("glossary", rows.clone(), &options, &texts).unwrap();
+        assert_eq!(page["total"], 2);
+        assert_eq!(page["count"], 1);
+        assert_eq!(page["offset"], 1);
+        assert_eq!(page["categoryCounts"], json!({"creatures":2}));
+        assert_eq!(
+            page["categories"][0]["entries"][0]["id"],
+            "BloodflyGlossary"
+        );
+        assert_eq!(
+            page["categories"][0]["entries"][0]["label"],
+            "Übersetzter Begriff B"
+        );
+
+        let page = progression_page(
+            "glossary",
+            rows.clone(),
+            &Options {
+                include_unset: true,
+                all: true,
+                ..options.clone()
+            },
+            &texts,
+        )
+        .unwrap();
+        assert_eq!(page["total"], 3);
+        assert_eq!(page["count"], 2);
+        assert_eq!(page["limit"], 2);
+
+        let page = progression_page(
+            "glossary",
+            rows,
+            &Options {
+                entry: Some("document_wolf".into()),
+                state: Some("locked".into()),
+                offset: 0,
+                ..options
+            },
+            &texts,
+        )
+        .unwrap();
+        assert_eq!(page["total"], 1);
+        assert_eq!(page["categories"][0]["entries"][0]["id"], "WolfGlossary");
+    }
 
     #[test]
     fn catalog_search_matches_game_text_before_filtering_and_pagination() {

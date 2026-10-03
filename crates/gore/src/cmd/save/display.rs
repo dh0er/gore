@@ -559,7 +559,7 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             if o.format != "html" {
                 bail!("report supports --format html");
             }
-            let settings = administration::settings_read("ui")?;
+            let settings = administration::settings_read("ui").unwrap_or_default();
             let body = super::report::html(&data, &settings, o)?;
             write_save_export(o, out, body.as_bytes())?;
             if !o.dry_run {

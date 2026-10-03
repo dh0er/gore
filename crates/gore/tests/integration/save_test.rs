@@ -771,6 +771,10 @@ fn run_failure(home: &Path, args: &[&str]) -> Value {
 // A strictly typed profile registry, including the difficulty and slot arrays
 // used by the native reset, detach and delete operations.
 fn profile_fixture(preset: &str) -> Vec<u8> {
+    profile_fixture_with_metadata(preset, None)
+}
+
+fn profile_fixture_with_metadata(preset: &str, metadata: Option<(i32, f64)>) -> Vec<u8> {
     fn string(value: &str) -> Vec<u8> {
         let mut bytes = ((value.len() + 1) as i32).to_le_bytes().to_vec();
         bytes.extend_from_slice(value.as_bytes());
@@ -816,6 +820,20 @@ fn profile_fixture(preset: &str) -> Vec<u8> {
         &[],
         &0i32.to_le_bytes(),
     ));
+    if let Some((chapter, played)) = metadata {
+        public.extend(property(
+            "m_ChapterID",
+            "IntProperty",
+            &[],
+            &chapter.to_le_bytes(),
+        ));
+        public.extend(property(
+            "m_TimePlayed",
+            "DoubleProperty",
+            &[],
+            &played.to_le_bytes(),
+        ));
+    }
     public.extend(string("None"));
     let mut map = 0u32.to_le_bytes().to_vec();
     map.extend(1u32.to_le_bytes());
@@ -4559,14 +4577,184 @@ fn every_editor_feature_maps_to_existing_cli_and_mcp_leaves() {
 }
 
 #[test]
+fn glossary_roles_follow_live_segment_unlocks_and_discovery() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let catalog = run(home, &["catalog", "list", "--kind", "glossary", "--all"]);
+    let entry = catalog["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| {
+            entry["segments"].as_array().unwrap().iter().any(|segment| {
+                segment["roles"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("teacher"))
+            })
+        })
+        .unwrap();
+    let segment = entry["segments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|segment| {
+            segment["roles"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("teacher"))
+        })
+        .unwrap();
+    let id = entry["id"].as_str().unwrap();
+    let document = entry["documentClass"].as_str().unwrap();
+    let segment = segment["class"].as_str().unwrap();
+    let listed = |state| {
+        run(
+            home,
+            &[
+                "glossary", "list", save_arg, "--id", id, "--state", state, "--role", "teacher",
+                "--all",
+            ],
+        )
+    };
+    assert_eq!(listed("unlocked")["total"], 0);
+    let original = fs::read(&save).unwrap();
+    run(
+        home,
+        &[
+            "glossary",
+            "segment",
+            "unlock",
+            save_arg,
+            "--document",
+            document,
+            "--segment",
+            segment,
+            "--dry-run",
+        ],
+    );
+    assert_eq!(fs::read(&save).unwrap(), original);
+    assert!(!home.join("goresave_backups").exists());
+    run(
+        home,
+        &[
+            "glossary",
+            "segment",
+            "unlock",
+            save_arg,
+            "--document",
+            document,
+            "--segment",
+            segment,
+        ],
+    );
+    let unlocked = listed("unlocked");
+    assert_eq!(unlocked["total"], 1, "{unlocked}");
+    let rows = unlocked["categories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|category| category["entries"].as_array().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], id);
+    assert_eq!(rows[0]["unlocked"], true);
+    assert!(
+        rows[0]["roles"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("teacher"))
+    );
+    run(
+        home,
+        &[
+            "glossary",
+            "segment",
+            "lock",
+            save_arg,
+            "--document",
+            document,
+            "--segment",
+            segment,
+        ],
+    );
+    assert_eq!(listed("unlocked")["total"], 0);
+}
+
+#[test]
+fn relative_statistics_preserve_profile_chapter_and_playtime() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let profile = home.join("PersistentDataList.sav");
+    let profile_bytes = profile_fixture_with_metadata("Statistics", Some((3, 12345.0)));
+    fs::write(&profile, &profile_bytes).unwrap();
+    let original = fs::read(&save).unwrap();
+    let absolute = run(home, &["statistics", save.to_str().unwrap()]);
+    assert_eq!(absolute["statistics"]["progress"]["chapter"], 3);
+    assert_eq!(
+        absolute["statistics"]["progress"]["playedSeconds"].as_f64(),
+        Some(12345.0)
+    );
+    for name in ["G1R-001.sav", "./G1R-001.sav"] {
+        let relative = run_from(home, Some(home), &["statistics", name]);
+        assert_eq!(
+            relative["statistics"]["progress"],
+            absolute["statistics"]["progress"]
+        );
+    }
+    assert_eq!(fs::read(&save).unwrap(), original);
+    assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
 fn corrupt_ui_preferences_do_not_block_commands_or_a_full_reset() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
     let path = home.join("gore/gore-save/ui_settings.json");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let original = fs::read(&save).unwrap();
+    let report = home.join("report.html");
     for bytes in [b"{broken".as_slice(), b"null".as_slice()] {
         fs::write(&path, bytes).unwrap();
         run(home, &["about"]);
+        fs::write(&report, b"existing report").unwrap();
+        run(
+            home,
+            &[
+                "report",
+                save.to_str().unwrap(),
+                "--out",
+                report.to_str().unwrap(),
+                "--dry-run",
+            ],
+        );
+        assert_eq!(fs::read(&report).unwrap(), b"existing report");
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        run(
+            home,
+            &[
+                "report",
+                save.to_str().unwrap(),
+                "--out",
+                report.to_str().unwrap(),
+            ],
+        );
+        assert!(
+            fs::read_to_string(&report)
+                .unwrap()
+                .contains("id=\"statistics\"")
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read(&save).unwrap(), original);
+        assert!(!home.join("goresave_backups").exists());
         run(home, &["settings", "reset", "--scope", "ui", "--dry-run"]);
         assert_eq!(fs::read(&path).unwrap(), bytes);
         let reset = run(home, &["settings", "reset", "--scope", "ui"]);
@@ -5480,17 +5668,18 @@ fn domain_writes_resolve_aliases_and_find_states_before_applying_the_new_filter(
     let save = fixture();
     let save = save.to_str().unwrap();
     for domain in ["quests", "tutorials", "glossary"] {
-        let data = run(
-            &home,
-            &[
-                domain,
-                "list",
-                save,
-                "--all",
-                "--limit",
-                if domain == "glossary" { "7" } else { "100" },
-            ],
-        );
+        let mut args = vec![
+            domain,
+            "list",
+            save,
+            "--all",
+            "--limit",
+            if domain == "glossary" { "7" } else { "100" },
+        ];
+        if domain == "glossary" {
+            args.push("--include-unset");
+        }
+        let data = run(&home, &args);
         if domain == "glossary" {
             let returned = data["categories"]
                 .as_array()

@@ -407,7 +407,12 @@ pub(super) fn statistics(data: &Value, o: &Options) -> Result<Value> {
     } else {
         None
     };
-    let metadata = call("scan_save_dir_readonly", json!({"path":save(o)?.parent()})).ok();
+    let save_path = save(o)?.canonicalize()?;
+    let parent = save(o)?
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let metadata = call("scan_save_dir_readonly", json!({"path":parent})).ok();
     let meta = metadata
         .as_ref()
         .and_then(|v| v["saves"].as_array())
@@ -416,7 +421,8 @@ pub(super) fn statistics(data: &Value, o: &Options) -> Result<Value> {
                 r["path"]
                     .as_str()
                     .and_then(|p| Path::new(p).canonicalize().ok())
-                    == save(o).ok().and_then(|p| p.canonicalize().ok())
+                    .as_ref()
+                    == Some(&save_path)
             })
         });
     Ok(
