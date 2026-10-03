@@ -809,18 +809,23 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
         )?;
         return stage(file, &p, o.dry_run);
     }
+    let mut execution = data.clone();
     if let Some(output) = &o.out {
-        data["outputPath"] = json!(output);
+        execution["outputPath"] = json!(output);
     }
-    if let Some(output) = data["outputPath"].as_str() {
+    if let Some(output) = execution["outputPath"].as_str() {
         api::validate_output_path(file, Path::new(output))
             .context("output must preserve the draft file")?;
         // Exported copies do not update either source or destination profile.
-        data["syncPersistentDataList"] = json!(false);
+        execution["syncPersistentDataList"] = json!(false);
     }
-    data["dryRun"] = json!(o.dry_run || v == "validate");
-    if data["syncPersistentDataList"] == true {
-        let target = Path::new(data["path"].as_str().context("draft has no save path")?);
+    execution["dryRun"] = json!(o.dry_run || v == "validate");
+    if execution["syncPersistentDataList"] == true {
+        let target = Path::new(
+            execution["path"]
+                .as_str()
+                .context("draft has no save path")?,
+        );
         guard_profile_recovery(
             &target
                 .parent()
@@ -828,9 +833,17 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
                 .join("PersistentDataList.sav"),
         )?;
     }
-    let mut result = call("apply_edits", data.clone())?;
+    let mut result = call("apply_edits", execution.clone())?;
     if !o.dry_run && v == "apply" {
-        data = draft_after_apply(data, &result)?;
+        if result["committed"]
+            .as_array()
+            .context("invalid apply result")?
+            .is_empty()
+        {
+            result["draftUpdated"] = json!(false);
+            return Ok(result);
+        }
+        data = draft_after_apply(execution, &result)?;
         let publication = api::update_json_file(file, |current| {
             if current != original {
                 return Err(gore_save::CoreError::Validation(

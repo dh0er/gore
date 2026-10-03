@@ -2085,6 +2085,88 @@ fn dictionary_catalog_queries_and_pages_work_through_the_cli() {
 }
 
 #[test]
+fn failed_draft_exports_preserve_in_place_rename_and_profile_sync() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let source = home.join("G1R-001.sav");
+    fs::copy(fixture(), &source).unwrap();
+    let source_before = fs::read(&source).unwrap();
+    let profile = home.join("PersistentDataList.sav");
+    let profile_before = profile_fixture("Gothic");
+    fs::write(&profile, &profile_before).unwrap();
+    let draft = home.join("rename.json");
+    run(
+        home,
+        &[
+            "rename",
+            source.to_str().unwrap(),
+            "--name",
+            "Retried name",
+            "--draft",
+            draft.to_str().unwrap(),
+        ],
+    );
+    let draft_before = fs::read(&draft).unwrap();
+    let directory = home.join("exports");
+    fs::create_dir(&directory).unwrap();
+    let output = directory.join("locked.sav");
+    let output_before = b"original export target";
+    fs::write(&output, output_before).unwrap();
+    let error = {
+        #[cfg(windows)]
+        let _lock = {
+            use std::os::windows::fs::OpenOptionsExt;
+            // Permit validation reads, but deny deletion/replacement at publication.
+            fs::OpenOptions::new()
+                .read(true)
+                .share_mode(3)
+                .open(&output)
+                .unwrap()
+        };
+        #[cfg(unix)]
+        let _permissions = {
+            use std::os::unix::fs::PermissionsExt;
+            struct RestorePermissions(PathBuf, fs::Permissions);
+            impl Drop for RestorePermissions {
+                fn drop(&mut self) {
+                    let _ = fs::set_permissions(&self.0, self.1.clone());
+                }
+            }
+            let original = fs::metadata(&directory).unwrap().permissions();
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o555)).unwrap();
+            RestorePermissions(directory.clone(), original)
+        };
+        run_failure(
+            home,
+            &[
+                "draft",
+                "apply",
+                draft.to_str().unwrap(),
+                "--out",
+                output.to_str().unwrap(),
+            ],
+        )
+    };
+    assert_eq!(error["code"], "PARTIAL_APPLY");
+    assert_eq!(fs::read(&draft).unwrap(), draft_before);
+    assert_eq!(fs::read(&source).unwrap(), source_before);
+    assert_eq!(fs::read(&profile).unwrap(), profile_before);
+    assert_eq!(fs::read(&output).unwrap(), output_before);
+    let retry = run(home, &["draft", "apply", draft.to_str().unwrap()]);
+    assert_eq!(retry["complete"], true);
+    assert_eq!(
+        run(home, &["inspect", source.to_str().unwrap()])["public"]["playerSaveName"],
+        "Retried name"
+    );
+    assert_ne!(fs::read(&profile).unwrap(), profile_before);
+    assert_eq!(fs::read(&output).unwrap(), output_before);
+    assert_eq!(
+        run(home, &["draft", "show", draft.to_str().unwrap()])["edits"],
+        json!([])
+    );
+}
+
+#[test]
 fn rename_draft_exports_preserve_both_profiles_and_ignore_unused_profile_snapshots() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
