@@ -11993,6 +11993,41 @@ fn inventory_count_removal_conflict(first: &PrivateEdit, second: &PrivateEdit) -
         && inventory_edit_matches_item(count, &remove.path)
 }
 
+/// Revival restores this actor's Health record. Whole attribute-map/set edits
+/// can discard it too; other actors and explicitly selected attributes are separate.
+fn path_targets_npc_health(path: &[properties::PathSeg], id: &str) -> bool {
+    for map in ["AttributesByGlobalId", "AttributesMap", "_Attributes"] {
+        let Some(at) = path
+            .iter()
+            .position(|segment| matches!(segment, properties::PathSeg::Name(name) if name == map))
+        else {
+            continue;
+        };
+        match path.get(at + 1) {
+            Some(properties::PathSeg::MapKey(actor))
+                if actor.trim().eq_ignore_ascii_case(id.trim()) => {}
+            Some(properties::PathSeg::MapKey(_)) => continue,
+            // Whole-map and unkeyed edits can discard the actor's health record.
+            _ => return true,
+        }
+        let attribute = path[at + 2..]
+            .iter()
+            .rev()
+            .find_map(|segment| match segment {
+                properties::PathSeg::MapKey(key) => Some(key.as_str()),
+                _ => None,
+            });
+        return attribute.is_none_or(|key| {
+            key.eq_ignore_ascii_case("Health")
+                || key
+                    .rsplit('.')
+                    .next()
+                    .is_some_and(|class| class.eq_ignore_ascii_case("AttributeSet_Health"))
+        });
+    }
+    false
+}
+
 /// Whether a raw typed edit at `path` addresses something the structured `edit`
 /// rewrites as a whole.
 ///
@@ -12037,9 +12072,11 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
             (path_has_name(path, "MemorizedEvents") && path_has_key(path, skills::HERO))
                 || path_is_a_quest_current_state(path)
         }
-        // Strips memory events, death tags and the corpse entry.
+        // Restores Health to MaxHealth and strips memory events, death tags and
+        // the corpse entry. A peer health edit would otherwise be overwritten.
         PrivateEdit::NpcRevive(revive) => {
-            path_has_name(path, "MemorizedEvents")
+            path_targets_npc_health(path, &revive.id)
+                || path_has_name(path, "MemorizedEvents")
                 || path_enters_map_entry(path, "LooseTagsByGlobalId", &revive.id)
                 || match segment_after_name(path, "m_SavedInventories") {
                     None => false,

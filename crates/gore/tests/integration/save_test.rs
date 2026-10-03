@@ -603,6 +603,109 @@ fn portrait_exports_refuse_source_artwork_aliases_and_copy_other_outputs() {
 }
 
 #[test]
+fn npc_revival_and_health_edits_are_rejected_without_consuming_the_draft() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let hash = gore_save::api::file_sha1(&save).unwrap();
+    let actor = "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN";
+    let rows = run(
+        home,
+        &[
+            "attributes",
+            "show",
+            save.to_str().unwrap(),
+            "--actor",
+            actor,
+            "--attribute",
+            "Health",
+        ],
+    );
+    let health = &rows["attributes"][0];
+    let revive = json!({"path":"private.npc.revive","value":{"id":actor}});
+    execute_core(
+        "apply_edits",
+        json!({"path":save,"edits":[revive.clone()],"dryRun":true}),
+    );
+    let file = home.join("health-revive.json");
+    for (field, flag) in [("basePath", "--base"), ("currentPath", "--current")] {
+        let raw =
+            json!({"path":"private.typed.setValue","value":{"path":health[field],"value":1.0}});
+        execute_core(
+            "apply_edits",
+            json!({"path":save,"edits":[raw.clone()],"dryRun":true}),
+        );
+        for revive_first in [false, true] {
+            let edits = if revive_first {
+                vec![revive.clone(), raw.clone()]
+            } else {
+                vec![raw.clone(), revive.clone()]
+            };
+            for command in ["write_save", "apply_edits"] {
+                for dry in [false, true] {
+                    let error = gore_save::api::execute(&gore_save::api::Request {
+                        command: command.into(),
+                        payload: json!({"path":save,"edits":edits,"dryRun":dry,"backup":true}),
+                    })
+                    .unwrap_err();
+                    match command {
+                        "apply_edits" => assert!(
+                            matches!(
+                                error,
+                                gore_save::CoreError::PlanConflict {
+                                    kind: "property",
+                                    ..
+                                }
+                            ),
+                            "{error}"
+                        ),
+                        _ => assert!(error.to_string().contains("rewrites as a whole"), "{error}"),
+                    }
+                }
+            }
+            let health_args = [
+                "attributes",
+                "set",
+                save.to_str().unwrap(),
+                "--actor",
+                actor,
+                "--attribute",
+                "Health",
+                flag,
+                "1",
+                "--draft",
+                file.to_str().unwrap(),
+            ];
+            let revive_args = [
+                "npc",
+                "revive",
+                save.to_str().unwrap(),
+                "--actor",
+                actor,
+                "--draft",
+                file.to_str().unwrap(),
+            ];
+            if revive_first {
+                run(home, &revive_args);
+                run(home, &health_args);
+            } else {
+                run(home, &health_args);
+                run(home, &revive_args);
+            }
+            let pending = fs::read(&file).unwrap();
+            for verb in ["validate", "apply"] {
+                run_failure(home, &["draft", verb, file.to_str().unwrap()]);
+                assert_eq!(fs::read(&file).unwrap(), pending);
+                assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+                assert!(!home.join("goresave_backups").exists());
+            }
+            fs::remove_file(&file).unwrap();
+        }
+    }
+}
+
+#[test]
 fn screenshot_export_rejects_invalid_sources_without_creating_or_truncating_output() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

@@ -1499,6 +1499,51 @@ void main() {
   );
 
   test(
+    'saveAllPending preserves conflicting NPC health and revival edits',
+    () async {
+      for (final field in ['BaseValue', 'CurrentValue']) {
+        for (final reviveFirst in [false, true]) {
+          final core = _RecordingCoreService();
+          final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+          await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+          final revive = <String, Object?>{
+            'path': 'private.npc.revive',
+            'value': {'id': 'NPC-A'},
+          };
+          final health = <String, Object?>{
+            'path': 'private.typed.setValue',
+            'value': {
+              'path': [
+                'AttributesByGlobalId',
+                '{NPC-A}',
+                'AttributeSetsByClass',
+                '{/Script/G1R.AttributeSet_Health}',
+                'Attributes',
+                '{Health}',
+                field,
+              ],
+              'value': 1,
+            },
+          };
+          final reviveKey = reviveFirst ? 'a-revive' : 'b-revive';
+          final healthKey = reviveFirst ? 'b-health' : 'a-health';
+          notifier.setPendingEdit(reviveKey, PendingSaveEdit(edits: [revive]));
+          notifier.setPendingEdit(healthKey, PendingSaveEdit(edits: [health]));
+          expect(await notifier.saveAllPending(), isFalse);
+          expect(notifier.state.error, contains('Health'));
+          expect(
+            core.requests.where((r) => r.command == 'write_save'),
+            isEmpty,
+          );
+          expect(notifier.state.pendingEdits, hasLength(2));
+          expect(notifier.state.pendingEdits[reviveKey]!.edits, [revive]);
+          expect(notifier.state.pendingEdits[healthKey]!.edits, [health]);
+        }
+      }
+    },
+  );
+
+  test(
     'saveAllPending refuses conflicting edits for the same typed path',
     () async {
       final core = _RecordingCoreService();

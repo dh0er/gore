@@ -1137,6 +1137,60 @@ mod tests {
     }
 
     #[test]
+    fn revive_health_conflicts_cover_the_same_actor_and_preserve_other_attributes() {
+        let revive = json!({"path":"private.npc.revive","value":{"id":"NPC-A"}});
+        for map in ["AttributesByGlobalId", "AttributesMap", "_Attributes"] {
+            for class in ["/Script/G1R.AttributeSet_Health", "AttributeSet_Health"] {
+                for field in ["BaseValue", "CurrentValue"] {
+                    let path = [
+                        map,
+                        "{npc-a}",
+                        "AttributeSetsByClass",
+                        &format!("{{{class}}}"),
+                        "Attributes",
+                        "{Health}",
+                        field,
+                    ];
+                    for length in 1..=path.len() {
+                        let raw = raw(&path[..length]);
+                        for edits in [
+                            vec![revive.clone(), raw.clone()],
+                            vec![raw.clone(), revive.clone()],
+                        ] {
+                            assert!(
+                                matches!(
+                                    plan(&edits),
+                                    Err(CoreError::PlanConflict {
+                                        kind: "property",
+                                        ..
+                                    })
+                                ),
+                                "{edits:?}"
+                            );
+                        }
+                    }
+                }
+            }
+            for (actor, attribute) in [
+                ("NPC-B", "Health"),
+                ("Hero", "Health"),
+                ("NPC-A", "MaxHealth"),
+                ("NPC-A", "Strength"),
+            ] {
+                let raw = raw(&[
+                    map,
+                    &format!("{{{actor}}}"),
+                    "Attributes",
+                    &format!("{{{attribute}}}"),
+                    "CurrentValue",
+                ]);
+                assert!(plan(&[revive.clone(), raw.clone()]).is_ok());
+                assert!(plan(&[raw, revive.clone()]).is_ok());
+            }
+        }
+    }
+
+    #[test]
     fn revive_tag_and_corpse_conflicts_allow_other_npcs_but_guard_all_memory_owners() {
         let revive = json!({"path":"private.npc.revive","value":{"id":"NPC-A"}});
         for path in [
