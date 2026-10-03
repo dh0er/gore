@@ -1244,9 +1244,30 @@ pub fn screenshot_for_save(path: &Path) -> Result<Option<ScreenshotSummary>, Cor
     let dir = path
         .parent()
         .ok_or_else(|| CoreError::InvalidRequest("save has no parent directory".to_string()))?;
-    let persistent = persistent_data_list_summary_for_dir(dir).unwrap_or_default();
+    let mut persistent = persistent_data_list_summary_for_dir(dir).unwrap_or_default();
+    let owners = normalize_profile_saved_slots(&mut persistent.profiles, &persistent.slots);
+    let profile_id = owners
+        .get(slot)
+        .copied()
+        .or_else(|| persistent.profiles.is_empty().then_some(0));
+    let Some(profile_id) = profile_id else {
+        return Ok(None);
+    };
     let backend = codec_backend::KrakenBackend::default();
-    Ok(screenshot_summaries_for_dir(dir, &persistent.profiles, Some(&backend))?.remove(slot))
+    Ok(screenshot_summaries_for_profile(dir, profile_id, Some(&backend)).remove(slot))
+}
+
+fn screenshot_summaries_for_profile(
+    dir: &Path,
+    profile_id: i32,
+    codec_backend: Option<&dyn codec_backend::CodecBackend>,
+) -> HashMap<String, ScreenshotSummary> {
+    let path = dir.join(format!("Profile_{profile_id}_Screenshots.sav"));
+    // Optional screenshots must not trigger recovery or substitute another profile's image.
+    fs::read(path)
+        .ok()
+        .and_then(|data| parse_screenshot_save(&data, codec_backend).ok())
+        .unwrap_or_default()
 }
 
 fn screenshot_summaries_for_dir(
@@ -1266,23 +1287,15 @@ fn screenshot_summaries_for_dir(
 
     let mut screenshots = HashMap::new();
     for profile_id in profile_ids {
-        let path = dir.join(format!("Profile_{profile_id}_Screenshots.sav"));
-        if !path.exists() {
-            continue;
-        }
-        // Screenshots are optional. A missing/failed codec or an unreadable
-        // sidecar must not drop other profiles' thumbnails or abort the scan;
-        // skip just this profile and leave its thumbnails unavailable.
-        let Ok(data) = fs::read(&path) else {
-            continue;
-        };
-        match parse_screenshot_save(&data, codec_backend) {
-            Ok(parsed) => {
-                for (slot, screenshot) in parsed {
-                    screenshots.insert(slot, screenshot);
-                }
+        for (slot, screenshot) in screenshot_summaries_for_profile(dir, profile_id, codec_backend) {
+            if profiles.is_empty()
+                || profiles
+                    .iter()
+                    .find(|profile| profile.saved_slots.contains(&slot))
+                    .is_some_and(|profile| profile.profile_id == profile_id)
+            {
+                screenshots.insert(slot, screenshot);
             }
-            Err(_) => continue,
         }
     }
     Ok(screenshots)
@@ -11711,7 +11724,7 @@ fn apply_private_edits(
     }
     for (first_at, first) in edit_specs.iter().enumerate() {
         for (second_at, second) in edit_specs.iter().enumerate().skip(first_at + 1) {
-            if opposing_set_element(first, second).is_some() {
+            if opposing_set_element(first, second, false).is_some() {
                 return Err(CoreError::UnsupportedEdit(format!(
                     "{} (edit {first_at}) and {} (edit {second_at}) add and remove the same set element; save them separately",
                     edits[first_at].path, edits[second_at].path
@@ -11782,6 +11795,17 @@ fn apply_private_edits(
     // sequence still behaves exactly as separate writes did — it just stops re-parsing
     // 120 MB per edit when nothing moved.
     let mut root_cache = PayloadRoot::default();
+    let case_paths = case_only_opposing_set_paths(&edit_specs);
+    if !case_paths.is_empty() {
+        let root = root_cache.structural(&private_payload)?;
+        for path in case_paths {
+            if set_path_folds_case(root, path)? {
+                return Err(CoreError::UnsupportedEdit(
+                    "opposing edits add and remove the same case-insensitive NameProperty set element; save them separately".into(),
+                ));
+            }
+        }
+    }
     for edit in &edit_specs {
         apply_private_edit_to_payload(&mut private_payload, edit, &mut root_cache)?;
     }
@@ -11985,6 +12009,7 @@ fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> 
 fn opposing_set_element<'a>(
     first: &'a PrivateEdit,
     second: &'a PrivateEdit,
+    fold_case: bool,
 ) -> Option<(&'a [properties::PathSeg], &'a str)> {
     let (PrivateEdit::TypedContainer(first), PrivateEdit::TypedContainer(second)) = (first, second)
     else {
@@ -12001,8 +12026,52 @@ fn opposing_set_element<'a>(
         | (
             properties::ContainerEdit::SetRemove(first_value),
             properties::ContainerEdit::SetAdd(second_value),
-        ) if first_value == second_value => Some((&first.path, first_value)),
+        ) if first_value == second_value
+            || (fold_case && first_value.eq_ignore_ascii_case(second_value)) =>
+        {
+            Some((&first.path, first_value))
+        }
         _ => None,
+    }
+}
+
+fn case_only_opposing_set_paths(edits: &[PrivateEdit]) -> Vec<&[properties::PathSeg]> {
+    let mut paths = Vec::new();
+    for (i, first) in edits.iter().enumerate() {
+        for second in edits.iter().skip(i + 1) {
+            if opposing_set_element(first, second, false).is_none() {
+                if let Some((path, _)) = opposing_set_element(first, second, true) {
+                    if !paths.contains(&path) {
+                        paths.push(path);
+                    }
+                }
+            }
+        }
+    }
+    paths
+}
+
+fn set_path_folds_case(
+    root: &properties::RootObject,
+    path: &[properties::PathSeg],
+) -> Result<bool, CoreError> {
+    let target = properties::resolve(&root.properties, path)?;
+    if target.type_name != "SetProperty" {
+        return Err(CoreError::InvalidRequest(
+            "set edit requires a SetProperty target".into(),
+        ));
+    }
+    let inner = target
+        .descriptor
+        .inner
+        .as_deref()
+        .ok_or_else(|| CoreError::Parse("set property has no inner descriptor".into()))?;
+    match inner.type_name.as_str() {
+        "NameProperty" => Ok(true),
+        "StrProperty" => Ok(false),
+        other => Err(CoreError::UnsupportedEdit(format!(
+            "set edits support Name/Str sets; this set holds {other}"
+        ))),
     }
 }
 
@@ -22801,6 +22870,75 @@ mod tests {
         assert_eq!(fs::read(&claim).unwrap(), bytes);
         assert_eq!(fs::read(&sidecar).unwrap(), screenshot_bytes);
         assert!(dir.path().join("G1R-999.sav").is_dir());
+    }
+
+    #[test]
+    fn screenshot_lookup_and_listing_use_only_the_owning_profile() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        let bytes = minimal_gsav("Thumbnail owner");
+        fs::write(&save, &bytes).unwrap();
+        let claim = dir.path().join("G1R-001.sav.assign-final-goresave-1-2-3");
+        fs::write(&claim, &bytes).unwrap();
+        let profile = dir.path().join("PersistentDataList.sav");
+        let sidecars = [
+            dir.path().join("Profile_0_Screenshots.sav"),
+            dir.path().join("Profile_1_Screenshots.sav"),
+        ];
+        let jpegs: [&[u8]; 2] = [
+            &[0xff, 0xd8, 0xaa, 0xbb, 0xff, 0xd9],
+            &[0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9],
+        ];
+        let screenshots = jpegs.map(|jpeg| raw_screenshot_gsav_for_tests(&[("G1R-001", jpeg)]));
+        let backend = codec_backend::KrakenBackend::default();
+        for owner in [0, 1] {
+            let profile_bytes = assignment_persistent_data_list("G1R-001", owner);
+            fs::write(&profile, &profile_bytes).unwrap();
+            for (sidecar, screenshot) in sidecars.iter().zip(&screenshots) {
+                fs::write(sidecar, screenshot).unwrap();
+            }
+            let expected = if owner == 0 { "/9iqu//Z" } else { "/9gBAv/Z" };
+            assert_eq!(
+                screenshot_for_save(&save).unwrap().unwrap().bytes_base64,
+                expected
+            );
+            let listing =
+                scan_save_dir_summary_readonly_with_codec_backend(dir.path(), Some(&backend)).unwrap();
+            let listed = listing
+                .saves
+                .iter()
+                .find(|save| save.slot == "G1R-001")
+                .unwrap();
+            assert_eq!(listed.screenshot.as_ref().unwrap().bytes_base64, expected);
+            for (sidecar, screenshot) in sidecars.iter().zip(&screenshots) {
+                assert_eq!(fs::read(sidecar).unwrap(), *screenshot);
+            }
+            let owned = &sidecars[owner as usize];
+            for corrupt in [false, true] {
+                if corrupt {
+                    fs::write(owned, b"corrupt optional thumbnail").unwrap();
+                } else {
+                    fs::remove_file(owned).unwrap();
+                }
+                assert!(screenshot_for_save(&save).unwrap().is_none());
+                let listing =
+                    scan_save_dir_summary_readonly_with_codec_backend(dir.path(), Some(&backend))
+                        .unwrap();
+                assert!(
+                    listing
+                        .saves
+                        .iter()
+                        .find(|save| save.slot == "G1R-001")
+                        .unwrap()
+                        .screenshot
+                        .is_none()
+                );
+            }
+            assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+            assert_eq!(fs::read(&save).unwrap(), bytes);
+            assert_eq!(fs::read(&claim).unwrap(), bytes);
+            assert!(!dir.path().join("goresave_backups").exists());
+        }
     }
 
     #[test]

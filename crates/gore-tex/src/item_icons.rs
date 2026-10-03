@@ -277,6 +277,15 @@ fn retain_item_icon_cache_for_cli_with(
 /// process. Repeated preparations require matching releases. The manifest may
 /// have become corrupt; releasing still permits its subsequent safe repair.
 pub fn release_item_icon_cache_for_cli(manifest_path: &Path) -> Result<bool> {
+    release_item_icon_cache_for_cli_with_mode(manifest_path, false)
+}
+
+/// Validate ownership and find a matching durable lease without changing cache files.
+pub fn preview_release_item_icon_cache_for_cli(manifest_path: &Path) -> Result<bool> {
+    release_item_icon_cache_for_cli_with_mode(manifest_path, true)
+}
+
+fn release_item_icon_cache_for_cli_with_mode(manifest_path: &Path, dry_run: bool) -> Result<bool> {
     let (cache_root, generation) = match cli_lease_generation(manifest_path) {
         Ok(paths) => paths,
         Err(TexError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -285,7 +294,11 @@ pub fn release_item_icon_cache_for_cli(manifest_path: &Path) -> Result<bool> {
         Err(error) => return Err(error),
     };
     let name = owned_generation_name(&cache_root, &generation)?;
-    let _lock = GenerationLock::acquire(&cache_root, &generation)?;
+    let _lock = if dry_run {
+        None
+    } else {
+        Some(GenerationLock::acquire(&cache_root, &generation)?)
+    };
     for entry in std::fs::read_dir(&cache_root)? {
         let entry = entry?;
         if entry
@@ -307,7 +320,9 @@ pub fn release_item_icon_cache_for_cli(manifest_path: &Path) -> Result<bool> {
         }
         drop(named);
         drop(file);
-        std::fs::remove_file(path)?;
+        if !dry_run {
+            std::fs::remove_file(path)?;
+        }
         return Ok(true);
     }
     Ok(false)
@@ -2646,6 +2661,9 @@ mod tests {
         let name = generation.file_name().unwrap().to_str().unwrap();
         std::fs::remove_dir_all(generation).unwrap();
         assert!(generation_has_live_lease(temp.path(), name));
+        assert!(preview_release_item_icon_cache_for_cli(&manifest).unwrap());
+        assert!(preview_release_item_icon_cache_for_cli(&manifest).unwrap());
+        assert!(!generation.exists());
         assert!(release_item_icon_cache_for_cli(&manifest).unwrap());
         assert!(generation_has_live_lease(temp.path(), name));
         assert!(release_item_icon_cache_for_cli(&manifest).unwrap());
@@ -2747,7 +2765,10 @@ mod tests {
             prepare_item_icon_cache_with_source_and_lease(temp.path(), &specs(), &mut source, true)
                 .unwrap();
         retain_item_icon_cache_for_cli(&manifest).unwrap();
+        assert!(preview_release_item_icon_cache_for_cli(&manifest).unwrap());
+        assert!(preview_release_item_icon_cache_for_cli(&manifest).unwrap());
         assert!(release_item_icon_cache_for_cli(&manifest).unwrap());
+        assert!(!preview_release_item_icon_cache_for_cli(&manifest).unwrap());
         assert!(!release_item_icon_cache_for_cli(&manifest).unwrap());
         assert!(
             release_item_icon_cache(&manifest).unwrap(),
@@ -2756,6 +2777,7 @@ mod tests {
         retain_item_icon_cache_for_cli(&manifest).unwrap();
         std::fs::write(&manifest, b"{}").unwrap();
         assert!(retain_item_icon_cache_for_cli(&manifest).is_err());
+        assert!(preview_release_item_icon_cache_for_cli(&manifest).unwrap());
         let mut repair = FakeSource::stable("build-a");
         assert!(prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut repair).is_err());
         assert!(release_item_icon_cache_for_cli(&manifest).unwrap());
@@ -2764,6 +2786,7 @@ mod tests {
             manifest
         );
         assert!(release_item_icon_cache_for_cli(&temp.path().join("image.png")).is_err());
+        assert!(preview_release_item_icon_cache_for_cli(&temp.path().join("image.png")).is_err());
     }
 
     #[test]

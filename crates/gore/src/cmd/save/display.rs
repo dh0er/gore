@@ -475,7 +475,9 @@ fn assets(v: &str, o: &Options) -> Result<Value> {
         .context("--manifest required (from assets prepare)")?;
     if v == "release" {
         if o.dry_run {
-            return Ok(json!({"dryRun":true,"manifest":manifest}));
+            let would_release =
+                gore_tex::item_icons::preview_release_item_icon_cache_for_cli(manifest)?;
+            return Ok(json!({"dryRun":true,"manifest":manifest,"wouldRelease":would_release}));
         }
         let released = gore_tex::item_icons::release_item_icon_cache_for_cli(manifest)?;
         return Ok(json!({"released":released}));

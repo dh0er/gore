@@ -214,6 +214,33 @@ pub fn replacement_key(raw: &Value) -> Option<String> {
 
 /// Returns groups of original edit indices, preserving identity even for equal adds.
 pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
+    plan_with_root(raw, None)
+}
+
+/// Only case-only opposing set values need the source's element descriptor.
+pub fn plan_for_save(path: &Path, raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
+    let set_specs = parse(raw)?
+        .iter()
+        .filter(|edit| {
+            matches!(
+                edit.path.as_str(),
+                "private.typed.setAdd" | "private.typed.setRemove"
+            )
+        })
+        .map(crate::parse_private_edit)
+        .collect::<Result<Vec<_>, _>>()?;
+    if crate::case_only_opposing_set_paths(&set_specs).is_empty() {
+        return plan(raw);
+    }
+    let root =
+        crate::decode_private_root_cached(path, &crate::codec_backend::KrakenBackend::default())?;
+    plan_with_root(raw, Some(&root))
+}
+
+fn plan_with_root(
+    raw: &[Value],
+    root: Option<&crate::properties::RootObject>,
+) -> Result<Vec<Vec<usize>>, CoreError> {
     let edits = parse(raw)?;
     reject_duplicate_public_renames(&edits)?;
     let specs = edits
@@ -283,11 +310,20 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
             if let Some((path, value)) = specs[i]
                 .as_ref()
                 .zip(specs[j].as_ref())
-                .and_then(|(first, second)| crate::opposing_set_element(first, second))
+                .and_then(|(first, second)| crate::opposing_set_element(first, second, true))
             {
-                let mut path = path.to_vec();
-                path.push(PathSeg::MapKey(value.into()));
-                return Err(pending("property", Some(&path)));
+                let exact =
+                    specs[i]
+                        .as_ref()
+                        .zip(specs[j].as_ref())
+                        .is_some_and(|(first, second)| {
+                            crate::opposing_set_element(first, second, false).is_some()
+                        });
+                if exact || root.is_none() || crate::set_path_folds_case(root.unwrap(), path)? {
+                    let mut path = path.to_vec();
+                    path.push(PathSeg::MapKey(value.into()));
+                    return Err(pending("property", Some(&path)));
+                }
             }
             let overlap = if targets[i].is_some() && targets[i] == targets[j] {
                 targets[i].clone()
@@ -533,7 +569,11 @@ pub fn plan_request(payload: &Value) -> Result<Value, CoreError> {
     let edits = payload["edits"]
         .as_array()
         .ok_or_else(|| invalid("edits must be an array"))?;
-    let groups = plan(edits)?;
+    let groups = if let Some(path) = payload["path"].as_str() {
+        plan_for_save(Path::new(path), edits)?
+    } else {
+        plan(edits)?
+    };
     if let Some(notes) = payload.get("placementNotes") {
         crate::placement::parse_records(notes)?;
     }
@@ -598,7 +638,7 @@ pub fn apply_with_progress(
         crate::api::validate_output_path(&path, Path::new(output))?;
     }
     crate::api::check_edit_persistent_snapshots(&path, raw)?;
-    let groups = plan(raw)?;
+    let groups = plan_for_save(&path, raw)?;
     let hashes = simulate(&path, raw, &groups)?;
     if payload["expectedSha1"]
         .as_str()
@@ -715,6 +755,15 @@ mod tests {
                 "{edits:?}"
             );
         }
+        let mut case_alias = remove.clone();
+        case_alias["value"]["value"] = json!("choiceb");
+        assert!(matches!(
+            plan(&[add.clone(), case_alias]),
+            Err(CoreError::PlanConflict {
+                kind: "property",
+                ..
+            })
+        ));
         let mut other_element = remove.clone();
         other_element["value"]["value"] = json!("ChoiceA");
         assert!(plan(&[add.clone(), other_element]).is_ok());

@@ -38,6 +38,45 @@ fn asset_release_releases_durable_leases_across_cli_processes() {
     let original = fs::read(&manifest).unwrap();
     let image = manifest.parent().unwrap().join("images/one.png");
     let original_image = fs::read(&image).unwrap();
+    let entries = || {
+        let mut names = fs::read_dir(home)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    };
+    let initial_entries = entries();
+    let args = [
+        "assets",
+        "release",
+        "--manifest",
+        manifest.to_str().unwrap(),
+    ];
+    let mut dry = args.to_vec();
+    dry.push("--dry-run");
+    assert_eq!(run(home, &dry)["wouldRelease"], false);
+    assert_eq!(
+        entries(),
+        initial_entries,
+        "a preview must not create lock files"
+    );
+    let foreign = home.join("unrelated");
+    fs::create_dir(&foreign).unwrap();
+    let foreign_manifest = foreign.join("manifest.json");
+    fs::write(&foreign_manifest, b"{}").unwrap();
+    let invalid = [manifest.with_file_name("image.png"), foreign_manifest];
+    let before_invalid = entries();
+    for path in &invalid {
+        for preview in [false, true] {
+            let mut args = vec!["assets", "release", "--manifest", path.to_str().unwrap()];
+            if preview {
+                args.push("--dry-run");
+            }
+            run_failure(home, &args);
+            assert_eq!(entries(), before_invalid);
+        }
+    }
     for _ in 0..2 {
         gore_tex::item_icons::retain_item_icon_cache_for_cli(&manifest).unwrap();
     }
@@ -50,15 +89,11 @@ fn asset_release_releases_durable_leases_across_cli_processes() {
             .count()
     };
     assert_eq!(leases(), 2);
-    let args = [
-        "assets",
-        "release",
-        "--manifest",
-        manifest.to_str().unwrap(),
-    ];
-    let mut dry = args.to_vec();
-    dry.push("--dry-run");
-    assert_eq!(run(home, &dry)["dryRun"], true);
+    let retained_entries = entries();
+    let preview = run(home, &dry);
+    assert_eq!(preview["dryRun"], true);
+    assert_eq!(preview["wouldRelease"], true);
+    assert_eq!(entries(), retained_entries);
     assert_eq!(leases(), 2);
     assert_eq!(
         run_from(
@@ -71,12 +106,14 @@ fn asset_release_releases_durable_leases_across_cli_processes() {
     assert_eq!(leases(), 1);
     assert_eq!(run(home, &args)["released"], true);
     assert_eq!(leases(), 0);
+    assert_eq!(run(home, &dry)["wouldRelease"], false);
     assert_eq!(run(home, &args)["released"], false);
     assert_eq!(fs::read(&manifest).unwrap(), original);
     assert_eq!(fs::read(&image).unwrap(), original_image);
     gore_tex::item_icons::retain_item_icon_cache_for_cli(&manifest).unwrap();
     fs::remove_dir_all(manifest.parent().unwrap()).unwrap();
-    assert_eq!(run(home, &dry)["dryRun"], true);
+    assert_eq!(run(home, &dry)["wouldRelease"], true);
+    assert!(!manifest.parent().unwrap().exists());
     assert_eq!(leases(), 1);
     assert_eq!(run(home, &args)["released"], true);
     assert_eq!(leases(), 0);
@@ -162,6 +199,10 @@ fn execute_core(command: &str, payload: Value) -> Value {
 }
 
 fn nested_container_fixture(save: &Path) {
+    nested_container_fixture_with_strings(save, false);
+}
+
+fn nested_container_fixture_with_strings(save: &Path, include_strings: bool) {
     use gore_save::codec_backend::{CodecBackend, KrakenBackend};
     fn string(value: &str) -> Vec<u8> {
         let mut bytes = ((value.len() + 1) as i32).to_le_bytes().to_vec();
@@ -205,6 +246,11 @@ fn nested_container_fixture(save: &Path) {
     private.push(0);
     private.extend(property("Events", "ArrayProperty", &events_type, &events));
     private.extend(property("Other", "SetProperty", &set_type, &set));
+    if include_strings {
+        let mut strings_type = 1u32.to_le_bytes().to_vec();
+        strings_type.extend(string("StrProperty"));
+        private.extend(property("Strings", "SetProperty", &strings_type, &set));
+    }
     private.extend(string("None"));
     private.extend(0u32.to_le_bytes());
     gore_save::properties::parse_private_root(&private).unwrap();
@@ -228,6 +274,138 @@ fn nested_container_fixture(save: &Path) {
     bytes.extend(stream);
     bytes.extend(0u32.to_le_bytes());
     fs::write(save, bytes).unwrap();
+}
+
+#[test]
+fn set_case_conflicts_follow_name_and_string_element_descriptors() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    nested_container_fixture_with_strings(&save, true);
+    let original = fs::read(&save).unwrap();
+    let hash = gore_save::api::file_sha1(&save).unwrap();
+    let draft = home.join("case.json");
+    let request = home.join("request.json");
+    for (add_first, add_value, remove_value) in
+        [(true, "ChoiceB", "CHOICEb"), (false, "CHOICEa", "choiceA")]
+    {
+        let add = json!({"path":"private.typed.setAdd","value":{"path":["Events","[01]","Knowledge"],"value":add_value}});
+        let remove = json!({"path":"private.typed.setRemove","value":{"path":["Events","[1]","Knowledge"],"value":remove_value}});
+        let edits = if add_first {
+            vec![add, remove]
+        } else {
+            vec![remove, add]
+        };
+        execute_core(
+            "apply_edits",
+            json!({"path":save,"edits":[edits[0]],"dryRun":true}),
+        );
+        for command in ["plan_edits", "write_save", "apply_edits"] {
+            for dry in [false, true] {
+                let payload = json!({"path":save,"edits":edits,"dryRun":dry,"backup":true});
+                let error = gore_save::api::execute(&gore_save::api::Request {
+                    command: command.into(),
+                    payload: payload.clone(),
+                })
+                .unwrap_err();
+                assert!(
+                    matches!(
+                        error,
+                        gore_save::CoreError::PlanConflict {
+                            kind: "property",
+                            ..
+                        } | gore_save::CoreError::UnsupportedEdit(_)
+                    ),
+                    "{error}"
+                );
+                if command == "apply_edits" {
+                    fs::write(
+                        &request,
+                        serde_json::to_vec(&json!({"command":command,"payload":payload})).unwrap(),
+                    )
+                    .unwrap();
+                    let error = run_failure(
+                        home,
+                        &["core", "exec", "--request-file", request.to_str().unwrap()],
+                    );
+                    assert_eq!(error["code"], "PLAN_CONFLICT", "{error}");
+                }
+                assert_eq!(fs::read(&save).unwrap(), original);
+                assert!(!home.join("goresave_backups").exists());
+            }
+        }
+        let pending = serde_json::to_vec(&json!({"format":"gore.save.draft.v1","path":save.canonicalize().unwrap(),"expectedSha1":hash,"edits":edits})).unwrap();
+        fs::write(&draft, &pending).unwrap();
+        for flags in [vec!["validate"], vec!["apply"], vec!["apply", "--dry-run"]] {
+            let mut args = vec!["draft", flags[0], draft.to_str().unwrap()];
+            args.extend_from_slice(&flags[1..]);
+            let error = run_failure(home, &args);
+            assert!(
+                error.to_string().contains("pending edit conflict"),
+                "{error}"
+            );
+            assert_eq!(fs::read(&draft).unwrap(), pending);
+            assert_eq!(fs::read(&save).unwrap(), original);
+            assert!(!home.join("goresave_backups").exists());
+        }
+    }
+    let add = json!({"path":"private.typed.setAdd","value":{"path":["Strings"],"value":"choicea"}});
+    let remove =
+        json!({"path":"private.typed.setRemove","value":{"path":["Strings"],"value":"ChoiceA"}});
+    for edits in [vec![add.clone(), remove.clone()], vec![remove, add]] {
+        // A source-less planner cannot establish whether these are FNames.
+        assert!(gore_save::workflow::plan(&edits).is_err());
+        assert_eq!(
+            execute_core("plan_edits", json!({"path":save,"edits":edits}))["groups"],
+            json!([[0, 1]])
+        );
+        execute_core(
+            "apply_edits",
+            json!({"path":save,"edits":edits,"dryRun":true}),
+        );
+        assert_eq!(fs::read(&save).unwrap(), original);
+        for command in ["write_save", "apply_edits"] {
+            fs::write(&save, &original).unwrap();
+            let result = execute_core(command, json!({"path":save,"edits":edits,"backup":false}));
+            if command == "apply_edits" {
+                assert_eq!(result["complete"], true);
+                assert_eq!(result["committed"], json!([0, 1]));
+            } else {
+                assert_eq!(result["editsApplied"], 2);
+            }
+            let inspected =
+                execute_core("inspect_save", json!({"path":save,"includePrivate":true}));
+            assert!(
+                inspected["private"]["strings"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("choicea"))
+            );
+            let data = execute_core(
+                "search_typed_properties",
+                json!({"path":save,"query":"Strings","includeNodes":true}),
+            );
+            let row = data["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["path"] == json!(["Strings"]))
+                .unwrap();
+            assert_eq!(row["childCount"], 1);
+            assert!(!home.join("goresave_backups").exists());
+        }
+        fs::write(&save, &original).unwrap();
+        let pending = serde_json::to_vec(&json!({"format":"gore.save.draft.v1","path":save.canonicalize().unwrap(),"expectedSha1":hash,"edits":edits,"backup":false})).unwrap();
+        fs::write(&draft, &pending).unwrap();
+        run(home, &["draft", "validate", draft.to_str().unwrap()]);
+        assert_eq!(fs::read(&draft).unwrap(), pending);
+        assert_eq!(fs::read(&save).unwrap(), original);
+        assert_eq!(
+            run(home, &["draft", "apply", draft.to_str().unwrap()])["complete"],
+            true
+        );
+        fs::write(&save, &original).unwrap();
+    }
 }
 
 #[test]
@@ -974,6 +1152,9 @@ fn reports_embed_readonly_screenshot_sidecars_without_repairing_save_state() {
     let screenshot_bytes = screenshot_fixture("G1R-001", &jpeg);
     let sidecar = home.join("Profile_0_Screenshots.sav");
     fs::write(&sidecar, &screenshot_bytes).unwrap();
+    let foreign_sidecar = home.join("Profile_1_Screenshots.sav");
+    let foreign_bytes = screenshot_fixture("G1R-001", &[0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9]);
+    fs::write(&foreign_sidecar, &foreign_bytes).unwrap();
     let encoded = base64::engine::general_purpose::STANDARD.encode(jpeg);
     let overview = run(home, &["overview", save_arg]);
     assert_eq!(
@@ -1002,6 +1183,7 @@ fn reports_embed_readonly_screenshot_sidecars_without_repairing_save_state() {
         assert_eq!(gore_save::api::file_sha1(&claim).unwrap(), hash);
         assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
         assert_eq!(fs::read(&sidecar).unwrap(), screenshot_bytes);
+        assert_eq!(fs::read(&foreign_sidecar).unwrap(), foreign_bytes);
         assert!(unrelated.is_dir());
         assert!(!home.join("goresave_backups").exists());
     }
@@ -1022,6 +1204,7 @@ fn reports_embed_readonly_screenshot_sidecars_without_repairing_save_state() {
         fs::read(&sidecar).unwrap(),
         b"unavailable optional screenshot"
     );
+    assert_eq!(fs::read(&foreign_sidecar).unwrap(), foreign_bytes);
     assert!(!home.join("goresave_backups").exists());
 }
 

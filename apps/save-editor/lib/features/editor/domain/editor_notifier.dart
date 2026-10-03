@@ -1399,6 +1399,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       planned = await _execute(
         'plan_edits',
         payload: {
+          'path': savePath,
           'edits': [for (final keyed in allEdits) keyed.edit],
           if (placementNotes.isNotEmpty) 'placementNotes': placementNotes,
           if (clearPlacementNotes.isNotEmpty)
