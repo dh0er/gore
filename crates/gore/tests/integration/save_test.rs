@@ -951,6 +951,264 @@ fn knowledge_filters_select_all_core_pages_before_pagination() {
 }
 
 #[test]
+fn edited_save_exports_refuse_source_aliases_without_writing_or_staging() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let profile = home.join("PersistentDataList.sav");
+    let profile_bytes = profile_fixture("Gothic");
+    fs::write(&profile, &profile_bytes).unwrap();
+    let hardlink = home.join("alias.sav");
+    fs::hard_link(&save, &hardlink).unwrap();
+    let mut aliases = vec![save.clone(), home.join("./G1R-001.sav"), hardlink];
+    #[cfg(unix)]
+    {
+        let link = home.join("symlink.sav");
+        std::os::unix::fs::symlink(&save, &link).unwrap();
+        aliases.push(link);
+    }
+    #[cfg(windows)]
+    aliases.push(home.join("G1R-001.SAV"));
+    let draft = home.join("export.json");
+    for out in &aliases {
+        for mode in [
+            vec![],
+            vec!["--dry-run"],
+            vec!["--draft", draft.to_str().unwrap()],
+        ] {
+            let mut args = vec![
+                "rename",
+                save.to_str().unwrap(),
+                "--name",
+                "Export name",
+                "--out",
+                out.to_str().unwrap(),
+            ];
+            args.extend(mode);
+            let error = run_failure(home, &args);
+            assert!(
+                error
+                    .to_string()
+                    .contains("must not refer to the source save"),
+                "{error}"
+            );
+            assert_eq!(fs::read(&save).unwrap(), before);
+            assert_eq!(fs::read(out).unwrap(), before);
+            assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+            assert!(!draft.exists());
+            assert!(!home.join("goresave_backups").exists());
+        }
+    }
+    let out = home.join("export.sav");
+    run(
+        home,
+        &[
+            "rename",
+            save.to_str().unwrap(),
+            "--name",
+            "Export name",
+            "--out",
+            out.to_str().unwrap(),
+            "--dry-run",
+        ],
+    );
+    assert!(!out.exists());
+    run(
+        home,
+        &[
+            "rename",
+            save.to_str().unwrap(),
+            "--name",
+            "Export name",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        run(home, &["inspect", out.to_str().unwrap()])["public"]["playerSaveName"],
+        "Export name"
+    );
+    assert_eq!(fs::read(save).unwrap(), before);
+    assert_eq!(fs::read(profile).unwrap(), profile_bytes);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
+fn administrative_dry_runs_keep_slot_values_when_launched_from_the_save_directory() {
+    for operation in [vec!["profile", "detach"], vec!["delete"]] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let save = home.join("G1R-001.sav");
+        fs::copy(fixture(), &save).unwrap();
+        let before = fs::read(&save).unwrap();
+        let profile = home.join("PersistentDataList.sav");
+        let profile_bytes = profile_fixture("Gothic");
+        fs::write(&profile, &profile_bytes).unwrap();
+        let mut args = operation.clone();
+        args.extend(["G1R-001.sav", "--profile", "0"]);
+        let mut dry = args.clone();
+        dry.push("--dry-run");
+        let preview = run_from(home, Some(home), &dry);
+        assert_eq!(preview["validated"], true);
+        assert_eq!(preview["request"]["slot"], "G1R-001");
+        assert_eq!(preview["simulation"]["slot"], "G1R-001");
+        assert_eq!(fs::read(&save).unwrap(), before);
+        assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+        assert!(!home.join("goresave_backups").exists());
+        let live = run_from(home, Some(home), &args);
+        assert_eq!(live["slot"], "G1R-001");
+        assert_ne!(fs::read(&profile).unwrap(), profile_bytes);
+        assert_eq!(save.exists(), operation[0] != "delete");
+    }
+}
+
+#[test]
+fn profile_derived_reset_drafts_reject_profile_changes_and_preserve_pending_edits() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let profile = home.join("PersistentDataList.sav");
+    fs::write(&profile, profile_fixture("Hard")).unwrap();
+    let draft = home.join("derived.json");
+    run(
+        home,
+        &[
+            "inventory",
+            "reset",
+            save.to_str().unwrap(),
+            "--draft",
+            draft.to_str().unwrap(),
+        ],
+    );
+    let pending = fs::read(&draft).unwrap();
+    let data: Value = serde_json::from_slice(&pending).unwrap();
+    assert_eq!(data["edits"][0]["value"]["resourcesLevel"], "Hard");
+    assert_eq!(
+        data["edits"][0]["value"]["expectedPersistentSha1"],
+        gore_save::api::file_sha1(&profile).unwrap()
+    );
+    let explicit = home.join("explicit.json");
+    run(
+        home,
+        &[
+            "inventory",
+            "reset",
+            save.to_str().unwrap(),
+            "--resources-level",
+            "Novice",
+            "--draft",
+            explicit.to_str().unwrap(),
+        ],
+    );
+    let changed = profile_fixture("Easy");
+    fs::write(&profile, &changed).unwrap();
+    for verb in ["validate", "apply"] {
+        let error = run_failure(home, &["draft", verb, draft.to_str().unwrap()]);
+        assert!(error.to_string().contains("profile changed"), "{error}");
+        assert_eq!(fs::read(&draft).unwrap(), pending);
+        assert_eq!(fs::read(&save).unwrap(), before);
+        assert_eq!(fs::read(&profile).unwrap(), changed);
+        assert!(!home.join("goresave_backups").exists());
+    }
+    run(home, &["draft", "validate", explicit.to_str().unwrap()]);
+    run(home, &["draft", "apply", explicit.to_str().unwrap()]);
+    let novice = fixture().with_file_name("resources_novice.sav");
+    assert_eq!(
+        run(
+            home,
+            &["inventory", "list", save.to_str().unwrap(), "--all"]
+        )["items"],
+        run(
+            home,
+            &["inventory", "list", novice.to_str().unwrap(), "--all"]
+        )["items"]
+    );
+    assert_eq!(fs::read(&profile).unwrap(), changed);
+    assert_eq!(fs::read(&draft).unwrap(), pending);
+
+    let combined = home.join("combined");
+    fs::create_dir(&combined).unwrap();
+    let source = combined.join("G1R-001.sav");
+    fs::copy(fixture(), &source).unwrap();
+    let source_profile = combined.join("PersistentDataList.sav");
+    fs::write(&source_profile, profile_fixture("Hard")).unwrap();
+    let combined_draft = home.join("combined.json");
+    run(
+        home,
+        &[
+            "rename",
+            source.to_str().unwrap(),
+            "--name",
+            "Combined rename",
+            "--draft",
+            combined_draft.to_str().unwrap(),
+        ],
+    );
+    run(
+        home,
+        &[
+            "inventory",
+            "reset",
+            source.to_str().unwrap(),
+            "--draft",
+            combined_draft.to_str().unwrap(),
+        ],
+    );
+    let applied = run(home, &["draft", "apply", combined_draft.to_str().unwrap()]);
+    assert_eq!(applied["complete"], true);
+    assert_eq!(applied["committed"], json!([0, 1]));
+    assert_eq!(
+        run(home, &["inspect", source.to_str().unwrap()])["persistent"]["playerSaveName"],
+        "Combined rename"
+    );
+    let source_bytes = fs::read(&source).unwrap();
+    let profile_bytes = fs::read(&source_profile).unwrap();
+    let export_dir = home.join("exports");
+    fs::create_dir(&export_dir).unwrap();
+    let exported = export_dir.join("G1R-001.sav");
+    let export_draft = home.join("combined-export.json");
+    run(
+        home,
+        &[
+            "rename",
+            source.to_str().unwrap(),
+            "--name",
+            "Exported combined",
+            "--out",
+            exported.to_str().unwrap(),
+            "--draft",
+            export_draft.to_str().unwrap(),
+        ],
+    );
+    run(
+        home,
+        &[
+            "inventory",
+            "reset",
+            source.to_str().unwrap(),
+            "--draft",
+            export_draft.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        run(home, &["draft", "apply", export_draft.to_str().unwrap()])["complete"],
+        true
+    );
+    assert_eq!(
+        run(home, &["inspect", exported.to_str().unwrap()])["public"]["playerSaveName"],
+        "Exported combined"
+    );
+    assert_eq!(fs::read(&source).unwrap(), source_bytes);
+    assert_eq!(fs::read(&source_profile).unwrap(), profile_bytes);
+    assert!(!export_dir.join("PersistentDataList.sav").exists());
+    assert!(!export_dir.join("goresave_backups").exists());
+}
+
+#[test]
 fn inventory_reset_uses_the_selected_saves_profile_difficulty() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

@@ -146,8 +146,119 @@ pub fn file_sha1(path: &std::path::Path) -> Result<String, CoreError> {
     Ok(crate::sha1_hex(&std::fs::read(path)?))
 }
 
+pub fn validate_output_path(
+    path: &std::path::Path,
+    output: &std::path::Path,
+) -> Result<(), CoreError> {
+    let source = std::fs::File::open(path)?;
+    let output = match std::fs::File::open(output) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    #[cfg(unix)]
+    let same = {
+        use std::os::unix::fs::MetadataExt;
+        let left = source.metadata()?;
+        let right = output.metadata()?;
+        (left.dev(), left.ino()) == (right.dev(), right.ino())
+    };
+    #[cfg(windows)]
+    let same = {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+        };
+        let identity = |file: &std::fs::File| -> Result<_, CoreError> {
+            let mut info = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+            // SAFETY: the file owns a valid handle and info is a writable Win32 buffer.
+            if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            Ok((
+                info.dwVolumeSerialNumber,
+                info.nFileIndexHigh,
+                info.nFileIndexLow,
+            ))
+        };
+        identity(&source)? == identity(&output)?
+    };
+    #[cfg(not(any(unix, windows)))]
+    let same = return Err(CoreError::InvalidRequest(
+        "output file identity checks are unsupported on this platform".into(),
+    ));
+    if same {
+        return Err(CoreError::InvalidRequest(
+            "outputPath must not refer to the source save".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn check_edit_persistent_snapshots(
+    path: &std::path::Path,
+    edits: &[Value],
+) -> Result<(), CoreError> {
+    for edit in edits {
+        if edit["path"] == "private.inventory.reset" {
+            if let Some(profile) = edit["value"]["persistentPath"].as_str() {
+                check_persistent_snapshot_at(std::path::Path::new(profile), &edit["value"])?;
+            } else {
+                check_persistent_snapshot(path, &edit["value"])?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn refresh_edit_persistent_snapshots(
+    path: &std::path::Path,
+    edits: &mut [Value],
+    result: &Value,
+) {
+    let Some(written) = result["persistentWrittenSha1"].as_str() else {
+        return;
+    };
+    let Some(profile) = result["persistentPath"].as_str() else {
+        return;
+    };
+    let physical = |path: &std::path::Path| path.canonicalize().unwrap_or_else(|_| path.to_owned());
+    let profile = physical(std::path::Path::new(profile));
+    let source = physical(path);
+    let fallback = source
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("PersistentDataList.sav");
+    for edit in edits {
+        if edit["path"] != "private.inventory.reset"
+            || edit["value"]["expectedPersistentSha1"] != result["persistentOriginalSha1"]
+        {
+            continue;
+        }
+        let dependency = edit["value"]["persistentPath"]
+            .as_str()
+            .map(std::path::Path::new)
+            .unwrap_or(&fallback);
+        if physical(dependency) == profile {
+            edit["value"]["expectedPersistentSha1"] = json!(written);
+        }
+    }
+}
+
 pub(crate) fn check_persistent_snapshot(
     path: &std::path::Path,
+    payload: &Value,
+) -> Result<(), CoreError> {
+    let physical = path.canonicalize().unwrap_or_else(|_| path.to_owned());
+    let profile = physical
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("PersistentDataList.sav");
+    check_persistent_snapshot_at(&profile, payload)
+}
+
+fn check_persistent_snapshot_at(
+    profile: &std::path::Path,
     payload: &Value,
 ) -> Result<(), CoreError> {
     if let Some(expected) = payload.get("expectedPersistentSha1") {
@@ -156,12 +267,8 @@ pub(crate) fn check_persistent_snapshot(
                 "expectedPersistentSha1 must be a hash or null".into(),
             ));
         }
-        let profile = path
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("PersistentDataList.sav");
         let actual = if profile.exists() {
-            Some(file_sha1(&profile)?)
+            Some(file_sha1(profile)?)
         } else {
             None
         };

@@ -1511,9 +1511,19 @@ fn inventory(v: &str, o: &Options) -> Result<Value> {
         data["containerType"] = json!(container)
     }
     if v == "reset" {
-        data["resourcesLevel"] = json!(&administration::resources_level(o)?)
+        data.as_object_mut()
+            .unwrap()
+            .extend(reset_template(o)?.as_object().unwrap().clone());
     }
     write(o, vec![edit(op, data)], json!({}))
+}
+fn reset_template(o: &Options) -> Result<Value> {
+    let mut template = json!({});
+    if o.resources_level.is_none() {
+        template = administration::resources_profile_snapshot(o)?;
+    }
+    template["resourcesLevel"] = json!(administration::resources_level(o)?);
+    Ok(template)
 }
 pub(super) fn time_value(o: &Options) -> Result<f64> {
     if let Some(seconds) = o.seconds {
@@ -1570,6 +1580,67 @@ fn time(v: &str, o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_derived_reset_template_blocks_direct_writes_and_staging_after_profile_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let save = temp.path().join("G1R-001.sav");
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../gore-save/assets/start_saves/resources_gothic.sav"),
+            &save,
+        )
+        .unwrap();
+        let profile = temp.path().join("PersistentDataList.sav");
+        fs::write(&profile, b"original profile").unwrap();
+        let options = capture_save_snapshot(&Options {
+            save: Some(save.clone()),
+            ..Options::default()
+        })
+        .unwrap();
+        let template = reset_template(&options).unwrap();
+        assert_eq!(
+            template["expectedPersistentSha1"],
+            api::file_sha1(&profile).unwrap()
+        );
+        let edits = vec![edit("private.inventory.reset", template)];
+        fs::write(&profile, b"concurrent profile change").unwrap();
+        let save_hash = api::file_sha1(&save).unwrap();
+        for dry_run in [true, false] {
+            let direct = Options {
+                dry_run,
+                ..options.clone()
+            };
+            assert!(
+                write(&direct, edits.clone(), json!({}))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("profile changed")
+            );
+            let draft = temp.path().join("stale-reset.json");
+            let staged = Options {
+                draft: Some(draft.clone()),
+                ..direct
+            };
+            assert!(
+                write(&staged, edits.clone(), json!({}))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("profile changed")
+            );
+            assert!(!draft.exists());
+            assert_eq!(api::file_sha1(&save).unwrap(), save_hash);
+            assert_eq!(fs::read(&profile).unwrap(), b"concurrent profile change");
+            assert!(!temp.path().join("goresave_backups").exists());
+        }
+        let explicit = reset_template(&Options {
+            resources_level: Some("Novice".into()),
+            ..options
+        })
+        .unwrap();
+        assert_eq!(explicit["resourcesLevel"], "Novice");
+        assert!(explicit.get("expectedPersistentSha1").is_none());
+    }
 
     #[test]
     fn inspected_save_hash_guards_direct_writes_and_draft_publication() {

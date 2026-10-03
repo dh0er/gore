@@ -707,6 +707,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let kraken_backend = codec_backend::KrakenBackend::default();
             let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             let expected_sha1 = payload.get("expectedSha1").and_then(Value::as_str);
+            api::check_edit_persistent_snapshots(&path, &edits)?;
             if expected_sha1.is_some_and(|hash| api::file_sha1(&path).ok().as_deref()!=Some(hash)) {
                 return Err(CoreError::Validation("save changed since inspection".into()));
             }
@@ -722,6 +723,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                         if api::file_sha1(&path)?!=hash {return Err(CoreError::Validation("save changed during edit preparation".into()));}
                     }
                     if sync_persistent_data_list {api::check_persistent_snapshot(&path,&payload)?;}
+                    api::check_edit_persistent_snapshots(&path, &edits)?;
                     Ok(())
                 },
             )?;
@@ -11240,6 +11242,9 @@ where
         return Err(CoreError::InvalidRequest(
             "syncPersistentDataList cannot be used with outputPath".to_string(),
         ));
+    }
+    if let Some(output) = output_path {
+        api::validate_output_path(path, output)?;
     }
     let original = fs::read(path)?;
     let target = output_path.unwrap_or(path);
@@ -22509,6 +22514,118 @@ mod tests {
 
         assert_eq!(saves.len(), 1);
         assert_eq!(saves[0].slot, "G1R-001");
+    }
+
+    #[test]
+    fn save_exports_reject_source_aliases_before_shared_or_direct_writes() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        let bytes = minimal_gsav("Export source");
+        fs::write(&save, &bytes).unwrap();
+        let hardlink = dir.path().join("alias.sav");
+        fs::hard_link(&save, &hardlink).unwrap();
+        let mut aliases = vec![save.clone(), dir.path().join("./G1R-001.sav"), hardlink];
+        #[cfg(unix)]
+        {
+            let symlink = dir.path().join("symlink.sav");
+            std::os::unix::fs::symlink(&save, &symlink).unwrap();
+            aliases.push(symlink);
+        }
+        #[cfg(windows)]
+        aliases.push(dir.path().join("G1R-001.SAV"));
+        for output in aliases {
+            for command in ["apply_edits", "write_save"] {
+                for dry_run in [true, false] {
+                    let error = api::execute(&api::Request { command: command.into(), payload: json!({"path":save,"outputPath":output,"dryRun":dry_run,"edits":[{"path":"public.m_PlayerSaveName","value":"Exported"}]}) }).unwrap_err();
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("must not refer to the source save"),
+                        "{error}"
+                    );
+                    assert_eq!(fs::read(&save).unwrap(), bytes);
+                    assert_eq!(fs::read(&output).unwrap(), bytes);
+                    assert!(!dir.path().join("goresave_backups").exists());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn profile_derived_reset_guards_shared_and_direct_writes_without_profile_sync() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        let bytes = include_bytes!("../assets/start_saves/resources_gothic.sav");
+        fs::write(&save, bytes).unwrap();
+        let profile = dir.path().join("PersistentDataList.sav");
+        for expected in [Value::Null, json!(sha1_hex(b"old profile"))] {
+            fs::write(&profile, b"new profile").unwrap();
+            let reset = json!({"path":"private.inventory.reset","value":{"resourcesLevel":"Gothic","expectedPersistentSha1":expected}});
+            for command in ["apply_edits", "write_save"] {
+                let error = api::execute(&api::Request {
+                    command: command.into(),
+                    payload: json!({"path":save,"syncPersistentDataList":false,"edits":[reset]}),
+                })
+                .unwrap_err();
+                assert!(error.to_string().contains("profile changed"), "{error}");
+                assert_eq!(fs::read(&save).unwrap(), bytes);
+                assert_eq!(fs::read(&profile).unwrap(), b"new profile");
+                assert!(!dir.path().join("goresave_backups").exists());
+            }
+        }
+        let reset = json!({"path":"private.inventory.reset","value":{"resourcesLevel":"Gothic","expectedPersistentSha1":api::file_sha1(&profile).unwrap()}});
+        workflow::apply_request(&json!({"path":save,"dryRun":true,"edits":[reset]})).unwrap();
+        assert_eq!(fs::read(&save).unwrap(), bytes);
+        assert!(!dir.path().join("goresave_backups").exists());
+    }
+
+    #[test]
+    fn reset_guards_reject_external_profile_changes_after_a_committed_synced_rename() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        fs::write(
+            &save,
+            include_bytes!("../assets/start_saves/resources_gothic.sav"),
+        )
+        .unwrap();
+        let profile = dir.path().join("PersistentDataList.sav");
+        fs::write(&profile, assignment_persistent_data_list("G1R-001", 0)).unwrap();
+        let reset = json!({"path":"private.inventory.reset","value":{"resourcesLevel":"Gothic","persistentPath":profile,"expectedPersistentSha1":api::file_sha1(&profile).unwrap()}});
+        let raw = vec![
+            json!({"path":"public.m_PlayerSaveName","value":"Synced rename"}),
+            reset.clone(),
+        ];
+        assert_eq!(workflow::plan(&raw).unwrap(), vec![vec![0], vec![1]]);
+        let payload = json!({"path":save,"edits":raw,"syncPersistentDataList":true,"expectedPersistentSha1":api::file_sha1(&profile).unwrap()});
+        let result = workflow::apply_with_progress(&payload, |_| {
+            fs::write(&profile, b"concurrent profile change").unwrap();
+        })
+        .unwrap();
+        assert_eq!(result["complete"], false);
+        assert_eq!(result["committed"], json!([0]));
+        assert_eq!(result["remaining"], json!([1]));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("profile changed")
+        );
+        let mut remaining = vec![reset];
+        api::refresh_edit_persistent_snapshots(&save, &mut remaining, &result["results"][0]);
+        assert_eq!(
+            remaining[0]["value"]["expectedPersistentSha1"],
+            result["results"][0]["persistentWrittenSha1"]
+        );
+        assert_ne!(
+            remaining[0]["value"]["expectedPersistentSha1"],
+            api::file_sha1(&profile).unwrap()
+        );
+        assert!(api::check_edit_persistent_snapshots(&save, &remaining).is_err());
+        assert_eq!(
+            inspect_save(&save, false).unwrap()["public"]["playerSaveName"],
+            "Synced rename"
+        );
+        assert_eq!(fs::read(&profile).unwrap(), b"concurrent profile change");
     }
 
     #[test]

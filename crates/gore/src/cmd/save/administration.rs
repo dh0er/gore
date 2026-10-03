@@ -210,6 +210,15 @@ pub(super) fn resources_level(o: &Options) -> Result<String> {
     });
     resolved_resources(&active.map(profile_resource_settings).unwrap_or(Value::Null))
 }
+pub(super) fn resources_profile_snapshot(o: &Options) -> Result<Value> {
+    let profile = profile_path(&save_context(o)?)?;
+    let hash = if profile.exists() {
+        Some(api::file_sha1(&profile)?)
+    } else {
+        None
+    };
+    Ok(json!({"persistentPath":profile,"expectedPersistentSha1":hash}))
+}
 fn normalize_resources(raw: &str) -> Result<String> {
     let last = raw
         .rsplit([':', '.', '_'])
@@ -462,6 +471,13 @@ pub(super) fn stage(file: &Path, payload: &Value, dry_run: bool) -> Result<Value
     let path = PathBuf::from(payload["path"].as_str().context("draft has no save path")?)
         .canonicalize()?;
     let hash = api::file_sha1(&path)?;
+    if let Some(output) = payload["outputPath"].as_str() {
+        api::validate_output_path(&path, Path::new(output))?;
+    }
+    api::check_edit_persistent_snapshots(
+        &path,
+        payload["edits"].as_array().context("edits required")?,
+    )?;
     if payload["expectedSha1"]
         .as_str()
         .is_some_and(|expected| expected != hash)
@@ -614,6 +630,15 @@ pub(super) fn stage(file: &Path, payload: &Value, dry_run: bool) -> Result<Value
         if let Some(output) = payload.get("outputPath") {
             current["outputPath"] = output.clone();
         }
+        if let Some(output) = current["outputPath"].as_str() {
+            api::validate_output_path(&path, Path::new(output))?;
+        }
+        api::check_edit_persistent_snapshots(
+            &path,
+            current["edits"]
+                .as_array()
+                .ok_or_else(|| gore_save::CoreError::Parse("invalid draft edits".into()))?,
+        )?;
         Ok(current)
     };
     let result = if dry_run {
@@ -786,6 +811,7 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
 }
 
 fn draft_after_apply(mut data: Value, result: &Value) -> Result<Value> {
+    let source = PathBuf::from(data["path"].as_str().context("draft has no source")?);
     let committed: Vec<usize> = serde_json::from_value(result["committed"].clone())?;
     let list = data["edits"].as_array().context("invalid draft")?;
     let consumed_sync = committed.iter().any(|index| {
@@ -799,6 +825,15 @@ fn draft_after_apply(mut data: Value, result: &Value) -> Result<Value> {
             .map(|(_, e)| e)
             .collect::<Vec<_>>()
     );
+    if let Some(results) = result["results"].as_array() {
+        for write in results {
+            api::refresh_edit_persistent_snapshots(
+                &source,
+                data["edits"].as_array_mut().unwrap(),
+                write,
+            );
+        }
+    }
     let has_pending = data["edits"]
         .as_array()
         .is_some_and(|edits| !edits.is_empty());
@@ -977,7 +1012,11 @@ fn admin_write(command: &str, p: Value, o: &Options) -> Result<Value> {
         copy_admin_files(src, dst, false, &|value| remap(value, &mappings))?;
     }
     let mut request = p.clone();
-    remap(&mut request, &mappings);
+    for key in ["path", "persistentPath", "backupPath", "destinationPath"] {
+        if let Some(value) = request.get_mut(key) {
+            remap(value, &mappings);
+        }
+    }
     let result = call(command, request)?;
     Ok(json!({"dryRun":true,"command":command,"request":p,"validated":true,"simulation":result}))
 }
@@ -1587,4 +1626,27 @@ mod tests {
         assert_eq!(resolved_resources(&Value::Null).unwrap(), "Gothic");
         assert!(resolved_resources(&json!({"preset":"DifficultyPreset_Future","resources":"ResourcesDifficultySettings_Standard"})).is_err());
     }
+}
+#[test]
+fn partial_apply_keeps_the_reset_guard_from_the_committed_profile_write() {
+    let temp = tempfile::tempdir().unwrap();
+    let save = temp.path().join("G1R-001.sav");
+    fs::write(&save, b"committed save").unwrap();
+    let profile = temp.path().join("PersistentDataList.sav");
+    fs::write(&profile, b"concurrent profile change").unwrap();
+    let before = json!({"path":save,"syncPersistentDataList":true,"edits":[
+        {"path":"public.m_PlayerSaveName","value":"Committed rename"},
+        {"path":"private.inventory.reset","value":{"resourcesLevel":"Hard","persistentPath":profile,"expectedPersistentSha1":"original-hash"}}
+    ]});
+    let result = json!({"complete":false,"path":save,"sha1":api::file_sha1(&save).unwrap(),"committed":[0],"remaining":[1],"results":[{"persistentPath":profile,"persistentOriginalSha1":"original-hash","persistentWrittenSha1":"self-written-hash"}]});
+    let remaining = draft_after_apply(before, &result).unwrap();
+    assert_eq!(
+        remaining["edits"][0]["value"]["expectedPersistentSha1"],
+        "self-written-hash"
+    );
+    assert!(
+        api::check_edit_persistent_snapshots(&save, remaining["edits"].as_array().unwrap())
+            .is_err()
+    );
+    assert_eq!(fs::read(profile).unwrap(), b"concurrent profile change");
 }

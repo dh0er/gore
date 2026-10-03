@@ -549,6 +549,10 @@ pub fn apply_with_progress(
     let raw = payload["edits"]
         .as_array()
         .ok_or_else(|| invalid("edits must be an array"))?;
+    if let Some(output) = payload["outputPath"].as_str() {
+        crate::api::validate_output_path(&path, Path::new(output))?;
+    }
+    crate::api::check_edit_persistent_snapshots(&path, raw)?;
     let groups = plan(raw)?;
     let hashes = simulate(&path, raw, &groups)?;
     if payload["expectedSha1"]
@@ -583,6 +587,7 @@ pub fn apply_with_progress(
     }
     let output = payload["outputPath"].as_str();
     let target = output.map(Path::new).unwrap_or(&path);
+    let mut operations = raw.clone();
     let mut results = Vec::new();
     let mut committed = Vec::new();
     let mut error = None;
@@ -601,7 +606,7 @@ pub fn apply_with_progress(
         }
         let mut request = payload.clone();
         request["path"] = json!(source);
-        request["edits"] = json!(group.iter().map(|i| &raw[*i]).collect::<Vec<_>>());
+        request["edits"] = json!(group.iter().map(|i| &operations[*i]).collect::<Vec<_>>());
         request["expectedSha1"] = json!(hashes[step]);
         request["backup"] = json!(step == 0 && payload["backup"].as_bool().unwrap_or(true));
         request["syncPersistentDataList"] = json!(
@@ -623,6 +628,7 @@ pub fn apply_with_progress(
             payload: request,
         }) {
             Ok(result) => {
+                crate::api::refresh_edit_persistent_snapshots(&path, &mut operations, &result);
                 results.push(result);
                 committed.extend(group.iter().copied());
                 progress(
