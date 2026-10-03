@@ -10,6 +10,142 @@ fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gore-save/assets/start_saves/resources_gothic.sav")
 }
+fn item_icon_fixture(home: &Path) -> PathBuf {
+    use image::ImageEncoder;
+    let generation = home.join(format!("item-icons-v1-{}", "a".repeat(64)));
+    fs::create_dir_all(generation.join("images")).unwrap();
+    let rgba = [255, 0, 0, 255];
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(&rgba, 1, 1, image::ExtendedColorType::Rgba8)
+        .unwrap();
+    fs::write(generation.join("images/one.png"), &png).unwrap();
+    let manifest = generation.join("manifest.json");
+    fs::write(&manifest, serde_json::to_vec(&json!({
+        "schema":1,"buildId":"fixture","itemCount":1,"items":{"ItMi_One":"images/one.png"},
+        "files":{"images/one.png":{"width":1,"height":1,"byteLength":png.len(),"decodedByteLength":4,
+            "pngBlake3":blake3::hash(&png).to_hex().to_string(),"rgbaBlake3":blake3::hash(&rgba).to_hex().to_string()}}
+    })).unwrap()).unwrap();
+    gore_tex::item_icons::verified_item_icon_manifest(&manifest).unwrap();
+    manifest
+}
+
+#[test]
+fn asset_release_releases_durable_leases_across_cli_processes() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let manifest = item_icon_fixture(home);
+    let original = fs::read(&manifest).unwrap();
+    let image = manifest.parent().unwrap().join("images/one.png");
+    let original_image = fs::read(&image).unwrap();
+    for _ in 0..2 {
+        gore_tex::item_icons::retain_item_icon_cache_for_cli(&manifest).unwrap();
+    }
+    assert!(!gore_tex::item_icons::release_item_icon_cache(&manifest).unwrap());
+    let leases = || {
+        fs::read_dir(home)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".cli-lease-"))
+            .count()
+    };
+    assert_eq!(leases(), 2);
+    let args = [
+        "assets",
+        "release",
+        "--manifest",
+        manifest.to_str().unwrap(),
+    ];
+    let mut dry = args.to_vec();
+    dry.push("--dry-run");
+    assert_eq!(run(home, &dry)["dryRun"], true);
+    assert_eq!(leases(), 2);
+    assert_eq!(
+        run_from(
+            home,
+            Some(manifest.parent().unwrap()),
+            &["assets", "release", "--manifest", "manifest.json"]
+        )["released"],
+        true
+    );
+    assert_eq!(leases(), 1);
+    assert_eq!(run(home, &args)["released"], true);
+    assert_eq!(leases(), 0);
+    assert_eq!(run(home, &args)["released"], false);
+    assert_eq!(fs::read(&manifest).unwrap(), original);
+    assert_eq!(fs::read(&image).unwrap(), original_image);
+}
+
+#[test]
+fn export_previews_reject_missing_output_parents_without_creating_them() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let hash = gore_save::api::file_sha1(&save).unwrap();
+    let screenshot = home.join("Profile_0_Screenshots.sav");
+    let screenshot_bytes = screenshot_fixture("G1R-001", &[0xff, 0xd8, 0xff, 0xd9]);
+    fs::write(&screenshot, &screenshot_bytes).unwrap();
+    let game = home.join("game");
+    let portraits = game.join("G1R/Story/Conversation/images/Glossary/Locations");
+    fs::create_dir_all(&portraits).unwrap();
+    let artwork = portraits.join("T_GlossaryImage_AbandonedMine_S.png");
+    fs::write(&artwork, b"original artwork").unwrap();
+    let manifest = item_icon_fixture(home);
+    let out = home.join("missing/child/export");
+    let workflows = [
+        vec!["screenshot", "export", save.to_str().unwrap()],
+        vec![
+            "assets",
+            "export",
+            "--kind",
+            "portraits",
+            "--game",
+            game.to_str().unwrap(),
+            "--id",
+            "Document_Glossary_AbandonedMine",
+        ],
+        vec![
+            "assets",
+            "export",
+            "--manifest",
+            manifest.to_str().unwrap(),
+            "--id",
+            "ItMi_One",
+        ],
+        vec!["report", save.to_str().unwrap()],
+    ];
+    for mut args in workflows {
+        args.extend(["--out", out.to_str().unwrap()]);
+        for dry in [false, true] {
+            let mut invocation = args.clone();
+            if dry {
+                invocation.push("--dry-run");
+            }
+            run_failure(home, &invocation);
+            assert!(!home.join("missing").exists());
+        }
+    }
+    let preview = run_from(
+        home,
+        Some(home),
+        &[
+            "screenshot",
+            "export",
+            "G1R-001.sav",
+            "--out",
+            "fresh.jpg",
+            "--dry-run",
+        ],
+    );
+    assert_eq!(preview["dryRun"], true);
+    assert!(!home.join("fresh.jpg").exists());
+    assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+    assert_eq!(fs::read(screenshot).unwrap(), screenshot_bytes);
+    assert_eq!(fs::read(artwork).unwrap(), b"original artwork");
+    assert!(!home.join("goresave_backups").exists());
+}
+
 fn execute_core(command: &str, payload: Value) -> Value {
     gore_save::api::execute(&gore_save::api::Request {
         command: command.into(),

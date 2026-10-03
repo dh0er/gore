@@ -99,7 +99,16 @@ fn export_output(
     let output = if dry_run {
         match fs::File::open(out) {
             Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let parent = out
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .unwrap_or(Path::new("."));
+                if !fs::metadata(parent)?.is_dir() {
+                    bail!("export output parent must be a directory");
+                }
+                return Ok(None);
+            }
             Err(error) => return Err(error.into()),
         }
     } else {
@@ -109,6 +118,9 @@ fn export_output(
             .truncate(false)
             .open(out)?
     };
+    if !output.metadata()?.is_file() {
+        bail!("export output must be a regular file");
+    }
     if same_export_file(source, &output)? {
         bail!("export output must not refer to the source {source_label}");
     }
@@ -452,7 +464,7 @@ fn assets(v: &str, o: &Options) -> Result<Value> {
         if o.dry_run {
             return Ok(api::validate_item_icons(&payload(o)?)?);
         }
-        return call("item_icons_prepare", payload(o)?);
+        return retain_cli_assets(call("item_icons_prepare", payload(o)?)?);
     }
     if v == "status" {
         return call("item_icons_source_identity", payload(o)?);
@@ -465,7 +477,8 @@ fn assets(v: &str, o: &Options) -> Result<Value> {
         if o.dry_run {
             return Ok(json!({"dryRun":true,"manifest":manifest}));
         }
-        return call("item_icons_release", json!({"manifestPath":manifest}));
+        let released = gore_tex::item_icons::release_item_icon_cache_for_cli(manifest)?;
+        return Ok(json!({"released":released}));
     }
     let data = serde_json::to_value(gore_tex::item_icons::verified_item_icon_manifest(manifest)?)?;
     if v == "list" {
@@ -500,6 +513,17 @@ fn assets(v: &str, o: &Options) -> Result<Value> {
         }
     }
     Ok(json!({"path":out,"source":file,"dryRun":o.dry_run}))
+}
+
+fn retain_cli_assets(mut prepared: Value) -> Result<Value> {
+    let manifest = prepared["manifestPath"]
+        .as_str()
+        .context("item icon preparation returned no manifest path")?;
+    let manifest = Path::new(manifest);
+    gore_tex::item_icons::retain_item_icon_cache_for_cli(manifest)?;
+    gore_tex::item_icons::release_item_icon_cache(manifest)?;
+    prepared["leaseScope"] = json!("cli");
+    Ok(prepared)
 }
 
 pub(super) fn attach_artwork(data: &mut Value, o: &Options) {
@@ -995,6 +1019,39 @@ fn overview(o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn export_previews_require_a_valid_parent_and_file_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_path = temp.path().join("source");
+        fs::write(&source_path, b"original source").unwrap();
+        let source = fs::File::open(&source_path).unwrap();
+        let directory = temp.path().join("directory");
+        fs::create_dir(&directory).unwrap();
+        for out in [
+            temp.path().join("missing/child"),
+            source_path.join("child"),
+            directory,
+        ] {
+            for dry in [false, true] {
+                assert!(export_output(&source, &out, dry, "fixture").is_err());
+            }
+        }
+        let fresh = temp.path().join("fresh");
+        assert!(
+            export_output(&source, &fresh, true, "fixture")
+                .unwrap()
+                .is_none()
+        );
+        assert!(!fresh.exists());
+        let mut output = export_output(&source, &fresh, false, "fixture")
+            .unwrap()
+            .unwrap();
+        output.write_all(b"exported").unwrap();
+        assert_eq!(fs::read(fresh).unwrap(), b"exported");
+        assert_eq!(fs::read(source_path).unwrap(), b"original source");
+        assert!(!temp.path().join("missing").exists());
+    }
+
     #[test]
     fn merchant_windows_match_calendar_elapsed_and_unknown_input_rules() {
         let activity = Some(12.0 * 3600.0);
