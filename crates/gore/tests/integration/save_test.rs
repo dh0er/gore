@@ -1715,6 +1715,42 @@ fn attribute_set_selectors_disambiguate_hero_and_npc_reads_before_pagination() {
 }
 
 #[test]
+fn hero_position_show_returns_the_transform_and_rejects_npc_pin_status() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let inspected = execute_core("inspect_save", json!({"path":save,"includePrivate":true}));
+    let expected = &inspected["private"]["player"]["transform"];
+    assert!(expected["location"]["x"].is_number());
+    assert!(expected["rotation"].is_object());
+    for actor in [vec![], vec!["--actor", "HERO"]] {
+        let mut args = vec!["position", "show", save_arg];
+        args.extend(actor.clone());
+        let shown = run(home, &args);
+        assert_eq!(&shown, expected);
+        assert!(shown.get("private").is_none());
+        args[1] = "pin-status";
+        let error = run_failure(home, &args);
+        assert!(error.to_string().contains("requires an NPC"), "{error}");
+    }
+    let x = (expected["location"]["x"].as_f64().unwrap() + 7.0).to_string();
+    run(home, &["position", "set", save_arg, "--x", &x, "--dry-run"]);
+    assert_eq!(run(home, &["position", "show", save_arg]), *expected);
+    let npc = "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN";
+    let shown = run(home, &["position", "show", save_arg, "--actor", npc]);
+    assert!(shown["pose"]["location"].is_object());
+    assert_eq!(
+        run(home, &["position", "pin-status", save_arg, "--actor", npc]),
+        shown
+    );
+    assert_eq!(fs::read(save).unwrap(), before);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
 fn library_add_accepts_only_inspectable_gsav_files_before_updating_settings() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

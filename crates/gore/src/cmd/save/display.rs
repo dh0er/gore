@@ -591,6 +591,9 @@ pub(super) fn timing(v: &str, o: &Options) -> Result<Value> {
 
 pub(super) fn position(v: &str, o: &Options) -> Result<Value> {
     let hero = o.actor.eq_ignore_ascii_case("hero");
+    if hero && !matches!(v, "show" | "set") {
+        bail!("this operation requires an NPC");
+    }
     let mut resolved = o.clone();
     if !hero {
         resolved.actor = npc_id(o)?;
@@ -608,6 +611,13 @@ pub(super) fn position(v: &str, o: &Options) -> Result<Value> {
         )?
     };
     if matches!(v, "show" | "pin-status") {
+        if hero {
+            return data["private"]["player"]
+                .get("transform")
+                .filter(|transform| transform.is_object())
+                .cloned()
+                .context("player transform is unavailable");
+        }
         return Ok(data);
     }
     let pending = if let Some(file) = o.draft.as_deref().filter(|p| p.is_file()) {
@@ -616,9 +626,6 @@ pub(super) fn position(v: &str, o: &Options) -> Result<Value> {
         None
     };
     if hero {
-        if v != "set" {
-            bail!("this operation requires an NPC");
-        }
         let original = &data["private"]["player"]["transform"];
         let mut transform = pending
             .as_ref()
