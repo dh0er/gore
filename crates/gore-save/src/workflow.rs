@@ -194,20 +194,33 @@ pub fn replacement_key(raw: &Value) -> Option<String> {
     if edit.path == "private.typed.setValue" {
         return Some(format!("typed:{:?}", typed(&edit).ok()??));
     }
+    if let PrivateEdit::InventoryItemCount(count) = &spec {
+        let container = if count.actor_id.is_none()
+            && count.container_type.is_none()
+            && count.slot_id.is_none()
+        {
+            "*".into()
+        } else {
+            crate::container_enum_label(count.container_type.as_deref())
+        };
+        return Some(format!(
+            "{}:{}",
+            edit.path,
+            json!([
+                count.actor_id,
+                container,
+                count.slot_id,
+                count.path,
+                count.id
+            ])
+        ));
+    }
     match edit.path.as_str() {
         "private.player.setPlayerName"
         | "private.profile.setProfileName"
         | "private.player.setTransform"
         | "private.inventory.repairSlots" => Some(edit.path),
         "private.player.setAttribute" => Some(format!("{}:{}", edit.path, edit.value["id"])),
-        "private.inventory.setItemCount" => Some(format!(
-            "{}:{}:{}:{}:{}",
-            edit.path,
-            edit.value["actorId"],
-            edit.value["containerType"],
-            edit.value["slotId"],
-            edit.value["path"]
-        )),
         _ => None,
     }
 }
@@ -405,6 +418,7 @@ fn plan_with_root(
                 .zip(specs[j].as_ref())
                 .is_some_and(|(first, second)| {
                     crate::inventory_count_removal_conflict(first, second)
+                        || crate::inventory_count_conflict(first, second)
                 })
             {
                 return Err(pending("inventorySlot", None));
@@ -1813,6 +1827,103 @@ mod tests {
             ])
             .is_ok()
         );
+    }
+
+    #[test]
+    fn inventory_count_registry_keeps_distinct_item_ids() {
+        let count = |id, count| json!({"path":"private.inventory.setItemCount","value":{"id":id,"count":count}});
+        assert_ne!(
+            replacement_key(&count("ItWr_Scroll_Letter_01", 11)),
+            replacement_key(&count("ItMs_Glossary", 22))
+        );
+        assert_eq!(
+            replacement_key(&count("ItMs_Glossary", 11)),
+            replacement_key(&count("ItMs_Glossary", 22))
+        );
+    }
+
+    #[test]
+    fn inventory_count_selectors_cannot_overwrite_the_same_stack() {
+        let first = json!({"path":"private.inventory.setItemCount","value":{"path":"/Script/Angelscript.ItWr_Scroll_Letter_01","count":11}});
+        let second = json!({"path":"private.inventory.setItemCount","value":{"path":"/Script/Angelscript.ItWr_Scroll_Letter_01","containerType":"MainContainer","slotId":3,"count":22}});
+        for edits in [
+            vec![first.clone(), second.clone()],
+            vec![second.clone(), first.clone()],
+        ] {
+            assert!(matches!(
+                plan(&edits),
+                Err(CoreError::PlanConflict {
+                    kind: "inventorySlot",
+                    ..
+                })
+            ));
+        }
+        for actor in [Value::Null, json!("NPC-Diego")] {
+            let mut pinned = second.clone();
+            pinned["value"]["actorId"] = actor.clone();
+            for selectors in [
+                json!({"id":"ItWr_Scroll_Letter_01"}),
+                json!({"path":"/Script/Angelscript.ItWr_Scroll_Letter_01"}),
+                json!({"id":"ItWr_Scroll_Letter_01","path":"/Script/Angelscript.ItWr_Scroll_Letter_01","containerType":"EInventoryTypes::MainContainer","slotId":3}),
+            ] {
+                let mut other = json!({"path":"private.inventory.setItemCount","value":selectors});
+                other["value"]["actorId"] = actor.clone();
+                other["value"]["count"] = json!(44);
+                for edits in [
+                    vec![pinned.clone(), other.clone()],
+                    vec![other, pinned.clone()],
+                ] {
+                    assert!(matches!(
+                        plan(&edits),
+                        Err(CoreError::PlanConflict {
+                            kind: "inventorySlot",
+                            ..
+                        })
+                    ));
+                }
+            }
+            for (key, value) in [
+                ("actorId", json!("NPC-Other")),
+                ("containerType", json!("Pouch")),
+                ("slotId", json!(4)),
+                ("path", json!("/Script/Angelscript.ItMs_Glossary")),
+            ] {
+                let mut separate = pinned.clone();
+                separate["value"][key] = value;
+                assert!(plan(&[pinned.clone(), separate]).is_ok(), "{key}");
+            }
+        }
+        let mut pouch = second;
+        pouch["value"]["containerType"] = json!("Pouch");
+        assert!(
+            plan(&[first, pouch]).is_err(),
+            "legacy player scope includes every container"
+        );
+    }
+
+    #[test]
+    fn overlapping_inventory_counts_are_rejected_before_any_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let save = temp.path().join("G1R-001.sav");
+        let output = temp.path().join("out.sav");
+        let original = include_bytes!("../assets/start_saves/resources_gothic.sav");
+        fs::write(&save, original).unwrap();
+        let first = json!({"path":"private.inventory.setItemCount","value":{"id":"ItWr_Scroll_Letter_01","count":11}});
+        let second = json!({"path":"private.inventory.setItemCount","value":{"path":"/Script/Angelscript.ItWr_Scroll_Letter_01","containerType":"MainContainer","slotId":3,"count":22}});
+        for edits in [vec![first.clone(), second.clone()], vec![second, first]] {
+            for command in ["write_save", "apply_edits"] {
+                for dry in [false, true] {
+                    let result = crate::api::execute(&crate::api::Request {
+                        command: command.into(),
+                        payload: json!({"path":save,"edits":edits,"outputPath":output,"dryRun":dry}),
+                    });
+                    assert!(result.is_err(), "{command}: {result:?}");
+                    assert_eq!(fs::read(&save).unwrap(), original);
+                    assert!(!output.exists());
+                    assert!(!temp.path().join("goresave_backups").exists());
+                }
+            }
+        }
     }
 
     #[test]

@@ -1015,6 +1015,87 @@ fn portrait_exports_refuse_source_artwork_aliases_and_copy_other_outputs() {
 }
 
 #[test]
+fn draft_staging_keeps_distinct_inventory_id_counts_and_applies_both() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    let draft = home.join("draft.json");
+    let payload = home.join("payload.json");
+    fs::copy(fixture(), &save).unwrap();
+    let original = fs::read(&save).unwrap();
+    let count = |id, count| json!({"path":"private.inventory.setItemCount","value":{"id":id,"count":count}});
+    run(
+        home,
+        &[
+            "draft",
+            "create",
+            draft.to_str().unwrap(),
+            "--target",
+            save.to_str().unwrap(),
+        ],
+    );
+    let stage = |edit, dry| {
+        fs::write(
+            &payload,
+            serde_json::to_vec(&json!({"path":save,"edits":[edit]})).unwrap(),
+        )
+        .unwrap();
+        let mut args = vec![
+            "draft",
+            "stage",
+            draft.to_str().unwrap(),
+            "--payload-file",
+            payload.to_str().unwrap(),
+        ];
+        if dry {
+            args.push("--dry-run");
+        }
+        run(home, &args)
+    };
+    assert_eq!(
+        stage(count("ItWr_Scroll_Letter_01", 11), false)["pending"],
+        1
+    );
+    let before = fs::read(&draft).unwrap();
+    assert_eq!(stage(count("ItMs_Glossary", 22), true)["pending"], 2);
+    assert_eq!(fs::read(&draft).unwrap(), before);
+    assert_eq!(stage(count("ItMs_Glossary", 22), false)["pending"], 2);
+    let staged = stage(count("ItMs_Glossary", 33), false);
+    assert_eq!(staged["pending"], 2);
+    assert_eq!(
+        staged["data"]["edits"][0],
+        count("ItWr_Scroll_Letter_01", 11)
+    );
+    assert_eq!(staged["data"]["edits"][1], count("ItMs_Glossary", 33));
+    run(home, &["draft", "validate", draft.to_str().unwrap()]);
+    assert_eq!(fs::read(&save).unwrap(), original);
+    assert!(!home.join("goresave_backups").exists());
+    assert_eq!(
+        run(home, &["draft", "apply", draft.to_str().unwrap()])["complete"],
+        true
+    );
+    let inventory = run(
+        home,
+        &["inventory", "list", save.to_str().unwrap(), "--all"],
+    );
+    for (id, count) in [("ItWr_Scroll_Letter_01", 11), ("ItMs_Glossary", 33)] {
+        assert_eq!(
+            inventory["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["id"] == id)
+                .unwrap()["count"],
+            count
+        );
+    }
+    assert_eq!(
+        run(home, &["draft", "show", draft.to_str().unwrap()])["edits"],
+        json!([])
+    );
+}
+
+#[test]
 fn npc_revival_and_health_edits_are_rejected_without_consuming_the_draft() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

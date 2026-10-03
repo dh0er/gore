@@ -11745,6 +11745,13 @@ fn apply_private_edits(
                     edits[first_at].path, edits[second_at].path
                 )));
             }
+            if inventory_count_conflict(first, second) {
+                return Err(CoreError::UnsupportedEdit(format!(
+                    "{} (edit {first_at}) and {} (edit {second_at}) set the count of \
+                     the same inventory stack; save them separately",
+                    edits[first_at].path, edits[second_at].path
+                )));
+            }
         }
     }
     // The same applies to two STRUCTURED edits that resolve the same target: each
@@ -12139,6 +12146,38 @@ fn inventory_count_removal_conflict(first: &PrivateEdit, second: &PrivateEdit) -
             .zip(remove.slot_id)
             .is_none_or(|(count_slot, remove_slot)| count_slot == remove_slot)
         && inventory_edit_matches_item(count, &remove.path)
+}
+
+/// Legacy player selectors cover all containers; explicit selectors narrow to
+/// one container and optionally one slot. Compare that scope and the complete
+/// item selector so different forms cannot overwrite the same pending count.
+fn inventory_count_conflict(first: &PrivateEdit, second: &PrivateEdit) -> bool {
+    let (PrivateEdit::InventoryItemCount(first), PrivateEdit::InventoryItemCount(second)) =
+        (first, second)
+    else {
+        return false;
+    };
+    let legacy = |edit: &PrivateInventoryItemCountEdit| {
+        edit.actor_id.is_none() && edit.container_type.is_none() && edit.slot_id.is_none()
+    };
+    let item_overlap = match (first.path.as_deref(), second.path.as_deref()) {
+        (Some(first_path), Some(second_path)) => {
+            first_path == second_path
+                && inventory_edit_matches_item(first, first_path)
+                && inventory_edit_matches_item(second, first_path)
+        }
+        (Some(path), None) | (None, Some(path)) => {
+            inventory_edit_matches_item(first, path) && inventory_edit_matches_item(second, path)
+        }
+        (None, None) => first.id == second.id,
+    };
+    first.actor_id == second.actor_id
+        && (legacy(first)
+            || legacy(second)
+            || container_enum_label(first.container_type.as_deref())
+                == container_enum_label(second.container_type.as_deref()))
+        && first.slot_id.zip(second.slot_id).is_none_or(|(first, second)| first == second)
+        && item_overlap
 }
 
 /// Revival restores this actor's Health record. Whole attribute-map/set edits

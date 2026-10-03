@@ -461,12 +461,18 @@ pub(super) fn catalog_page(domain: &str, o: &Options, texts: &super::text::Texts
 pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
     match (g, v) {
         ("catalog" | "items" | "locations", _) => {
+            let mut options = o.clone();
             let domain = if g == "catalog" {
-                o.kind.as_deref().or(o.source.as_deref()).unwrap_or("items")
+                if let Some(source) = o.source.as_deref() {
+                    source
+                } else {
+                    options.kind = None;
+                    o.kind.as_deref().unwrap_or("items")
+                }
             } else {
                 g
             };
-            catalog_page(domain, o, &super::text::Texts::load_options(o)?)
+            catalog_page(domain, &options, &super::text::Texts::load_options(o)?)
         }
         ("localization", "status") => call("loc_status", json!({})),
         ("localization", "find") => {
@@ -1148,6 +1154,60 @@ fn overview(o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lock_catalog_selection_is_separate_from_lock_kind_filter() {
+        let options = Options {
+            all: true,
+            lang: "en".into(),
+            game_lang: "en".into(),
+            ..Options::default()
+        };
+        let source = dispatch(
+            "catalog",
+            "list",
+            &Options {
+                source: Some("locks".into()),
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert!(source["total"].as_u64().unwrap() > 0);
+        let kind = dispatch(
+            "catalog",
+            "list",
+            &Options {
+                kind: Some("locks".into()),
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(kind, source);
+        for lock_kind in ["chest", "door"] {
+            let filtered = dispatch(
+                "catalog",
+                "list",
+                &Options {
+                    source: Some("locks".into()),
+                    kind: Some(lock_kind.into()),
+                    ..options.clone()
+                },
+            )
+            .unwrap();
+            let expected = source["locks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|row| {
+                    row["k"]
+                        .as_str()
+                        .is_some_and(|kind| kind.eq_ignore_ascii_case(lock_kind))
+                })
+                .count();
+            assert!(expected > 0);
+            assert_eq!(filtered["total"], expected);
+        }
+    }
 
     #[test]
     fn catalog_items_use_editor_inventory_categories() {
