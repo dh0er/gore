@@ -1,12 +1,12 @@
 name: CI
 
+# Explicit user policy (2026-10-03): CI tests are manual-only because automatic
+# runs on every push/PR update waste time and CI minutes during fix-bugs loops.
+# Dispatch only after two clean review rounds. Failed CI invalidates the loop;
+# fix the failure and repeat reviews before dispatching CI again at the end.
+# Do not restore automatic CI triggers unless the user explicitly requests it.
 on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read

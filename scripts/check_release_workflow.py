@@ -44,7 +44,26 @@ _TOOL_ROW = re.compile(
 )
 _DOWNLOAD_LINK = re.compile(r"^\[(?P<label>[^\]]+)\]\((?P<url>[^)]+)\)$")
 
-REUSABLE_CI = "./.github/workflows/ci.yml"
+MANUAL_CI_GATE = """const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+  ...context.repo, workflow_id: 'ci.yml', event: 'workflow_dispatch',
+  head_sha: context.sha, per_page: 100,
+});
+const run = runs.filter(run => run.head_sha === context.sha &&
+  run.event === 'workflow_dispatch').sort((a, b) =>
+    new Date(b.created_at) - new Date(a.created_at))[0];
+if (!run || run.status !== 'completed' || run.conclusion !== 'success') {
+  core.setFailed('The latest manual CI for this exact commit has not passed. Complete the fix-bugs review loop and manually run CI before releasing.');
+  return;
+}
+const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+  ...context.repo, run_id: run.id, filter: 'latest', per_page: 100,
+});
+if (!jobs.some(job => job.name === 'test' && job.status === 'completed' &&
+    job.conclusion === 'success')) {
+  core.setFailed('The required test job did not pass; do not release.');
+  return;
+}
+core.info(`Using successful manual CI: ${run.html_url}`);"""
 QUALITY_JOB = "quality-gates"
 PUBLISH_GUARD = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')"
 
@@ -605,21 +624,14 @@ def _validate_ci(root: dict[str, Field], problems: list[str]) -> None:
     triggers = _mapping(on, "ci.on")
     _expect_keys(
         triggers,
-        {"pull_request", "push", "workflow_dispatch", "workflow_call"},
+        {"workflow_dispatch"},
         "ci.on",
         problems,
     )
-    for trigger in ("workflow_dispatch", "workflow_call"):
+    for trigger in ("workflow_dispatch",):
         field = triggers.get(trigger)
         if field is not None and _scalar(field, f"ci.on.{trigger}") != "":
             problems.append(f"ci.on.{trigger}: must not declare inputs or options")
-    for trigger in ("pull_request", "push"):
-        field = triggers.get(trigger)
-        if field is not None:
-            _expect_scalar_map(
-                field, {"branches": "[main]"}, f"ci.on.{trigger}", problems
-            )
-
     permission_fields = _mapping(permissions, "ci.permissions")
     _expect_keys(permission_fields, {"contents"}, "ci.permissions", problems)
     contents = permission_fields.get("contents")
@@ -1038,8 +1050,9 @@ def _validate_product_steps(
         if with_field is not None:
             with_fields = _mapping(with_field, f"{context} upload.with")
             _expect_keys(
-                with_fields, {"name", "path"}, f"{context} upload.with", problems
+                with_fields, {"name", "path", "retention-days"}, f"{context} upload.with", problems
             )
+            _expect_scalar(with_fields, "retention-days", "3", context, problems)
             name = with_fields.get("name")
             path = with_fields.get("path")
             if name is None or _scalar(name, context) != contract.upload_name:
@@ -1232,31 +1245,26 @@ def _validate_release(root: dict[str, Field], problems: list[str]) -> None:
     if quality is not None:
         quality_fields = _mapping(quality, f"release.jobs.{QUALITY_JOB}")
         _expect_keys(
-            quality_fields,
-            {"name", "permissions", "uses"},
-            f"release.jobs.{QUALITY_JOB}",
-            problems,
+            quality_fields, {"name", "runs-on", "permissions", "steps"},
+            f"release.jobs.{QUALITY_JOB}", problems,
         )
-        name = quality_fields.get("name")
-        uses = quality_fields.get("uses")
-        permissions = quality_fields.get("permissions")
-        if name is None or _scalar(name, QUALITY_JOB) != "CI quality gates":
-            problems.append(f"release.jobs.{QUALITY_JOB}: display name changed")
-        if uses is None or _scalar(uses, QUALITY_JOB) != REUSABLE_CI:
-            problems.append(
-                f"release.jobs.{QUALITY_JOB}: must call the exact local CI workflow"
-            )
+        _expect_scalar(quality_fields, "name", "CI quality gates", QUALITY_JOB, problems)
+        _expect_scalar(quality_fields, "runs-on", "ubuntu-latest", QUALITY_JOB, problems)
+        permissions = _required(quality_fields, "permissions", QUALITY_JOB, problems)
         if permissions is not None:
-            permission_fields = _mapping(permissions, f"{QUALITY_JOB}.permissions")
-            _expect_keys(
-                permission_fields,
-                {"contents"},
-                f"{QUALITY_JOB}.permissions",
-                problems,
-            )
-            contents = permission_fields.get("contents")
-            if contents is None or _scalar(contents, QUALITY_JOB) != "read":
-                problems.append(f"release.jobs.{QUALITY_JOB}: contents must be read")
+            _expect_scalar_map(permissions, {"contents": "read", "actions": "read"}, QUALITY_JOB, problems)
+        field = _required(quality_fields, "steps", QUALITY_JOB, problems)
+        if field is not None:
+            steps = _parse_steps(field, QUALITY_JOB)
+            if len(steps) != 1:
+                problems.append("quality-gates: exact step count changed")
+            else:
+                fields = steps[0].fields
+                _expect_keys(fields, {"uses", "with"}, QUALITY_JOB, problems)
+                _expect_scalar(fields, "uses", "actions/github-script@v7", QUALITY_JOB, problems)
+                options = _required(fields, "with", QUALITY_JOB, problems)
+                if options is not None:
+                    _expect_scalar_map(options, {"script": MANUAL_CI_GATE}, QUALITY_JOB, problems)
 
     for product, contract in PRODUCTS.items():
         job = job_fields.get(product)
@@ -1438,7 +1446,7 @@ def main() -> int:
         )
         return 1
 
-    print("OK: release jobs are gated by the exact normal CI workflow.")
+    print("OK: release jobs require successful manual CI for the exact commit.")
     return 0
 
 
