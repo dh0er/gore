@@ -426,6 +426,25 @@ fn loc_payload(o: &Options) -> Result<Value> {
 
 pub(super) fn catalog_page(domain: &str, o: &Options, texts: &super::text::Texts) -> Result<Value> {
     let mut data = catalog(domain)?;
+    if domain == "item-stats" {
+        let items = data
+            .as_object_mut()
+            .context("invalid item stats catalog")?
+            .remove("items")
+            .context("item stats have no items")?;
+        let mut rows = items
+            .as_object()
+            .context("invalid item stats")?
+            .iter()
+            .map(|(id, stats)| {
+                let mut row = stats.clone();
+                row["id"] = json!(id);
+                row
+            })
+            .collect::<Vec<_>>();
+        annotate_items(&mut rows, false)?;
+        data["entries"] = json!(rows);
+    }
     if domain == "ui-texts" {
         data = json!({"entries":data[&o.lang].as_object().context("unknown language")?.iter().map(|(key,text)|json!({"id":key,"text":text})).collect::<Vec<_>>()});
     }
@@ -449,7 +468,7 @@ pub(super) fn catalog_page(domain: &str, o: &Options, texts: &super::text::Texts
         options.id = options.item.clone().or(options.location.clone());
     }
     texts.apply(&mut data)?;
-    if matches!(domain, "item" | "items") {
+    if matches!(domain, "item" | "items" | "item-stats") {
         filter_items(&mut data, key, &options);
     } else {
         filter(&mut data, key, &options);
@@ -1154,6 +1173,56 @@ fn overview(o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn item_stat_catalog_supports_selection_search_and_pagination() {
+        let options = Options {
+            kind: Some("item-stats".into()),
+            lang: "en".into(),
+            game_lang: "en".into(),
+            limit: 1,
+            ..Options::default()
+        };
+        let empty = dispatch(
+            "catalog",
+            "search",
+            &Options {
+                query: Some("definitely_does_not_exist".into()),
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(empty["total"], 0);
+        let selected = dispatch(
+            "catalog",
+            "show",
+            &Options {
+                id: Some("ItMi_Orenugget".into()),
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(selected["total"], 1);
+        assert_eq!(selected["entries"][0]["id"], "ItMi_Orenugget");
+        assert_eq!(
+            selected["entries"][0]["maxStack"],
+            catalog("item-stats").unwrap()["items"]["ItMi_Orenugget"]["maxStack"]
+        );
+        let first = dispatch("catalog", "list", &options).unwrap();
+        let second = dispatch(
+            "catalog",
+            "list",
+            &Options {
+                offset: 1,
+                ..options
+            },
+        )
+        .unwrap();
+        assert_eq!(first["total"], 867);
+        assert_eq!(first["count"], 1);
+        assert_eq!(second["total"], first["total"]);
+        assert_ne!(first["entries"][0]["id"], second["entries"][0]["id"]);
+    }
 
     #[test]
     fn lock_catalog_selection_is_separate_from_lock_kind_filter() {

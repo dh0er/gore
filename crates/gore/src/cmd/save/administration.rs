@@ -810,6 +810,15 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
         return stage(file, &p, o.dry_run);
     }
     data["dryRun"] = json!(o.dry_run || v == "validate");
+    if data["syncPersistentDataList"] == true {
+        let target = Path::new(data["path"].as_str().context("draft has no save path")?);
+        guard_profile_recovery(
+            &target
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join("PersistentDataList.sav"),
+        )?;
+    }
     let mut result = call("apply_edits", data.clone())?;
     if !o.dry_run && v == "apply" {
         data = draft_after_apply(data, &result)?;
@@ -1004,6 +1013,22 @@ fn copy_admin_files(
 /// Run the actual administrative core transaction against copies, including
 /// backups, manifests and placement notes. Validation is identical to a write.
 fn admin_write(command: &str, p: Value, o: &Options) -> Result<Value> {
+    let profile = match command {
+        "write_difficulty" => p["profile"]["path"].as_str().map(PathBuf::from),
+        "assign_save_profile" | "remove_save_from_profile" | "delete_save" => {
+            p["persistentPath"].as_str().map(PathBuf::from)
+        }
+        "restore_backup" | "delete_backup" => p["path"].as_str().map(|path| {
+            Path::new(path)
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join("PersistentDataList.sav")
+        }),
+        _ => None,
+    };
+    if let Some(profile) = profile {
+        guard_profile_recovery(&profile)?;
+    }
     if !o.dry_run {
         return call(command, p);
     }
@@ -1127,6 +1152,139 @@ fn selected_recovery<'a>(data: &'a Value, o: &Options) -> Result<&'a Value> {
                 })
         })
         .context("no matching recovery")
+}
+
+pub(super) fn guard_profile_recovery(profile: &Path) -> Result<()> {
+    let parent = profile
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let native = call("recovery_status", json!({"path":parent}))?;
+    let pending_native = native["recoveries"]
+        .as_array()
+        .is_some_and(|rows| !rows.is_empty());
+    let pending_editor = if pending_native {
+        false
+    } else {
+        let settings = settings_read("editor")?;
+        let token = &settings["deletedSaveRecovery"];
+        // Match DeletedSaveRecovery.tryFromJson: incomplete preferences are
+        // ignored by the Editor and must not invent a profile-write blocker.
+        let valid = [
+            "targetPath",
+            "backupPath",
+            "persistentPostDeleteSha1",
+            "deletedSaveSha1",
+            "deletedPersistentSha1",
+            "message",
+        ]
+        .iter()
+        .all(|key| {
+            token[*key]
+                .as_str()
+                .is_some_and(|value| !value.trim().is_empty())
+        });
+        valid
+            && token["targetPath"].as_str().is_some_and(|raw| {
+                let target = Path::new(raw);
+                !target.exists()
+                    && target.parent().is_some_and(|root| {
+                        same_path(&root.to_string_lossy(), &parent.to_string_lossy())
+                    })
+            })
+    };
+    if pending_native || pending_editor {
+        bail!("pending deleted-save recovery; restore or dismiss it before changing this profile");
+    }
+    Ok(())
+}
+
+fn dismiss_recovery_payload(data: &Value, o: &Options) -> Result<Value> {
+    if let Ok(recovery) = selected_recovery(data, o) {
+        if o.target.as_ref().or(o.save.as_ref()).is_some_and(|target| {
+            recovery["targetPath"]
+                .as_str()
+                .is_none_or(|actual| !same_path(actual, &target.to_string_lossy()))
+        }) {
+            bail!("selected recovery belongs to another save");
+        }
+        return Ok(recovery.clone());
+    }
+    let save_root = root(o)?;
+    let settings = settings_read("editor")?;
+    let stored = &settings["deletedSaveRecovery"];
+    let stored_match = stored["backupPath"].as_str().is_some_and(|backup| {
+        o.backup
+            .as_ref()
+            .is_none_or(|selected| same_path(backup, &selected.to_string_lossy()))
+    });
+    let backup = o
+        .backup
+        .clone()
+        .or_else(|| {
+            stored_match
+                .then(|| stored["backupPath"].as_str().map(PathBuf::from))
+                .flatten()
+        })
+        .context("no matching recovery; provide --backup to dismiss an unusable record")?;
+    let backup = normalized_path(&backup);
+    let target = o
+        .target
+        .clone()
+        .or(o.save.clone())
+        .or_else(|| {
+            stored_match
+                .then(|| stored["targetPath"].as_str().map(PathBuf::from))
+                .flatten()
+        })
+        .or_else(|| {
+            backup
+                .file_name()?
+                .to_str()?
+                .split_once(".bak.")
+                .map(|(name, _)| save_root.join(name))
+        })
+        .context("cannot resolve the deleted save; provide --target")?;
+    let target = normalized_path(&target);
+    if !target
+        .parent()
+        .is_some_and(|parent| same_path(&parent.to_string_lossy(), &save_root.to_string_lossy()))
+    {
+        bail!("recovery target must belong to the requested save root");
+    }
+    Ok(json!({"targetPath":target,"backupPath":backup}))
+}
+
+fn clear_matching_editor_recovery(recovery: &Value) -> Result<()> {
+    let settings = settings_read("editor")?;
+    let token = settings["deletedSaveRecovery"].clone();
+    let matches = ["targetPath", "backupPath"].iter().all(|key| {
+        token[*key]
+            .as_str()
+            .zip(recovery[*key].as_str())
+            .is_some_and(|(a, b)| same_path(a, b))
+    });
+    if !matches {
+        return Ok(());
+    }
+    let path = settings_path("editor")?;
+    let seed_legacy = !path.exists();
+    api::update_json_file(&path, |mut current| {
+        if seed_legacy
+            && !path.exists()
+            && current.as_object().is_some_and(|object| object.is_empty())
+        {
+            current = settings.clone();
+        }
+        if current["deletedSaveRecovery"] == token {
+            current
+                .as_object_mut()
+                .unwrap()
+                .remove("deletedSaveRecovery");
+        }
+        Ok(current)
+    })?;
+    Ok(())
 }
 
 fn draft_is_stale(draft: &Value) -> bool {
@@ -1299,9 +1457,13 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
         ("recovery", "repair") => admin_write("scan_save_dir", json!({"path":root(o)?}), o),
         ("recovery", "restore" | "dismiss") => {
             let data = call("recovery_status", json!({"path":root(o)?}))?;
-            let recovery = selected_recovery(&data, o)?;
+            let recovery = if v == "dismiss" {
+                dismiss_recovery_payload(&data, o)?
+            } else {
+                selected_recovery(&data, o)?.clone()
+            };
             let p = json!({"path":recovery["targetPath"],"backupPath":recovery["backupPath"],"expectedPersistentSha1":recovery["persistentPostDeleteSha1"],"expectedSaveSha1":recovery["deletedSaveSha1"],"expectedPersistentBackupSha1":recovery["deletedPersistentSha1"]});
-            admin_write(
+            let mut result = admin_write(
                 if v == "restore" {
                     "restore_deleted_save"
                 } else {
@@ -1309,7 +1471,13 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 },
                 p,
                 o,
-            )
+            )?;
+            if !o.dry_run {
+                if let Err(error) = clear_matching_editor_recovery(&recovery) {
+                    result["editorSettingsWarning"] = json!(error.to_string());
+                }
+            }
+            Ok(result)
         }
         ("updates", _) => super::updates::run(v, o),
         _ => bail!("unknown administrative command"),

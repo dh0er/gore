@@ -812,6 +812,33 @@ pub(super) fn npc_id(o: &Options) -> Result<String> {
         .context("character has no saved GlobalId")?
         .into())
 }
+fn exact_npc_page(o: &Options) -> Result<Value> {
+    let selected = Options {
+        actor: o.id.clone().unwrap_or_else(|| o.actor.clone()),
+        ..o.clone()
+    };
+    let id = npc_id(&selected)?;
+    let complete = Options {
+        all: true,
+        offset: 0,
+        limit: 1000,
+        ..o.clone()
+    };
+    let mut p = payload(&complete)?;
+    p["query"] = json!(id);
+    let mut data = paged("private.npc.list", p, &complete)?;
+    data["npcs"]
+        .as_array_mut()
+        .context("NPC list unavailable")?
+        .retain(|row| row["id"].as_str() == Some(id.as_str()));
+    display::paginate(&mut data, "npcs", o);
+    data["limit"] = if o.all {
+        data["count"].clone()
+    } else {
+        json!(o.limit.clamp(1, 1000))
+    };
+    Ok(data)
+}
 fn typed_path(o: &Options) -> Result<Value> {
     let p = read_json(
         o.path_file
@@ -845,6 +872,14 @@ pub(super) fn write(o: &Options, edits: Vec<Value>, extras: Value) -> Result<Val
     }
     if let Some(draft) = &o.draft {
         return administration::stage(draft, &p, o.dry_run);
+    }
+    if p["syncPersistentDataList"] == true {
+        administration::guard_profile_recovery(
+            &save(o)?
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join("PersistentDataList.sav"),
+        )?;
     }
     call("apply_edits", p)
 }
@@ -945,26 +980,17 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             Ok(data)
         }
         ("npc", "list" | "show") => {
-            let mut p = payload(o)?;
             if v == "show" {
-                let selected = Options {
-                    actor: o.id.clone().unwrap_or_else(|| o.actor.clone()),
-                    ..o.clone()
-                };
-                p["query"] = json!(npc_id(&selected)?);
+                return exact_npc_page(o);
             }
-            paged("private.npc.list", p, o)
+            paged("private.npc.list", payload(o)?, o)
         }
         ("npc", "revive") => write(
             o,
             vec![edit("private.npc.revive", json!({"id":npc_id(o)?}))],
             json!({}),
         ),
-        ("relationship", "show") => paged(
-            "private.npc.list",
-            json!({"path":save(o)?,"query":npc_id(o)?,"limit":1000}),
-            o,
-        ),
+        ("relationship", "show") => exact_npc_page(o),
         ("relationship", "set") => write(
             o,
             vec![edit(

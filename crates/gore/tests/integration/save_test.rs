@@ -4368,6 +4368,304 @@ fn npc_restores_require_the_original_pinned_routine_and_preserve_its_note() {
 }
 
 #[test]
+fn exact_npc_reads_filter_before_pagination() {
+    let temp = tempfile::tempdir().unwrap();
+    let save = fixture();
+    let actor = "Goblin_Black-WP_EF_GOBLINCAVE_GOBLIN_SPAWN_08-2";
+    for command in [vec!["npc", "show"], vec!["npc", "relationship", "show"]] {
+        let mut args = command;
+        args.extend([save.to_str().unwrap(), "--actor", actor]);
+        let data = run(temp.path(), &args);
+        assert_eq!(data["total"], 1, "{data}");
+        assert_eq!(data["npcs"][0]["id"], actor);
+        args.extend(["--offset", "1", "--limit", "1"]);
+        let empty = run(temp.path(), &args);
+        assert_eq!(empty["total"], 1);
+        assert_eq!(empty["npcs"], json!([]));
+    }
+}
+
+#[test]
+fn pending_recovery_blocks_profile_writes_without_changing_any_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    let profile = home.join("PersistentDataList.sav");
+    fs::copy(fixture(), &save).unwrap();
+    fs::write(&profile, profile_fixture("Gothic")).unwrap();
+    run(home, &["delete", save.to_str().unwrap(), "--profile", "0"]);
+    let recovery = run(
+        home,
+        &["recovery", "show", "--root", home.to_str().unwrap()],
+    );
+    let before = fs::read(&profile).unwrap();
+    let manifest = home.join("goresave_backups").join(format!(
+        ".delete-recovery.{}.json",
+        Path::new(recovery["backupPath"].as_str().unwrap())
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+    ));
+    let record = fs::read(&manifest).unwrap();
+    let other = home.join("G1R-002.sav");
+    fs::copy(fixture(), &other).unwrap();
+    let draft = home.join("pending.json");
+    run(
+        home,
+        &[
+            "draft",
+            "create",
+            draft.to_str().unwrap(),
+            "--target",
+            other.to_str().unwrap(),
+        ],
+    );
+    run(
+        home,
+        &[
+            "rename",
+            other.to_str().unwrap(),
+            "--name",
+            "Pending name",
+            "--draft",
+            draft.to_str().unwrap(),
+        ],
+    );
+    let other_before = fs::read(&other).unwrap();
+    let draft_before = fs::read(&draft).unwrap();
+    for base in [
+        vec![
+            "difficulty",
+            "set",
+            "--root",
+            home.to_str().unwrap(),
+            "--profile",
+            "0",
+            "--preset",
+            "Hard",
+        ],
+        vec![
+            "profile",
+            "assign",
+            other.to_str().unwrap(),
+            "--profile",
+            "0",
+        ],
+        vec![
+            "profile",
+            "detach",
+            other.to_str().unwrap(),
+            "--profile",
+            "0",
+        ],
+        vec!["rename", other.to_str().unwrap(), "--name", "Blocked name"],
+        vec!["draft", "validate", draft.to_str().unwrap()],
+        vec!["draft", "apply", draft.to_str().unwrap()],
+        vec![
+            "backups",
+            "restore",
+            "--target",
+            save.to_str().unwrap(),
+            "--backup",
+            recovery["backupPath"].as_str().unwrap(),
+        ],
+        vec![
+            "backups",
+            "delete",
+            "--target",
+            save.to_str().unwrap(),
+            "--backup",
+            recovery["backupPath"].as_str().unwrap(),
+            "--yes",
+        ],
+    ] {
+        for dry in [false, true] {
+            let mut args = base.clone();
+            if dry {
+                args.push("--dry-run");
+            }
+            let error = run_failure(home, &args);
+            assert!(
+                error.to_string().contains("pending deleted-save recovery"),
+                "{error}"
+            );
+            assert_eq!(fs::read(&profile).unwrap(), before);
+            assert_eq!(fs::read(&manifest).unwrap(), record);
+            assert_eq!(fs::read(&other).unwrap(), other_before);
+            assert_eq!(fs::read(&draft).unwrap(), draft_before);
+            assert_eq!(
+                run(
+                    home,
+                    &["recovery", "show", "--root", home.to_str().unwrap()]
+                ),
+                recovery
+            );
+        }
+    }
+}
+
+#[test]
+fn recovery_dismiss_clears_only_matching_editor_tokens_and_accepts_invalid_manifests() {
+    for scenario in [
+        "valid",
+        "malformed",
+        "malformed-no-token",
+        "malformed-incomplete-token",
+        "stale",
+        "other-token",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let save = home.join("G1R-001.sav");
+        let profile = home.join("PersistentDataList.sav");
+        fs::copy(fixture(), &save).unwrap();
+        fs::write(&profile, profile_fixture("Gothic")).unwrap();
+        run(home, &["delete", save.to_str().unwrap(), "--profile", "0"]);
+        let recovery = run(
+            home,
+            &["recovery", "show", "--root", home.to_str().unwrap()],
+        );
+        let backup = Path::new(recovery["backupPath"].as_str().unwrap());
+        let manifest = backup.parent().unwrap().join(format!(
+            ".delete-recovery.{}.json",
+            backup.file_name().unwrap().to_str().unwrap()
+        ));
+        let mut token = recovery.clone();
+        token["message"] = json!("Recovery available");
+        if scenario == "other-token" {
+            token["backupPath"] = json!(home.join("goresave_backups/G1R-002.sav.bak.0"));
+            token["targetPath"] = json!(home.join("G1R-002.sav"));
+        }
+        run(
+            home,
+            &[
+                "settings",
+                "set",
+                "--scope",
+                "editor",
+                "--key",
+                "saveDir",
+                "--value",
+                home.to_str().unwrap(),
+            ],
+        );
+        if scenario == "malformed-incomplete-token" {
+            token = json!({"targetPath":save,"backupPath":backup});
+        }
+        if scenario != "malformed-no-token" {
+            run(
+                home,
+                &[
+                    "settings",
+                    "set",
+                    "--scope",
+                    "editor",
+                    "--key",
+                    "deletedSaveRecovery",
+                    "--value-json",
+                    &token.to_string(),
+                ],
+            );
+        }
+        let settings = run(home, &["settings", "show", "--scope", "editor"]);
+        let settings_path = Path::new(settings["path"].as_str().unwrap());
+        if scenario.starts_with("malformed") {
+            fs::write(&manifest, b"broken JSON").unwrap();
+        }
+        if scenario == "stale" {
+            fs::write(&profile, profile_fixture("Hard")).unwrap();
+        }
+        let profile_before = fs::read(&profile).unwrap();
+        let manifest_before = fs::read(&manifest).unwrap();
+        let settings_before = fs::read(settings_path).unwrap();
+        let backup_before = fs::read(backup).unwrap();
+        if scenario == "malformed-incomplete-token" {
+            run(
+                home,
+                &[
+                    "difficulty",
+                    "set",
+                    "--root",
+                    home.to_str().unwrap(),
+                    "--profile",
+                    "0",
+                    "--preset",
+                    "Hard",
+                    "--dry-run",
+                ],
+            );
+            assert_eq!(fs::read(&profile).unwrap(), profile_before);
+        }
+        if matches!(scenario, "malformed" | "stale") {
+            let error = run_failure(
+                home,
+                &[
+                    "difficulty",
+                    "set",
+                    "--root",
+                    home.to_str().unwrap(),
+                    "--profile",
+                    "0",
+                    "--preset",
+                    "Hard",
+                ],
+            );
+            assert!(
+                error.to_string().contains("pending deleted-save recovery"),
+                "{error}"
+            );
+            assert_eq!(fs::read(&profile).unwrap(), profile_before);
+        }
+        let args = [
+            "recovery",
+            "dismiss",
+            "--root",
+            home.to_str().unwrap(),
+            "--backup",
+            backup.to_str().unwrap(),
+        ];
+        let mut dry = args.to_vec();
+        dry.push("--dry-run");
+        let mut wrong = args.to_vec();
+        let wrong_target = home.join("G1R-003.sav");
+        wrong.extend(["--target", wrong_target.to_str().unwrap()]);
+        run_failure(home, &wrong);
+        assert_eq!(fs::read(&manifest).unwrap(), manifest_before);
+        assert_eq!(fs::read(settings_path).unwrap(), settings_before);
+        assert_eq!(run(home, &dry)["validated"], true);
+        assert_eq!(fs::read(&manifest).unwrap(), manifest_before);
+        assert_eq!(fs::read(settings_path).unwrap(), settings_before);
+        assert_eq!(run(home, &args)["dismissed"], true);
+        assert!(!manifest.exists());
+        assert!(!save.exists());
+        assert_eq!(fs::read(backup).unwrap(), backup_before);
+        assert_eq!(fs::read(&profile).unwrap(), profile_before);
+        let current = run(home, &["settings", "show", "--scope", "editor"]);
+        if scenario == "other-token" {
+            assert_eq!(current["settings"]["deletedSaveRecovery"], token);
+        } else {
+            assert!(current["settings"].get("deletedSaveRecovery").is_none());
+            run(
+                home,
+                &[
+                    "difficulty",
+                    "set",
+                    "--root",
+                    home.to_str().unwrap(),
+                    "--profile",
+                    "0",
+                    "--preset",
+                    "Hard",
+                    "--dry-run",
+                ],
+            );
+            assert_eq!(fs::read(&profile).unwrap(), profile_before);
+        }
+    }
+}
+
+#[test]
 fn recovery_previews_preserve_manifest_hashes_when_run_from_the_save_directory() {
     for operation in ["restore", "dismiss"] {
         let temp = tempfile::tempdir().unwrap();
