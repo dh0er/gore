@@ -646,6 +646,9 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
     }
     let original = data.clone();
     if matches!(v, "remove" | "reset") {
+        if v == "remove" && o.operation.is_none() {
+            bail!("--operation required for draft remove");
+        }
         if let Some(index) = o.operation {
             let list = data["edits"].as_array_mut().context("invalid draft")?;
             if index >= list.len() {

@@ -177,6 +177,148 @@ fn profile_fixture(preset: &str) -> Vec<u8> {
 }
 
 #[test]
+fn draft_remove_requires_an_operation_and_preserves_pending_placement_actions() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    let profile = home.join("PersistentDataList.sav");
+    let draft = home.join("pending.json");
+    fs::copy(fixture(), &save).unwrap();
+    fs::write(&profile, b"original profile snapshot").unwrap();
+    let save_arg = save.to_str().unwrap();
+    let draft_arg = draft.to_str().unwrap();
+    run(
+        home,
+        &[
+            "position",
+            "set",
+            save_arg,
+            "--actor",
+            "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN",
+            "--x",
+            "100",
+            "--stay",
+            "--draft",
+            draft_arg,
+        ],
+    );
+    run(
+        home,
+        &[
+            "rename",
+            save_arg,
+            "--name",
+            "Pending name",
+            "--draft",
+            draft_arg,
+        ],
+    );
+    let before = fs::read(&draft).unwrap();
+    let pending: Value = serde_json::from_slice(&before).unwrap();
+    assert_eq!(pending["placementNotes"].as_array().unwrap().len(), 1);
+    assert_eq!(pending["syncPersistentDataList"], true);
+    let save_before = fs::read(&save).unwrap();
+    for mode in [vec![], vec!["--dry-run"], vec!["--operation", "99999"]] {
+        let mut args = vec!["draft", "remove", draft_arg];
+        args.extend(mode);
+        let error = run_failure(home, &args);
+        assert!(
+            error.to_string().contains("--operation required")
+                || error.to_string().contains("operation out of range"),
+            "{error}"
+        );
+        assert_eq!(fs::read(&draft).unwrap(), before);
+    }
+    let index = pending["edits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|edit| edit["path"] == "public.m_PlayerSaveName")
+        .unwrap()
+        .to_string();
+    let simulated = run(
+        home,
+        &[
+            "draft",
+            "remove",
+            draft_arg,
+            "--operation",
+            &index,
+            "--dry-run",
+        ],
+    );
+    assert_eq!(
+        simulated["edits"].as_array().unwrap().len(),
+        pending["edits"].as_array().unwrap().len() - 1
+    );
+    assert_eq!(simulated["placementNotes"], pending["placementNotes"]);
+    assert_eq!(fs::read(&draft).unwrap(), before);
+    let removed = run(home, &["draft", "remove", draft_arg, "--operation", &index]);
+    assert_eq!(removed, simulated);
+    let remaining = fs::read(&draft).unwrap();
+    let reset = run(home, &["draft", "reset", draft_arg, "--dry-run"]);
+    assert_eq!(reset["edits"], json!([]));
+    assert!(reset.get("placementNotes").is_none());
+    assert_eq!(fs::read(&draft).unwrap(), remaining);
+    assert_eq!(
+        run(home, &["draft", "reset", draft_arg])["edits"],
+        json!([])
+    );
+    assert_eq!(fs::read(save).unwrap(), save_before);
+    assert_eq!(fs::read(profile).unwrap(), b"original profile snapshot");
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
+fn all_pages_report_the_count_of_the_collected_rows() {
+    let temp = tempfile::tempdir().unwrap();
+    let save = temp.path().join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let npcs = run(
+        temp.path(),
+        &["npc", "list", save_arg, "--all", "--limit", "1000"],
+    );
+    assert!(npcs["npcs"].as_array().unwrap().len() > 1000);
+    assert_eq!(npcs["count"], npcs["npcs"].as_array().unwrap().len());
+    assert_eq!(npcs["count"], npcs["total"]);
+    let rest = run(
+        temp.path(),
+        &[
+            "npc", "list", save_arg, "--all", "--limit", "1000", "--offset", "1000",
+        ],
+    );
+    assert_eq!(
+        rest["npcs"],
+        json!(&npcs["npcs"].as_array().unwrap()[1000..])
+    );
+    assert_eq!(rest["count"], npcs["count"].as_u64().unwrap() - 1000);
+    assert_eq!(rest["limit"], rest["count"]);
+    assert_eq!(rest["offset"], 1000);
+    let empty = run(
+        temp.path(),
+        &["npc", "list", save_arg, "--all", "--offset", "99999"],
+    );
+    assert_eq!(empty["count"], 0);
+    assert_eq!(empty["limit"], 0);
+    assert_eq!(empty["npcs"], json!([]));
+    let data = run(
+        temp.path(),
+        &[
+            "data", "search", save_arg, "--query", "m_Game", "--all", "--limit", "2",
+        ],
+    );
+    assert!(data["results"].as_array().unwrap().len() > 2);
+    assert_eq!(data["count"], data["results"].as_array().unwrap().len());
+    assert_eq!(data["limit"], data["count"]);
+    assert_eq!(data["total"], data["count"]);
+    assert_eq!(data["offset"], 0);
+    assert_eq!(fs::read(save).unwrap(), before);
+    assert!(!temp.path().join("goresave_backups").exists());
+}
+
+#[test]
 fn trader_stock_set_requires_an_explicit_count_without_writing_or_staging() {
     let temp = tempfile::tempdir().unwrap();
     let save = temp.path().join("G1R-001.sav");

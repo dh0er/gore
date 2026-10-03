@@ -652,6 +652,7 @@ pub(super) fn paged(command: &str, mut p: Value, o: &Options) -> Result<Value> {
     result[key] = json!(rows);
     result["offset"] = json!(o.offset);
     result["limit"] = json!(rows.len());
+    result["count"] = json!(rows.len());
     Ok(result)
 }
 fn progression(section: &str, o: &Options) -> Result<Value> {
