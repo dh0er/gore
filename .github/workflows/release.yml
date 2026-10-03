@@ -147,6 +147,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gore-save-editor-windows-x64
+          retention-days: 3
           path: |
             dist/gore-save-editor/*.zip
             dist/gore-save-editor/*.exe
@@ -267,6 +268,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gore-mod-studio-windows-x64
+          retention-days: 3
           path: |
             dist/gore-mod-studio/*.zip
             dist/gore-mod-studio/*.exe
@@ -387,6 +389,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gore-mod-manager-windows-x64
+          retention-days: 3
           path: |
             dist/gore-mod-manager/*.zip
             dist/gore-mod-manager/*.exe
@@ -482,6 +485,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gore-cli-windows-x64
+          retention-days: 3
           path: dist/gore-cli/*.zip
 
       - name: Publish GitHub release
