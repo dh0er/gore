@@ -1715,13 +1715,78 @@ fn attribute_set_selectors_disambiguate_hero_and_npc_reads_before_pagination() {
 }
 
 #[test]
+fn library_add_accepts_only_inspectable_gsav_files_before_updating_settings() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let valid = home.join("external.backup");
+    fs::copy(fixture(), &valid).unwrap();
+    let bytes = fs::read(&valid).unwrap();
+    let note = home.join("note.sav");
+    fs::write(&note, b"this is not a save").unwrap();
+    let truncated = home.join("truncated.sav");
+    fs::write(&truncated, &bytes[..16]).unwrap();
+    let profile = home.join("profile.sav");
+    let profile_bytes = profile_fixture("Gothic");
+    fs::write(&profile, &profile_bytes).unwrap();
+    let missing = home.join("absent/directory/missing.sav");
+    let settings = home.join("gore/gore-save/settings.json");
+    let bad_paths: [&Path; 5] = [&note, &truncated, &profile, &missing, home];
+    for initialized in [false, true] {
+        if initialized {
+            let preview = run(
+                home,
+                &["library", "add", valid.to_str().unwrap(), "--dry-run"],
+            );
+            assert_eq!(preview["externalSavePaths"].as_array().unwrap().len(), 1);
+            assert!(!settings.exists());
+            let added = run(home, &["library", "add", valid.to_str().unwrap()]);
+            let path = added["externalSavePaths"][0].as_str().unwrap();
+            assert_eq!(
+                Path::new(path).canonicalize().unwrap(),
+                valid.canonicalize().unwrap()
+            );
+        }
+        let snapshot = fs::read(&settings).ok();
+        for invalid in bad_paths {
+            for dry_run in [false, true] {
+                let mut args = vec!["library", "add", invalid.to_str().unwrap()];
+                if dry_run {
+                    args.push("--dry-run");
+                }
+                run_failure(home, &args);
+                assert_eq!(fs::read(&settings).ok(), snapshot);
+            }
+        }
+        run_failure(home, &["library", "add", "missing.sav"]);
+        assert_eq!(fs::read(&settings).ok(), snapshot);
+    }
+    let before = fs::read(&settings).unwrap();
+    let duplicate = run_from(home, Some(home), &["library", "add", "external.backup"]);
+    assert_eq!(duplicate["externalSavePaths"].as_array().unwrap().len(), 1);
+    assert_eq!(fs::read(&settings).unwrap(), before);
+    let root = home.join("game-saves");
+    fs::create_dir(&root).unwrap();
+    let listed = run(home, &["list", "--root", root.to_str().unwrap()]);
+    let rows = listed["saves"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["external"], true);
+    assert_eq!(rows[0]["format"], "GSAV");
+    assert_ne!(rows[0]["available"], false);
+    assert_eq!(fs::read(valid).unwrap(), bytes);
+    assert_eq!(fs::read(note).unwrap(), b"this is not a save");
+    assert_eq!(fs::read(profile).unwrap(), profile_bytes);
+    assert_eq!(fs::read(&settings).unwrap(), before);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
 fn library_removes_missing_absolute_and_relative_paths_without_requiring_their_directory() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
     let directory = home.join("external");
     fs::create_dir(&directory).unwrap();
     let file = directory.join("old.sav");
-    fs::write(&file, b"external library reference").unwrap();
+    fs::copy(fixture(), &file).unwrap();
     let path = file.to_str().unwrap();
     run(home, &["library", "add", path]);
     run(home, &["library", "hide", path]);

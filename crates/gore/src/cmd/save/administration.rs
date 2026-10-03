@@ -420,6 +420,15 @@ fn library(v: &str, o: &Options) -> Result<Value> {
         return settings_read("editor");
     }
     let input = save(o)?;
+    if v == "add" {
+        if !input.is_file() {
+            bail!("library add requires an existing save file");
+        }
+        let inspection = call("inspect_save", json!({"path":input}))?;
+        if inspection["format"] != "GSAV" {
+            bail!("library add requires an inspectable Gothic GSAV save");
+        }
+    }
     let file = normalized_path(input).to_string_lossy().into_owned();
     let key = if matches!(v, "hide" | "unhide") {
         "hiddenOtherSavePaths"
