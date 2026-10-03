@@ -11726,9 +11726,9 @@ fn apply_private_edits(
     }
     for (first_at, first) in edit_specs.iter().enumerate() {
         for (second_at, second) in edit_specs.iter().enumerate().skip(first_at + 1) {
-            if opposing_set_element(first, second, false).is_some() {
+            if set_element_conflict(first, second, false).is_some() {
                 return Err(CoreError::UnsupportedEdit(format!(
-                    "{} (edit {first_at}) and {} (edit {second_at}) add and remove the same set element; save them separately",
+                    "{} (edit {first_at}) and {} (edit {second_at}) edit the same set element; remove the duplicate or conflicting pending intent before saving",
                     edits[first_at].path, edits[second_at].path
                 )));
             }
@@ -11797,13 +11797,13 @@ fn apply_private_edits(
     // sequence still behaves exactly as separate writes did — it just stops re-parsing
     // 120 MB per edit when nothing moved.
     let mut root_cache = PayloadRoot::default();
-    let case_paths = case_only_opposing_set_paths(&edit_specs);
+    let case_paths = case_only_set_conflict_paths(&edit_specs);
     if !case_paths.is_empty() {
         let root = root_cache.structural(&private_payload)?;
         for path in case_paths {
             if set_path_folds_case(root, path)? {
                 return Err(CoreError::UnsupportedEdit(
-                    "opposing edits add and remove the same case-insensitive NameProperty set element; save them separately".into(),
+                    "multiple edits target the same case-insensitive NameProperty set element; remove the duplicate or conflicting pending intent before saving".into(),
                 ));
             }
         }
@@ -12007,8 +12007,8 @@ fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> 
     }
 }
 
-/// Opposing operations for one value discard an intent, even though each succeeds in sequence.
-fn opposing_set_element<'a>(
+/// Repeated set membership edits either cancel an intent or fail on its changed state.
+fn set_element_conflict<'a>(
     first: &'a PrivateEdit,
     second: &'a PrivateEdit,
     fold_case: bool,
@@ -12028,6 +12028,14 @@ fn opposing_set_element<'a>(
         | (
             properties::ContainerEdit::SetRemove(first_value),
             properties::ContainerEdit::SetAdd(second_value),
+        )
+        | (
+            properties::ContainerEdit::SetAdd(first_value),
+            properties::ContainerEdit::SetAdd(second_value),
+        )
+        | (
+            properties::ContainerEdit::SetRemove(first_value),
+            properties::ContainerEdit::SetRemove(second_value),
         ) if first_value == second_value
             || (fold_case && first_value.eq_ignore_ascii_case(second_value)) =>
         {
@@ -12037,12 +12045,12 @@ fn opposing_set_element<'a>(
     }
 }
 
-fn case_only_opposing_set_paths(edits: &[PrivateEdit]) -> Vec<&[properties::PathSeg]> {
+fn case_only_set_conflict_paths(edits: &[PrivateEdit]) -> Vec<&[properties::PathSeg]> {
     let mut paths = Vec::new();
     for (i, first) in edits.iter().enumerate() {
         for second in edits.iter().skip(i + 1) {
-            if opposing_set_element(first, second, false).is_none() {
-                if let Some((path, _)) = opposing_set_element(first, second, true) {
+            if set_element_conflict(first, second, false).is_none() {
+                if let Some((path, _)) = set_element_conflict(first, second, true) {
                     if !paths.contains(&path) {
                         paths.push(path);
                     }

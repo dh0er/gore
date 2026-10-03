@@ -286,16 +286,36 @@ fn set_case_conflicts_follow_name_and_string_element_descriptors() {
     let hash = gore_save::api::file_sha1(&save).unwrap();
     let draft = home.join("case.json");
     let request = home.join("request.json");
-    for (add_first, add_value, remove_value) in
-        [(true, "ChoiceB", "CHOICEb"), (false, "CHOICEa", "choiceA")]
-    {
-        let add = json!({"path":"private.typed.setAdd","value":{"path":["Events","[01]","Knowledge"],"value":add_value}});
-        let remove = json!({"path":"private.typed.setRemove","value":{"path":["Events","[1]","Knowledge"],"value":remove_value}});
-        let edits = if add_first {
-            vec![add, remove]
-        } else {
-            vec![remove, add]
-        };
+    for (first_op, first_value, second_op, second_value) in [
+        (
+            "private.typed.setAdd",
+            "ChoiceB",
+            "private.typed.setRemove",
+            "CHOICEb",
+        ),
+        (
+            "private.typed.setRemove",
+            "choiceA",
+            "private.typed.setAdd",
+            "CHOICEa",
+        ),
+        (
+            "private.typed.setAdd",
+            "ChoiceB",
+            "private.typed.setAdd",
+            "CHOICEb",
+        ),
+        (
+            "private.typed.setRemove",
+            "ChoiceA",
+            "private.typed.setRemove",
+            "choicea",
+        ),
+    ] {
+        let edits = vec![
+            json!({"path":first_op,"value":{"path":["Events","[01]","Knowledge"],"value":first_value}}),
+            json!({"path":second_op,"value":{"path":["Events","[1]","Knowledge"],"value":second_value}}),
+        ];
         execute_core(
             "apply_edits",
             json!({"path":save,"edits":[edits[0]],"dryRun":true}),
@@ -406,10 +426,43 @@ fn set_case_conflicts_follow_name_and_string_element_descriptors() {
         );
         fs::write(&save, &original).unwrap();
     }
+
+    for command in ["write_save", "apply_edits"] {
+        fs::write(&save, &original).unwrap();
+        for (operation, expected_count) in
+            [("private.typed.setAdd", 3), ("private.typed.setRemove", 1)]
+        {
+            let edits = ["ChoiceB", "choiceb"]
+                .map(|value| json!({"path":operation,"value":{"path":["Strings"],"value":value}}));
+            let before = fs::read(&save).unwrap();
+            assert_eq!(
+                execute_core("plan_edits", json!({"path":save,"edits":edits}))["groups"],
+                json!([[0, 1]])
+            );
+            execute_core(
+                "apply_edits",
+                json!({"path":save,"edits":edits,"dryRun":true}),
+            );
+            assert_eq!(fs::read(&save).unwrap(), before);
+            execute_core(command, json!({"path":save,"edits":edits,"backup":false}));
+            let data = execute_core(
+                "search_typed_properties",
+                json!({"path":save,"query":"Strings","includeNodes":true}),
+            );
+            let row = data["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["path"] == json!(["Strings"]))
+                .unwrap();
+            assert_eq!(row["childCount"], expected_count);
+            assert!(!home.join("goresave_backups").exists());
+        }
+    }
 }
 
 #[test]
-fn opposing_set_elements_preserve_drafts_and_allow_independent_changes() {
+fn set_element_conflicts_preserve_drafts_and_allow_independent_changes() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
     let save = home.join("G1R-001.sav");
@@ -420,17 +473,16 @@ fn opposing_set_elements_preserve_drafts_and_allow_independent_changes() {
     let request = home.join("request.json");
     let path_file = home.join("set-path.json");
     fs::write(&path_file, br#"["Events","[01]","Knowledge"]"#).unwrap();
-    for (add_first, value) in [(true, "ChoiceB"), (false, "ChoiceA")] {
-        let first_op = if add_first {
-            "private.typed.setAdd"
-        } else {
-            "private.typed.setRemove"
-        };
-        let second_op = if add_first {
-            "private.typed.setRemove"
-        } else {
-            "private.typed.setAdd"
-        };
+    for (first_op, second_op, value) in [
+        ("private.typed.setAdd", "private.typed.setRemove", "ChoiceB"),
+        ("private.typed.setRemove", "private.typed.setAdd", "ChoiceA"),
+        ("private.typed.setAdd", "private.typed.setAdd", "ChoiceB"),
+        (
+            "private.typed.setRemove",
+            "private.typed.setRemove",
+            "ChoiceA",
+        ),
+    ] {
         let first =
             json!({"path":first_op,"value":{"path":["Events","[01]","Knowledge"],"value":value}});
         let second =
@@ -494,7 +546,11 @@ fn opposing_set_elements_preserve_drafts_and_allow_independent_changes() {
             home,
             &[
                 "data",
-                if add_first { "set-add" } else { "set-remove" },
+                if first_op == "private.typed.setAdd" {
+                    "set-add"
+                } else {
+                    "set-remove"
+                },
                 save.to_str().unwrap(),
                 "--path-file",
                 path_file.to_str().unwrap(),
@@ -508,7 +564,11 @@ fn opposing_set_elements_preserve_drafts_and_allow_independent_changes() {
             home,
             &[
                 "data",
-                if add_first { "set-remove" } else { "set-add" },
+                if second_op == "private.typed.setAdd" {
+                    "set-add"
+                } else {
+                    "set-remove"
+                },
                 save.to_str().unwrap(),
                 "--path-file",
                 path_file.to_str().unwrap(),

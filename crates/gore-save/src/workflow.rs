@@ -217,7 +217,7 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
     plan_with_root(raw, None)
 }
 
-/// Only case-only opposing set values need the source's element descriptor.
+/// Only case-only set conflicts need the source's element descriptor.
 pub fn plan_for_save(path: &Path, raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
     let set_specs = parse(raw)?
         .iter()
@@ -229,7 +229,7 @@ pub fn plan_for_save(path: &Path, raw: &[Value]) -> Result<Vec<Vec<usize>>, Core
         })
         .map(crate::parse_private_edit)
         .collect::<Result<Vec<_>, _>>()?;
-    if crate::case_only_opposing_set_paths(&set_specs).is_empty() {
+    if crate::case_only_set_conflict_paths(&set_specs).is_empty() {
         return plan(raw);
     }
     let root =
@@ -310,14 +310,14 @@ fn plan_with_root(
             if let Some((path, value)) = specs[i]
                 .as_ref()
                 .zip(specs[j].as_ref())
-                .and_then(|(first, second)| crate::opposing_set_element(first, second, true))
+                .and_then(|(first, second)| crate::set_element_conflict(first, second, true))
             {
                 let exact =
                     specs[i]
                         .as_ref()
                         .zip(specs[j].as_ref())
                         .is_some_and(|(first, second)| {
-                            crate::opposing_set_element(first, second, false).is_some()
+                            crate::set_element_conflict(first, second, false).is_some()
                         });
                 if exact || root.is_none() || crate::set_path_folds_case(root.unwrap(), path)? {
                     let mut path = path.to_vec();
@@ -737,7 +737,7 @@ pub fn apply_with_progress(
 mod tests {
     use super::*;
     #[test]
-    fn opposing_set_elements_conflict_but_independent_elements_batch() {
+    fn set_element_conflicts_reject_duplicates_and_opposites() {
         let add = json!({"path":"private.typed.setAdd","value":{"path":["Events","[01]","Knowledge"],"value":"ChoiceB"}});
         let remove = json!({"path":"private.typed.setRemove","value":{"path":["Events","[1]","Knowledge"],"value":"ChoiceB"}});
         for edits in [
@@ -770,8 +770,18 @@ mod tests {
         let mut other_set = remove.clone();
         other_set["value"]["path"] = json!(["Other"]);
         assert!(plan(&[add.clone(), other_set]).is_ok());
-        assert!(plan(&[add.clone(), add]).is_ok());
-        assert!(plan(&[remove.clone(), remove]).is_ok());
+        for duplicate in [add, remove] {
+            assert!(matches!(
+                plan(&[duplicate.clone(), duplicate.clone()]),
+                Err(CoreError::PlanConflict {
+                    kind: "property",
+                    ..
+                })
+            ));
+            let mut case_alias = duplicate.clone();
+            case_alias["value"]["value"] = json!("choiceb");
+            assert!(plan(&[duplicate, case_alias]).is_err());
+        }
     }
     #[test]
     fn repeated_private_names_are_refused_in_either_order() {
