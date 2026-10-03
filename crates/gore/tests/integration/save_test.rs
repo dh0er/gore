@@ -603,6 +603,99 @@ fn portrait_exports_refuse_source_artwork_aliases_and_copy_other_outputs() {
 }
 
 #[test]
+fn screenshot_export_rejects_invalid_sources_without_creating_or_truncating_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    let profile = home.join("PersistentDataList.sav");
+    let profile_bytes = profile_fixture("Gothic");
+    fs::write(&profile, &profile_bytes).unwrap();
+    let sidecar = home.join("Profile_0_Screenshots.sav");
+    let jpeg = [0xff, 0xd8, 0xaa, 0xbb, 0xff, 0xd9];
+    let screenshot_bytes = screenshot_fixture("G1R-001", &jpeg);
+    fs::write(&sidecar, &screenshot_bytes).unwrap();
+    let valid = fs::read(fixture()).unwrap();
+    let claim = home.join("G1R-001.sav.assign-final-goresave-1-2-3");
+    fs::write(&claim, &valid).unwrap();
+    let output = home.join("existing.jpg");
+    let fresh = home.join("fresh.jpg");
+    fs::write(&output, b"previous export").unwrap();
+    for bytes in [
+        b"not a save".to_vec(),
+        b"GSAV".to_vec(),
+        profile_bytes.clone(),
+        valid[..20].to_vec(),
+    ] {
+        fs::write(&save, &bytes).unwrap();
+        for out in [&output, &fresh] {
+            for dry in [false, true] {
+                let mut args = vec![
+                    "screenshot",
+                    "export",
+                    save.to_str().unwrap(),
+                    "--out",
+                    out.to_str().unwrap(),
+                ];
+                if dry {
+                    args.push("--dry-run");
+                }
+                run_failure(home, &args);
+                assert_eq!(fs::read(&save).unwrap(), bytes);
+                assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+                assert_eq!(fs::read(&sidecar).unwrap(), screenshot_bytes);
+                assert_eq!(fs::read(&claim).unwrap(), valid);
+                assert_eq!(fs::read(&output).unwrap(), b"previous export");
+                assert!(!fresh.exists());
+                assert!(!home.join("goresave_backups").exists());
+            }
+        }
+    }
+    fs::remove_file(&save).unwrap();
+    fs::create_dir(&save).unwrap();
+    run_failure(
+        home,
+        &[
+            "screenshot",
+            "export",
+            save.to_str().unwrap(),
+            "--out",
+            output.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(fs::read(&output).unwrap(), b"previous export");
+    fs::remove_dir(&save).unwrap();
+    fs::write(&save, &valid).unwrap();
+    run(
+        home,
+        &[
+            "screenshot",
+            "export",
+            save.to_str().unwrap(),
+            "--out",
+            fresh.to_str().unwrap(),
+            "--dry-run",
+        ],
+    );
+    assert!(!fresh.exists());
+    run(
+        home,
+        &[
+            "screenshot",
+            "export",
+            save.to_str().unwrap(),
+            "--out",
+            output.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(fs::read(&output).unwrap(), jpeg);
+    assert_eq!(fs::read(&save).unwrap(), valid);
+    assert_eq!(fs::read(&claim).unwrap(), valid);
+    assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+    assert_eq!(fs::read(&sidecar).unwrap(), screenshot_bytes);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
 fn screenshot_export_reads_only_thumbnail_sidecars_and_preserves_recovery_claims() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

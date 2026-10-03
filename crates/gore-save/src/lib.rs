@@ -1225,6 +1225,18 @@ fn scan_save_dir_summary_readonly_with_codec_backend(
 /// Read the matching thumbnail sidecars without scanning slots or recovering assignments.
 pub fn screenshot_for_save(path: &Path) -> Result<Option<ScreenshotSummary>, CoreError> {
     let path = path.canonicalize()?;
+    if !fs::metadata(&path)?.is_file() {
+        return Err(CoreError::InvalidRequest(
+            "screenshot source must be a regular GSAV save file".to_string(),
+        ));
+    }
+    let bytes = fs::read(&path)?;
+    if !bytes.starts_with(b"GSAV") {
+        return Err(CoreError::InvalidRequest(
+            "screenshot source must be a GSAV save file".to_string(),
+        ));
+    }
+    parse_gsav(&bytes, Some(&path))?;
     let slot = path
         .file_stem()
         .and_then(|value| value.to_str())
@@ -22626,6 +22638,39 @@ mod tests {
             "Synced rename"
         );
         assert_eq!(fs::read(&profile).unwrap(), b"concurrent profile change");
+    }
+
+    #[test]
+    fn screenshot_lookup_rejects_invalid_sources_before_resolving_a_valid_sidecar() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        let sidecar = dir.path().join("Profile_0_Screenshots.sav");
+        let screenshot_bytes =
+            raw_screenshot_gsav_for_tests(&[("G1R-001", &[0xff, 0xd8, 0xaa, 0xbb, 0xff, 0xd9])]);
+        fs::write(&sidecar, &screenshot_bytes).unwrap();
+        let claim = dir.path().join("G1R-001.sav.assign-final-goresave-1-2-3");
+        let valid = minimal_gsav("Real source");
+        fs::write(&claim, &valid).unwrap();
+        for bytes in [
+            b"not a save".to_vec(),
+            b"GSAV".to_vec(),
+            b"GVAS".to_vec(),
+            valid[..20].to_vec(),
+        ] {
+            fs::write(&save, &bytes).unwrap();
+            assert!(screenshot_for_save(&save).is_err(), "{bytes:?}");
+            assert_eq!(fs::read(&save).unwrap(), bytes);
+            assert_eq!(fs::read(&sidecar).unwrap(), screenshot_bytes);
+            assert_eq!(fs::read(&claim).unwrap(), valid);
+        }
+        fs::remove_file(&save).unwrap();
+        fs::create_dir(&save).unwrap();
+        assert!(screenshot_for_save(&save).is_err());
+        fs::remove_dir(&save).unwrap();
+        fs::write(&save, &valid).unwrap();
+        assert_eq!(screenshot_for_save(&save).unwrap().unwrap().byte_length, 6);
+        assert_eq!(fs::read(&claim).unwrap(), valid);
+        assert!(!dir.path().join("goresave_backups").exists());
     }
 
     #[test]
