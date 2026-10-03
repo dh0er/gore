@@ -240,9 +240,13 @@ fn normalized_path(path: &Path) -> PathBuf {
         return path;
     }
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
-    if let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) {
-        if let Ok(parent) = parent.canonicalize() {
-            return parent.join(name);
+    // A stale entry can lose multiple directories. Resolve the existing prefix
+    // so Windows short names and directory aliases still identify the saved path.
+    for ancestor in absolute.ancestors().skip(1) {
+        if let Ok(parent) = ancestor.canonicalize() {
+            if let Ok(tail) = absolute.strip_prefix(ancestor) {
+                return parent.join(tail);
+            }
         }
     }
     absolute

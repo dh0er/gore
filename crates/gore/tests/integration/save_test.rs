@@ -3882,36 +3882,72 @@ fn library_add_accepts_only_inspectable_gsav_files_before_updating_settings() {
 #[test]
 fn library_removes_missing_absolute_and_relative_paths_without_requiring_their_directory() {
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path();
-    let directory = home.join("external");
-    fs::create_dir(&directory).unwrap();
+    let home = temp.path().join("Long library root with spaces");
+    fs::create_dir(&home).unwrap();
+    let directory = home.join("external/nested");
+    fs::create_dir_all(&directory).unwrap();
     let file = directory.join("old.sav");
     fs::copy(fixture(), &file).unwrap();
-    let path = file.to_str().unwrap();
-    run(home, &["library", "add", path]);
-    run(home, &["library", "hide", path]);
+    #[cfg(unix)]
+    let alias = {
+        let alias = temp.path().join("library-alias");
+        std::os::unix::fs::symlink(&home, &alias).unwrap();
+        alias
+    };
+    #[cfg(windows)]
+    let alias = {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let input = home
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let mut output = vec![0u16; 32768];
+        let length = unsafe {
+            windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
+                input.as_ptr(),
+                output.as_mut_ptr(),
+                output.len() as u32,
+            )
+        };
+        assert!(
+            length > 0 && (length as usize) < output.len(),
+            "{}",
+            std::io::Error::last_os_error()
+        );
+        PathBuf::from(std::ffi::OsString::from_wide(&output[..length as usize]))
+    };
+    assert_eq!(alias.canonicalize().unwrap(), home.canonicalize().unwrap());
+    let selected = alias.join("external/nested/old.sav");
+    let path = selected.to_str().unwrap();
+    run(&home, &["library", "add", path]);
+    run(&home, &["library", "hide", path]);
     fs::remove_file(&file).unwrap();
-    fs::remove_dir(&directory).unwrap();
+    fs::remove_dir_all(home.join("external")).unwrap();
     let settings_path = home.join("gore/gore-save/settings.json");
     let before = fs::read(&settings_path).unwrap();
-    let preview = run(home, &["library", "remove", path, "--dry-run"]);
+    let preview = run(&home, &["library", "remove", path, "--dry-run"]);
     assert_eq!(preview["externalSavePaths"], json!([]));
     assert_eq!(fs::read(&settings_path).unwrap(), before);
     let preview = run_from(
-        home,
-        Some(home),
-        &["library", "unhide", "external/old.sav", "--dry-run"],
+        &home,
+        Some(&alias),
+        &["library", "unhide", "external/nested/old.sav", "--dry-run"],
     );
     assert_eq!(preview["hiddenOtherSavePaths"], json!([]));
     assert_eq!(fs::read(&settings_path).unwrap(), before);
     assert_eq!(
-        run(home, &["library", "remove", path])["externalSavePaths"],
+        run(&home, &["library", "remove", path])["externalSavePaths"],
         json!([])
     );
-    let removed = run_from(home, Some(home), &["library", "unhide", "external/old.sav"]);
+    let removed = run_from(
+        &home,
+        Some(&alias),
+        &["library", "unhide", "external/nested/old.sav"],
+    );
     assert_eq!(removed["externalSavePaths"], json!([]));
     assert_eq!(removed["hiddenOtherSavePaths"], json!([]));
-    assert!(!directory.exists());
+    assert!(!home.join("external").exists());
 }
 
 #[test]
