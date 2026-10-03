@@ -177,6 +177,124 @@ fn profile_fixture(preset: &str) -> Vec<u8> {
 }
 
 #[test]
+fn screenshot_and_report_exports_refuse_source_file_aliases_before_truncating() {
+    fn string(value: &str) -> Vec<u8> {
+        let mut bytes = ((value.len() + 1) as i32).to_le_bytes().to_vec();
+        bytes.extend_from_slice(value.as_bytes());
+        bytes.push(0);
+        bytes
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let profile = home.join("PersistentDataList.sav");
+    let profile_bytes = profile_fixture("Gothic");
+    fs::write(&profile, &profile_bytes).unwrap();
+    let jpeg = [0xff, 0xd8, 0xaa, 0xbb, 0xff, 0xd9];
+    let mut payload = Vec::new();
+    for value in [
+        "m_Screenshots",
+        "MapProperty",
+        "StrProperty",
+        "ArrayProperty",
+        "ByteProperty",
+        "G1R-001",
+    ] {
+        payload.extend(string(value));
+    }
+    payload.extend(jpeg);
+    payload.extend(string("None"));
+    let mut screenshot_bytes = b"GSAV".to_vec();
+    screenshot_bytes.push(2);
+    screenshot_bytes.extend(((13 + payload.len()) as u32).to_le_bytes());
+    screenshot_bytes.extend(0u32.to_le_bytes());
+    screenshot_bytes.extend(payload);
+    let screenshot = home.join("Profile_0_Screenshots.sav");
+    fs::write(&screenshot, &screenshot_bytes).unwrap();
+    let hardlink = home.join("save-hardlink.jpg");
+    fs::hard_link(&save, &hardlink).unwrap();
+    fs::create_dir(home.join("nested")).unwrap();
+    let mut aliases = vec![save.clone(), home.join("nested/../G1R-001.sav"), hardlink];
+    #[cfg(unix)]
+    {
+        let link = home.join("save-symlink.jpg");
+        std::os::unix::fs::symlink(&save, &link).unwrap();
+        aliases.push(link);
+    }
+    #[cfg(windows)]
+    aliases.push(home.join("G1R-001.SAV"));
+    for command in [vec!["screenshot", "export"], vec!["report"]] {
+        for out in &aliases {
+            for dry_run in [false, true] {
+                let mut args = command.clone();
+                args.extend([save.to_str().unwrap(), "--out", out.to_str().unwrap()]);
+                if dry_run {
+                    args.push("--dry-run");
+                }
+                let error = run_failure(home, &args);
+                assert!(
+                    error
+                        .to_string()
+                        .contains("must not refer to the source save"),
+                    "{error}"
+                );
+                assert_eq!(fs::read(&save).unwrap(), before);
+                assert_eq!(fs::read(out).unwrap(), before);
+                assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+                assert_eq!(fs::read(&screenshot).unwrap(), screenshot_bytes);
+                assert!(!home.join("goresave_backups").exists());
+            }
+        }
+    }
+    let out = home.join("screenshot.jpg");
+    let out_arg = out.to_str().unwrap();
+    let save_arg = save.to_str().unwrap();
+    run(
+        home,
+        &[
+            "screenshot",
+            "export",
+            save_arg,
+            "--out",
+            out_arg,
+            "--dry-run",
+        ],
+    );
+    assert!(!out.exists());
+    let exported = run(home, &["screenshot", "export", save_arg, "--out", out_arg]);
+    assert_eq!(exported["byteLength"], jpeg.len());
+    assert_eq!(exported["mimeType"], "image/jpeg");
+    assert_eq!(fs::read(&out).unwrap(), jpeg);
+    fs::write(&out, b"a longer previous export that must be truncated").unwrap();
+    run(home, &["screenshot", "export", save_arg, "--out", out_arg]);
+    assert_eq!(fs::read(&out).unwrap(), jpeg);
+    let report = home.join("report.html");
+    fs::write(&report, b"previous report").unwrap();
+    run(
+        home,
+        &[
+            "report",
+            save_arg,
+            "--out",
+            report.to_str().unwrap(),
+            "--dry-run",
+        ],
+    );
+    assert_eq!(fs::read(&report).unwrap(), b"previous report");
+    run(
+        home,
+        &["report", save_arg, "--out", report.to_str().unwrap()],
+    );
+    assert!(fs::read_to_string(&report).unwrap().contains("<table>"));
+    assert_eq!(fs::read(&save).unwrap(), before);
+    assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+    assert_eq!(fs::read(&screenshot).unwrap(), screenshot_bytes);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
 fn draft_remove_requires_an_operation_and_preserves_pending_placement_actions() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

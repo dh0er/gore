@@ -55,6 +55,68 @@ pub(super) fn open(path: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+fn same_export_file(left: &fs::File, right: &fs::File) -> Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let left = left.metadata()?;
+        let right = right.metadata()?;
+        Ok((left.dev(), left.ino()) == (right.dev(), right.ino()))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+        };
+        let identity = |file: &fs::File| -> Result<_> {
+            let mut info = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+            // SAFETY: the file owns a valid handle and info is a writable Win32 buffer.
+            if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+                return Err(io::Error::last_os_error().into());
+            }
+            Ok((
+                info.dwVolumeSerialNumber,
+                info.nFileIndexHigh,
+                info.nFileIndexLow,
+            ))
+        };
+        Ok(identity(left)? == identity(right)?)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        bail!("export file identity checks are unsupported on this platform")
+    }
+}
+
+fn write_save_export(o: &Options, out: &Path, bytes: &[u8]) -> Result<()> {
+    let p = payload(o)?;
+    let source = fs::File::open(p["path"].as_str().context("a save file is required")?)?;
+    let mut output = if o.dry_run {
+        match fs::File::open(out) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
+    } else {
+        fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(out)?
+    };
+    if same_export_file(&source, &output)? {
+        bail!("export output must not refer to the source save");
+    }
+    if !o.dry_run {
+        // Validate the opened file before truncating, and write through that same handle.
+        output.set_len(0)?;
+        output.write_all(bytes)?;
+    }
+    Ok(())
+}
+
 pub(super) fn catalog(domain: &str) -> Result<Value> {
     macro_rules! asset {
         ($file:literal) => {
@@ -299,8 +361,20 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
         }
         ("assets", _) => assets(v, o),
         ("screenshot", "export") => {
-            let data = call("inspect_save", payload(o)?)?;
-            let screenshot = data["screenshot"]
+            let p = payload(o)?;
+            let source =
+                Path::new(p["path"].as_str().context("a save file is required")?).canonicalize()?;
+            let data = call(
+                "scan_save_dir",
+                json!({"path":source.parent().context("save has no parent directory")?}),
+            )?;
+            let row = data["saves"]
+                .as_array()
+                .context("invalid save scan")?
+                .iter()
+                .find(|row| row["path"].as_str() == source.to_str())
+                .context("save was not found in its directory")?;
+            let screenshot = row["screenshot"]
                 .as_object()
                 .context("save has no screenshot")?;
             let bytes = base64::engine::general_purpose::STANDARD.decode(
@@ -310,8 +384,8 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                     .context("screenshot has no bytes")?,
             )?;
             let out = o.out.as_deref().context("--out required")?;
+            write_save_export(o, out, &bytes)?;
             if !o.dry_run {
-                fs::write(out, &bytes)?;
                 if o.open {
                     open(out)?
                 }
@@ -352,8 +426,8 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             }
             let settings = administration::settings_read("ui")?;
             let body = super::report::html(&data, &settings, o)?;
+            write_save_export(o, out, body.as_bytes())?;
             if !o.dry_run {
-                fs::write(out, body)?;
                 if o.open {
                     open(out)?
                 }
