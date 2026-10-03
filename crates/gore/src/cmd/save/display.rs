@@ -90,13 +90,16 @@ fn same_export_file(left: &fs::File, right: &fs::File) -> Result<bool> {
     }
 }
 
-fn write_save_export(o: &Options, out: &Path, bytes: &[u8]) -> Result<()> {
-    let p = payload(o)?;
-    let source = fs::File::open(p["path"].as_str().context("a save file is required")?)?;
-    let mut output = if o.dry_run {
+fn export_output(
+    source: &fs::File,
+    out: &Path,
+    dry_run: bool,
+    source_label: &str,
+) -> Result<Option<fs::File>> {
+    let output = if dry_run {
         match fs::File::open(out) {
             Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error.into()),
         }
     } else {
@@ -106,13 +109,32 @@ fn write_save_export(o: &Options, out: &Path, bytes: &[u8]) -> Result<()> {
             .truncate(false)
             .open(out)?
     };
-    if same_export_file(&source, &output)? {
-        bail!("export output must not refer to the source save");
+    if same_export_file(source, &output)? {
+        bail!("export output must not refer to the source {source_label}");
     }
+    Ok(Some(output))
+}
+
+fn write_save_export(o: &Options, out: &Path, bytes: &[u8]) -> Result<()> {
+    let p = payload(o)?;
+    let source = fs::File::open(p["path"].as_str().context("a save file is required")?)?;
+    let output = export_output(&source, out, o.dry_run, "save")?;
     if !o.dry_run {
+        let mut output = output.context("export output was not opened")?;
         // Validate the opened file before truncating, and write through that same handle.
         output.set_len(0)?;
         output.write_all(bytes)?;
+    }
+    Ok(())
+}
+
+fn copy_artwork_export(source: &Path, out: &Path, dry_run: bool) -> Result<()> {
+    let mut source = fs::File::open(source)?;
+    let output = export_output(&source, out, dry_run, "artwork")?;
+    if !dry_run {
+        let mut output = output.context("export output was not opened")?;
+        output.set_len(0)?;
+        io::copy(&mut source, &mut output)?;
     }
     Ok(())
 }
@@ -362,27 +384,11 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
         ("assets", _) => assets(v, o),
         ("screenshot", "export") => {
             let p = payload(o)?;
-            let source =
-                Path::new(p["path"].as_str().context("a save file is required")?).canonicalize()?;
-            let data = call(
-                "scan_save_dir",
-                json!({"path":source.parent().context("save has no parent directory")?}),
-            )?;
-            let row = data["saves"]
-                .as_array()
-                .context("invalid save scan")?
-                .iter()
-                .find(|row| row["path"].as_str() == source.to_str())
-                .context("save was not found in its directory")?;
-            let screenshot = row["screenshot"]
-                .as_object()
-                .context("save has no screenshot")?;
-            let bytes = base64::engine::general_purpose::STANDARD.decode(
-                screenshot
-                    .get("bytesBase64")
-                    .and_then(Value::as_str)
-                    .context("screenshot has no bytes")?,
-            )?;
+            let source = Path::new(p["path"].as_str().context("a save file is required")?);
+            let screenshot =
+                gore_save::screenshot_for_save(source)?.context("save has no screenshot")?;
+            let bytes =
+                base64::engine::general_purpose::STANDARD.decode(&screenshot.bytes_base64)?;
             let out = o.out.as_deref().context("--out required")?;
             write_save_export(o, out, &bytes)?;
             if !o.dry_run {
@@ -391,7 +397,7 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 }
             }
             Ok(
-                json!({"path":out,"byteLength":bytes.len(),"mimeType":screenshot.get("mimeType"),"dryRun":o.dry_run}),
+                json!({"path":out,"byteLength":bytes.len(),"mimeType":screenshot.mime_type,"dryRun":o.dry_run}),
             )
         }
         ("", "about") => Ok(
@@ -487,8 +493,8 @@ fn assets(v: &str, o: &Options) -> Result<Value> {
         return Ok(json!({"path":file}));
     }
     let out = o.out.as_deref().context("--out required")?;
+    copy_artwork_export(&file, out, o.dry_run)?;
     if !o.dry_run {
-        fs::copy(&file, out)?;
         if o.open {
             open(out)?
         }
@@ -571,8 +577,8 @@ fn portraits(v: &str, o: &Options) -> Result<Value> {
         return Ok(json!({"path":path,"dryRun":o.dry_run}));
     }
     let out = o.out.as_deref().context("--out required")?;
+    copy_artwork_export(&path, out, o.dry_run)?;
     if !o.dry_run {
-        fs::copy(&path, out)?;
         if o.open {
             open(out)?;
         }

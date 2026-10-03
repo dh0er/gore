@@ -1220,6 +1220,21 @@ fn scan_save_dir_summary_readonly_with_codec_backend(
     })
 }
 
+/// Read the matching thumbnail sidecars without scanning slots or recovering assignments.
+pub fn screenshot_for_save(path: &Path) -> Result<Option<ScreenshotSummary>, CoreError> {
+    let path = path.canonicalize()?;
+    let slot = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| CoreError::InvalidRequest("save has no slot name".to_string()))?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| CoreError::InvalidRequest("save has no parent directory".to_string()))?;
+    let persistent = persistent_data_list_summary_for_dir(dir).unwrap_or_default();
+    let backend = codec_backend::KrakenBackend::default();
+    Ok(screenshot_summaries_for_dir(dir, &persistent.profiles, Some(&backend))?.remove(slot))
+}
+
 fn screenshot_summaries_for_dir(
     dir: &Path,
     profiles: &[ProfileSummary],
@@ -19924,6 +19939,7 @@ mod tests {
         })
         .unwrap();
         assert!(!save_path.exists(), "a read-only scan must not restore a claim");
+        assert!(screenshot_for_save(&save_path).is_err());
         assert_eq!(fs::read(&interrupted_claim).unwrap(), assigned);
         assert_eq!(fs::read(&persistent_path).unwrap(), persistent_before);
 
@@ -19968,6 +19984,8 @@ mod tests {
             payload: json!({"path": dir.path()}),
         })
         .unwrap();
+        assert_eq!(fs::read(&stale_claim).unwrap(), claim_before);
+        assert!(screenshot_for_save(&save_path).unwrap().is_none());
         assert_eq!(fs::read(&stale_claim).unwrap(), claim_before);
         assert_eq!(fs::read(&save_path).unwrap(), concurrent_save);
         assert_eq!(fs::read(&persistent_path).unwrap(), persistent_before);
@@ -22491,6 +22509,30 @@ mod tests {
 
         assert_eq!(saves.len(), 1);
         assert_eq!(saves[0].slot, "G1R-001");
+    }
+
+    #[test]
+    fn screenshot_lookup_ignores_other_slots_and_preserves_assignment_claims() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        let bytes = minimal_gsav("Thumbnail source");
+        fs::write(&save, &bytes).unwrap();
+        fs::create_dir(dir.path().join("G1R-999.sav")).unwrap();
+        let claim = dir.path().join("G1R-001.sav.assign-final-goresave-1-2-3");
+        fs::write(&claim, &bytes).unwrap();
+        assert!(screenshot_for_save(&save).unwrap().is_none());
+        let sidecar = dir.path().join("Profile_0_Screenshots.sav");
+        let screenshot_bytes =
+            raw_screenshot_gsav_for_tests(&[("G1R-001", &[0xff, 0xd8, 0xaa, 0xbb, 0xff, 0xd9])]);
+        fs::write(&sidecar, &screenshot_bytes).unwrap();
+        let image = screenshot_for_save(&save).unwrap().unwrap();
+        assert_eq!(image.mime_type, "image/jpeg");
+        assert_eq!(image.byte_length, 6);
+        assert_eq!(image.bytes_base64, "/9iqu//Z");
+        assert_eq!(fs::read(&save).unwrap(), bytes);
+        assert_eq!(fs::read(&claim).unwrap(), bytes);
+        assert_eq!(fs::read(&sidecar).unwrap(), screenshot_bytes);
+        assert!(dir.path().join("G1R-999.sav").is_dir());
     }
 
     #[test]

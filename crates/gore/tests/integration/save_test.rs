@@ -176,14 +176,167 @@ fn profile_fixture(preset: &str) -> Vec<u8> {
     bytes
 }
 
-#[test]
-fn screenshot_and_report_exports_refuse_source_file_aliases_before_truncating() {
+fn screenshot_fixture(slot: &str, jpeg: &[u8]) -> Vec<u8> {
     fn string(value: &str) -> Vec<u8> {
         let mut bytes = ((value.len() + 1) as i32).to_le_bytes().to_vec();
         bytes.extend_from_slice(value.as_bytes());
         bytes.push(0);
         bytes
     }
+    let mut payload = Vec::new();
+    for value in [
+        "m_Screenshots",
+        "MapProperty",
+        "StrProperty",
+        "ArrayProperty",
+        "ByteProperty",
+        slot,
+    ] {
+        payload.extend(string(value));
+    }
+    payload.extend_from_slice(jpeg);
+    payload.extend(string("None"));
+    let mut screenshot_bytes = b"GSAV".to_vec();
+    screenshot_bytes.push(2);
+    screenshot_bytes.extend(((13 + payload.len()) as u32).to_le_bytes());
+    screenshot_bytes.extend(0u32.to_le_bytes());
+    screenshot_bytes.extend(payload);
+    screenshot_bytes
+}
+
+#[test]
+fn portrait_exports_refuse_source_artwork_aliases_and_copy_other_outputs() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let game = home.join("game");
+    let root = game.join("G1R/Story/Conversation/images/Glossary/Locations");
+    fs::create_dir_all(&root).unwrap();
+    let small = root.join("T_GlossaryImage_AbandonedMine_S.png");
+    let medium = root.join("T_GlossaryImage_AbandonedMine_M.png");
+    let image = b"\x89PNG\r\n\x1a\noriginal game artwork";
+    fs::write(&small, image).unwrap();
+    fs::write(&medium, image).unwrap();
+    for source in [&small, &medium] {
+        let hardlink = home.join(if source == &small {
+            "small-link.png"
+        } else {
+            "medium-link.png"
+        });
+        fs::hard_link(source, &hardlink).unwrap();
+        let mut aliases = vec![source.clone(), hardlink];
+        #[cfg(unix)]
+        {
+            let link = source.with_extension("symlink");
+            std::os::unix::fs::symlink(source, &link).unwrap();
+            aliases.push(link);
+        }
+        #[cfg(windows)]
+        aliases.push(source.with_extension("PNG"));
+        let mut base = vec![
+            "assets",
+            "export",
+            "--kind",
+            "portraits",
+            "--game",
+            game.to_str().unwrap(),
+            "--id",
+            "Document_Glossary_AbandonedMine",
+        ];
+        if source == &medium {
+            base.push("--details");
+        }
+        for out in &aliases {
+            for dry_run in [false, true] {
+                let mut args = base.clone();
+                args.extend(["--out", out.to_str().unwrap()]);
+                if dry_run {
+                    args.push("--dry-run");
+                }
+                let error = run_failure(home, &args);
+                assert!(
+                    error
+                        .to_string()
+                        .contains("must not refer to the source artwork"),
+                    "{error}"
+                );
+                assert_eq!(fs::read(source).unwrap(), image);
+                assert_eq!(fs::read(out).unwrap(), image);
+            }
+        }
+        let out = home.join(if source == &small {
+            "small-export.png"
+        } else {
+            "medium-export.png"
+        });
+        let mut args = base.clone();
+        args.extend(["--out", out.to_str().unwrap()]);
+        let mut dry = args.clone();
+        dry.push("--dry-run");
+        run(home, &dry);
+        assert!(!out.exists());
+        run(home, &args);
+        assert_eq!(fs::read(&out).unwrap(), image);
+        let previous = b"a much longer previous output to prove the copied file is fully truncated";
+        fs::write(&out, previous).unwrap();
+        run(home, &dry);
+        assert_eq!(fs::read(&out).unwrap(), previous);
+        run(home, &args);
+        assert_eq!(fs::read(&out).unwrap(), image);
+    }
+    assert_eq!(fs::read(&small).unwrap(), image);
+    assert_eq!(fs::read(&medium).unwrap(), image);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
+fn screenshot_export_reads_only_thumbnail_sidecars_and_preserves_recovery_claims() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let profile = home.join("PersistentDataList.sav");
+    let profile_bytes = profile_fixture("Gothic");
+    fs::write(&profile, &profile_bytes).unwrap();
+    let claim = home.join("G1R-001.sav.assign-final-goresave-1-2-3");
+    fs::write(&claim, &before).unwrap();
+    // A whole-directory scan would try to read this unrelated slot and fail.
+    fs::create_dir(home.join("G1R-999.sav")).unwrap();
+    let jpeg = [0xff, 0xd8, 0xaa, 0xbb, 0xff, 0xd9];
+    let screenshot_bytes = screenshot_fixture("G1R-001", &jpeg);
+    let sidecar = home.join("Profile_0_Screenshots.sav");
+    fs::write(&sidecar, &screenshot_bytes).unwrap();
+    for dry_run in [true, false] {
+        let out = home.join(if dry_run { "dry.jpg" } else { "live.jpg" });
+        let mut args = vec![
+            "screenshot",
+            "export",
+            save.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ];
+        if dry_run {
+            args.push("--dry-run");
+        }
+        let data = run(home, &args);
+        assert_eq!(data["byteLength"], jpeg.len());
+        assert_eq!(data["mimeType"], "image/jpeg");
+        if dry_run {
+            assert!(!out.exists());
+        } else {
+            assert_eq!(fs::read(out).unwrap(), jpeg);
+        }
+        assert_eq!(fs::read(&save).unwrap(), before);
+        assert_eq!(fs::read(&claim).unwrap(), before);
+        assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+        assert_eq!(fs::read(&sidecar).unwrap(), screenshot_bytes);
+        assert!(home.join("G1R-999.sav").is_dir());
+        assert!(!home.join("goresave_backups").exists());
+    }
+}
+
+#[test]
+fn screenshot_and_report_exports_refuse_source_file_aliases_before_truncating() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
     let save = home.join("G1R-001.sav");
@@ -193,24 +346,7 @@ fn screenshot_and_report_exports_refuse_source_file_aliases_before_truncating() 
     let profile_bytes = profile_fixture("Gothic");
     fs::write(&profile, &profile_bytes).unwrap();
     let jpeg = [0xff, 0xd8, 0xaa, 0xbb, 0xff, 0xd9];
-    let mut payload = Vec::new();
-    for value in [
-        "m_Screenshots",
-        "MapProperty",
-        "StrProperty",
-        "ArrayProperty",
-        "ByteProperty",
-        "G1R-001",
-    ] {
-        payload.extend(string(value));
-    }
-    payload.extend(jpeg);
-    payload.extend(string("None"));
-    let mut screenshot_bytes = b"GSAV".to_vec();
-    screenshot_bytes.push(2);
-    screenshot_bytes.extend(((13 + payload.len()) as u32).to_le_bytes());
-    screenshot_bytes.extend(0u32.to_le_bytes());
-    screenshot_bytes.extend(payload);
+    let screenshot_bytes = screenshot_fixture("G1R-001", &jpeg);
     let screenshot = home.join("Profile_0_Screenshots.sav");
     fs::write(&screenshot, &screenshot_bytes).unwrap();
     let hardlink = home.join("save-hardlink.jpg");
