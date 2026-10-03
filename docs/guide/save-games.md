@@ -72,4 +72,6 @@ The CLI reads the same `gore/gore-save/settings.json` and `ui_settings.json` as 
 
 Each `assets prepare` retains its cache generation across CLI and MCP invocations until a matching `assets release`. Release the manifest once per preparation after its consumers have finished; this allows later cache cleanup or repair. These leases are separate from the Editor's live leases. Export previews require an existing output parent directory and never create it.
 
+On Windows, `updates check/install --kind installed --target <directory>` requires `goresave.exe`, its Save Editor product metadata and the installation's `unins000.exe`. The feed is compared with that executable's version; JSON reports `installedEditorVersion`, `currentEditorVersion` and the CLI's `bundledEditorVersion` separately. Portable copies use the bundled version and open the release download page for manual replacement.
+
 Backup deletion is permanent and requires `--yes` in scripts. Save deletion retains the native recovery transaction. Read-only listing never repairs metadata; run `recovery repair` explicitly when needed. MCP exposes the complete family as `gore_save` and retains its existing write-permission gate.
