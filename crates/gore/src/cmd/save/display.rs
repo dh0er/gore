@@ -203,37 +203,150 @@ pub(super) fn existing_item_path(id: &str) -> Result<String> {
     }
     item_path(id)
 }
+
+fn item_category(id: &str, stats: &Value, filters: &[&Value]) -> &'static str {
+    if stats.is_null() {
+        use gore_catalog::ItemCategory;
+        return match gore_catalog::item_category_from_id(id) {
+            ItemCategory::MeleeWeapon => "meleeWeapon",
+            ItemCategory::RangedWeapon | ItemCategory::Ammunition => "rangedWeapon",
+            ItemCategory::Rune | ItemCategory::Scroll => "magic",
+            ItemCategory::Armor | ItemCategory::Amulet | ItemCategory::Ring => "wearable",
+            ItemCategory::Food
+                if id.starts_with("ItFo_Potion_") || id.starts_with("ItFo_Booze") =>
+            {
+                "potion"
+            }
+            ItemCategory::Food => "food",
+            ItemCategory::Trophy => "material",
+            ItemCategory::Writing => "document",
+            ItemCategory::Misc => "misc",
+            ItemCategory::Mission | ItemCategory::Key => "artefact",
+            _ => "other",
+        };
+    }
+    let claims = |filter: &Value, tag: &str| {
+        filter["itemTags"].as_array().is_some_and(|tags| {
+            tags.iter().filter_map(Value::as_str).any(|parent| {
+                tag == parent
+                    || tag
+                        .strip_prefix(parent)
+                        .is_some_and(|tail| tail.starts_with('_'))
+            })
+        })
+    };
+    let category = |filter: &Value| {
+        super::presentation::metadata()["itemCategories"][filter["id"].as_str().unwrap_or("")]
+            .as_str()
+            .unwrap_or("other")
+    };
+    let mut by_type = None;
+    for &filter in filters {
+        // Property matches outrank type matches, including later filters (forge stock).
+        if stats["specs"].as_array().is_some_and(|specs| {
+            specs
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|tag| claims(filter, tag))
+        }) {
+            return category(filter);
+        }
+        if by_type.is_none()
+            && stats["itemType"]
+                .as_str()
+                .is_some_and(|tag| !tag.is_empty() && claims(filter, tag))
+        {
+            by_type = Some(filter);
+        }
+    }
+    // Known items no filter claims stay in Other; only unknown ids use prefixes.
+    by_type.map(category).unwrap_or("other")
+}
+
+pub(super) fn annotate_items(rows: &mut [Value], details: bool) -> Result<()> {
+    let stats = catalog("item-stats")?;
+    let by_id = stats["items"]
+        .as_object()
+        .context("invalid item stats catalog")?
+        .iter()
+        .map(|(id, stats)| (id.trim().to_lowercase(), stats))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut filters = stats["filters"]
+        .as_array()
+        .context("invalid inventory filters")?
+        .iter()
+        .filter(|filter| filter["id"].as_str().is_some_and(|id| !id.is_empty()))
+        .collect::<Vec<_>>();
+    filters.sort_by_key(|filter| filter["sortOrder"].as_i64().unwrap_or(1 << 20));
+    for row in rows {
+        let id = row["id"].as_str().unwrap_or("").to_string();
+        let info = by_id
+            .get(&id.trim().to_lowercase())
+            .copied()
+            .unwrap_or(&Value::Null);
+        row["category"] = json!(item_category(&id, info, &filters));
+        if details {
+            row["stats"] = info.clone();
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn filter(data: &mut Value, key: &str, o: &Options) {
+    filter_rows(data, key, o, false);
+}
+
+pub(super) fn filter_items(data: &mut Value, key: &str, o: &Options) {
+    filter_rows(data, key, o, true);
+}
+
+fn filter_rows(data: &mut Value, key: &str, o: &Options, items: bool) {
     let Some(rows) = data[key].as_array_mut() else {
         return;
     };
     rows.retain(|r| {
-        o.query
-            .as_ref()
-            .is_none_or(|q| r.to_string().to_lowercase().contains(&q.to_lowercase()))
-            && o.id.as_ref().is_none_or(|id| {
-                r.as_object().is_some_and(|r| {
-                    r.values()
-                        .any(|v| v.as_str().is_some_and(|v| v.eq_ignore_ascii_case(id)))
+        o.query.as_ref().is_none_or(|q| {
+            let query = q.to_lowercase();
+            if items {
+                ["id", "path", "idText"].iter().any(|field| {
+                    r[*field]
+                        .as_str()
+                        .is_some_and(|value| value.to_lowercase().contains(&query))
                 })
-            })
-            && o.category.as_ref().is_none_or(|c| {
-                r["category"]
-                    .as_str()
-                    .is_some_and(|v| v.eq_ignore_ascii_case(c))
-                    || r["a"].as_str() == Some(c)
-            })
-            && o.role.as_ref().is_none_or(|role| match role.as_str() {
-                "teacher" => r["teacher"] == true,
-                "trader" => r["isTrader"] == true,
-                _ => r["roles"]
-                    .as_array()
-                    .is_some_and(|roles| roles.contains(&json!(role))),
-            })
-            && (key != "characters"
-                || o.kind
-                    .as_ref()
-                    .is_none_or(|kind| r["category"].as_str() == Some(kind)))
+            } else {
+                r.to_string().to_lowercase().contains(&query)
+            }
+        }) && o.id.as_ref().is_none_or(|id| {
+            if items {
+                ["id", "path"].iter().any(|field| {
+                    r[*field]
+                        .as_str()
+                        .is_some_and(|value| value.eq_ignore_ascii_case(id))
+                })
+            } else {
+                r.as_object().is_some_and(|r| {
+                    r.values().any(|value| {
+                        value
+                            .as_str()
+                            .is_some_and(|value| value.eq_ignore_ascii_case(id))
+                    })
+                })
+            }
+        }) && o.category.as_ref().is_none_or(|c| {
+            r["category"]
+                .as_str()
+                .is_some_and(|v| v.eq_ignore_ascii_case(c))
+                || r["a"].as_str() == Some(c)
+        }) && o.role.as_ref().is_none_or(|role| match role.as_str() {
+            "teacher" => r["teacher"] == true,
+            "trader" => r["isTrader"] == true,
+            _ => r["roles"]
+                .as_array()
+                .is_some_and(|roles| roles.contains(&json!(role))),
+        }) && (key != "characters"
+            || o.kind
+                .as_ref()
+                .is_none_or(|kind| r["category"].as_str() == Some(kind)))
             && (key != "locks"
                 || o.kind.as_ref().is_none_or(|kind| {
                     r["k"]
@@ -311,6 +424,40 @@ fn loc_payload(o: &Options) -> Result<Value> {
     Ok(p)
 }
 
+pub(super) fn catalog_page(domain: &str, o: &Options, texts: &super::text::Texts) -> Result<Value> {
+    let mut data = catalog(domain)?;
+    if domain == "ui-texts" {
+        data = json!({"entries":data[&o.lang].as_object().context("unknown language")?.iter().map(|(key,text)|json!({"id":key,"text":text})).collect::<Vec<_>>()});
+    }
+    if matches!(domain, "item" | "items") {
+        annotate_items(data.as_array_mut().context("invalid item catalog")?, true)?;
+    }
+    let key = if data.is_array() {
+        "entries"
+    } else if matches!(domain, "location" | "locations") {
+        "spots"
+    } else if matches!(domain, "lock" | "locks") {
+        "locks"
+    } else {
+        "entries"
+    };
+    if data.is_array() {
+        data = json!({key:data})
+    }
+    let mut options = o.clone();
+    if options.id.is_none() {
+        options.id = options.item.clone().or(options.location.clone());
+    }
+    texts.apply(&mut data)?;
+    if matches!(domain, "item" | "items") {
+        filter_items(&mut data, key, &options);
+    } else {
+        filter(&mut data, key, &options);
+    }
+    paginate(&mut data, key, o);
+    Ok(data)
+}
+
 pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
     match (g, v) {
         ("catalog" | "items" | "locations", _) => {
@@ -319,37 +466,7 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             } else {
                 g
             };
-            let mut data = catalog(domain)?;
-            if domain == "ui-texts" {
-                data = json!({"entries":data[&o.lang].as_object().context("unknown language")?.iter().map(|(key,text)|json!({"id":key,"text":text})).collect::<Vec<_>>()});
-            }
-            if matches!(domain, "item" | "items") {
-                let stats = catalog("item-stats")?;
-                for row in data.as_array_mut().unwrap() {
-                    let id = row["id"].as_str().unwrap_or("").to_string();
-                    row["stats"] = stats["items"][&id].clone();
-                }
-            }
-            let key = if data.is_array() {
-                "entries"
-            } else if matches!(domain, "location" | "locations") {
-                "spots"
-            } else if matches!(domain, "lock" | "locks") {
-                "locks"
-            } else {
-                "entries"
-            };
-            if data.is_array() {
-                data = json!({key:data})
-            }
-            let mut options = o.clone();
-            if options.id.is_none() {
-                options.id = options.item.clone().or(options.location.clone());
-            }
-            filter(&mut data, key, &options);
-            paginate(&mut data, key, o);
-            localize(&mut data, o)?;
-            Ok(data)
+            catalog_page(domain, o, &super::text::Texts::load_options(o)?)
         }
         ("localization", "status") => call("loc_status", json!({})),
         ("localization", "find") => {
@@ -1031,6 +1148,90 @@ fn overview(o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_items_use_editor_inventory_categories() {
+        for (id, category) in [
+            ("ItMi_Orenugget", "material"),
+            ("ItAr_Rune_FireBall", "magic"),
+            ("ItAm_Arrow", "rangedWeapon"),
+            ("ItKe_Lockpick", "misc"),
+            ("ItMi_Smith_1H_Axe_01", "material"),
+            ("ItMw_2H_Mace_Orc_01_vOrc", "other"),
+        ] {
+            let data = dispatch(
+                "catalog",
+                "search",
+                &Options {
+                    kind: Some("items".into()),
+                    id: Some(id.into()),
+                    category: Some(category.to_uppercase()),
+                    lang: "en".into(),
+                    game_lang: "en".into(),
+                    limit: 1,
+                    ..Options::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(data["total"], 1, "{id} belongs to {category}");
+            assert_eq!(data["entries"][0]["id"], id);
+            assert_eq!(data["entries"][0]["category"], category);
+        }
+    }
+
+    #[test]
+    fn item_categories_use_case_insensitive_stats_and_native_fallbacks() {
+        let mut rows = vec![
+            json!({"id":" itmi_orenugget ","category":"misc"}),
+            json!({"id":"ItMw_NewWeapon"}),
+            json!({"id":"ItAr_Scroll_NewSpell"}),
+            json!({"id":"ItFo_Potion_NewPotion"}),
+            json!({"id":"ItFo_BoozeNewDrink"}),
+            json!({"id":"ItAt_NewTrophy"}),
+            json!({"id":"Org_Armor_NewPiece"}),
+            json!({"id":"UnknownItem"}),
+        ];
+        annotate_items(&mut rows, false).unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row["category"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "material",
+                "meleeWeapon",
+                "magic",
+                "potion",
+                "potion",
+                "material",
+                "wearable",
+                "other"
+            ]
+        );
+        assert!(rows.iter().all(|row| row.get("stats").is_none()));
+    }
+
+    #[test]
+    fn item_categories_prioritize_properties_and_match_whole_tag_segments() {
+        let filters = json!([
+            {"id":"G1R_All","itemTags":[]},
+            {"id":"G1R_MeleeWeapons","itemTags":["Item_Weapon_Sword"]},
+            {"id":"G1R_Magic","itemTags":["Item_Weapon_Rune"]},
+            {"id":"G1R_Materials","itemTags":["Item_Property_Forge"]}
+        ]);
+        let filters = filters.as_array().unwrap().iter().collect::<Vec<_>>();
+        for (stats, expected) in [
+            (
+                json!({"itemType":"Item_Weapon_Sword_OneHand","specs":["Item_Property_Forge_Head"]}),
+                "material",
+            ),
+            (json!({"itemType":"Item_Weapon_Rune_FireBall"}), "magic"),
+            (json!({"itemType":"Item_Weapon_RuneFake"}), "other"),
+            (json!({}), "other"),
+        ] {
+            assert_eq!(item_category("ItMw_KnownItem", &stats, &filters), expected);
+        }
+    }
+
     #[test]
     fn export_previews_require_a_valid_parent_and_file_target() {
         let temp = tempfile::tempdir().unwrap();

@@ -4322,7 +4322,36 @@ fn recovery_previews_preserve_manifest_hashes_when_run_from_the_save_directory()
                 .map(|(_, bytes)| String::from_utf8_lossy(bytes))
                 .collect::<Vec<_>>()
         );
+        let recovery =
+            run_from(home, Some(home), &["recovery", "list", "--root", "."])["recoveries"][0]
+                .clone();
+        let relative_backup = Path::new("goresave_backups").join(
+            Path::new(recovery["backupPath"].as_str().unwrap())
+                .file_name()
+                .unwrap(),
+        );
+        let relative_backup = relative_backup.to_str().unwrap();
+        assert_eq!(
+            run_from(
+                home,
+                Some(home),
+                &[
+                    "recovery",
+                    "show",
+                    "--root",
+                    ".",
+                    "--backup",
+                    relative_backup
+                ]
+            ),
+            recovery
+        );
         for relative in [false, true] {
+            let backup_arg = if relative {
+                relative_backup
+            } else {
+                recovery["backupPath"].as_str().unwrap()
+            };
             let root_arg = if relative {
                 "."
             } else {
@@ -4331,7 +4360,15 @@ fn recovery_previews_preserve_manifest_hashes_when_run_from_the_save_directory()
             let preview = run_from(
                 home,
                 Some(home),
-                &["recovery", operation, "--root", root_arg, "--dry-run"],
+                &[
+                    "recovery",
+                    operation,
+                    "--root",
+                    root_arg,
+                    "--backup",
+                    backup_arg,
+                    "--dry-run",
+                ],
             );
             assert_eq!(preview["validated"], true);
             assert_eq!(
@@ -4350,7 +4387,18 @@ fn recovery_previews_preserve_manifest_hashes_when_run_from_the_save_directory()
                 assert_eq!(fs::read(path).unwrap(), *bytes);
             }
         }
-        let result = run_from(home, Some(home), &["recovery", operation, "--root", "."]);
+        let result = run_from(
+            home,
+            Some(home),
+            &[
+                "recovery",
+                operation,
+                "--root",
+                ".",
+                "--backup",
+                relative_backup,
+            ],
+        );
         if operation == "restore" {
             assert_eq!(result["bytesChanged"], true);
             assert_eq!(fs::read(&save).unwrap(), original_save);
@@ -4422,6 +4470,26 @@ fn recovery_show_selects_one_record_without_changing_recovery_files() {
         ],
     );
     assert_eq!(selected, records[0]);
+    let relative_backup = Path::new("goresave_backups").join(
+        Path::new(records[0]["backupPath"].as_str().unwrap())
+            .file_name()
+            .unwrap(),
+    );
+    assert_eq!(
+        run_from(
+            root,
+            Some(root),
+            &[
+                "recovery",
+                "show",
+                "--root",
+                ".",
+                "--backup",
+                relative_backup.to_str().unwrap()
+            ]
+        ),
+        records[0]
+    );
     assert_eq!(
         run(root, &["recovery", "show", "--root", root_arg]),
         records[1]

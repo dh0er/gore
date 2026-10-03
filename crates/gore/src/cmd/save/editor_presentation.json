@@ -4,6 +4,7 @@
     "apps/save-editor/lib/features/editor/domain/story_state_semantics.dart": "00b4ac6bd0640770b3c73b840f95ba4df2ff2ab4b8fc47fa980b6f5bf62c5538",
     "apps/save-editor/lib/features/editor/domain/hero_attributes.dart": "961588011408d69cafeec2a1beb6b34fc5860a700be72e45fc90ffd1712b12f2",
     "apps/save-editor/lib/loc/game_lang.dart": "d8cec38718efc50e5ee3afe469c6269a56cb67df10f66d7db30cea74ab7cbf35",
+    "apps/save-editor/lib/features/editor/domain/item_categories.dart": "d84fff85ce72c41fea450de0c9c1d34b5cbf7adfc875bfc1f382aaa04277c81d",
     "apps/save-editor/lib/l10n/app_en.arb": "f852a34cd90c18980f38e03aa994b99d2c5fda03774b68579f455f87db346342",
     "apps/save-editor/lib/l10n/app_de.arb": "a4ca5f93f72635e843eb0c98137a2155b9e687f80267fb2848ad22a018e2631a",
     "apps/save-editor/lib/l10n/app_fr.arb": "8a356923b3e996205fdba883d9c28a204dc3e97200f92cf52ab7dc289c5aa622",
@@ -22331,5 +22332,17 @@
         "other": "{fallback}"
       }
     }
+  },
+  "itemCategories": {
+    "G1R_MeleeWeapons": "meleeWeapon",
+    "G1R_RangedWeapons": "rangedWeapon",
+    "G1R_Magic": "magic",
+    "G1R_Wereables": "wearable",
+    "G1R_Food": "food",
+    "G1R_Potions": "potion",
+    "G1R_Materials": "material",
+    "G1R_Documents": "document",
+    "G1R_Miscellaneous": "misc",
+    "G1R_Artefacts": "artefact"
   }
 }

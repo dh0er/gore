@@ -534,6 +534,25 @@ pub(super) fn stage(file: &Path, payload: &Value, dry_run: bool) -> Result<Value
                 }
                 list.retain(|e| key.is_none() || gore_save::workflow::replacement_key(e) != key);
                 list.push(merged);
+            } else if incoming["path"] == "private.player.setTransform" {
+                gore_save::workflow::plan(std::slice::from_ref(incoming))?;
+                let pending = list
+                    .iter()
+                    .filter(|edit| edit["path"] == "private.player.setTransform")
+                    .cloned()
+                    .collect::<Vec<_>>();
+                gore_save::workflow::plan(&pending)?;
+                let mut merged = incoming.clone();
+                merged["value"] = json!({});
+                for edit in pending.iter().chain(std::iter::once(incoming)) {
+                    for field in ["location", "rotation"] {
+                        if let Some(value) = edit["value"].get(field) {
+                            merged["value"][field] = value.clone();
+                        }
+                    }
+                }
+                list.retain(|edit| edit["path"] != "private.player.setTransform");
+                list.push(merged);
             } else if incoming["path"] == "private.story.apply" {
                 let changes = incoming["value"]["changes"].as_array().ok_or_else(|| {
                     gore_save::CoreError::InvalidRequest("story changes required".into())
@@ -1101,9 +1120,11 @@ fn selected_recovery<'a>(data: &'a Value, o: &Options) -> Result<&'a Value> {
         .rev()
         .find(|r| {
             !r.is_null()
-                && o.backup
-                    .as_ref()
-                    .is_none_or(|p| r["backupPath"] == json!(p))
+                && o.backup.as_ref().is_none_or(|p| {
+                    r["backupPath"]
+                        .as_str()
+                        .is_some_and(|backup| same_path(backup, &p.to_string_lossy()))
+                })
         })
         .context("no matching recovery")
 }
@@ -1618,6 +1639,168 @@ mod tests {
             fs::read(source.path().join("G1R-001.sav")).unwrap(),
             live_before
         );
+    }
+
+    #[test]
+    fn draft_staging_preserves_disjoint_player_transform_components() {
+        for reverse in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let save = temp.path().join("G1R-001.sav");
+            let file = temp.path().join("draft.json");
+            let original =
+                include_bytes!("../../../../gore-save/assets/start_saves/resources_gothic.sav");
+            fs::write(&save, original).unwrap();
+            let location = json!({"location":{"x":11.0,"y":22.0,"z":33.0}});
+            let rotation = json!({"rotation":{"pitch":4.0,"yaw":5.0,"roll":6.0}});
+            let stage_transform = |value, dry| {
+                stage(
+                    &file,
+                    &json!({"path":save,"edits":[{
+                        "path":"private.player.setTransform","value":value
+                    }]}),
+                    dry,
+                )
+                .unwrap()
+            };
+            let (first, second) = if reverse {
+                (&rotation, &location)
+            } else {
+                (&location, &rotation)
+            };
+            stage_transform(first.clone(), false);
+            let before = fs::read(&file).unwrap();
+            let preview = stage_transform(second.clone(), true);
+            assert_eq!(preview["pending"], 1);
+            assert_eq!(
+                preview["data"]["edits"][0]["value"]["location"],
+                location["location"]
+            );
+            assert_eq!(
+                preview["data"]["edits"][0]["value"]["rotation"],
+                rotation["rotation"]
+            );
+            assert_eq!(fs::read(&file).unwrap(), before);
+            stage_transform(second.clone(), false);
+            let next_location = json!({"location":{"x":44.0,"y":55.0,"z":66.0}});
+            let next_rotation = json!({"rotation":{"pitch":7.0,"yaw":8.0,"roll":9.0}});
+            stage_transform(next_location.clone(), false);
+            let final_stage = stage_transform(next_rotation.clone(), false);
+            assert_eq!(final_stage["pending"], 1);
+            assert_eq!(
+                final_stage["data"]["edits"][0]["value"]["location"],
+                next_location["location"]
+            );
+            assert_eq!(fs::read(&save).unwrap(), original);
+            assert!(!temp.path().join("goresave_backups").exists());
+            let mut imported = read_json(&file).unwrap();
+            imported["edits"] = json!([
+                {"path":"private.player.setTransform","value":next_location},
+                {"path":"private.player.setTransform","value":next_rotation}
+            ]);
+            fs::write(&file, serde_json::to_vec(&imported).unwrap()).unwrap();
+            let restaged = stage_transform(next_location.clone(), false);
+            assert_eq!(restaged["pending"], 1);
+            assert_eq!(
+                restaged["data"]["edits"][0]["value"]["rotation"],
+                next_rotation["rotation"]
+            );
+            let valid_draft = fs::read(&file).unwrap();
+            for value in [
+                json!("invalid transform"),
+                json!({}),
+                json!({"location":{"x":1}}),
+            ] {
+                assert!(
+                    stage(
+                        &file,
+                        &json!({"path":save,"edits":[{
+                            "path":"private.player.setTransform","value":value
+                        }]}),
+                        false
+                    )
+                    .is_err()
+                );
+                assert_eq!(fs::read(&file).unwrap(), valid_draft);
+            }
+            let mut malformed = read_json(&file).unwrap();
+            malformed["edits"][0]["value"] = json!("invalid pending transform");
+            let malformed = serde_json::to_vec(&malformed).unwrap();
+            fs::write(&file, &malformed).unwrap();
+            assert!(
+                stage(
+                    &file,
+                    &json!({"path":save,"edits":[{
+                        "path":"private.player.setTransform","value":next_location
+                    }]}),
+                    false
+                )
+                .is_err()
+            );
+            assert_eq!(fs::read(&file).unwrap(), malformed);
+            fs::write(&file, &valid_draft).unwrap();
+            let result = draft(
+                "apply",
+                &Options {
+                    save: Some(file),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(result["complete"], true);
+            let actual = call("inspect_save", json!({"path":save,"includePrivate":true})).unwrap();
+            assert_eq!(
+                actual["private"]["player"]["transform"]["location"],
+                next_location["location"]
+            );
+            assert_eq!(
+                actual["private"]["player"]["transform"]["rotation"],
+                next_rotation["rotation"]
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_selection_accepts_equivalent_paths_without_matching_another_backup() {
+        let cwd = std::env::current_dir().unwrap();
+        let temp = tempfile::tempdir_in(&cwd).unwrap();
+        let backup = temp.path().join("goresave_backups/first.bak");
+        let second = temp.path().join("goresave_backups/second.bak");
+        fs::create_dir(backup.parent().unwrap()).unwrap();
+        fs::write(&backup, b"first recovery").unwrap();
+        fs::write(&second, b"second recovery").unwrap();
+        let data = json!({"recoveries":[{"backupPath":backup.canonicalize().unwrap()}, {"backupPath":second.canonicalize().unwrap()}]});
+        for selected in [
+            backup.clone(),
+            backup.strip_prefix(&cwd).unwrap().to_owned(),
+            backup.parent().unwrap().join("./first.bak"),
+        ] {
+            let options = Options {
+                backup: Some(selected),
+                ..Default::default()
+            };
+            assert_eq!(
+                selected_recovery(&data, &options).unwrap(),
+                &data["recoveries"][0]
+            );
+        }
+        let other = tempfile::tempdir().unwrap();
+        let foreign = other.path().join("first.bak");
+        fs::write(&foreign, b"foreign recovery").unwrap();
+        assert!(
+            selected_recovery(
+                &data,
+                &Options {
+                    backup: Some(foreign),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(
+            selected_recovery(&data, &Options::default()).unwrap(),
+            &data["recoveries"][1]
+        );
+        assert_eq!(fs::read(backup).unwrap(), b"first recovery");
     }
 
     #[test]

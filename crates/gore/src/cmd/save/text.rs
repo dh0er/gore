@@ -326,6 +326,59 @@ impl Texts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_search_matches_game_text_before_filtering_and_pagination() {
+        let texts = Texts {
+            catalog: json!({
+                "itmi_orenugget":{"german":"Übersetzter Treffer: Erz", "english":"English ore"},
+                "itar_rune_fireball":{"german":"Übersetzter Treffer: Feuer", "english":"English rune"}
+            }),
+            sets: vec!["german"],
+            lang: "en".into(),
+        };
+        let options = Options {
+            lang: "en".into(),
+            game_lang: "de".into(),
+            query: Some("übersetzter treffer".into()),
+            offset: 1,
+            limit: 1,
+            ..Options::default()
+        };
+        let data = display::catalog_page("items", &options, &texts).unwrap();
+        assert_eq!(data["total"], 2);
+        assert_eq!(data["count"], 1);
+        assert_eq!(data["offset"], 1);
+        assert_eq!(data["entries"][0]["id"], "ItMi_Orenugget");
+        assert_eq!(data["entries"][0]["idText"], "Übersetzter Treffer: Erz");
+
+        let selected = display::catalog_page(
+            "items",
+            &Options {
+                category: Some("material".into()),
+                offset: 0,
+                ..options.clone()
+            },
+            &texts,
+        )
+        .unwrap();
+        assert_eq!(selected["total"], 1);
+        assert_eq!(selected["entries"][0]["id"], "ItMi_Orenugget");
+
+        let raw_id = display::catalog_page(
+            "items",
+            &Options {
+                query: Some("ItMi_Orenugget".into()),
+                offset: 0,
+                ..options
+            },
+            &texts,
+        )
+        .unwrap();
+        assert_eq!(raw_id["total"], 1);
+        assert_eq!(raw_id["entries"][0]["id"], "ItMi_Orenugget");
+    }
+
     #[test]
     fn progression_keys_resolve_exact_metadata_before_numeric_fallback() {
         let texts = Texts {

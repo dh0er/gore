@@ -1379,9 +1379,40 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
     }
     write(o, edits, json!({}))
 }
+fn inventory_page(mut data: Value, o: &Options) -> Result<Value> {
+    let catalog = display::catalog("items")?;
+    if let Some(rows) = data["items"].as_array_mut() {
+        for row in rows.iter_mut() {
+            if let Some(item) = catalog
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|i| i["id"] == row["id"])
+            {
+                row["icon"] = item["icon"].clone();
+            }
+        }
+        display::annotate_items(rows, o.details)?;
+        rows.retain(|r| {
+            o.container
+                .as_ref()
+                .is_none_or(|c| r["containerType"] == *c)
+                && o.slot
+                    .as_ref()
+                    .is_none_or(|s| r["slotId"].as_i64() == s.parse::<i64>().ok())
+        });
+    }
+    let mut filter = o.clone();
+    filter.id = o.item.clone().or(o.id.clone());
+    display::localize(&mut data, o)?;
+    display::filter_items(&mut data, "items", &filter);
+    display::paginate(&mut data, "items", o);
+    Ok(data)
+}
+
 fn inventory(v: &str, o: &Options) -> Result<Value> {
     if matches!(v, "list" | "show" | "check-slots") {
-        let mut data = if o.actor.eq_ignore_ascii_case("hero") {
+        let data = if o.actor.eq_ignore_ascii_case("hero") {
             let mut summary = call(
                 "inspect_save",
                 json!({"path":save(o)?,"includePrivate":true}),
@@ -1420,34 +1451,7 @@ fn inventory(v: &str, o: &Options) -> Result<Value> {
             }
             inventory
         };
-        let catalog = display::catalog("items")?;
-        let stats = display::catalog("item-stats")?;
-        if let Some(rows) = data["items"].as_array_mut() {
-            for row in rows.iter_mut() {
-                let id = row["id"].as_str().unwrap_or("").to_string();
-                if let Some(item) = catalog.as_array().unwrap().iter().find(|i| i["id"] == id) {
-                    row["category"] = item["category"].clone();
-                    row["icon"] = item["icon"].clone();
-                }
-                if o.details {
-                    row["stats"] = stats["items"][&id].clone();
-                }
-            }
-            rows.retain(|r| {
-                o.container
-                    .as_ref()
-                    .is_none_or(|c| r["containerType"] == *c)
-                    && o.slot
-                        .as_ref()
-                        .is_none_or(|s| r["slotId"].as_i64() == s.parse::<i64>().ok())
-            });
-        }
-        let mut filter = o.clone();
-        filter.id = o.item.clone().or(o.id.clone());
-        display::localize(&mut data, o)?;
-        display::filter(&mut data, "items", &filter);
-        display::paginate(&mut data, "items", o);
-        return Ok(data);
+        return inventory_page(data, o);
     }
     let op = match v {
         "set-count" => "private.inventory.setItemCount",
@@ -1596,6 +1600,45 @@ fn time(v: &str, o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inventory_uses_editor_categories_without_requiring_details() {
+        let inventory = json!({"items":[
+            {"id":"ItAr_Rune_FireBall","count":1,"containerType":"Main","slotId":6,"equipped":true},
+            {"id":"ItMi_Orenugget","count":9,"containerType":"Main","slotId":7},
+            {"id":"ItMi_Orenugget","count":17,"containerType":"Main","slotId":8}
+        ]});
+        for (category, offset, total, id, slot, count) in [
+            ("material", 1, 2, "ItMi_Orenugget", 8, 17),
+            ("magic", 0, 1, "ItAr_Rune_FireBall", 6, 1),
+        ] {
+            let data = inventory_page(
+                inventory.clone(),
+                &Options {
+                    category: Some(category.into()),
+                    container: Some("Main".into()),
+                    offset,
+                    lang: "en".into(),
+                    game_lang: "en".into(),
+                    limit: 1,
+                    ..Options::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(data["total"], total);
+            assert_eq!(data["count"], 1);
+            let row = &data["items"][0];
+            assert_eq!(row["id"], id);
+            assert_eq!(row["category"], category);
+            assert!(row.get("stats").is_none());
+            assert_eq!(row["count"], count);
+            assert_eq!(row["containerType"], "Main");
+            assert_eq!(row["slotId"], slot);
+            if category == "magic" {
+                assert_eq!(row["equipped"], true);
+            }
+        }
+    }
 
     #[test]
     fn profile_derived_reset_template_blocks_direct_writes_and_staging_after_profile_changes() {

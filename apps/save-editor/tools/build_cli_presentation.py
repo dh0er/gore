@@ -76,6 +76,11 @@ def build():
         languages, re.S))
     if len(defaults) < 10 or len(defaults) != len(re.findall(r"\bUiLang\s*\(", languages)):
         raise ValueError("could not extract the Editor interface language table")
+    categories = read("lib/features/editor/domain/item_categories.dart", sources)
+    filter_table = categories.split("ItemCategory? itemCategoryFromFilterId(", 1)[1].split("_ => null", 1)[0]
+    item_categories = dict(re.findall(r"'([^']+)'\s*=>\s*ItemCategory\.(\w+)", filter_table))
+    if len(item_categories) != 10:
+        raise ValueError("could not extract the Editor inventory category table")
     ui, selects = {}, {}
     for lang in defaults:
         file = lang.replace("-", "_")
@@ -84,7 +89,7 @@ def build():
         selects[lang] = {key: arms for key, value in ui[lang].items() if (arms := select_arms(value))}
     return {"schema": 1, "sources": sources, "story": entries,
             "attributeGroups": groups, "hiddenAttributes": sorted(set(hidden)), "ui": ui,
-            "gameTextDefaults": defaults, "selects": selects}
+            "gameTextDefaults": defaults, "selects": selects, "itemCategories": item_categories}
 
 
 def main():
