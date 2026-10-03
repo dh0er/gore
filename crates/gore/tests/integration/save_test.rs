@@ -1265,6 +1265,142 @@ fn knowledge_filters_select_all_core_pages_before_pagination() {
 }
 
 #[test]
+fn edited_save_previews_validate_output_parents_and_preserve_drafts() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let profile = home.join("PersistentDataList.sav");
+    let profile_bytes = profile_fixture("Gothic");
+    fs::write(&profile, &profile_bytes).unwrap();
+    let file_parent = home.join("file-parent");
+    fs::write(&file_parent, b"parent bytes").unwrap();
+    let draft = home.join("export.json");
+    for out in [
+        home.join("missing/child.sav"),
+        home.join("missing/nested/child.sav"),
+        file_parent.join("child.sav"),
+        home.to_path_buf(),
+    ] {
+        for command in ["apply_edits", "write_save"] {
+            for dry in [false, true] {
+                assert!(
+                    gore_save::api::execute(&gore_save::api::Request {
+                        command: command.into(),
+                        payload: json!({"path":save,"outputPath":out,"dryRun":dry,
+                            "edits":[{"path":"public.m_PlayerSaveName","value":"Export name"}]}),
+                    })
+                    .is_err(),
+                    "{command} dry={dry} out={out:?}"
+                );
+            }
+        }
+        for mode in [
+            vec![],
+            vec!["--dry-run"],
+            vec!["--draft", draft.to_str().unwrap()],
+            vec!["--draft", draft.to_str().unwrap(), "--dry-run"],
+        ] {
+            let mut args = vec![
+                "rename",
+                save.to_str().unwrap(),
+                "--name",
+                "Export name",
+                "--out",
+                out.to_str().unwrap(),
+            ];
+            args.extend(mode);
+            run_failure(home, &args);
+            assert!(!draft.exists());
+            assert!(!home.join("missing").exists());
+            assert!(!home.join("goresave_backups").exists());
+            assert_eq!(fs::read(&save).unwrap(), before);
+            assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+            assert_eq!(fs::read(&file_parent).unwrap(), b"parent bytes");
+        }
+    }
+
+    let output_parent = home.join("existing-parent");
+    fs::create_dir(&output_parent).unwrap();
+    let output = output_parent.join("export.sav");
+    run(
+        home,
+        &[
+            "rename",
+            save.to_str().unwrap(),
+            "--name",
+            "Export name",
+            "--out",
+            output.to_str().unwrap(),
+            "--draft",
+            draft.to_str().unwrap(),
+        ],
+    );
+    let draft_bytes = fs::read(&draft).unwrap();
+    assert!(!output.exists());
+    fs::remove_dir(&output_parent).unwrap();
+    for args in [
+        vec!["draft", "validate", draft.to_str().unwrap()],
+        vec!["draft", "apply", draft.to_str().unwrap()],
+        vec!["draft", "apply", draft.to_str().unwrap(), "--dry-run"],
+    ] {
+        let error = run_failure(home, &args);
+        assert!(error.to_string().contains("outputPath parent"), "{error}");
+        assert_eq!(fs::read(&draft).unwrap(), draft_bytes);
+        assert!(!output_parent.exists());
+        assert!(!home.join("goresave_backups").exists());
+        assert_eq!(fs::read(&save).unwrap(), before);
+        assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+    }
+    fs::create_dir(&output_parent).unwrap();
+    run(home, &["draft", "validate", draft.to_str().unwrap()]);
+    assert_eq!(fs::read(&draft).unwrap(), draft_bytes);
+    assert!(!output.exists());
+    run(home, &["draft", "apply", draft.to_str().unwrap()]);
+    assert_eq!(
+        run(home, &["inspect", output.to_str().unwrap()])["public"]["playerSaveName"],
+        "Export name"
+    );
+    run_from(
+        home,
+        Some(home),
+        &[
+            "rename",
+            "G1R-001.sav",
+            "--name",
+            "Relative export",
+            "--out",
+            "relative.sav",
+            "--dry-run",
+        ],
+    );
+    assert!(!home.join("relative.sav").exists());
+    run_from(
+        home,
+        Some(home),
+        &[
+            "rename",
+            "G1R-001.sav",
+            "--name",
+            "Relative export",
+            "--out",
+            "relative.sav",
+        ],
+    );
+    assert_eq!(
+        run(
+            home,
+            &["inspect", home.join("relative.sav").to_str().unwrap()]
+        )["public"]["playerSaveName"],
+        "Relative export"
+    );
+    assert_eq!(fs::read(&save).unwrap(), before);
+    assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
 fn edited_save_exports_refuse_source_aliases_without_writing_or_staging() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

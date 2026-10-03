@@ -153,9 +153,28 @@ pub fn validate_output_path(
     let source = std::fs::File::open(path)?;
     let output = match std::fs::File::open(output) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = output
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or(std::path::Path::new("."));
+            match std::fs::metadata(parent) {
+                Ok(metadata) if metadata.is_dir() => return Ok(()),
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            return Err(CoreError::InvalidRequest(
+                "outputPath parent must be an existing directory".into(),
+            ));
+        }
         Err(error) => return Err(error.into()),
     };
+    if !output.metadata()?.is_file() {
+        return Err(CoreError::InvalidRequest(
+            "outputPath must name a regular file".into(),
+        ));
+    }
     #[cfg(unix)]
     let same = {
         use std::os::unix::fs::MetadataExt;
@@ -378,4 +397,40 @@ pub fn recovery_status(root: &std::path::Path) -> Result<Value, CoreError> {
     }
     manifests.sort_by_key(|v| v["createdEpoch"].as_u64().unwrap_or(0));
     Ok(json!({"recoveries":manifests}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn edited_save_output_validation_requires_an_existing_parent_and_file_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.sav");
+        fs::write(&source, b"source bytes").unwrap();
+        let file_parent = dir.path().join("file-parent");
+        fs::write(&file_parent, b"parent bytes").unwrap();
+        for output in [
+            dir.path().join("missing/child.sav"),
+            dir.path().join("missing/nested/child.sav"),
+            file_parent.join("child.sav"),
+            dir.path().to_path_buf(),
+        ] {
+            assert!(
+                validate_output_path(&source, &output).is_err(),
+                "{output:?}"
+            );
+        }
+        let fresh = dir.path().join("fresh.sav");
+        validate_output_path(&source, &fresh).unwrap();
+        assert!(!fresh.exists());
+        let existing = dir.path().join("existing.sav");
+        fs::write(&existing, b"existing bytes").unwrap();
+        validate_output_path(&source, &existing).unwrap();
+        assert_eq!(fs::read(&existing).unwrap(), b"existing bytes");
+        assert_eq!(fs::read(&source).unwrap(), b"source bytes");
+        assert_eq!(fs::read(&file_parent).unwrap(), b"parent bytes");
+        assert!(!dir.path().join("missing").exists());
+    }
 }
