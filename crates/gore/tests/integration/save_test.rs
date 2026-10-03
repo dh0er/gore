@@ -2085,6 +2085,85 @@ fn dictionary_catalog_queries_and_pages_work_through_the_cli() {
 }
 
 #[test]
+fn rename_draft_exports_preserve_both_profiles_and_ignore_unused_profile_snapshots() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let source = home.join("G1R-001.sav");
+    fs::copy(fixture(), &source).unwrap();
+    let source_before = fs::read(&source).unwrap();
+    let profile = home.join("PersistentDataList.sav");
+    fs::write(&profile, profile_fixture("Gothic")).unwrap();
+    let draft = home.join("rename.json");
+    run(
+        home,
+        &[
+            "rename",
+            source.to_str().unwrap(),
+            "--name",
+            "Exported rename",
+            "--draft",
+            draft.to_str().unwrap(),
+        ],
+    );
+    let draft_before = fs::read(&draft).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&draft_before).unwrap()["syncPersistentDataList"],
+        true
+    );
+    // An export uses neither profile, so their current bytes must be preserved.
+    let profile_before = profile_fixture("Hard");
+    fs::write(&profile, &profile_before).unwrap();
+    let destination = home.join("exports");
+    fs::create_dir(&destination).unwrap();
+    let destination_profile = destination.join("PersistentDataList.sav");
+    let destination_before = b"unrelated destination profile";
+    fs::write(&destination_profile, destination_before).unwrap();
+    let output = destination.join("G1R-002.sav");
+    run_failure(home, &["draft", "validate", draft.to_str().unwrap()]);
+    for mode in ["validate", "apply"] {
+        let mut args = vec![
+            "draft",
+            mode,
+            draft.to_str().unwrap(),
+            "--out",
+            output.to_str().unwrap(),
+        ];
+        if mode == "apply" {
+            args.push("--dry-run");
+        }
+        assert_eq!(run(home, &args)["dryRun"], true);
+        assert!(!output.exists());
+        assert_eq!(fs::read(&source).unwrap(), source_before);
+        assert_eq!(fs::read(&draft).unwrap(), draft_before);
+        assert_eq!(fs::read(&profile).unwrap(), profile_before);
+        assert_eq!(fs::read(&destination_profile).unwrap(), destination_before);
+    }
+    let result = run(
+        home,
+        &[
+            "draft",
+            "apply",
+            draft.to_str().unwrap(),
+            "--out",
+            output.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(result["complete"], true);
+    assert_eq!(result["draftUpdated"], true);
+    assert_eq!(
+        run(home, &["inspect", output.to_str().unwrap()])["public"]["playerSaveName"],
+        "Exported rename"
+    );
+    assert_eq!(fs::read(&source).unwrap(), source_before);
+    assert_eq!(fs::read(&profile).unwrap(), profile_before);
+    assert_eq!(fs::read(&destination_profile).unwrap(), destination_before);
+    let completed = run(home, &["draft", "show", draft.to_str().unwrap()]);
+    assert_eq!(completed["path"], json!(output.canonicalize().unwrap()));
+    assert_eq!(completed["edits"], json!([]));
+    assert!(completed["syncPersistentDataList"].is_null());
+}
+
+#[test]
 fn draft_output_overrides_preserve_source_and_validate_before_publication() {
     for stored_output in [false, true] {
         let temp = tempfile::tempdir().unwrap();

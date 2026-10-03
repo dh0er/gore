@@ -815,6 +815,8 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
     if let Some(output) = data["outputPath"].as_str() {
         api::validate_output_path(file, Path::new(output))
             .context("output must preserve the draft file")?;
+        // Exported copies do not update either source or destination profile.
+        data["syncPersistentDataList"] = json!(false);
     }
     data["dryRun"] = json!(o.dry_run || v == "validate");
     if data["syncPersistentDataList"] == true {
