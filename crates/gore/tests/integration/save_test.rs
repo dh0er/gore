@@ -2030,6 +2030,171 @@ fn knowledge_filters_select_all_core_pages_before_pagination() {
 }
 
 #[test]
+fn dictionary_catalog_queries_and_pages_work_through_the_cli() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    for domain in [
+        "story-semantics",
+        "glossary-text",
+        "portraits",
+        "hero-attributes",
+    ] {
+        let all = run(home, &["catalog", "list", "--kind", domain, "--all"]);
+        let entries = all["entries"].as_array().unwrap();
+        assert!(entries.len() > 1, "{domain}");
+        assert_eq!(all["total"], entries.len());
+        let page = run(
+            home,
+            &[
+                "catalog", "list", "--kind", domain, "--offset", "1", "--limit", "1",
+            ],
+        );
+        assert_eq!(page["entries"], json!([entries[1].clone()]));
+        assert_eq!(page["total"], entries.len());
+        assert_eq!(page["count"], 1);
+        assert_eq!(page["offset"], 1);
+        let empty = run(
+            home,
+            &[
+                "catalog",
+                "search",
+                "--kind",
+                domain,
+                "--query",
+                "PR123_NO_SUCH_CATALOG_ENTRY_987654",
+                "--limit",
+                "1",
+            ],
+        );
+        assert_eq!(empty["entries"], json!([]), "{domain}");
+        assert_eq!(empty["total"], 0, "{domain}");
+        let id = entries[0]["id"].as_str().unwrap();
+        let selected = run(home, &["catalog", "list", "--kind", domain, "--id", id]);
+        let expected = entries
+            .iter()
+            .filter(|entry| {
+                entry["id"]
+                    .as_str()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(id))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(selected["entries"], json!(expected));
+        assert_eq!(selected["total"], expected.len());
+    }
+}
+
+#[test]
+fn draft_output_overrides_preserve_source_and_validate_before_publication() {
+    for stored_output in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let source = home.join("G1R-001.sav");
+        fs::copy(fixture(), &source).unwrap();
+        let before = fs::read(&source).unwrap();
+        let draft = home.join("draft.json");
+        let staged_output = home.join("staged.sav");
+        let output = home.join("override.sav");
+        let mut args = vec![
+            "attributes",
+            "set",
+            source.to_str().unwrap(),
+            "--attribute",
+            "Strength",
+            "--current",
+            "41",
+            "--draft",
+            draft.to_str().unwrap(),
+        ];
+        if stored_output {
+            args.extend(["--out", staged_output.to_str().unwrap()]);
+        }
+        run(home, &args);
+        let draft_before = fs::read(&draft).unwrap();
+        for invalid in [
+            source.clone(),
+            draft.clone(),
+            home.join("missing/output.sav"),
+        ] {
+            for mode in ["validate", "apply"] {
+                run_failure(
+                    home,
+                    &[
+                        "draft",
+                        mode,
+                        draft.to_str().unwrap(),
+                        "--out",
+                        invalid.to_str().unwrap(),
+                    ],
+                );
+                assert_eq!(fs::read(&source).unwrap(), before);
+                assert_eq!(fs::read(&draft).unwrap(), draft_before);
+                assert!(!staged_output.exists());
+                assert!(!home.join("goresave_backups").exists());
+            }
+        }
+        run(
+            home,
+            &[
+                "draft",
+                "validate",
+                draft.to_str().unwrap(),
+                "--out",
+                output.to_str().unwrap(),
+            ],
+        );
+        run(
+            home,
+            &[
+                "draft",
+                "apply",
+                draft.to_str().unwrap(),
+                "--out",
+                output.to_str().unwrap(),
+                "--dry-run",
+            ],
+        );
+        assert_eq!(fs::read(&source).unwrap(), before);
+        assert_eq!(fs::read(&draft).unwrap(), draft_before);
+        assert!(!output.exists());
+        assert!(!staged_output.exists());
+        let result = run(
+            home,
+            &[
+                "draft",
+                "apply",
+                draft.to_str().unwrap(),
+                "--out",
+                output.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(result["complete"], true);
+        assert_eq!(result["draftUpdated"], true);
+        let exported = execute_core("inspect_save", json!({"path":output,"includePrivate":true}));
+        let attributes = &exported["private"]["player"]["attributes"];
+        assert_eq!(
+            attributes
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == "Strength")
+                .unwrap()["currentValue"],
+            41.0
+        );
+        assert_eq!(fs::read(&source).unwrap(), before);
+        assert!(!staged_output.exists());
+        let saved_draft = run(home, &["draft", "show", draft.to_str().unwrap()]);
+        assert_eq!(saved_draft["path"], json!(output.canonicalize().unwrap()));
+        assert_eq!(
+            saved_draft["expectedSha1"],
+            gore_save::api::file_sha1(&output).unwrap()
+        );
+        assert_eq!(saved_draft["edits"], json!([]));
+        assert!(saved_draft["outputPath"].is_null());
+    }
+}
+
+#[test]
 fn edited_save_previews_validate_output_parents_and_preserve_drafts() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

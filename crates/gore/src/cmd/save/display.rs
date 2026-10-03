@@ -426,6 +426,51 @@ fn loc_payload(o: &Options) -> Result<Value> {
 
 pub(super) fn catalog_page(domain: &str, o: &Options, texts: &super::text::Texts) -> Result<Value> {
     let mut data = catalog(domain)?;
+    let dictionary = matches!(
+        domain,
+        "story-semantics" | "glossary-text" | "portraits" | "hero-attributes"
+    );
+    // Normalize only the entry dictionaries in each bundled schema. Wrapper
+    // metadata (schema, filters, hidden attributes, etc.) is not an entry.
+    match domain {
+        "story-semantics" => {
+            data = json!({"entries":data.as_object().context("invalid story semantics")?.values().collect::<Vec<_>>()});
+        }
+        "glossary-text" => {
+            data = json!({"entries":data.as_object().context("invalid glossary texts")?.iter().map(|(id,text_ids)|json!({"id":id,"segmentClass":id,"textIds":text_ids})).collect::<Vec<_>>()});
+        }
+        "portraits" => {
+            let mut rows = Vec::new();
+            for source in ["images", "artwork"] {
+                let entries = data
+                    .as_object_mut()
+                    .context("invalid portrait catalog")?
+                    .remove(source)
+                    .context("portrait catalog has no entry dictionary")?;
+                for (id, entry) in entries.as_object().context("invalid portrait entries")? {
+                    let mut row = entry.clone();
+                    row["id"] = json!(id);
+                    row["source"] = json!(source);
+                    rows.push(row);
+                }
+            }
+            data["entries"] = json!(rows);
+        }
+        "hero-attributes" => {
+            let groups = data
+                .as_object_mut()
+                .context("invalid hero attribute catalog")?
+                .remove("groups")
+                .context("hero attribute catalog has no groups")?;
+            data["entries"] = json!(groups
+                .as_object()
+                .context("invalid attribute groups")?
+                .iter()
+                .map(|(id, attributes)| json!({"id":id,"attributes":attributes}))
+                .collect::<Vec<_>>());
+        }
+        _ => {}
+    }
     if domain == "item-stats" {
         let items = data
             .as_object_mut()
@@ -468,6 +513,20 @@ pub(super) fn catalog_page(domain: &str, o: &Options, texts: &super::text::Texts
         options.id = options.item.clone().or(options.location.clone());
     }
     texts.apply(&mut data)?;
+    if dictionary {
+        if let Some(id) = options.id.take() {
+            // The dictionary key (or its canonical id) identifies a row;
+            // content such as a portrait name or semantic kind does not.
+            data["entries"]
+                .as_array_mut()
+                .context("invalid dictionary catalog entries")?
+                .retain(|row| {
+                    row["id"]
+                        .as_str()
+                        .is_some_and(|value| value.eq_ignore_ascii_case(&id))
+                });
+        }
+    }
     if matches!(domain, "item" | "items" | "item-stats") {
         filter_items(&mut data, key, &options);
     } else {
@@ -1173,6 +1232,450 @@ fn overview(o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn catalog_options(domain: &str) -> Options {
+        Options {
+            kind: Some(domain.into()),
+            lang: "en".into(),
+            game_lang: "en".into(),
+            limit: 1,
+            ..Options::default()
+        }
+    }
+
+    #[test]
+    fn dictionary_catalog_search_and_exact_id_reject_missing_entries() {
+        for domain in [
+            "story-semantics",
+            "glossary-text",
+            "portraits",
+            "hero-attributes",
+        ] {
+            let options = catalog_options(domain);
+            for selected in [
+                Options {
+                    query: Some("PR123_NO_SUCH_QUEST_987654".into()),
+                    ..options.clone()
+                },
+                Options {
+                    id: Some("PR123_NO_SUCH_QUEST_987654".into()),
+                    ..options.clone()
+                },
+            ] {
+                let page = dispatch("catalog", "search", &selected).unwrap();
+                assert_eq!(page["entries"], json!([]), "{domain}");
+                assert_eq!(page["total"], 0, "{domain}");
+                assert_eq!(page["count"], 0, "{domain}");
+                assert_eq!(page["offset"], 0, "{domain}");
+            }
+        }
+    }
+
+    #[test]
+    fn dictionary_catalog_story_rows_retain_semantics_and_canonical_ids() {
+        let raw = catalog("story-semantics").unwrap();
+        let options = catalog_options("story-semantics");
+        let selected = dispatch(
+            "catalog",
+            "show",
+            &Options {
+                id: Some("BAALLUKOR_BRINGPARCHMENT".into()),
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(selected["total"], 1);
+        assert_eq!(selected["entries"][0], raw["baallukor_bringparchment"]);
+        assert_eq!(selected["entries"][0]["id"], "BaalLukor_BringParchment");
+        let expected = raw
+            .as_object()
+            .unwrap()
+            .values()
+            .filter(|row| row["kind"] == "finiteState")
+            .cloned()
+            .collect::<Vec<_>>();
+        let searched = dispatch(
+            "catalog",
+            "search",
+            &Options {
+                query: Some("FINITESTATE".into()),
+                offset: 1,
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert!(expected.len() > 1);
+        assert_eq!(searched["total"], expected.len());
+        assert_eq!(searched["count"], 1);
+        assert_eq!(searched["entries"][0], expected[1]);
+        let by_value = dispatch(
+            "catalog",
+            "show",
+            &Options {
+                id: Some("finiteState".into()),
+                ..options
+            },
+        )
+        .unwrap();
+        assert_eq!(by_value["total"], 0, "a semantic kind is not a row id");
+    }
+
+    #[test]
+    fn dictionary_catalog_glossary_rows_retain_ordered_text_ids() {
+        let raw = catalog("glossary-text").unwrap();
+        let (id, text_ids) = raw
+            .as_object()
+            .unwrap()
+            .iter()
+            .find(|(_, ids)| ids.as_array().unwrap().len() > 1)
+            .unwrap();
+        let options = catalog_options("glossary-text");
+        let selected = dispatch(
+            "catalog",
+            "show",
+            &Options {
+                id: Some(id.to_uppercase()),
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(selected["total"], 1);
+        assert_eq!(selected["entries"][0]["id"], *id);
+        assert_eq!(selected["entries"][0]["segmentClass"], *id);
+        assert_eq!(selected["entries"][0]["textIds"], *text_ids);
+        let query = text_ids[0].as_str().unwrap().to_lowercase();
+        let expected = raw
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(_, ids)| ids.to_string().to_lowercase().contains(&query))
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        let searched = dispatch(
+            "catalog",
+            "search",
+            &Options {
+                query: Some(query.clone()),
+                all: true,
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(searched["total"], expected.len());
+        assert_eq!(
+            searched["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        let by_text_id = dispatch(
+            "catalog",
+            "show",
+            &Options {
+                id: Some(query),
+                ..options
+            },
+        )
+        .unwrap();
+        assert_eq!(by_text_id["total"], 0);
+    }
+
+    #[test]
+    fn dictionary_catalog_portraits_preserve_both_sources_and_schema() {
+        let raw = catalog("portraits").unwrap();
+        let options = catalog_options("portraits");
+        let page = dispatch(
+            "catalog",
+            "list",
+            &Options {
+                all: true,
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(page["schema"], raw["schema"]);
+        let rows = page["entries"].as_array().unwrap();
+        let mut expected_total = 0;
+        for source in ["images", "artwork"] {
+            let entries = raw[source].as_object().unwrap();
+            expected_total += entries.len();
+            for (id, content) in entries {
+                let row = rows
+                    .iter()
+                    .find(|row| row["id"] == *id && row["source"] == source)
+                    .unwrap();
+                for (key, value) in content.as_object().unwrap() {
+                    assert_eq!(row[key], *value, "{source}/{id}/{key}");
+                }
+            }
+        }
+        assert_eq!(page["total"], expected_total);
+        assert_eq!(rows.len(), expected_total);
+        let selected = dispatch(
+            "catalog",
+            "show",
+            &Options {
+                id: Some("abandonedmine".into()),
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            selected["total"], 1,
+            "an image name is not its dictionary id"
+        );
+        assert_eq!(selected["entries"][0]["id"], "AbandonedMine");
+        assert_eq!(selected["entries"][0]["source"], "artwork");
+        let searched = dispatch(
+            "catalog",
+            "search",
+            &Options {
+                query: Some("AbandonedMine".into()),
+                all: true,
+                ..options
+            },
+        )
+        .unwrap();
+        assert_eq!(searched["total"], 2);
+        assert_eq!(searched["schema"], raw["schema"]);
+    }
+
+    #[test]
+    fn dictionary_catalog_attribute_groups_keep_hidden_metadata_out_of_rows() {
+        let raw = catalog("hero-attributes").unwrap();
+        let options = catalog_options("hero-attributes");
+        let page = dispatch(
+            "catalog",
+            "list",
+            &Options {
+                all: true,
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        let groups = raw["groups"].as_object().unwrap();
+        assert_eq!(page["hidden"], raw["hidden"]);
+        assert_eq!(page["total"], groups.len());
+        for row in page["entries"].as_array().unwrap() {
+            assert_eq!(row["attributes"], groups[row["id"].as_str().unwrap()]);
+        }
+        let searched = dispatch(
+            "catalog",
+            "search",
+            &Options {
+                query: Some("Health".into()),
+                offset: 1,
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(searched["total"], 2);
+        assert_eq!(searched["count"], 1);
+        assert_eq!(searched["entries"][0]["id"], "sleep");
+        assert_eq!(searched["hidden"], raw["hidden"]);
+        let metadata_only = dispatch(
+            "catalog",
+            "search",
+            &Options {
+                query: Some("ToughnessA".into()),
+                ..options
+            },
+        )
+        .unwrap();
+        assert_eq!(metadata_only["total"], 0);
+        assert_eq!(metadata_only["hidden"], raw["hidden"]);
+    }
+
+    #[test]
+    fn dictionary_catalog_pages_support_offsets_zero_limits_and_all() {
+        for domain in [
+            "story-semantics",
+            "glossary-text",
+            "portraits",
+            "hero-attributes",
+        ] {
+            let options = catalog_options(domain);
+            let whole = dispatch(
+                "catalog",
+                "list",
+                &Options {
+                    all: true,
+                    ..options.clone()
+                },
+            )
+            .unwrap();
+            let rows = whole["entries"].as_array().unwrap();
+            assert!(rows.len() > 1, "{domain}");
+            let first = dispatch("catalog", "list", &options).unwrap();
+            let by_source = dispatch(
+                "catalog",
+                "list",
+                &Options {
+                    kind: None,
+                    source: Some(domain.into()),
+                    ..options.clone()
+                },
+            )
+            .unwrap();
+            assert_eq!(by_source, first, "{domain}");
+            let selected = dispatch(
+                "catalog",
+                "show",
+                &Options {
+                    id: Some(rows[0]["id"].as_str().unwrap().to_uppercase()),
+                    ..options.clone()
+                },
+            )
+            .unwrap();
+            assert_eq!(selected["entries"], json!([rows[0]]), "{domain}");
+            assert_eq!(selected["total"], 1, "{domain}");
+            let second = dispatch(
+                "catalog",
+                "list",
+                &Options {
+                    offset: 1,
+                    ..options.clone()
+                },
+            )
+            .unwrap();
+            assert_eq!(first["total"], rows.len(), "{domain}");
+            assert_eq!(first["count"], 1, "{domain}");
+            assert_eq!(first["entries"], json!([rows[0]]), "{domain}");
+            assert_eq!(second["total"], rows.len(), "{domain}");
+            assert_eq!(second["count"], 1, "{domain}");
+            assert_eq!(second["offset"], 1, "{domain}");
+            assert_eq!(second["entries"], json!([rows[1]]), "{domain}");
+            for selected in [
+                Options {
+                    limit: 0,
+                    ..options.clone()
+                },
+                Options {
+                    offset: rows.len() + 1,
+                    ..options.clone()
+                },
+            ] {
+                let empty = dispatch("catalog", "list", &selected).unwrap();
+                assert_eq!(empty["entries"], json!([]), "{domain}");
+                assert_eq!(empty["total"], rows.len(), "{domain}");
+                assert_eq!(empty["count"], 0, "{domain}");
+                assert_eq!(empty["offset"], selected.offset, "{domain}");
+            }
+            let rest = dispatch(
+                "catalog",
+                "list",
+                &Options {
+                    all: true,
+                    offset: 1,
+                    ..options
+                },
+            )
+            .unwrap();
+            assert_eq!(rest["entries"], json!(rows[1..]), "{domain}");
+            assert_eq!(rest["total"], rows.len(), "{domain}");
+            assert_eq!(rest["count"], rows.len() - 1, "{domain}");
+        }
+    }
+
+    #[test]
+    fn catalog_pages_preserve_existing_array_and_wrapper_metadata() {
+        for (domain, key, metadata) in [
+            ("npc", "entries", &[][..]),
+            ("knowledge", "entries", &[][..]),
+            ("glossary", "entries", &[][..]),
+            ("locations", "spots", &["version", "areas"][..]),
+            ("locks", "locks", &["version"][..]),
+            ("item-stats", "entries", &["schema", "filters"][..]),
+        ] {
+            let options = catalog_options(domain);
+            let mut raw = catalog(domain).unwrap();
+            // Shared metadata is localized too when a game-text cache exists.
+            super::super::text::Texts::load_options(&options)
+                .unwrap()
+                .apply(&mut raw)
+                .unwrap();
+            let page = dispatch("catalog", "list", &options).unwrap();
+            let expected = if raw.is_array() {
+                raw.as_array().unwrap().len()
+            } else if domain == "item-stats" {
+                raw["items"].as_object().unwrap().len()
+            } else {
+                raw[key].as_array().unwrap().len()
+            };
+            assert_eq!(page["total"], expected, "{domain}");
+            assert_eq!(page["count"], 1, "{domain}");
+            assert_eq!(page[key].as_array().unwrap().len(), 1, "{domain}");
+            for field in metadata {
+                assert_eq!(page[*field], raw[*field], "{domain}/{field}");
+            }
+        }
+        let raw = catalog("ui-texts").unwrap();
+        let page = dispatch("catalog", "list", &catalog_options("ui-texts")).unwrap();
+        assert_eq!(page["total"], raw["en"].as_object().unwrap().len());
+        assert_eq!(page["count"], 1);
+        let row = &page["entries"][0];
+        assert_eq!(row["text"], raw["en"][row["id"].as_str().unwrap()]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn dictionary_catalog_localizes_before_search_and_pagination() {
+        const CHILD: &str = "GORE_TEST_DICTIONARY_LOCALIZATION_CHILD";
+        const TEST: &str =
+            "cmd::save::display::tests::dictionary_catalog_localizes_before_search_and_pagination";
+        let raw = catalog("glossary-text").unwrap();
+        let segments = raw.as_object().unwrap().iter().take(2).collect::<Vec<_>>();
+        if std::env::var_os(CHILD).is_none() {
+            // A child harness isolates its localization cache without mutating the
+            // environment or extracted game texts used by concurrent unit tests.
+            let temp = tempfile::tempdir().unwrap();
+            let mut localized = json!({});
+            for (_, ids) in &segments {
+                for id in ids.as_array().unwrap() {
+                    localized[id.as_str().unwrap().to_lowercase()] =
+                        json!({"german":"PR123 Übersetzter Glossartreffer"});
+                }
+            }
+            fs::create_dir(temp.path().join("gore")).unwrap();
+            fs::write(
+                temp.path().join("gore/loc_catalog.json"),
+                serde_json::to_vec(&localized).unwrap(),
+            )
+            .unwrap();
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", TEST, "--nocapture"])
+                .env(CHILD, "1")
+                .env("XDG_DATA_HOME", temp.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let options = Options {
+            query: Some("pr123 übersetzter glossartreffer".into()),
+            game_lang: "de".into(),
+            offset: 1,
+            ..catalog_options("glossary-text")
+        };
+        let page = dispatch("catalog", "search", &options).unwrap();
+        assert_eq!(page["total"], 2);
+        assert_eq!(page["count"], 1);
+        assert_eq!(page["offset"], 1);
+        assert_eq!(page["entries"][0]["id"], *segments[1].0);
+        assert_eq!(page["entries"][0]["textIds"], *segments[1].1);
+        assert_eq!(
+            page["entries"][0]["textSegments"][0]["text"],
+            "PR123 Übersetzter Glossartreffer"
+        );
+    }
 
     #[test]
     fn item_stat_catalog_supports_selection_search_and_pagination() {

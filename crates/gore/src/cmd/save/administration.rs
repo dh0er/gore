@@ -809,6 +809,13 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
         )?;
         return stage(file, &p, o.dry_run);
     }
+    if let Some(output) = &o.out {
+        data["outputPath"] = json!(output);
+    }
+    if let Some(output) = data["outputPath"].as_str() {
+        api::validate_output_path(file, Path::new(output))
+            .context("output must preserve the draft file")?;
+    }
     data["dryRun"] = json!(o.dry_run || v == "validate");
     if data["syncPersistentDataList"] == true {
         let target = Path::new(data["path"].as_str().context("draft has no save path")?);
