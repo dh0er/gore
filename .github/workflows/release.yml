@@ -6,8 +6,9 @@ name: Release
 #   gore-mod-manager-vX.Y.Z  -> gore-mod-manager (Flutter app, WinSparkle updater)
 #   gore-cli-vX.Y.Z          -> gore-cli (Rust binary)
 # Each job gates on its tag prefix, so one tag builds exactly one product. A
-# reusable call to the normal CI workflow must pass on this exact commit before
+# previously completed manual CI run must pass on this exact commit before
 # any product can build, sign, upload, publish, or update an appcast feed.
+# Explicit user policy: release tags must not start another expensive CI run.
 #
 # Every updater reads a fixed-tag feed release — `gore-save-editor-appcast`,
 # `gore-mod-studio-appcast`, `gore-mod-manager-appcast` — whose single
@@ -60,9 +61,34 @@ env:
 jobs:
   quality-gates:
     name: CI quality gates
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-    uses: ./.github/workflows/ci.yml
+      actions: read
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              ...context.repo, workflow_id: 'ci.yml', event: 'workflow_dispatch',
+              head_sha: context.sha, per_page: 100,
+            });
+            const run = runs.filter(run => run.head_sha === context.sha &&
+              run.event === 'workflow_dispatch').sort((a, b) =>
+                new Date(b.created_at) - new Date(a.created_at))[0];
+            if (!run || run.status !== 'completed' || run.conclusion !== 'success') {
+              core.setFailed('The latest manual CI for this exact commit has not passed. Complete the fix-bugs review loop and manually run CI before releasing.');
+              return;
+            }
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              ...context.repo, run_id: run.id, filter: 'latest', per_page: 100,
+            });
+            if (!jobs.some(job => job.name === 'test' && job.status === 'completed' &&
+                job.conclusion === 'success')) {
+              core.setFailed('The required test job did not pass; do not release.');
+              return;
+            }
+            core.info(`Using successful manual CI: ${run.html_url}`);
 
   gore-save-editor:
     needs: quality-gates

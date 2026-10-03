@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 import posixpath
+import json
+import subprocess
 import re
 import unittest
 
 from check_release_workflow import (
     APPCAST_KEYS,
     DOWNLOAD_TOOLS,
+    MANUAL_CI_GATE,
     PRODUCTS,
     PUBLISH_GUARD,
     UNRELEASED_PRODUCTS,
@@ -182,9 +185,12 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         self.assertEqual(validate_workflows(self.ci, self.release), [])
         self.assertEqual(validate_appcast_key_resources(self.runner_resources), [])
 
-    def test_ci_must_be_reusable_and_read_only(self) -> None:
-        without_call = replace_once(self.ci, "  workflow_call:\n", "")
-        self.assert_invalid(ci=without_call, mentions="workflow_call")
+    def test_ci_must_be_manual_and_read_only(self) -> None:
+        without_dispatch = replace_once(self.ci, "  workflow_dispatch:\n", "")
+        self.assert_invalid(ci=without_dispatch)
+        for event in ("push", "pull_request", "workflow_call", "schedule", "workflow_run"):
+            automatic = replace_once(self.ci, "  workflow_dispatch:\n", f"  workflow_dispatch:\n  {event}:\n")
+            self.assert_invalid(ci=automatic, mentions="unexpected=")
 
         writable = replace_once(
             self.ci, "permissions:\n  contents: read", "permissions:\n  contents: write"
@@ -239,19 +245,19 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
                 )
                 self.assert_invalid(release=release_ref, mentions="field set changed")
 
-    def test_quality_job_must_call_exact_local_ci_without_bypass_fields(self) -> None:
+    def test_quality_job_must_verify_manual_ci_without_bypass_fields(self) -> None:
         wrong_path = mutate_job(
             self.release,
             "quality-gates",
-            "uses: ./.github/workflows/ci.yml",
-            "uses: ./.github/workflows/other.yml",
+            "uses: actions/github-script@v7",
+            "uses: actions/other@v7",
         )
-        self.assert_invalid(release=wrong_path, mentions="exact local CI")
+        self.assert_invalid(release=wrong_path, mentions="changed")
 
         writable = mutate_job(
             self.release, "quality-gates", "contents: read", "contents: write"
         )
-        self.assert_invalid(release=writable, mentions="contents must be read")
+        self.assert_invalid(release=writable, mentions="changed")
 
         conditional = mutate_job(
             self.release,
@@ -264,8 +270,8 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         secrets = mutate_job(
             self.release,
             "quality-gates",
-            "uses: ./.github/workflows/ci.yml",
-            "secrets: inherit\n    uses: ./.github/workflows/ci.yml",
+            "name: CI quality gates",
+            "secrets: inherit\n    name: CI quality gates",
         )
         self.assert_invalid(release=secrets, mentions="field set changed")
 
@@ -629,3 +635,48 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ManualReleaseGateTest(unittest.TestCase):
+    def test_release_reuses_only_latest_success_for_exact_commit(self):
+        good = {"id": 1, "head_sha": "reviewed", "event": "workflow_dispatch", "status": "completed", "conclusion": "success", "created_at": "2026-10-03T01:00:00Z"}
+        job = {"name": "test", "status": "completed", "conclusion": "success"}
+        cases = [
+            ([good], [job], True),
+            ([], [job], False),
+            ([{**good, "head_sha": "other"}], [job], False),
+            ([{**good, "event": "push"}], [job], False),
+            ([{**good, "conclusion": "failure"}], [job], False),
+            ([good, {**good, "id": 2, "created_at": "2026-10-03T02:00:00Z", "conclusion": "failure"}], [job], False),
+            ([good, {**good, "id": 2, "created_at": "2026-10-03T02:00:00Z", "status": "in_progress", "conclusion": None}], [job], False),
+            ([good], [], False),
+            ([good], [{**job, "conclusion": "skipped"}], False),
+            ([good], [{**job, "name": "unrelated"}], False),
+        ]
+        harness = r"""
+const fs = require('node:fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+let failed = false;
+const github = {
+  rest: {actions: {listWorkflowRuns: 'runs', listJobsForWorkflowRun: 'jobs'}},
+  paginate: async (endpoint, options) => {
+    if (endpoint === 'runs') {
+      if (options.head_sha !== 'reviewed' || options.event !== 'workflow_dispatch') throw new Error('Unbound lookup');
+      return input.runs;
+    }
+    if (options.run_id !== 1) throw new Error('Wrong run');
+    return input.jobs;
+  },
+};
+(async () => {
+  await new AsyncFunction('github', 'context', 'core', input.script)(github,
+    {repo: {owner: 'owner', repo: 'repo'}, sha: 'reviewed'},
+    {setFailed: () => { failed = true; }, info: () => {}});
+  process.stdout.write(JSON.stringify(!failed));
+})();
+"""
+        for runs, jobs, expected in cases:
+            with self.subTest(runs=runs, jobs=jobs):
+                result = subprocess.run(['node', '-e', harness], input=json.dumps({"script": MANUAL_CI_GATE, "runs": runs, "jobs": jobs}), text=True, capture_output=True, check=True)
+                self.assertEqual(json.loads(result.stdout), expected)
