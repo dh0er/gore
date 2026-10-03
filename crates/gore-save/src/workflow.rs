@@ -217,9 +217,23 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
     plan_with_root(raw, None)
 }
 
-/// Only case-only set conflicts need the source's element descriptor.
+/// Resolve source-dependent set conflicts and inventory slot identities.
 pub fn plan_for_save(path: &Path, raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
-    let set_specs = parse(raw)?
+    let edits = parse(raw)?;
+    let inventory_batch = edits
+        .iter()
+        .filter(|edit| {
+            matches!(
+                edit.path.as_str(),
+                "private.inventory.addItem" | "private.inventory.removeItem"
+            )
+        })
+        .count()
+        > 1
+        && edits.iter().any(|edit| {
+            edit.path == "private.inventory.removeItem" && !edit.value["slotId"].is_null()
+        });
+    let set_specs = edits
         .iter()
         .filter(|edit| {
             matches!(
@@ -229,12 +243,56 @@ pub fn plan_for_save(path: &Path, raw: &[Value]) -> Result<Vec<Vec<usize>>, Core
         })
         .map(crate::parse_private_edit)
         .collect::<Result<Vec<_>, _>>()?;
-    if crate::case_only_set_conflict_paths(&set_specs).is_empty() {
+    if !inventory_batch && crate::case_only_set_conflict_paths(&set_specs).is_empty() {
         return plan(raw);
     }
     let root =
         crate::decode_private_root_cached(path, &crate::codec_backend::KrakenBackend::default())?;
     plan_with_root(raw, Some(&root))
+}
+
+// Add/remove operations repair legacy slot IDs as part of their write. A later
+// removal still carries the inspected ID, which may now address another stack.
+// Reject that sequence before simulation/publication; repair and restage first.
+fn reject_retargeted_inventory_removals(
+    root: &crate::properties::RootObject,
+    specs: &[Option<PrivateEdit>],
+    groups: &[Vec<usize>],
+) -> Result<(), CoreError> {
+    let mut normalized = Vec::<Vec<String>>::new();
+    for index in groups.iter().flatten() {
+        let (actor, container, pinned) = match &specs[*index] {
+            Some(PrivateEdit::InventoryAddItem(edit)) => (edit.actor_id.as_deref(), None, false),
+            Some(PrivateEdit::InventoryRemoveItem(edit)) => (
+                edit.actor_id.as_deref(),
+                edit.container_type.as_deref(),
+                edit.slot_id.is_some(),
+            ),
+            _ => continue,
+        };
+        let mut slots_path = crate::resolve_inventory_path(root, actor)
+            .ok_or_else(|| conflict("inventory actor not found"))?;
+        slots_path.extend(crate::container_slots_suffix(
+            root,
+            &slots_path,
+            &crate::container_enum_label(container),
+        )?);
+        if pinned && normalized.contains(&slots_path) {
+            return Err(conflict(
+                "Inventory slot IDs are misaligned. Repair slots and restage the pending removals before combining these edits.",
+            ));
+        }
+        let slots = crate::properties::resolve(
+            &root.properties,
+            &crate::properties::parse_path(&slots_path)?,
+        )?;
+        if let crate::properties::PropertyValue::Array { elements } = &slots.value {
+            if !crate::slot_ids_are_index_aligned(elements) && !normalized.contains(&slots_path) {
+                normalized.push(slots_path);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn plan_with_root(
@@ -561,6 +619,9 @@ fn plan_with_root(
     }
     if !current.is_empty() {
         groups.push(current);
+    }
+    if let Some(root) = root {
+        reject_retargeted_inventory_removals(root, &specs, &groups)?;
     }
     Ok(groups)
 }
@@ -1771,6 +1832,95 @@ mod tests {
             )
         );
     }
+    #[test]
+    fn legacy_inventory_batches_cannot_retarget_later_slot_removals() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("G1R-001.sav");
+        fs::write(
+            &path,
+            include_bytes!("../assets/start_saves/resources_gothic.sav"),
+        )
+        .unwrap();
+        let backend = crate::codec_backend::KrakenBackend::default();
+        let root = crate::decode_private_root_cached(&path, &backend).unwrap();
+        let mut slots = crate::resolve_inventory_path(&root, None).unwrap();
+        slots.extend(
+            crate::container_slots_suffix(&root, &slots, crate::MAIN_CONTAINER_ENUM_LABEL).unwrap(),
+        );
+        let item = "/Script/Angelscript.ItMi_CLI_Legacy_Remove_Test";
+        let mut edits = Vec::new();
+        for (index, (id, count)) in [(10, 5), (2, 20), (1, 30)].into_iter().enumerate() {
+            for (suffix, value) in [
+                (vec!["m_Id"], json!(id)),
+                (vec!["m_SlotData", "m_ItemDefinition"], json!(item)),
+                (vec!["m_SlotData", "m_ItemCount"], json!(count)),
+            ] {
+                let mut target = slots.clone();
+                target.push(format!("[{index}]"));
+                target.extend(suffix.into_iter().map(str::to_string));
+                edits.push(
+                    json!({"path":"private.typed.setValue","value":{"path":target,"value":value}}),
+                );
+            }
+        }
+        for edit in edits {
+            crate::api::execute(&crate::api::Request {
+                command: "write_save".into(),
+                payload: json!({"path":path,"backup":false,"edits":[edit]}),
+            })
+            .unwrap();
+        }
+        let original = fs::read(&path).unwrap();
+        let remove =
+            |id| json!({"path":"private.inventory.removeItem","value":{"path":item,"slotId":id}});
+        let add = json!({"path":"private.inventory.addItem","value":{"path":"/Script/Angelscript.ItMi_Orenugget","count":1}});
+        let repair = json!({"path":"private.inventory.repairSlots","value":{}});
+        for edits in [
+            vec![remove(10), remove(1)],
+            vec![remove(1), remove(10)],
+            vec![add.clone(), remove(1)],
+            vec![repair.clone(), remove(10), remove(1)],
+        ] {
+            for dry_run in [true, false] {
+                let result = apply_request(&json!({"path":path,"edits":edits,"dryRun":dry_run}));
+                assert!(
+                    matches!(result, Err(CoreError::UnsupportedEdit(ref message)) if message.contains("Repair slots")),
+                    "{result:?}"
+                );
+                assert_eq!(fs::read(&path).unwrap(), original);
+                assert!(!temp.path().join("goresave_backups").exists());
+            }
+        }
+        // A count update retains IDs, and independent actors/containers do not
+        // repair the container addressed by this removal.
+        let count = json!({"path":"private.inventory.setItemCount","value":{"path":item,"slotId":10,"count":8}});
+        assert!(plan_for_save(&path, &[count, remove(1)]).is_ok());
+        let npc = json!({"path":"private.inventory.addItem","value":{"actorId":"OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN","path":"/Script/Angelscript.ItMi_Orenugget","count":1}});
+        assert!(plan_for_save(&path, &[npc, remove(1)]).is_ok());
+        let pouch = json!({"path":"private.inventory.removeItem","value":{"path":item,"containerType":"Pouch"}});
+        assert!(plan_for_save(&path, &[pouch, remove(1)]).is_ok());
+        // Repair separately and restage against the repaired IDs. The intended
+        // middle stack must survive the now-safe batch.
+        apply_request(&json!({"path":path,"edits":[repair],"backup":false})).unwrap();
+        let result =
+            apply_request(&json!({"path":path,"edits":[remove(0),remove(2)],"backup":false}))
+                .unwrap();
+        assert_eq!(result["complete"], true);
+        let root = crate::decode_private_root_cached(&path, &backend).unwrap();
+        let target = crate::properties::resolve(
+            &root.properties,
+            &crate::properties::parse_path(&slots).unwrap(),
+        )
+        .unwrap();
+        let crate::properties::PropertyValue::Array { elements } = &target.value else {
+            panic!("slot array")
+        };
+        assert!(crate::slot_is_free(&elements[0]));
+        assert_eq!(crate::slot_item_definition(&elements[1]), Some(item));
+        assert_eq!(crate::slot_item_count(&elements[1]), Some(20));
+        assert!(crate::slot_is_free(&elements[2]));
+    }
+
     #[test]
     fn simulation_and_partial_commit_preserve_unconsumed_operation_identity() {
         let temp = tempfile::tempdir().unwrap();
