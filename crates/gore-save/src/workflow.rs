@@ -30,6 +30,22 @@ fn parse(raw: &[Value]) -> Result<Vec<Edit>, CoreError> {
         .map(|v| serde_json::from_value(v).map_err(|e| invalid(e.to_string())))
         .collect()
 }
+pub(super) fn reject_duplicate_public_renames(edits: &[Edit]) -> Result<(), CoreError> {
+    if edits
+        .iter()
+        .filter(|edit| edit.path == "public.m_PlayerSaveName")
+        .take(2)
+        .count()
+        == 2
+    {
+        let path = [
+            PathSeg::Name("public".into()),
+            PathSeg::Name("m_PlayerSaveName".into()),
+        ];
+        return Err(pending("property", Some(&path)));
+    }
+    Ok(())
+}
 fn is_array(edit: &Edit) -> bool {
     matches!(
         edit.path.as_str(),
@@ -199,6 +215,7 @@ pub fn replacement_key(raw: &Value) -> Option<String> {
 /// Returns groups of original edit indices, preserving identity even for equal adds.
 pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
     let edits = parse(raw)?;
+    reject_duplicate_public_renames(&edits)?;
     let specs = edits
         .iter()
         .map(|e| {
@@ -663,6 +680,28 @@ pub fn apply_with_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repeated_public_renames_are_refused_before_grouping() {
+        let first = json!({"path":"public.m_PlayerSaveName","value":"First name"});
+        let second = json!({"path":"public.m_PlayerSaveName","value":"Second name"});
+        for edit in [&first, &second] {
+            assert_eq!(plan(&[edit.clone()]).unwrap(), vec![vec![0]]);
+        }
+        for edits in [
+            vec![first.clone(), second.clone()],
+            vec![second, first.clone()],
+            vec![first.clone(), first],
+        ] {
+            assert!(matches!(
+                plan(&edits),
+                Err(CoreError::PlanConflict { kind: "property", path })
+                    if path == "public › m_PlayerSaveName"
+            ));
+        }
+        let unrelated = json!({"path":"private.npc.setRelationship","value":{"id":"NPC-A","relationship":"friend"}});
+        let rename = json!({"path":"public.m_PlayerSaveName","value":"Allowed name"});
+        assert!(plan(&[unrelated, rename]).is_ok());
+    }
     #[test]
     fn repeated_structured_targets_are_refused_before_grouping() {
         let relationship = json!({"path":"private.npc.setRelationship","value":{"id":"NPC-A","relationship":"friend"}});

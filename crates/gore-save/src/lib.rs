@@ -11271,6 +11271,7 @@ where
         .map(|v| serde_json::from_value::<Edit>(v.clone()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| CoreError::InvalidRequest(e.to_string()))?;
+    workflow::reject_duplicate_public_renames(&edits)?;
 
     // StoryApply is a self-contained transaction whose changes may splice the
     // private map. It must be the sole outer edit, including relative to PUBLIC

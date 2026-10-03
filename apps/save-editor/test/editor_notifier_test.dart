@@ -1547,6 +1547,35 @@ void main() {
   );
 
   test(
+    'saveAllPending retains conflicting public rename entries without writing',
+    () async {
+      for (final secondFirst in [false, true]) {
+        final core = _RecordingCoreService();
+        final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+        await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+        final first = <String, Object?>{
+          'path': 'public.m_PlayerSaveName',
+          'value': 'First name',
+        };
+        final second = <String, Object?>{
+          'path': 'public.m_PlayerSaveName',
+          'value': 'Second name',
+        };
+        final firstKey = secondFirst ? 'b-first' : 'a-first';
+        final secondKey = secondFirst ? 'a-second' : 'b-second';
+        notifier.setPendingEdit(firstKey, PendingSaveEdit(edits: [first]));
+        notifier.setPendingEdit(secondKey, PendingSaveEdit(edits: [second]));
+        expect(await notifier.saveAllPending(), isFalse);
+        expect(notifier.state.error, contains('m_PlayerSaveName'));
+        expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+        expect(notifier.state.pendingEdits, hasLength(2));
+        expect(notifier.state.pendingEdits[firstKey]!.edits, [first]);
+        expect(notifier.state.pendingEdits[secondKey]!.edits, [second]);
+      }
+    },
+  );
+
+  test(
     'saveAllPending preserves repeated structured targets instead of splitting them',
     () async {
       for (final relationship in [true, false]) {

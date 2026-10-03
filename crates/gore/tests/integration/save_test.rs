@@ -2622,6 +2622,107 @@ fn hero_transform_raw_collisions_reject_core_writes_and_keep_staged_drafts() {
 }
 
 #[test]
+fn duplicate_public_renames_preserve_save_profile_and_manual_drafts() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let profile = home.join("PersistentDataList.sav");
+    let profile_bytes = profile_fixture("Gothic");
+    fs::write(&profile, &profile_bytes).unwrap();
+    let hash = gore_save::api::file_sha1(&save).unwrap();
+    let unchanged = || {
+        assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+        assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+        assert!(!home.join("goresave_backups").exists());
+    };
+    let first = json!({"path":"public.m_PlayerSaveName","value":"First name"});
+    let second = json!({"path":"public.m_PlayerSaveName","value":"Second name"});
+    for edit in [&first, &second] {
+        execute_core(
+            "apply_edits",
+            json!({"path":save,"edits":[edit],"syncPersistentDataList":true,"dryRun":true}),
+        );
+        unchanged();
+    }
+    let draft = home.join("duplicate.json");
+    let request = home.join("request.json");
+    for edits in [
+        vec![first.clone(), second.clone()],
+        vec![second.clone(), first.clone()],
+        vec![first.clone(), first],
+    ] {
+        for command in ["plan_edits", "write_save", "apply_edits"] {
+            for dry in [false, true] {
+                let payload = json!({"path":save,"expectedSha1":hash,"edits":edits,"syncPersistentDataList":true,"dryRun":dry,"backup":true});
+                let error = gore_save::api::execute(&gore_save::api::Request {
+                    command: command.into(),
+                    payload: payload.clone(),
+                })
+                .unwrap_err();
+                assert!(
+                    matches!(error,gore_save::CoreError::PlanConflict {kind:"property",ref path} if path=="public › m_PlayerSaveName"),
+                    "{error}"
+                );
+                unchanged();
+                if command == "apply_edits" {
+                    fs::write(
+                        &request,
+                        serde_json::to_vec(&json!({"command":command,"payload":payload})).unwrap(),
+                    )
+                    .unwrap();
+                    let error = run_failure(
+                        home,
+                        &["core", "exec", "--request-file", request.to_str().unwrap()],
+                    );
+                    assert_eq!(error["code"], "PLAN_CONFLICT", "{error}");
+                    unchanged();
+                }
+            }
+        }
+        let pending = serde_json::to_vec(&json!({"format":"gore.save.draft.v1","path":save.canonicalize().unwrap(),"expectedSha1":hash,"edits":edits,"syncPersistentDataList":true})).unwrap();
+        fs::write(&draft, &pending).unwrap();
+        for flags in [vec!["validate"], vec!["apply"], vec!["apply", "--dry-run"]] {
+            let mut args = vec!["draft", flags[0], draft.to_str().unwrap()];
+            args.extend_from_slice(&flags[1..]);
+            let error = run_failure(home, &args);
+            assert!(
+                error.to_string().contains("pending edit conflict"),
+                "{error}"
+            );
+            assert_eq!(fs::read(&draft).unwrap(), pending);
+            unchanged();
+        }
+    }
+    fs::remove_file(&draft).unwrap();
+    for name in ["First staged name", "Final staged name"] {
+        run(
+            home,
+            &[
+                "rename",
+                save.to_str().unwrap(),
+                "--name",
+                name,
+                "--draft",
+                draft.to_str().unwrap(),
+            ],
+        );
+        unchanged();
+    }
+    let pending: Value = serde_json::from_slice(&fs::read(&draft).unwrap()).unwrap();
+    assert_eq!(
+        pending["edits"],
+        json!([{"path":"public.m_PlayerSaveName","value":"Final staged name"}])
+    );
+    run(home, &["draft", "validate", draft.to_str().unwrap()]);
+    unchanged();
+    let result = run(home, &["draft", "apply", draft.to_str().unwrap()]);
+    assert_eq!(result["complete"], true, "{result}");
+    assert_ne!(gore_save::api::file_sha1(&save).unwrap(), hash);
+    assert_ne!(fs::read(&profile).unwrap(), profile_bytes);
+}
+
+#[test]
 fn repeated_structured_targets_refuse_manual_drafts_and_raw_core_requests() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
