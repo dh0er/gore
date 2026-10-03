@@ -74,6 +74,13 @@ fn asset_release_releases_durable_leases_across_cli_processes() {
     assert_eq!(run(home, &args)["released"], false);
     assert_eq!(fs::read(&manifest).unwrap(), original);
     assert_eq!(fs::read(&image).unwrap(), original_image);
+    gore_tex::item_icons::retain_item_icon_cache_for_cli(&manifest).unwrap();
+    fs::remove_dir_all(manifest.parent().unwrap()).unwrap();
+    assert_eq!(run(home, &dry)["dryRun"], true);
+    assert_eq!(leases(), 1);
+    assert_eq!(run(home, &args)["released"], true);
+    assert_eq!(leases(), 0);
+    assert_eq!(run(home, &args)["released"], false);
 }
 
 #[test]
@@ -152,6 +159,177 @@ fn execute_core(command: &str, payload: Value) -> Value {
         payload,
     })
     .unwrap()
+}
+
+fn nested_container_fixture(save: &Path) {
+    use gore_save::codec_backend::{CodecBackend, KrakenBackend};
+    fn string(value: &str) -> Vec<u8> {
+        let mut bytes = ((value.len() + 1) as i32).to_le_bytes().to_vec();
+        bytes.extend_from_slice(value.as_bytes());
+        bytes.push(0);
+        bytes
+    }
+    fn property(name: &str, kind: &str, descriptor: &[u8], value: &[u8]) -> Vec<u8> {
+        let mut bytes = string(name);
+        bytes.extend(string(kind));
+        bytes.extend(descriptor);
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend((value.len() as u32).to_le_bytes());
+        bytes.push(0);
+        bytes.extend(value);
+        bytes
+    }
+    let mut set_type = 1u32.to_le_bytes().to_vec();
+    set_type.extend(string("NameProperty"));
+    let mut set = 0u32.to_le_bytes().to_vec();
+    set.extend(1u32.to_le_bytes());
+    set.extend(string("ChoiceA"));
+    let mut notes_type = 1u32.to_le_bytes().to_vec();
+    notes_type.extend(string("StrProperty"));
+    let mut notes = 2u32.to_le_bytes().to_vec();
+    notes.extend(string("A"));
+    notes.extend(string("B"));
+    let mut event = property("Knowledge", "SetProperty", &set_type, &set);
+    event.extend(property("Notes", "ArrayProperty", &notes_type, &notes));
+    event.extend(string("None"));
+    let mut events = 2u32.to_le_bytes().to_vec();
+    events.extend(&event);
+    events.extend(event);
+    let mut events_type = 1u32.to_le_bytes().to_vec();
+    events_type.extend(string("StructProperty"));
+    events_type.extend(1u32.to_le_bytes());
+    events_type.extend(string("EventData"));
+    events_type.extend(1u32.to_le_bytes());
+    events_type.extend(string("/Script/G1R"));
+    let mut private = string("/Script/Angelscript.GothicFinalDataGame");
+    private.push(0);
+    private.extend(property("Events", "ArrayProperty", &events_type, &events));
+    private.extend(property("Other", "SetProperty", &set_type, &set));
+    private.extend(string("None"));
+    private.extend(0u32.to_le_bytes());
+    gore_save::properties::parse_private_root(&private).unwrap();
+    let compressed = KrakenBackend.compress(&private, 4).unwrap();
+    let mut stream = (private.len() as u64).to_le_bytes().to_vec();
+    stream.extend(string("Oodle"));
+    stream.extend(0x9E2A83C1u32.to_le_bytes());
+    stream.extend(0x22222222u32.to_le_bytes());
+    stream.extend((private.len() as u64).to_le_bytes());
+    stream.push(2);
+    for _ in 0..2 {
+        stream.extend((compressed.len() as u64).to_le_bytes());
+        stream.extend((private.len() as u64).to_le_bytes());
+    }
+    stream.extend(compressed);
+    let reference = fs::read(fixture()).unwrap();
+    let public_size = u32::from_le_bytes(reference[9..13].try_into().unwrap()) as usize;
+    let mut bytes = reference[..13 + public_size].to_vec();
+    let size = (bytes.len() + stream.len()) as u32;
+    bytes[5..9].copy_from_slice(&size.to_le_bytes());
+    bytes.extend(stream);
+    bytes.extend(0u32.to_le_bytes());
+    fs::write(save, bytes).unwrap();
+}
+
+#[test]
+fn structural_array_conflicts_preserve_nested_container_edits_in_drafts() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    nested_container_fixture(&save);
+    let hash = gore_save::api::file_sha1(&save).unwrap();
+    let draft = home.join("nested.json");
+    run(
+        home,
+        &[
+            "draft",
+            "create",
+            draft.to_str().unwrap(),
+            "--target",
+            save.to_str().unwrap(),
+        ],
+    );
+    let template: Value = serde_json::from_slice(&fs::read(&draft).unwrap()).unwrap();
+    for parent in ["private.typed.arrayRemove", "private.typed.arrayDuplicate"] {
+        let structural = json!({"path":parent,"value":{"path":["Events"],"index":1}});
+        execute_core(
+            "apply_edits",
+            json!({"path":save,"edits":[structural.clone()],"dryRun":true}),
+        );
+        for (operation, field, value) in [
+            ("private.typed.setAdd", "Knowledge", json!("ChoiceB")),
+            ("private.typed.setRemove", "Knowledge", json!("ChoiceA")),
+            ("private.typed.arrayRemove", "Notes", Value::Null),
+            ("private.typed.arrayDuplicate", "Notes", Value::Null),
+        ] {
+            let descendant = json!({"path":operation,"value":{"path":["Events","[01]",field],"value":value,"index":0}});
+            execute_core(
+                "apply_edits",
+                json!({"path":save,"edits":[descendant.clone()],"dryRun":true}),
+            );
+            let mut single = template.clone();
+            single["edits"] = json!([descendant.clone()]);
+            fs::write(&draft, serde_json::to_vec(&single).unwrap()).unwrap();
+            run(home, &["draft", "validate", draft.to_str().unwrap()]);
+            for edits in [
+                vec![structural.clone(), descendant.clone()],
+                vec![descendant.clone(), structural.clone()],
+            ] {
+                for dry in [false, true] {
+                    let error = gore_save::api::execute(&gore_save::api::Request {
+                        command: "apply_edits".into(),
+                        payload: json!({"path":save,"edits":edits,"backup":true,"dryRun":dry}),
+                    })
+                    .unwrap_err();
+                    assert!(
+                        matches!(
+                            error,
+                            gore_save::CoreError::PlanConflict {
+                                kind: "structuralValue",
+                                ..
+                            }
+                        ),
+                        "{error}"
+                    );
+                }
+                let mut staged = template.clone();
+                staged["edits"] = json!(edits);
+                let bytes = serde_json::to_vec(&staged).unwrap();
+                fs::write(&draft, &bytes).unwrap();
+                for command in ["validate", "apply"] {
+                    run_failure(home, &["draft", command, draft.to_str().unwrap()]);
+                    assert_eq!(fs::read(&draft).unwrap(), bytes);
+                    assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+                    assert!(!home.join("goresave_backups").exists());
+                }
+            }
+        }
+    }
+    let committed = execute_core(
+        "apply_edits",
+        json!({"path":save,"backup":false,"edits":[
+            {"path":"private.typed.setAdd","value":{"path":["Other"],"value":"UnrelatedChoice"}},
+            {"path":"private.typed.arrayRemove","value":{"path":["Events"],"index":1}}
+        ]}),
+    );
+    assert_eq!(committed["committed"], json!([0, 1]));
+    let inspected = execute_core("inspect_save", json!({"path":save,"includePrivate":true}));
+    assert!(
+        inspected["private"]["strings"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("UnrelatedChoice"))
+    );
+    let properties = execute_core(
+        "search_typed_properties",
+        json!({"path":save,"query":"Events","includeNodes":true}),
+    );
+    let events = properties["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["path"] == json!(["Events"]))
+        .unwrap();
+    assert_eq!(events["childCount"], 1);
 }
 fn run(home: &Path, args: &[&str]) -> Value {
     run_from(home, None, args)

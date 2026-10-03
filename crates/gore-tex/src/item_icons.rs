@@ -216,7 +216,27 @@ pub fn release_item_icon_cache(manifest_path: &Path) -> Result<bool> {
 /// matching release. These durable leases are independent of the Editor's OS
 /// leases and participate in the same generation lock and pruning checks.
 pub fn retain_item_icon_cache_for_cli(manifest_path: &Path) -> Result<()> {
+    retain_item_icon_cache_for_cli_with(manifest_path, verify_cli_lease)
+}
+
+fn verify_cli_lease(file: &File, path: &Path) -> Result<()> {
+    let identity = generation_lock_identity(file)?;
+    let named = open_generation_lock(path, false)?;
+    if generation_lock_identity(&named)? != identity {
+        return Err(invalid_data(
+            "CLI item icon cache lease changed while retaining",
+        ));
+    }
+    file.sync_all()?;
+    Ok(())
+}
+
+fn retain_item_icon_cache_for_cli_with(
+    manifest_path: &Path,
+    verify: impl Fn(&File, &Path) -> Result<()>,
+) -> Result<()> {
     let (cache_root, generation) = cli_lease_generation(manifest_path)?;
+    std::fs::symlink_metadata(&generation)?;
     let name = owned_generation_name(&cache_root, &generation)?;
     let _lock = GenerationLock::acquire(&cache_root, &generation)?;
     verified_item_icon_manifest(&generation.join(MANIFEST_FILE_NAME))?;
@@ -231,21 +251,22 @@ pub fn retain_item_icon_cache_for_cli(manifest_path: &Path) -> Result<()> {
             std::process::id(),
             timestamp.saturating_add(u128::from(sequence))
         ));
-        match create_generation_lease_file(&path) {
-            Ok(file) => {
-                let identity = generation_lock_identity(&file)?;
-                let named = open_generation_lock(&path, false)?;
-                if generation_lock_identity(&named)? != identity {
-                    return Err(invalid_data(
-                        "CLI item icon cache lease changed while retaining",
-                    ));
-                }
-                file.sync_all()?;
-                return Ok(());
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+        // The staging directory is cleaned on every error and after a crash by
+        // the normal generation cleanup. It never counts as a durable lease.
+        let staging = StagingDirectory::create(&cache_root, &generation)?;
+        let provisional = staging.path().join("cli-lease");
+        let file = create_generation_lease_file(&provisional)?;
+        verify(&file, &provisional)?;
+        drop(file);
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
+        // Every creator holds this generation lock. Publish only after all
+        // fallible verification, and preserve any previously published lease.
+        std::fs::rename(&provisional, &path)?;
+        return Ok(());
     }
     Err(invalid_data(
         "could not allocate a CLI item icon cache lease",
@@ -298,11 +319,39 @@ fn cli_lease_generation(manifest_path: &Path) -> Result<(PathBuf, PathBuf)> {
             "CLI item icon cache path must name manifest.json",
         ));
     }
-    let generation = manifest_path
+    let raw_generation = manifest_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(Path::new("."))
-        .canonicalize()?;
+        .unwrap_or(Path::new("."));
+    let generation = match raw_generation.canonicalize() {
+        Ok(generation) => generation,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Durable leases live beside the generation, so release must also
+            // work after the generation itself was removed. Never reinterpret
+            // an unresolved link as ownership of its lexical name.
+            match std::fs::symlink_metadata(raw_generation) {
+                Ok(_) => {
+                    return Err(invalid_data(
+                        "CLI item icon cache generation cannot be resolved",
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            let name = raw_generation
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| is_owned_generation_name(name))
+                .ok_or_else(|| invalid_data("CLI item icon cache generation name is invalid"))?;
+            let root = raw_generation
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or(Path::new("."))
+                .canonicalize()?;
+            root.join(name)
+        }
+        Err(error) => return Err(error.into()),
+    };
     let cache_root = generation
         .parent()
         .ok_or_else(|| invalid_data("CLI item icon cache generation has no cache root"))?
@@ -2510,6 +2559,107 @@ mod tests {
         .unwrap();
         assert_eq!(prepared.manifest_path, manifest);
         assert_eq!(prepared.source_identity, "source-b");
+    }
+
+    #[test]
+    fn failed_cli_lease_retention_does_not_publish_or_pin_generation() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut source = FakeSource::stable("build-a");
+        let manifest =
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut source).unwrap();
+        let name = manifest
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let owned_leases = || {
+            std::fs::read_dir(temp.path())
+                .unwrap()
+                .flatten()
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .and_then(owned_cli_lease_generation_name)
+                        .is_some()
+                })
+                .count()
+        };
+        let no_staging = || {
+            std::fs::read_dir(temp.path())
+                .unwrap()
+                .flatten()
+                .all(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .and_then(owned_auxiliary_directory_generation_name)
+                        .is_none()
+                })
+        };
+        for after_sync in [false, true] {
+            let result = retain_item_icon_cache_for_cli_with(&manifest, |file, path| {
+                if after_sync {
+                    verify_cli_lease(file, path)?;
+                }
+                Err(invalid_data("injected lease verification/flush failure"))
+            });
+            assert!(result.is_err());
+            assert_eq!(owned_leases(), 0);
+            assert!(!generation_has_live_lease(temp.path(), name));
+            assert!(no_staging());
+        }
+        retain_item_icon_cache_for_cli(&manifest).unwrap();
+        assert_eq!(owned_leases(), 1);
+        assert!(
+            retain_item_icon_cache_for_cli_with(&manifest, |_, _| Err(invalid_data(
+                "injected failure"
+            )))
+            .is_err()
+        );
+        assert_eq!(
+            owned_leases(),
+            1,
+            "a failed preparation must not add or remove another owner's lease"
+        );
+        assert!(no_staging());
+        assert!(release_item_icon_cache_for_cli(&manifest).unwrap());
+        assert!(!release_item_icon_cache_for_cli(&manifest).unwrap());
+    }
+
+    #[test]
+    fn cli_release_finds_leases_after_the_generation_directory_is_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut source = FakeSource::stable("build-a");
+        let manifest =
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut source).unwrap();
+        retain_item_icon_cache_for_cli(&manifest).unwrap();
+        retain_item_icon_cache_for_cli(&manifest).unwrap();
+        let mut other_source = FakeSource::stable("build-b");
+        let other_manifest =
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut other_source).unwrap();
+        retain_item_icon_cache_for_cli(&other_manifest).unwrap();
+        let other_before = std::fs::read(&other_manifest).unwrap();
+        let generation = manifest.parent().unwrap();
+        let name = generation.file_name().unwrap().to_str().unwrap();
+        std::fs::remove_dir_all(generation).unwrap();
+        assert!(generation_has_live_lease(temp.path(), name));
+        assert!(release_item_icon_cache_for_cli(&manifest).unwrap());
+        assert!(generation_has_live_lease(temp.path(), name));
+        assert!(release_item_icon_cache_for_cli(&manifest).unwrap());
+        assert!(!generation_has_live_lease(temp.path(), name));
+        assert!(!release_item_icon_cache_for_cli(&manifest).unwrap());
+        assert_eq!(std::fs::read(&other_manifest).unwrap(), other_before);
+        assert!(release_item_icon_cache_for_cli(&other_manifest).unwrap());
+        assert!(!release_item_icon_cache_for_cli(&other_manifest).unwrap());
+        let mut rebuilt = FakeSource::stable("build-a");
+        assert_eq!(
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut rebuilt).unwrap(),
+            manifest
+        );
+        assert!(!rebuilt.calls.is_empty());
     }
 
     #[test]

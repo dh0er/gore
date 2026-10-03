@@ -243,10 +243,11 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
         {
             return Err(pending("structuralMultiple", Some(path)));
         }
-        if paths.iter().enumerate().any(|(i, p)| {
-            edits[i].path == "private.typed.setValue"
-                && p.as_ref().is_some_and(|p| p.starts_with(path))
-        }) {
+        if paths
+            .iter()
+            .enumerate()
+            .any(|(i, p)| !group.contains(&i) && p.as_ref().is_some_and(|p| p.starts_with(path)))
+        {
             return Err(pending("structuralValue", Some(path)));
         }
         if crate::path_has_name(path, "MemorizedEvents")
@@ -671,6 +672,54 @@ mod tests {
             json!({"path":"private.typed.setValue","value":{"path":["Events","[2]","Magnitude"],"value":1}}),
         ];
         assert!(plan(&edits).is_err());
+    }
+
+    #[test]
+    fn structural_arrays_refuse_all_typed_container_descendants() {
+        for parent in ["private.typed.arrayRemove", "private.typed.arrayDuplicate"] {
+            let structural = json!({"path":parent,"value":{"path":["Events"],"index":1}});
+            for operation in [
+                "private.typed.setAdd",
+                "private.typed.setRemove",
+                "private.typed.arrayRemove",
+                "private.typed.arrayDuplicate",
+            ] {
+                let field = if operation.starts_with("private.typed.array") {
+                    "Notes"
+                } else {
+                    "Knowledge"
+                };
+                let descendant = json!({"path":operation,"value":{"path":["Events","[01]",field],"value":"ChoiceB","index":0}});
+                assert!(plan(&[structural.clone()]).is_ok());
+                assert!(plan(&[descendant.clone()]).is_ok());
+                for edits in [
+                    vec![structural.clone(), descendant.clone()],
+                    vec![descendant.clone(), structural.clone()],
+                ] {
+                    assert!(
+                        matches!(
+                            plan(&edits),
+                            Err(CoreError::PlanConflict {
+                                kind: "structuralValue",
+                                ..
+                            })
+                        ),
+                        "{edits:?}"
+                    );
+                }
+                let mut sibling = descendant;
+                sibling["value"]["path"] = json!(["OtherEvents", "[1]", "Knowledge"]);
+                assert!(plan(&[structural.clone(), sibling]).is_ok());
+            }
+        }
+        let unrelated =
+            json!({"path":"private.typed.arrayRemove","value":{"path":["Elsewhere"],"index":1}});
+        let ordered = vec![
+            json!({"path":"private.typed.arrayRemove","value":{"path":["Events"],"index":1}}),
+            json!({"path":"private.typed.arrayRemove","value":{"path":["Events"],"index":5}}),
+            unrelated,
+        ];
+        assert_eq!(plan(&ordered).unwrap().iter().flatten().count(), 3);
     }
 
     fn raw(path: &[&str]) -> Value {

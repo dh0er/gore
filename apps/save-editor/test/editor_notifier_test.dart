@@ -1439,6 +1439,66 @@ void main() {
   });
 
   test(
+    'saveAllPending keeps container changes inside a structurally edited array',
+    () async {
+      for (final parentOperation in [
+        'private.typed.arrayRemove',
+        'private.typed.arrayDuplicate',
+      ]) {
+        for (final childOperation in [
+          'private.typed.setAdd',
+          'private.typed.setRemove',
+          'private.typed.arrayRemove',
+          'private.typed.arrayDuplicate',
+        ]) {
+          for (final childFirst in [false, true]) {
+            final core = _RecordingCoreService();
+            final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+            await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+            final parent = <String, Object?>{
+              'path': parentOperation,
+              'value': {
+                'path': ['Events'],
+                'index': 1,
+              },
+            };
+            final child = <String, Object?>{
+              'path': childOperation,
+              'value': {
+                'path': [
+                  'Events',
+                  '[01]',
+                  childOperation.startsWith('private.typed.array')
+                      ? 'Notes'
+                      : 'Knowledge',
+                ],
+                'value': 'ChoiceB',
+                'index': 0,
+              },
+            };
+            final parentKey = childFirst ? 'b-parent' : 'a-parent';
+            final childKey = childFirst ? 'a-container' : 'b-container';
+            notifier.setPendingEdit(
+              parentKey,
+              PendingSaveEdit(edits: [parent]),
+            );
+            notifier.setPendingEdit(childKey, PendingSaveEdit(edits: [child]));
+            expect(await notifier.saveAllPending(), isFalse);
+            expect(notifier.state.error, contains('Events'));
+            expect(
+              core.requests.where((r) => r.command == 'write_save'),
+              isEmpty,
+            );
+            expect(notifier.state.pendingEdits, hasLength(2));
+            expect(notifier.state.pendingEdits[parentKey]!.edits, [parent]);
+            expect(notifier.state.pendingEdits[childKey]!.edits, [child]);
+          }
+        }
+      }
+    },
+  );
+
+  test(
     'saveAllPending refuses conflicting edits for the same typed path',
     () async {
       final core = _RecordingCoreService();
