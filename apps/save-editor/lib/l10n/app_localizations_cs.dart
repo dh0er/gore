@@ -2552,7 +2552,7 @@ class AppLocalizationsCs extends AppLocalizations {
 
   @override
   String get editorSkillsEffectConflict =>
-      'Změna dovedností a úprava v sekci Všechna data stejného efektu postavy (ActiveEffects › EffectSpec › Def) čekají na uložení. Nelze je uložit najednou — resetuj nebo vrať jednu z nich a pak znovu ulož.';
+      'Změna dovedností a úprava v sekci Všechna data stejného efektu postavy (ActiveEffects) čekají na uložení. Nelze je uložit najednou — resetuj nebo vrať jednu z nich a pak znovu ulož.';
 
   @override
   String get editorInventoryResetConflict =>

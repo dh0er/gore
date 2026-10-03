@@ -2546,7 +2546,7 @@ class AppLocalizationsHu extends AppLocalizations {
 
   @override
   String get editorSkillsEffectConflict =>
-      'Egy Képességek változás és egy Összes adat szerkesztés ugyanarra az aktor effektjére (ActiveEffects › EffectSpec › Def) is sorban áll. Együtt nem menthetők — állítsd vissza vagy vedd vissza az egyiket, majd ments újra.';
+      'Egy Képességek változás és egy Összes adat szerkesztés ugyanarra az aktor effektjére (ActiveEffects) is sorban áll. Együtt nem menthetők — állítsd vissza vagy vedd vissza az egyiket, majd ments újra.';
 
   @override
   String get editorInventoryResetConflict =>

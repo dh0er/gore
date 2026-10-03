@@ -226,7 +226,7 @@ gore/
 | [`gore-story-build`](../crates/gore-story-build) | Rust lib | Deterministic, non-publishing build plans over revision-3 story content. |
 | [`gore-story-inventory`](../crates/gore-story-inventory) | Rust lib | Sealed base-game AngelScript collision inventories bound to one game generation. |
 | [`gore-ffi`](../crates/gore-ffi) | Rust cdylib | `dart:ffi` bridge for the GUI apps (`gore_ffi.dll`) over the full mod engine. |
-| [`gore-save`](../crates/gore-save) | Rust lib + cdylib | GSAV savegame parse/edit core (`gore_save.dll`). |
+| [`gore-save`](../crates/gore-save) | Rust lib + cdylib | Shared GSAV parse/edit workflow: linked into `gore save` and exposed as `gore_save.dll` to the Editor. |
 | [`gore-oodle`](../crates/gore-oodle) | Rust lib | Oodle/Kraken codec (pure Rust; no proprietary `oo2core` DLL). |
 | [`gore-as`](../crates/gore-as) | Rust lib | AngelScript precompiled-cache decoder/emitter/decompiler/splicer. |
 
@@ -307,3 +307,9 @@ about shippable products. CI runs them in their own step. Neither replaces
 `claude plugin validate --strict plugins/gore`, which is the authority on whether
 a manifest is well formed and wants Claude Code installed — run it before
 publishing a change to the manifests.
+
+Save presentation tables are extracted from the Editor sources with
+`python apps/save-editor/tools/build_cli_presentation.py`. CI runs `--check`;
+the CLI tests also verify every source seal. The 64-feature parity contract is
+[`save-editor-parity.json`](save-editor-parity.json). Shared-planner Flutter
+tests require a fresh native core; `apps/save-editor/test.py flutter` builds it.

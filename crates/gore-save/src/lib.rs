@@ -9,6 +9,8 @@ pub mod skills;
 pub mod startsaves;
 pub mod story;
 pub mod traders;
+pub mod api;
+pub mod workflow;
 
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
@@ -44,6 +46,8 @@ pub enum CoreError {
     Validation(String),
     #[error("update error: {0}")]
     Update(String),
+    #[error("pending edit conflict ({kind}): {path}")]
+    PlanConflict { kind: &'static str, path: String },
 }
 
 impl From<std::io::Error> for CoreError {
@@ -416,21 +420,9 @@ pub fn execute_json(input: &str) -> String {
             response
         }
         Err(err) => {
-            let code = match &err {
-                CoreError::InvalidRequest(_) => "INVALID_REQUEST",
-                CoreError::Io(_) => "IO_ERROR",
-                CoreError::Parse(_) => "PARSE_ERROR",
-                CoreError::UnsupportedEdit(_) => "UNSUPPORTED_EDIT",
-                CoreError::Codec(_) => "CODEC_ERROR",
-                CoreError::Validation(_) => "VALIDATION_FAILED",
-                CoreError::Update(_) => "UPDATE_ERROR",
-            };
             json!({
                 "ok": false,
-                "error": {
-                    "code": code,
-                    "message": err.to_string()
-                }
+                "error": api::error_details(&err)
             })
             .to_string()
         }
@@ -447,6 +439,16 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
     let payload = value.get("payload").cloned().unwrap_or_else(|| json!({}));
 
     match command {
+        "capabilities" => Ok(api::capabilities()),
+        "recovery_status" => api::recovery_status(&payload.get("path").and_then(Value::as_str).map(PathBuf::from).unwrap_or_else(default_save_root)),
+        "plan_edits" => workflow::plan_request(&payload),
+        "apply_edits" => workflow::apply_request(&payload),
+        "scan_save_dir_readonly" => {
+            let path = payload.get("path").and_then(Value::as_str).map(PathBuf::from).unwrap_or_else(default_save_root);
+            let backend = codec_backend::KrakenBackend::default();
+            let summary = scan_save_dir_summary_readonly_with_codec_backend(&path, Some(&backend))?;
+            Ok(json!({"saveRoot": path, "saves": summary.saves, "profiles": summary.profiles, "activeProfileId": summary.active_profile_id}))
+        }
         "scan_save_dir" => {
             let path = payload
                 .get("path")
@@ -528,6 +530,12 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let kraken_backend = codec_backend::KrakenBackend::default();
             let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             skills_list_command(&path, &payload, codec_backend)
+        }
+        "private.inventory.list" => {
+            let path = required_path(&payload)?;
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let root = decode_private_root_cached(&path, &kraken_backend)?;
+            Ok(actor_inventory_summary_with_containers(&root, None, true))
         }
         "private.npc.list" => {
             let path = required_path(&payload)?;
@@ -698,13 +706,26 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             };
             let kraken_backend = codec_backend::KrakenBackend::default();
             let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
-            let mut result = write_save_internal(
+            let expected_sha1 = payload.get("expectedSha1").and_then(Value::as_str);
+            api::check_edit_persistent_snapshots(&path, &edits)?;
+            if expected_sha1.is_some_and(|hash| api::file_sha1(&path).ok().as_deref()!=Some(hash)) {
+                return Err(CoreError::Validation("save changed since inspection".into()));
+            }
+            let mut result = write_save_internal_with_before_replace(
                 &path,
                 &edits,
                 backup,
                 output_path.as_deref(),
                 codec_backend,
                 sync_persistent_data_list,
+                |_| {
+                    if let Some(hash)=expected_sha1 {
+                        if api::file_sha1(&path)?!=hash {return Err(CoreError::Validation("save changed during edit preparation".into()));}
+                    }
+                    if sync_persistent_data_list {api::check_persistent_snapshot(&path,&payload)?;}
+                    api::check_edit_persistent_snapshots(&path, &edits)?;
+                    Ok(())
+                },
             )?;
             // Only after the save bytes are on disk: a note recorded for a write
             // that then failed would offer to restore an NPC nobody moved. The
@@ -1028,13 +1049,22 @@ fn scan_save_dir_summary_with_codec_backend(
     path: &Path,
     codec_backend: Option<&dyn codec_backend::CodecBackend>,
 ) -> Result<SaveDirSummary, CoreError> {
+    recover_interrupted_profile_assignment_claims(path);
+    scan_save_dir_summary_readonly_with_codec_backend(path, codec_backend)
+}
+
+/// Listing must not publish or retire interrupted assignment claims. Recovery
+/// belongs to the mutating scan used by the Editor and explicit CLI repair.
+fn scan_save_dir_summary_readonly_with_codec_backend(
+    path: &Path,
+    codec_backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<SaveDirSummary, CoreError> {
     if !path.exists() {
         return Err(CoreError::Io(format!(
             "save directory does not exist: {}",
             path.display()
         )));
     }
-    recover_interrupted_profile_assignment_claims(path);
     let mut persistent = persistent_data_list_summary_for_dir(path).unwrap_or_default();
     let profile_slot_owners =
         normalize_profile_saved_slots(&mut persistent.profiles, &persistent.slots);
@@ -1192,6 +1222,54 @@ fn scan_save_dir_summary_with_codec_backend(
     })
 }
 
+/// Read the matching thumbnail sidecars without scanning slots or recovering assignments.
+pub fn screenshot_for_save(path: &Path) -> Result<Option<ScreenshotSummary>, CoreError> {
+    let path = path.canonicalize()?;
+    if !fs::metadata(&path)?.is_file() {
+        return Err(CoreError::InvalidRequest(
+            "screenshot source must be a regular GSAV save file".to_string(),
+        ));
+    }
+    let bytes = fs::read(&path)?;
+    if !bytes.starts_with(b"GSAV") {
+        return Err(CoreError::InvalidRequest(
+            "screenshot source must be a GSAV save file".to_string(),
+        ));
+    }
+    parse_gsav(&bytes, Some(&path))?;
+    let slot = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| CoreError::InvalidRequest("save has no slot name".to_string()))?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| CoreError::InvalidRequest("save has no parent directory".to_string()))?;
+    let mut persistent = persistent_data_list_summary_for_dir(dir).unwrap_or_default();
+    let owners = normalize_profile_saved_slots(&mut persistent.profiles, &persistent.slots);
+    let profile_id = owners
+        .get(slot)
+        .copied()
+        .or_else(|| persistent.profiles.is_empty().then_some(0));
+    let Some(profile_id) = profile_id else {
+        return Ok(None);
+    };
+    let backend = codec_backend::KrakenBackend::default();
+    Ok(screenshot_summaries_for_profile(dir, profile_id, Some(&backend)).remove(slot))
+}
+
+fn screenshot_summaries_for_profile(
+    dir: &Path,
+    profile_id: i32,
+    codec_backend: Option<&dyn codec_backend::CodecBackend>,
+) -> HashMap<String, ScreenshotSummary> {
+    let path = dir.join(format!("Profile_{profile_id}_Screenshots.sav"));
+    // Optional screenshots must not trigger recovery or substitute another profile's image.
+    fs::read(path)
+        .ok()
+        .and_then(|data| parse_screenshot_save(&data, codec_backend).ok())
+        .unwrap_or_default()
+}
+
 fn screenshot_summaries_for_dir(
     dir: &Path,
     profiles: &[ProfileSummary],
@@ -1209,23 +1287,15 @@ fn screenshot_summaries_for_dir(
 
     let mut screenshots = HashMap::new();
     for profile_id in profile_ids {
-        let path = dir.join(format!("Profile_{profile_id}_Screenshots.sav"));
-        if !path.exists() {
-            continue;
-        }
-        // Screenshots are optional. A missing/failed codec or an unreadable
-        // sidecar must not drop other profiles' thumbnails or abort the scan;
-        // skip just this profile and leave its thumbnails unavailable.
-        let Ok(data) = fs::read(&path) else {
-            continue;
-        };
-        match parse_screenshot_save(&data, codec_backend) {
-            Ok(parsed) => {
-                for (slot, screenshot) in parsed {
-                    screenshots.insert(slot, screenshot);
-                }
+        for (slot, screenshot) in screenshot_summaries_for_profile(dir, profile_id, codec_backend) {
+            if profiles.is_empty()
+                || profiles
+                    .iter()
+                    .find(|profile| profile.saved_slots.contains(&slot))
+                    .is_some_and(|profile| profile.profile_id == profile_id)
+            {
+                screenshots.insert(slot, screenshot);
             }
-            Err(_) => continue,
         }
     }
     Ok(screenshots)
@@ -3721,12 +3791,17 @@ fn read_deleted_save_recovery_manifest(
     Ok(manifest)
 }
 
+/// Read-only discovery uses `repair = false`; only a mutating scan may restore
+/// a claimed profile or retire an already completed recovery manifest.
 fn validate_discovered_deleted_save_recovery(
     save_root: &Path,
     manifest_path: &Path,
     manifest: &DeletedSaveRecoveryManifest,
+    repair: bool,
 ) -> Result<Option<String>, CoreError> {
-    if deleted_save_recovery_manifest_path(&manifest.backup_path)? != manifest_path {
+    if fs::canonicalize(deleted_save_recovery_manifest_path(&manifest.backup_path)?)?
+        != fs::canonicalize(manifest_path)?
+    {
         return Err(CoreError::Validation(
             "recovery manifest name does not match its slot backup".to_string(),
         ));
@@ -3836,6 +3911,9 @@ fn validate_discovered_deleted_save_recovery(
                     "the recovery profile backup is not a valid PersistentDataList.sav: {error}"
                 ))
             })?;
+            if !repair {
+                return Ok(None);
+            }
             let staged = ScratchFile::create(
                 &manifest.persistent_path,
                 "tmp-delete-recovery",
@@ -3869,12 +3947,14 @@ fn validate_discovered_deleted_save_recovery(
         return Ok(Some(persistent_sha1));
     }
     if target_sha1.is_some() && persistent_sha1 == manifest.deleted_persistent_sha1 {
-        if let Some(warning) = retire_deleted_save_recovery_manifest(
-            &canonical_root,
-            &canonical_backup_dir,
-            manifest_path,
-        )? {
-            return Err(CoreError::Update(warning));
+        if repair {
+            if let Some(warning) = retire_deleted_save_recovery_manifest(
+                &canonical_root,
+                &canonical_backup_dir,
+                manifest_path,
+            )? {
+                return Err(CoreError::Update(warning));
+            }
         }
         return Ok(None);
     }
@@ -3904,7 +3984,7 @@ fn discover_deleted_save_recovery(save_root: &Path) -> Result<Option<Value>, Cor
             continue;
         };
         let Ok(expected_persistent_sha1) =
-            validate_discovered_deleted_save_recovery(save_root, &path, &manifest)
+            validate_discovered_deleted_save_recovery(save_root, &path, &manifest, true)
         else {
             continue;
         };
@@ -7320,6 +7400,7 @@ const CACHEABLE_READ_COMMANDS: &[&str] = &[
     "search_typed_properties",
     "query_progression",
     "private.skills.list",
+    "private.inventory.list",
     "private.npc.list",
     "private.characters.list",
     "private.npc.attributes",
@@ -7632,6 +7713,7 @@ impl SaveDataNode {
 
 struct SaveDataRequest<'a> {
     source: &'a str,
+    property_path: Option<&'a [String]>,
     query_terms: Vec<String>,
     type_filter: Option<&'a str>,
     kind_filter: Option<&'a str>,
@@ -7696,18 +7778,20 @@ impl SaveDataPage {
         } else {
             self.limit.saturating_sub(self.results.len())
         };
-        let browsed = properties::browse_properties(
-            root,
-            &properties::PropertyBrowseOptions {
-                query: request.query_terms.join(" ").as_str(),
-                type_filter: request.type_filter,
-                kind_filter: request.kind_filter,
-                editable_filter: request.editable_filter,
-                offset: local_offset,
-                limit: local_limit,
-                allow_edits,
-            },
-        );
+        let query = request.query_terms.join(" ");
+        let options = properties::PropertyBrowseOptions {
+            query: &query,
+            type_filter: request.type_filter,
+            kind_filter: request.kind_filter,
+            editable_filter: request.editable_filter,
+            offset: local_offset,
+            limit: local_limit,
+            allow_edits,
+        };
+        let browsed = match request.property_path {
+            Some(path) => properties::browse_property_path(root, &options, path),
+            None => properties::browse_properties(root, &options),
+        };
         self.total += browsed.total;
         *self
             .stats
@@ -7753,6 +7837,12 @@ fn merge_browse_counts(target: &mut BTreeMap<String, usize>, source: BTreeMap<St
 }
 
 fn save_data_node_matches(node: &SaveDataNode, request: &SaveDataRequest<'_>) -> bool {
+    if request
+        .property_path
+        .is_some_and(|path| path != node.path.as_slice())
+    {
+        return false;
+    }
     if request.editable_filter == Some(true) {
         return false;
     }
@@ -7837,8 +7927,19 @@ fn browse_save_data(
         Some(Value::String(value)) if value == "readOnly" => Some(false),
         _ => None,
     };
+    let property_path = payload
+        .get("propertyPath")
+        .filter(|value| !value.is_null())
+        .map(|value| serde_json::from_value::<Vec<String>>(value.clone()))
+        .transpose()
+        .map_err(|error| {
+            CoreError::InvalidRequest(format!(
+                "propertyPath must be an array of path strings: {error}"
+            ))
+        })?;
     let request = SaveDataRequest {
         source,
+        property_path: property_path.as_deref(),
         query_terms: query.split_whitespace().map(str::to_lowercase).collect(),
         type_filter: payload.get("type").and_then(Value::as_str),
         kind_filter: payload.get("kind").and_then(Value::as_str),
@@ -8663,44 +8764,58 @@ fn triplet_matches_stored(current: [f64; 3], noted: [f64; 3], compact: bool) -> 
 /// (removable) path is present. The command names are identical to the
 /// player's; the frontend attaches `actorId` for the NPC case.
 fn actor_inventory_summary(root: &properties::RootObject, actor_id: Option<&str>) -> Value {
-    let Some(view) = inventory_main_container_view(root, actor_id) else {
+    actor_inventory_summary_with_containers(root, actor_id, actor_id.is_some())
+}
+
+fn actor_inventory_summary_with_containers(
+    root: &properties::RootObject,
+    actor_id: Option<&str>,
+    all_containers: bool,
+) -> Value {
+    let Some(view) = inventory_container_view(root, actor_id, all_containers) else {
         return json!({
             "items": [],
             "mainContainerPaths": [],
             "writable": [],
         });
     };
-    // NPC removal targets a specific container's slot precisely via
-    // (containerType, slotId), so any row with a stable slot id is removable —
-    // even a unique weapon/ore outside MainContainer, and even duplicate-path
-    // slots. The player removeItem edit is path-addressed (no slot id), so only
-    // globally-unique MainContainer paths are unambiguously removable there.
-    let is_npc = actor_id.is_some();
+    // Complete views address rows by container/slot for either actor. Legacy
+    // player summaries retain their path-only removal gate.
     let items = view
         .rows
         .iter()
-        .map(|(path, count, slot_id, container_label)| {
-            let removable = if is_npc {
+        .map(|row| {
+            let removable = if all_containers {
                 // Freeing a slot resets its payload from a state-free donor in
                 // the same inventory; without one the write would fail.
-                slot_id.is_some() && view.summary.has_clean_payload_donor
+                row.slot_id.is_some() && view.summary.has_clean_payload_donor
             } else {
-                view.summary.removable_paths.contains(path)
+                view.summary.removable_paths.contains(&row.path)
             };
-            json!({
-                "id": item_id_from_path(path),
-                "path": path,
-                "count": count,
+            let mut item = json!({
+                "id": item_id_from_path(&row.path),
+                "path": row.path,
+                "count": row.count,
                 "removable": removable,
                 // Stable per-slot discriminator (`m_Id`). Lets the frontend pin a
                 // count edit to one specific stack when two slots share a path.
-                "slotId": slot_id,
+                "slotId": row.slot_id,
                 // Short container label (e.g. `MainContainer`/`MeleeSlot`/`Pouch`).
-                // For NPC rows the frontend must echo this back as `containerType`
+                // Complete views echo this back as `containerType`
                 // on a per-container edit so the right container's slot is
-                // addressed; player rows are always `MainContainer`.
-                "containerType": container_label,
-            })
+                // addressed.
+                "containerType": row.container_type,
+            });
+            if all_containers {
+                item["equipped"] = json!(row.container_type == "ArmorSlot");
+                item["upgrades"] = json!(
+                    row.upgrades
+                        .iter()
+                        .map(|(key, value)| json!({"key":key,"value":value}))
+                        .collect::<Vec<_>>()
+                );
+            }
+            item
         })
         .collect::<Vec<_>>();
     let mut writable = Vec::new();
@@ -8716,9 +8831,8 @@ fn actor_inventory_summary(root: &properties::RootObject, actor_id: Option<&str>
     }
     // removeItem is offered when at least one emitted row is removable (NPC: any
     // row with a slot id; player: any globally-unique MainContainer path).
-    let any_removable = if is_npc {
-        view.summary.has_clean_payload_donor
-            && view.rows.iter().any(|(_, _, slot_id, _)| slot_id.is_some())
+    let any_removable = if all_containers {
+        view.summary.has_clean_payload_donor && view.rows.iter().any(|row| row.slot_id.is_some())
     } else {
         !view.summary.removable_paths.is_empty()
     };
@@ -11176,6 +11290,9 @@ where
             "syncPersistentDataList cannot be used with outputPath".to_string(),
         ));
     }
+    if let Some(output) = output_path {
+        api::validate_output_path(path, output)?;
+    }
     let original = fs::read(path)?;
     let target = output_path.unwrap_or(path);
     let expected_target = if target == path {
@@ -11189,6 +11306,7 @@ where
         .map(|v| serde_json::from_value::<Edit>(v.clone()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| CoreError::InvalidRequest(e.to_string()))?;
+    workflow::reject_duplicate_public_renames(&edits)?;
 
     // StoryApply is a self-contained transaction whose changes may splice the
     // private map. It must be the sole outer edit, including relative to PUBLIC
@@ -11449,24 +11567,8 @@ fn apply_public_edit(data: &mut Vec<u8>, edit: &Edit) -> Result<(), CoreError> {
     }
 }
 
-fn apply_private_edits(
-    data: &[u8],
-    edits: &[&Edit],
-    codec_backend: Option<&dyn codec_backend::CodecBackend>,
-) -> Result<Vec<u8>, CoreError> {
-    if !data.starts_with(b"GSAV") {
-        return Err(CoreError::UnsupportedEdit(
-            "private edits are only available for GSAV files".to_string(),
-        ));
-    }
-    let backend = codec_backend.ok_or_else(|| {
-        CoreError::Codec("private edits require a working codec backend".to_string())
-    })?;
-    let parts = split_gsav(data)?;
-    let stream = parse_compressed_stream(data, 13 + parts.public_payload.len())?;
-    let edit_specs = edits
-        .iter()
-        .map(|edit| match edit.path.as_str() {
+fn parse_private_edit(edit: &Edit) -> Result<PrivateEdit, CoreError> {
+    match edit.path.as_str() {
             "private.replaceFString" | "private.fstring" => {
                 parse_private_fstring_edit(edit).map(PrivateEdit::FString)
             }
@@ -11571,8 +11673,25 @@ fn apply_private_edits(
             other => Err(CoreError::UnsupportedEdit(format!(
                 "{other} is not writable in this build"
             ))),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        }
+}
+
+fn apply_private_edits(
+    data: &[u8],
+    edits: &[&Edit],
+    codec_backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Vec<u8>, CoreError> {
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "private edits are only available for GSAV files".to_string(),
+        ));
+    }
+    let backend = codec_backend.ok_or_else(|| {
+        CoreError::Codec("private edits require a working codec backend".to_string())
+    })?;
+    let parts = split_gsav(data)?;
+    let stream = parse_compressed_stream(data, 13 + parts.public_payload.len())?;
+    let edit_specs = edits.iter().map(|edit| parse_private_edit(edit)).collect::<Result<Vec<_>, _>>()?;
     // One StoryApply may contain many value-addressed story changes and applies them
     // transactionally on its own scratch payload. It stays exclusive for TRANSACTION
     // SCOPE, not for index shifting (the position rule below would already cover
@@ -11621,6 +11740,36 @@ fn apply_private_edits(
                      rewrites as a whole, so one of the two would silently be \
                      discarded whichever order they run in; save them separately",
                     edits[typed_at].path, edits[structured_at].path
+                )));
+            }
+        }
+    }
+    for (first_at, first) in edit_specs.iter().enumerate() {
+        for (second_at, second) in edit_specs.iter().enumerate().skip(first_at + 1) {
+            if set_element_conflict(first, second, false).is_some() {
+                return Err(CoreError::UnsupportedEdit(format!(
+                    "{} (edit {first_at}) and {} (edit {second_at}) edit the same set element; remove the duplicate or conflicting pending intent before saving",
+                    edits[first_at].path, edits[second_at].path
+                )));
+            }
+            if let Some((field, _)) = player_field_overlap(first, second) {
+                return Err(CoreError::UnsupportedEdit(format!(
+                    "{} (edit {first_at}) and {} (edit {second_at}) rewrite the same {field}; save them separately",
+                    edits[first_at].path, edits[second_at].path
+                )));
+            }
+            if inventory_count_removal_conflict(first, second) {
+                return Err(CoreError::UnsupportedEdit(format!(
+                    "{} (edit {first_at}) and {} (edit {second_at}) change and remove \
+                     the same inventory stack; save them separately",
+                    edits[first_at].path, edits[second_at].path
+                )));
+            }
+            if inventory_count_conflict(first, second) {
+                return Err(CoreError::UnsupportedEdit(format!(
+                    "{} (edit {first_at}) and {} (edit {second_at}) set the count of \
+                     the same inventory stack; save them separately",
+                    edits[first_at].path, edits[second_at].path
                 )));
             }
         }
@@ -11675,6 +11824,17 @@ fn apply_private_edits(
     // sequence still behaves exactly as separate writes did — it just stops re-parsing
     // 120 MB per edit when nothing moved.
     let mut root_cache = PayloadRoot::default();
+    let case_paths = case_only_set_conflict_paths(&edit_specs);
+    if !case_paths.is_empty() {
+        let root = root_cache.structural(&private_payload)?;
+        for path in case_paths {
+            if set_path_folds_case(root, path)? {
+                return Err(CoreError::UnsupportedEdit(
+                    "multiple edits target the same case-insensitive NameProperty set element; remove the duplicate or conflicting pending intent before saving".into(),
+                ));
+            }
+        }
+    }
     for edit in &edit_specs {
         apply_private_edit_to_payload(&mut private_payload, edit, &mut root_cache)?;
     }
@@ -11823,6 +11983,8 @@ fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> 
             .join("\u{1f}")
     }
     match edit {
+        PrivateEdit::PlayerName(_) => Some(("player name", key([skills::HERO, ""]))),
+        PrivateEdit::ProfileName(_) => Some(("profile name", key(["profile", ""]))),
         PrivateEdit::NpcRelationship(relationship) => Some((
             "relationship of that NPC",
             key([relationship.id.as_str(), ""]),
@@ -11872,6 +12034,207 @@ fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> 
     }
 }
 
+/// Repeated set membership edits either cancel an intent or fail on its changed state.
+fn set_element_conflict<'a>(
+    first: &'a PrivateEdit,
+    second: &'a PrivateEdit,
+    fold_case: bool,
+) -> Option<(&'a [properties::PathSeg], &'a str)> {
+    let (PrivateEdit::TypedContainer(first), PrivateEdit::TypedContainer(second)) = (first, second)
+    else {
+        return None;
+    };
+    if first.path != second.path {
+        return None;
+    }
+    match (&first.edit, &second.edit) {
+        (
+            properties::ContainerEdit::SetAdd(first_value),
+            properties::ContainerEdit::SetRemove(second_value),
+        )
+        | (
+            properties::ContainerEdit::SetRemove(first_value),
+            properties::ContainerEdit::SetAdd(second_value),
+        )
+        | (
+            properties::ContainerEdit::SetAdd(first_value),
+            properties::ContainerEdit::SetAdd(second_value),
+        )
+        | (
+            properties::ContainerEdit::SetRemove(first_value),
+            properties::ContainerEdit::SetRemove(second_value),
+        ) if first_value == second_value
+            || (fold_case && first_value.eq_ignore_ascii_case(second_value)) =>
+        {
+            Some((&first.path, first_value))
+        }
+        _ => None,
+    }
+}
+
+fn case_only_set_conflict_paths(edits: &[PrivateEdit]) -> Vec<&[properties::PathSeg]> {
+    let mut paths = Vec::new();
+    for (i, first) in edits.iter().enumerate() {
+        for second in edits.iter().skip(i + 1) {
+            if set_element_conflict(first, second, false).is_none() {
+                if let Some((path, _)) = set_element_conflict(first, second, true) {
+                    if !paths.contains(&path) {
+                        paths.push(path);
+                    }
+                }
+            }
+        }
+    }
+    paths
+}
+
+fn set_path_folds_case(
+    root: &properties::RootObject,
+    path: &[properties::PathSeg],
+) -> Result<bool, CoreError> {
+    let target = properties::resolve(&root.properties, path)?;
+    if target.type_name != "SetProperty" {
+        return Err(CoreError::InvalidRequest(
+            "set edit requires a SetProperty target".into(),
+        ));
+    }
+    let inner = target
+        .descriptor
+        .inner
+        .as_deref()
+        .ok_or_else(|| CoreError::Parse("set property has no inner descriptor".into()))?;
+    match inner.type_name.as_str() {
+        "NameProperty" => Ok(true),
+        "StrProperty" => Ok(false),
+        other => Err(CoreError::UnsupportedEdit(format!(
+            "set edits support Name/Str sets; this set holds {other}"
+        ))),
+    }
+}
+
+/// Partial attribute and transform edits can batch only when their fields are disjoint.
+fn player_field_overlap(first: &PrivateEdit, second: &PrivateEdit) -> Option<(&'static str, String)> {
+    match (first, second) {
+        (PrivateEdit::PlayerAttribute(first), PrivateEdit::PlayerAttribute(second))
+            if first.id == second.id =>
+        {
+            let field = if first.base_value.is_some() && second.base_value.is_some() {
+                "BaseValue"
+            } else if first.current_value.is_some() && second.current_value.is_some() {
+                "CurrentValue"
+            } else {
+                return None;
+            };
+            Some(("player attribute", format!("{}\u{1f}{field}", first.id)))
+        }
+        (PrivateEdit::PlayerTransform(first), PrivateEdit::PlayerTransform(second)) => {
+            let field = if first.location.is_some() && second.location.is_some() {
+                "location"
+            } else if first.rotation.is_some() && second.rotation.is_some() {
+                "rotation"
+            } else {
+                return None;
+            };
+            Some(("player transform", field.into()))
+        }
+        _ => None,
+    }
+}
+
+/// Removing a stack discards a pending count for it. An omitted slot selector
+/// can resolve the same stack as a pinned selector, so compare the overlapping
+/// selectors rather than registry keys. Keep the two pending intents distinct.
+fn inventory_count_removal_conflict(first: &PrivateEdit, second: &PrivateEdit) -> bool {
+    let (count, remove) = match (first, second) {
+        (PrivateEdit::InventoryItemCount(count), PrivateEdit::InventoryRemoveItem(remove))
+        | (PrivateEdit::InventoryRemoveItem(remove), PrivateEdit::InventoryItemCount(count)) => {
+            (count, remove)
+        }
+        _ => return false,
+    };
+    // Legacy player counts scan every container when no typed selectors are
+    // supplied. NPC counts and pinned player counts resolve one typed container.
+    let legacy_player = count.actor_id.is_none()
+        && count.container_type.is_none()
+        && count.slot_id.is_none();
+    count.actor_id == remove.actor_id
+        && (legacy_player
+            || container_enum_label(count.container_type.as_deref())
+                == container_enum_label(remove.container_type.as_deref()))
+        && count
+            .slot_id
+            .zip(remove.slot_id)
+            .is_none_or(|(count_slot, remove_slot)| count_slot == remove_slot)
+        && inventory_edit_matches_item(count, &remove.path)
+}
+
+/// Legacy player selectors cover all containers; explicit selectors narrow to
+/// one container and optionally one slot. Compare that scope and the complete
+/// item selector so different forms cannot overwrite the same pending count.
+fn inventory_count_conflict(first: &PrivateEdit, second: &PrivateEdit) -> bool {
+    let (PrivateEdit::InventoryItemCount(first), PrivateEdit::InventoryItemCount(second)) =
+        (first, second)
+    else {
+        return false;
+    };
+    let legacy = |edit: &PrivateInventoryItemCountEdit| {
+        edit.actor_id.is_none() && edit.container_type.is_none() && edit.slot_id.is_none()
+    };
+    let item_overlap = match (first.path.as_deref(), second.path.as_deref()) {
+        (Some(first_path), Some(second_path)) => {
+            first_path == second_path
+                && inventory_edit_matches_item(first, first_path)
+                && inventory_edit_matches_item(second, first_path)
+        }
+        (Some(path), None) | (None, Some(path)) => {
+            inventory_edit_matches_item(first, path) && inventory_edit_matches_item(second, path)
+        }
+        (None, None) => first.id == second.id,
+    };
+    first.actor_id == second.actor_id
+        && (legacy(first)
+            || legacy(second)
+            || container_enum_label(first.container_type.as_deref())
+                == container_enum_label(second.container_type.as_deref()))
+        && first.slot_id.zip(second.slot_id).is_none_or(|(first, second)| first == second)
+        && item_overlap
+}
+
+/// Revival restores this actor's Health record. Whole attribute-map/set edits
+/// can discard it too; other actors and explicitly selected attributes are separate.
+fn path_targets_npc_health(path: &[properties::PathSeg], id: &str) -> bool {
+    for map in ["AttributesByGlobalId", "AttributesMap", "_Attributes"] {
+        let Some(at) = path
+            .iter()
+            .position(|segment| matches!(segment, properties::PathSeg::Name(name) if name == map))
+        else {
+            continue;
+        };
+        match path.get(at + 1) {
+            Some(properties::PathSeg::MapKey(actor))
+                if actor.trim().eq_ignore_ascii_case(id.trim()) => {}
+            Some(properties::PathSeg::MapKey(_)) => continue,
+            // Whole-map and unkeyed edits can discard the actor's health record.
+            _ => return true,
+        }
+        let attribute = path[at + 2..]
+            .iter()
+            .rev()
+            .find_map(|segment| match segment {
+                properties::PathSeg::MapKey(key) => Some(key.as_str()),
+                _ => None,
+            });
+        return attribute.is_none_or(|key| {
+            key.eq_ignore_ascii_case("Health")
+                || key
+                    .rsplit('.')
+                    .next()
+                    .is_some_and(|class| class.eq_ignore_ascii_case("AttributeSet_Health"))
+        });
+    }
+    false
+}
+
 /// Whether a raw typed edit at `path` addresses something the structured `edit`
 /// rewrites as a whole.
 ///
@@ -11884,6 +12247,24 @@ fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> 
 /// too.
 fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) -> bool {
     match edit {
+        PrivateEdit::PlayerName(_) => ["m_PlayerName", "m_CharacterName", "m_UserName"]
+            .iter()
+            .any(|name| path_has_name(path, name)),
+        PrivateEdit::ProfileName(_) => path_has_name(path, "m_ProfileName"),
+        PrivateEdit::PlayerAttribute(attribute) => {
+            path_enters_map_entry(path, "AttributesByGlobalId", skills::HERO)
+                && path_has_key(path, &attribute.id)
+                && private_player_attribute_set_for_id(&attribute.id)
+                    .is_some_and(|class| path_has_key(path, class))
+                && ((attribute.base_value.is_some() && path_has_name(path, "BaseValue"))
+                    || (attribute.current_value.is_some() && path_has_name(path, "CurrentValue")))
+        }
+        PrivateEdit::PlayerTransform(transform) => {
+            path_has_name(path, "m_SavedPlayers")
+                && (matches!(path.last(), Some(properties::PathSeg::Name(name)) if name == "m_SavedPlayers")
+                    || (transform.location.is_some() && path_has_name(path, "m_Location"))
+                    || (transform.rotation.is_some() && path_has_name(path, "m_Rotation")))
+        }
         // Patches or appends a modifier under this NPC's relationship entry.
         PrivateEdit::NpcRelationship(relationship) => {
             path_enters_map_entry(path, "RelationshipByGlobalId", &relationship.id)
@@ -11898,11 +12279,20 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
             (path_has_name(path, "MemorizedEvents") && path_has_key(path, skills::HERO))
                 || path_is_a_quest_current_state(path)
         }
-        // Strips memory events, death tags and the corpse entry.
-        PrivateEdit::NpcRevive(_) => {
-            path_has_name(path, "MemorizedEvents")
-                || path_has_name(path, "LooseTagsByGlobalId")
-                || path_has_name(path, "m_SavedInventories")
+        // Restores Health to MaxHealth and strips memory events, death tags and
+        // the corpse entry. A peer health edit would otherwise be overwritten.
+        PrivateEdit::NpcRevive(revive) => {
+            path_targets_npc_health(path, &revive.id)
+                || path_has_name(path, "MemorizedEvents")
+                || path_enters_map_entry(path, "LooseTagsByGlobalId", &revive.id)
+                || match segment_after_name(path, "m_SavedInventories") {
+                    None => false,
+                    Some(Some(properties::PathSeg::MapKey(key))) => {
+                        npc::is_corpse_key_for(key, &revive.id)
+                    }
+                    // Whole-map and unkeyed edits can remove the targeted corpse.
+                    Some(_) => true,
+                }
         }
         // Insert or update ONE character's knowledge entry. Another character's
         // entry is a different map value, and every applier re-resolves its target
@@ -11936,6 +12326,47 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
         }
         PrivateEdit::InventoryRemoveItem(remove) => {
             slot_edit_targets_actor(path, remove.actor_id.as_deref())
+        }
+        PrivateEdit::InventoryItemCount(count) => {
+            slot_edit_targets_actor(path, count.actor_id.as_deref())
+                && path_has_name(path, "m_ItemCount")
+        }
+        PrivateEdit::InventoryReset(reset) => match reset.actor_id.as_deref() {
+            Some(id) => {
+                [
+                    "InventoryByGlobalId",
+                    "CharacterStateSaveGameData_Inventory",
+                    "_Inventory",
+                ]
+                .iter()
+                .any(|map| path_enters_map_entry(path, map, id))
+                    || (path_has_key(path, id)
+                        && (path_has_name(path, "InventoryItems")
+                            || path_has_name(path, "m_Inventory")
+                            || path_reaches_inventory_slot(path)))
+            }
+            None => {
+                path_has_name(path, "m_Inventory")
+                    && (path_has_name(path, "m_SavedPlayers")
+                        || !path
+                            .iter()
+                            .any(|segment| matches!(segment, properties::PathSeg::MapKey(_))))
+            }
+        },
+        PrivateEdit::StoryApply(changes) => {
+            path_has_name(path, "StoryPropertyValues")
+                && changes.iter().any(|change| path_has_key(path, &change.id))
+        }
+        // The guild-to-crime join depends on saved values, so a path-only plan
+        // guards the forgiveness fields across the crime blob. Other crime
+        // fields and identically named flags outside that blob stay independent.
+        PrivateEdit::FactionsForgive(_) => {
+            path_has_key(path, "CrimeMemoryPersistentData")
+                && (matches!(path, [.., properties::PathSeg::Name(entries), properties::PathSeg::Index(_), properties::PathSeg::Name(flag)]
+                    if entries == "GlobalCrimeDataEntries" && flag == "bIsForgiven")
+                    || (path_has_name(path, "RelativeCrimeDataEntries")
+                        && matches!(path, [.., properties::PathSeg::Name(entries), properties::PathSeg::Index(_), properties::PathSeg::Name(flag)]
+                            if entries == "RelativeCrimes" && flag == "bIsSuppressed")))
         }
         // Narrower still: it only rewrites ids, but it does so across every
         // container in the save, so it is not scoped to one actor.
@@ -12104,16 +12535,16 @@ struct PrivateInventoryItemCountEdit {
     /// Optional NPC GlobalId. `None` targets the player inventory; `Some(id)`
     /// targets that NPC's inventory. Parsed here; APPLY wiring is Task 16.
     actor_id: Option<String>,
-    /// Optional stable slot `m_Id`. When set (NPC inventory path only), the
-    /// target slot is selected by this id, disambiguating two slots that share
+    /// Optional stable slot `m_Id`. When set, the target slot is selected by
+    /// this id for either actor, disambiguating two slots that share
     /// the same item-definition path. When `None`, selection falls back to the
     /// path/id selector.
     slot_id: Option<i32>,
-    /// Optional container type (NPC inventory path only) — the short or qualified
+    /// Optional container type — the short or qualified
     /// `EInventoryTypes` label of the container holding the target slot (e.g.
     /// `MeleeSlot`, `Pouch`). `None` resolves to the MainContainer for
     /// back-compatibility with the player path and older frontends. A slot `m_Id`
-    /// is only unique WITHIN one container, so an NPC count edit must carry this
+    /// is only unique WITHIN one container, so an edit must carry this
     /// to address a non-MainContainer slot unambiguously.
     container_type: Option<String>,
 }
@@ -14946,16 +15377,22 @@ fn armor_slot_summary(root: &properties::RootObject) -> Option<ArmorSlotSummary>
 /// [`inventory_main_container_view`] for either the player or a single NPC.
 struct InventoryMainContainerView {
     summary: MainContainerSummary,
-    /// Inventory slots in storage order:
-    /// `(item-definition path, count, stable slot m_Id, container short label)`.
+    /// Inventory slots in storage order, including their stable identities.
     /// The slot id disambiguates two rows that share an item-definition path so a
     /// count edit can target one specific stack. The container short label (e.g.
     /// `MainContainer`/`MeleeSlot`/`Pouch`, the `EInventoryTypes::` prefix
     /// stripped) tells the frontend which container the row lives in so a
-    /// per-container edit can address it; it is `MainContainer` for every player
-    /// row (player view is MainContainer-only) and the row's real container for
-    /// NPC rows (which span all containers).
-    rows: Vec<(String, Option<i32>, Option<i32>, String)>,
+    /// per-container edit can address it. Legacy player summaries restrict
+    /// rows to MainContainer; complete actor views include every container.
+    rows: Vec<InventorySlotRow>,
+}
+
+struct InventorySlotRow {
+    path: String,
+    count: Option<i32>,
+    slot_id: Option<i32>,
+    container_type: String,
+    upgrades: Vec<(String, String)>,
 }
 
 /// Walk the typed inventory tree for `actor_id` (`None` = controlled player,
@@ -14967,6 +15404,14 @@ struct InventoryMainContainerView {
 fn inventory_main_container_view(
     root: &properties::RootObject,
     actor_id: Option<&str>,
+) -> Option<InventoryMainContainerView> {
+    inventory_container_view(root, actor_id, actor_id.is_some())
+}
+
+fn inventory_container_view(
+    root: &properties::RootObject,
+    actor_id: Option<&str>,
+    all_containers: bool,
 ) -> Option<InventoryMainContainerView> {
     let inventory_path = resolve_inventory_path(root, actor_id)?;
     let resolve_child = |suffix: &[&str]| -> Option<properties::PropertyValue> {
@@ -15050,12 +15495,8 @@ fn inventory_main_container_view(
             }
         }
     }
-    // Row emission diverges by actor:
-    //   - Player (`actor_id == None`): MainContainer-only (the player edit paths
-    //     can only address MainContainer). Every row is tagged `MainContainer`.
-    //   - NPC (`actor_id.is_some()`): ALL containers, so an equipped weapon
-    //     (MeleeSlot) or ore (Pouch) is visible. Each row is tagged with its own
-    //     container's short label.
+    // Legacy player summaries emit MainContainer rows. Complete views include
+    // every container, with the actual container label and slot metadata.
     // Both hide the non-lootable equipment markers (fists, watch-fight weapon).
     // Rows are addressed by id/path and slot, never by their position here, so
     // leaving them out changes nothing an edit can reach; the summary that gates
@@ -15069,7 +15510,7 @@ fn inventory_main_container_view(
             .unwrap_or_else(|| short_enum_label(MAIN_CONTAINER_ENUM_LABEL).to_string())
     };
     let mut rows = Vec::new();
-    let push_slot_rows = |rows: &mut Vec<(String, Option<i32>, Option<i32>, String)>,
+    let push_slot_rows = |rows: &mut Vec<InventorySlotRow>,
                           slots: &[properties::PropertyValue],
                           label: &str,
                           hide_markers: bool| {
@@ -15083,20 +15524,25 @@ fn inventory_main_container_view(
             if hide_markers && is_non_lootable_marker(&item_id_from_path(path)) {
                 continue;
             }
-            rows.push((
-                path.to_string(),
-                slot_item_count(slot),
-                slot_id(slot),
-                label.to_string(),
-            ));
+            rows.push(InventorySlotRow {
+                path: path.to_string(),
+                count: slot_item_count(slot),
+                slot_id: slot_id(slot),
+                container_type: label.to_string(),
+                upgrades: if label == "ArmorSlot" {
+                    slot_upgrade_pairs(slot)
+                } else {
+                    Vec::new()
+                },
+            });
         }
     };
-    match actor_id {
-        None => {
+    match all_containers {
+        false => {
             let main_label = short_enum_label(MAIN_CONTAINER_ENUM_LABEL);
             push_slot_rows(&mut rows, &main_slots, main_label, true);
         }
-        Some(_) => {
+        true => {
             if let Some(properties::PropertyValue::Array {
                 elements: containers,
             }) = resolve_child(&["m_Values", "Items"])
@@ -16689,29 +17135,28 @@ fn select_npc_count_slot(
     Ok(slot_index)
 }
 
-/// Patch an NPC slot's `m_ItemCount` via the typed path. Locates the NPC's
-/// MainContainer m_Slots (the same traversal addItem/removeItem use), finds the
+/// Patch either actor's slot count via its typed container/slot identity. Finds the
 /// slot whose `m_SlotData.m_ItemDefinition` matches the edit's selector, then
 /// resolves
 /// `[<npc inventory path...>, m_Values, Items, [main_index], m_Slots, [slot_index], m_SlotData, m_ItemCount]`
 /// and `patch_scalar`s the i32 count. The IntProperty is fixed-size, so the
 /// write is in place — no splice, no size cascade, payload length unchanged.
-fn apply_npc_inventory_item_count_edit_to_payload(
+fn apply_typed_inventory_item_count_edit_to_payload(
     payload: &mut [u8],
     edit: &PrivateInventoryItemCountEdit,
 ) -> Result<(), CoreError> {
-    let actor_id = edit
-        .actor_id
-        .as_deref()
-        .expect("caller guarantees an NPC actor_id");
+    let actor_id = edit.actor_id.as_deref();
+    let actor = actor_id
+        .map(|id| format!("NPC {id}"))
+        .unwrap_or_else(|| "player".into());
     let root = properties::parse_private_root(payload).map_err(|err| {
         CoreError::Parse(format!(
             "private.inventory.setItemCount requires a typed-parsable private payload: {err}"
         ))
     })?;
-    let inventory_path = resolve_inventory_path(&root, Some(actor_id)).ok_or_else(|| {
+    let inventory_path = resolve_inventory_path(&root, actor_id).ok_or_else(|| {
         CoreError::Parse(format!(
-            "NPC {actor_id} has no inventory container; cannot set item count"
+            "{actor} has no inventory container; cannot set item count"
         ))
     })?;
     // Resolve the specific container the edit targets (MainContainer when the
@@ -16734,13 +17179,12 @@ fn apply_npc_inventory_item_count_edit_to_payload(
     // falls back to the item-definition selector and rejects ambiguity.
     let slot_index = select_npc_count_slot(slots, edit).map_err(|err| match err {
         SlotSelectError::NotFound => CoreError::Validation(format!(
-            "NPC {actor_id} inventory does not contain the requested item"
+            "{actor} inventory does not contain the requested item"
         )),
-        SlotSelectError::Ambiguous => CoreError::Validation(
-            "NPC inventory item count edit matched multiple slots; \
+        SlotSelectError::Ambiguous => CoreError::Validation(format!(
+            "{actor} inventory item count edit matched multiple slots; \
              reload the inventory so the edit can target a specific stack"
-                .to_string(),
-        ),
+        )),
     })?;
 
     // Build the full typed path to that slot's m_SlotData.m_ItemCount and patch
@@ -16761,14 +17205,10 @@ fn apply_private_inventory_item_count_edit_to_payload(
     payload: &mut [u8],
     edit: &PrivateInventoryItemCountEdit,
 ) -> Result<(), CoreError> {
-    // NPC count edits go through the TYPED path: navigate to the target slot's
-    // m_SlotData.m_ItemCount IntProperty and patch it in place. IntProperty is a
-    // fixed-size 4-byte scalar, so patch_scalar never changes the payload length
-    // (no splice, no size cascade) — exactly like the player path's in-place
-    // write. The player path (actor_id == None) keeps its untyped FString-region
-    // scan unchanged below.
-    if edit.actor_id.is_some() {
-        return apply_npc_inventory_item_count_edit_to_payload(payload, edit);
+    // Explicit container/slot selectors use the typed path for either actor.
+    // Legacy player edits without selectors retain their FString-region scan.
+    if edit.actor_id.is_some() || edit.slot_id.is_some() || edit.container_type.is_some() {
+        return apply_typed_inventory_item_count_edit_to_payload(payload, edit);
     }
     let refs = scan_fstrings(payload, 0);
     let (start_idx, end_idx, scope) = inventory_item_region(&refs);
@@ -19753,6 +20193,17 @@ mod tests {
         let interrupted_claim = claim_existing_target(&save_path, "assign-final").unwrap();
         assert!(!save_path.exists());
 
+        let persistent_before = fs::read(&persistent_path).unwrap();
+        api::execute(&api::Request {
+            command: "scan_save_dir_readonly".into(),
+            payload: json!({"path": dir.path()}),
+        })
+        .unwrap();
+        assert!(!save_path.exists(), "a read-only scan must not restore a claim");
+        assert!(screenshot_for_save(&save_path).is_err());
+        assert_eq!(fs::read(&interrupted_claim).unwrap(), assigned);
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent_before);
+
         let summary = scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
 
         assert_eq!(fs::read(&save_path).unwrap(), assigned);
@@ -19786,6 +20237,19 @@ mod tests {
         let stale_claim = claim_existing_target(&save_path, "assign-final").unwrap();
         let concurrent_save = minimal_gsav("Concurrent winner");
         fs::write(&save_path, &concurrent_save).unwrap();
+
+        let claim_before = fs::read(&stale_claim).unwrap();
+        let persistent_before = fs::read(&persistent_path).unwrap();
+        api::execute(&api::Request {
+            command: "scan_save_dir_readonly".into(),
+            payload: json!({"path": dir.path()}),
+        })
+        .unwrap();
+        assert_eq!(fs::read(&stale_claim).unwrap(), claim_before);
+        assert!(screenshot_for_save(&save_path).unwrap().is_none());
+        assert_eq!(fs::read(&stale_claim).unwrap(), claim_before);
+        assert_eq!(fs::read(&save_path).unwrap(), concurrent_save);
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent_before);
 
         scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
         assert_eq!(fs::read(&save_path).unwrap(), concurrent_save);
@@ -20149,6 +20613,18 @@ mod tests {
         // State after the slot claim but before the profile replacement.
         fs::write(&persistent_path, &persistent_original).unwrap();
 
+        let manifest_path = deleted_save_recovery_manifest_path(&backup_path).unwrap();
+        let manifest_before = fs::read(&manifest_path).unwrap();
+        let status = api::recovery_status(dir.path()).unwrap();
+        let listed = &status["recoveries"][0];
+        assert_eq!(
+            listed["persistentPostDeleteSha1"],
+            deleted["deletedPersistentSha1"]
+        );
+        assert_eq!(fs::read(&manifest_path).unwrap(), manifest_before);
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent_original);
+        assert!(!save_path.exists());
+
         let discovered = discover_deleted_save_recovery(dir.path())
             .unwrap()
             .expect("a missing slot with its original profile must be recoverable");
@@ -20159,9 +20635,9 @@ mod tests {
         restore_deleted_save(
             &save_path,
             &backup_path,
-            discovered["persistentPostDeleteSha1"].as_str().unwrap(),
-            discovered["deletedSaveSha1"].as_str().unwrap(),
-            discovered["deletedPersistentSha1"].as_str().unwrap(),
+            listed["persistentPostDeleteSha1"].as_str().unwrap(),
+            listed["deletedSaveSha1"].as_str().unwrap(),
+            listed["deletedPersistentSha1"].as_str().unwrap(),
         )
         .unwrap();
 
@@ -20194,6 +20670,17 @@ mod tests {
         fs::write(&persistent_path, &persistent_original).unwrap();
         let stranded_profile = claim_existing_target(&persistent_path, "claim").unwrap();
         assert!(!persistent_path.exists());
+
+        let manifest_before = fs::read(&manifest_path).unwrap();
+        assert_eq!(
+            api::recovery_status(dir.path()).unwrap()["recoveries"],
+            json!([])
+        );
+        assert!(
+            !persistent_path.exists(),
+            "listing must leave repairs to scan_save_dir"
+        );
+        assert_eq!(fs::read(&manifest_path).unwrap(), manifest_before);
 
         let response = execute_json_inner(
             &json!({
@@ -22286,6 +22773,244 @@ mod tests {
     }
 
     #[test]
+    fn save_exports_reject_source_aliases_before_shared_or_direct_writes() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        let bytes = minimal_gsav("Export source");
+        fs::write(&save, &bytes).unwrap();
+        let hardlink = dir.path().join("alias.sav");
+        fs::hard_link(&save, &hardlink).unwrap();
+        let mut aliases = vec![save.clone(), dir.path().join("./G1R-001.sav"), hardlink];
+        #[cfg(unix)]
+        {
+            let symlink = dir.path().join("symlink.sav");
+            std::os::unix::fs::symlink(&save, &symlink).unwrap();
+            aliases.push(symlink);
+        }
+        #[cfg(windows)]
+        aliases.push(dir.path().join("G1R-001.SAV"));
+        for output in aliases {
+            for command in ["apply_edits", "write_save"] {
+                for dry_run in [true, false] {
+                    let error = api::execute(&api::Request { command: command.into(), payload: json!({"path":save,"outputPath":output,"dryRun":dry_run,"edits":[{"path":"public.m_PlayerSaveName","value":"Exported"}]}) }).unwrap_err();
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("must not refer to the source save"),
+                        "{error}"
+                    );
+                    assert_eq!(fs::read(&save).unwrap(), bytes);
+                    assert_eq!(fs::read(&output).unwrap(), bytes);
+                    assert!(!dir.path().join("goresave_backups").exists());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn profile_derived_reset_guards_shared_and_direct_writes_without_profile_sync() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        let bytes = include_bytes!("../assets/start_saves/resources_gothic.sav");
+        fs::write(&save, bytes).unwrap();
+        let profile = dir.path().join("PersistentDataList.sav");
+        for expected in [Value::Null, json!(sha1_hex(b"old profile"))] {
+            fs::write(&profile, b"new profile").unwrap();
+            let reset = json!({"path":"private.inventory.reset","value":{"resourcesLevel":"Gothic","expectedPersistentSha1":expected}});
+            for command in ["apply_edits", "write_save"] {
+                let error = api::execute(&api::Request {
+                    command: command.into(),
+                    payload: json!({"path":save,"syncPersistentDataList":false,"edits":[reset]}),
+                })
+                .unwrap_err();
+                assert!(error.to_string().contains("profile changed"), "{error}");
+                assert_eq!(fs::read(&save).unwrap(), bytes);
+                assert_eq!(fs::read(&profile).unwrap(), b"new profile");
+                assert!(!dir.path().join("goresave_backups").exists());
+            }
+        }
+        let reset = json!({"path":"private.inventory.reset","value":{"resourcesLevel":"Gothic","expectedPersistentSha1":api::file_sha1(&profile).unwrap()}});
+        workflow::apply_request(&json!({"path":save,"dryRun":true,"edits":[reset]})).unwrap();
+        assert_eq!(fs::read(&save).unwrap(), bytes);
+        assert!(!dir.path().join("goresave_backups").exists());
+    }
+
+    #[test]
+    fn reset_guards_reject_external_profile_changes_after_a_committed_synced_rename() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        fs::write(
+            &save,
+            include_bytes!("../assets/start_saves/resources_gothic.sav"),
+        )
+        .unwrap();
+        let profile = dir.path().join("PersistentDataList.sav");
+        fs::write(&profile, assignment_persistent_data_list("G1R-001", 0)).unwrap();
+        let reset = json!({"path":"private.inventory.reset","value":{"resourcesLevel":"Gothic","persistentPath":profile,"expectedPersistentSha1":api::file_sha1(&profile).unwrap()}});
+        let raw = vec![
+            json!({"path":"public.m_PlayerSaveName","value":"Synced rename"}),
+            reset.clone(),
+        ];
+        assert_eq!(workflow::plan(&raw).unwrap(), vec![vec![0], vec![1]]);
+        let payload = json!({"path":save,"edits":raw,"syncPersistentDataList":true,"expectedPersistentSha1":api::file_sha1(&profile).unwrap()});
+        let result = workflow::apply_with_progress(&payload, |_| {
+            fs::write(&profile, b"concurrent profile change").unwrap();
+        })
+        .unwrap();
+        assert_eq!(result["complete"], false);
+        assert_eq!(result["committed"], json!([0]));
+        assert_eq!(result["remaining"], json!([1]));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("profile changed")
+        );
+        let mut remaining = vec![reset];
+        api::refresh_edit_persistent_snapshots(&save, &mut remaining, &result["results"][0]);
+        assert_eq!(
+            remaining[0]["value"]["expectedPersistentSha1"],
+            result["results"][0]["persistentWrittenSha1"]
+        );
+        assert_ne!(
+            remaining[0]["value"]["expectedPersistentSha1"],
+            api::file_sha1(&profile).unwrap()
+        );
+        assert!(api::check_edit_persistent_snapshots(&save, &remaining).is_err());
+        assert_eq!(
+            inspect_save(&save, false).unwrap()["public"]["playerSaveName"],
+            "Synced rename"
+        );
+        assert_eq!(fs::read(&profile).unwrap(), b"concurrent profile change");
+    }
+
+    #[test]
+    fn screenshot_lookup_rejects_invalid_sources_before_resolving_a_valid_sidecar() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        let sidecar = dir.path().join("Profile_0_Screenshots.sav");
+        let screenshot_bytes =
+            raw_screenshot_gsav_for_tests(&[("G1R-001", &[0xff, 0xd8, 0xaa, 0xbb, 0xff, 0xd9])]);
+        fs::write(&sidecar, &screenshot_bytes).unwrap();
+        let claim = dir.path().join("G1R-001.sav.assign-final-goresave-1-2-3");
+        let valid = minimal_gsav("Real source");
+        fs::write(&claim, &valid).unwrap();
+        for bytes in [
+            b"not a save".to_vec(),
+            b"GSAV".to_vec(),
+            b"GVAS".to_vec(),
+            valid[..20].to_vec(),
+        ] {
+            fs::write(&save, &bytes).unwrap();
+            assert!(screenshot_for_save(&save).is_err(), "{bytes:?}");
+            assert_eq!(fs::read(&save).unwrap(), bytes);
+            assert_eq!(fs::read(&sidecar).unwrap(), screenshot_bytes);
+            assert_eq!(fs::read(&claim).unwrap(), valid);
+        }
+        fs::remove_file(&save).unwrap();
+        fs::create_dir(&save).unwrap();
+        assert!(screenshot_for_save(&save).is_err());
+        fs::remove_dir(&save).unwrap();
+        fs::write(&save, &valid).unwrap();
+        assert_eq!(screenshot_for_save(&save).unwrap().unwrap().byte_length, 6);
+        assert_eq!(fs::read(&claim).unwrap(), valid);
+        assert!(!dir.path().join("goresave_backups").exists());
+    }
+
+    #[test]
+    fn screenshot_lookup_ignores_other_slots_and_preserves_assignment_claims() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        let bytes = minimal_gsav("Thumbnail source");
+        fs::write(&save, &bytes).unwrap();
+        fs::create_dir(dir.path().join("G1R-999.sav")).unwrap();
+        let claim = dir.path().join("G1R-001.sav.assign-final-goresave-1-2-3");
+        fs::write(&claim, &bytes).unwrap();
+        assert!(screenshot_for_save(&save).unwrap().is_none());
+        let sidecar = dir.path().join("Profile_0_Screenshots.sav");
+        let screenshot_bytes =
+            raw_screenshot_gsav_for_tests(&[("G1R-001", &[0xff, 0xd8, 0xaa, 0xbb, 0xff, 0xd9])]);
+        fs::write(&sidecar, &screenshot_bytes).unwrap();
+        let image = screenshot_for_save(&save).unwrap().unwrap();
+        assert_eq!(image.mime_type, "image/jpeg");
+        assert_eq!(image.byte_length, 6);
+        assert_eq!(image.bytes_base64, "/9iqu//Z");
+        assert_eq!(fs::read(&save).unwrap(), bytes);
+        assert_eq!(fs::read(&claim).unwrap(), bytes);
+        assert_eq!(fs::read(&sidecar).unwrap(), screenshot_bytes);
+        assert!(dir.path().join("G1R-999.sav").is_dir());
+    }
+
+    #[test]
+    fn screenshot_lookup_and_listing_use_only_the_owning_profile() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        let bytes = minimal_gsav("Thumbnail owner");
+        fs::write(&save, &bytes).unwrap();
+        let claim = dir.path().join("G1R-001.sav.assign-final-goresave-1-2-3");
+        fs::write(&claim, &bytes).unwrap();
+        let profile = dir.path().join("PersistentDataList.sav");
+        let sidecars = [
+            dir.path().join("Profile_0_Screenshots.sav"),
+            dir.path().join("Profile_1_Screenshots.sav"),
+        ];
+        let jpegs: [&[u8]; 2] = [
+            &[0xff, 0xd8, 0xaa, 0xbb, 0xff, 0xd9],
+            &[0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9],
+        ];
+        let screenshots = jpegs.map(|jpeg| raw_screenshot_gsav_for_tests(&[("G1R-001", jpeg)]));
+        let backend = codec_backend::KrakenBackend::default();
+        for owner in [0, 1] {
+            let profile_bytes = assignment_persistent_data_list("G1R-001", owner);
+            fs::write(&profile, &profile_bytes).unwrap();
+            for (sidecar, screenshot) in sidecars.iter().zip(&screenshots) {
+                fs::write(sidecar, screenshot).unwrap();
+            }
+            let expected = if owner == 0 { "/9iqu//Z" } else { "/9gBAv/Z" };
+            assert_eq!(
+                screenshot_for_save(&save).unwrap().unwrap().bytes_base64,
+                expected
+            );
+            let listing =
+                scan_save_dir_summary_readonly_with_codec_backend(dir.path(), Some(&backend)).unwrap();
+            let listed = listing
+                .saves
+                .iter()
+                .find(|save| save.slot == "G1R-001")
+                .unwrap();
+            assert_eq!(listed.screenshot.as_ref().unwrap().bytes_base64, expected);
+            for (sidecar, screenshot) in sidecars.iter().zip(&screenshots) {
+                assert_eq!(fs::read(sidecar).unwrap(), *screenshot);
+            }
+            let owned = &sidecars[owner as usize];
+            for corrupt in [false, true] {
+                if corrupt {
+                    fs::write(owned, b"corrupt optional thumbnail").unwrap();
+                } else {
+                    fs::remove_file(owned).unwrap();
+                }
+                assert!(screenshot_for_save(&save).unwrap().is_none());
+                let listing =
+                    scan_save_dir_summary_readonly_with_codec_backend(dir.path(), Some(&backend))
+                        .unwrap();
+                assert!(
+                    listing
+                        .saves
+                        .iter()
+                        .find(|save| save.slot == "G1R-001")
+                        .unwrap()
+                        .screenshot
+                        .is_none()
+                );
+            }
+            assert_eq!(fs::read(&profile).unwrap(), profile_bytes);
+            assert_eq!(fs::read(&save).unwrap(), bytes);
+            assert_eq!(fs::read(&claim).unwrap(), bytes);
+            assert!(!dir.path().join("goresave_backups").exists());
+        }
+    }
+
+    #[test]
     fn parse_screenshot_payload_extracts_jpeg_by_slot() {
         let payload =
             screenshot_private_payload(&[("G1R-001", &[0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9])]);
@@ -22759,6 +23484,78 @@ mod tests {
         assert_eq!(
             info["publicPayloadSize"].as_u64().unwrap(),
             public_payload("Much Longer").len() as u64
+        );
+    }
+
+    #[test]
+    fn workflow_syncs_a_late_rename_and_keeps_one_pristine_paired_backup() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let original = startsaves::start_save_bytes(startsaves::ResourcesLevel::Gothic);
+        let profile = persistent_data_list(&[(
+            "G1R-001",
+            "Persistent old",
+            1,
+            "MainMap",
+            3600.0,
+            false,
+            true,
+        )]);
+        fs::write(&path, original).unwrap();
+        fs::write(&persistent_path, &profile).unwrap();
+        let root = decode_private_root_cached(&path, &codec_backend::KrakenBackend).unwrap();
+        let index = traders::list_traders(&root)
+            .unwrap()
+            .into_iter()
+            .find(|t| t.ore.is_some() && !t.placeholder)
+            .unwrap()
+            .index;
+        let stock = |count| {
+            json!({"path":"private.traders.setStock","value":{
+                "index":index,"path":traders::ORE_PATH,"count":count
+            }})
+        };
+        let edits = vec![
+            stock(200),
+            json!({"path":"private.inventory.reset","value":{"resourcesLevel":"Gothic"}}),
+            json!({
+                "path":"public.m_PlayerSaveName","value":"Synced workflow name"
+            }),
+        ];
+        let result = workflow::apply_request(&json!({
+            "path":path,"edits":edits,"syncPersistentDataList":true,
+            "expectedPersistentSha1":sha1_hex(&profile)
+        }))
+        .unwrap();
+        assert_eq!(result["complete"], true, "{result}");
+        assert_eq!(result["committed"], json!([2, 0, 1]));
+        assert_eq!(
+            inspect_save(&path, false).unwrap()["public"]["playerSaveName"],
+            "Synced workflow name"
+        );
+        assert_eq!(
+            persistent_slot_metadata_for_dir(dir.path()).unwrap()["G1R-001"]
+                .player_save_name
+                .as_deref(),
+            Some("Synced workflow name")
+        );
+        let results = result["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        let backup = results[0]["backupPath"].as_str().unwrap();
+        let paired = results[0]["persistentBackupPath"].as_str().unwrap();
+        assert_eq!(fs::read(backup).unwrap(), original);
+        assert_eq!(fs::read(paired).unwrap(), profile);
+        assert_eq!(
+            backup.rsplit("G1R-001.sav.bak.").next(),
+            paired.rsplit("PersistentDataList.sav.bak.").next()
+        );
+        assert!(results[1]["backupPath"].is_null());
+        assert!(results[1]["persistentBackupPath"].is_null());
+        let root = decode_private_root_cached(&path, &codec_backend::KrakenBackend).unwrap();
+        assert_eq!(
+            traders::trader_detail(&root, index).unwrap().summary.ore,
+            Some(200)
         );
     }
 
@@ -24158,6 +24955,33 @@ mod tests {
         assert!(refs.iter().any(|r| r.value == "None"));
     }
 
+    fn assert_duplicate_private_names_do_not_write(
+        path: &Path,
+        output: &Path,
+        backend: &dyn codec_backend::CodecBackend,
+        edit_path: &str,
+    ) {
+        let original = fs::read(path).unwrap();
+        let exported = fs::read(output).unwrap();
+        let first = json!({"path":edit_path,"value":"First name"});
+        let second = json!({"path":edit_path,"value":{"name":"Second name"}});
+        for edits in [
+            vec![first.clone(), second.clone()],
+            vec![second, first.clone()],
+            vec![first.clone(), first],
+        ] {
+            for target in [None, Some(output)] {
+                let error = write_save_with_codec_backend(path, &edits, true, target, Some(backend))
+                    .unwrap_err();
+                assert!(matches!(error, CoreError::UnsupportedEdit(_)), "{error}");
+                assert!(error.to_string().contains("rewrite the same"), "{error}");
+                assert_eq!(fs::read(path).unwrap(), original);
+                assert_eq!(fs::read(output).unwrap(), exported);
+                assert!(!path.parent().unwrap().join("goresave_backups").exists());
+            }
+        }
+    }
+
     #[test]
     fn write_save_updates_private_player_name_property_only() {
         let dir = tempdir().unwrap();
@@ -24198,6 +25022,12 @@ mod tests {
         let value =
             inspect_save_with_codec_backend(&output_path, true, Some(&backend), None).unwrap();
         assert_eq!(value["private"]["player"]["playerName"], "Nameless");
+        assert_duplicate_private_names_do_not_write(
+            &path,
+            &output_path,
+            &backend,
+            "private.player.setPlayerName",
+        );
         assert_eq!(
             value["private"]["player"]["writable"],
             json!(["private.player.setPlayerName"])
@@ -24248,6 +25078,12 @@ mod tests {
         let value =
             inspect_save_with_codec_backend(&output_path, true, Some(&backend), None).unwrap();
         assert_eq!(value["private"]["player"]["profileName"], "goresave");
+        assert_duplicate_private_names_do_not_write(
+            &path,
+            &output_path,
+            &backend,
+            "private.profile.setProfileName",
+        );
         assert_eq!(
             value["private"]["player"]["writable"],
             json!(["private.profile.setProfileName"])
@@ -24602,6 +25438,54 @@ mod tests {
             json!(["public", "private"])
         );
         let rows = response["results"].as_array().unwrap();
+        // Exact-path requests retain the same IDs, editability and values as
+        // the complete browser, without paginating unrelated nodes.
+        for row in rows {
+            let exact = search_typed_properties(
+                &path,
+                &json!({
+                    "includeNodes":true,"source":row["source"],
+                    "propertyPath":row["path"],"limit":1000
+                }),
+                Some(&backend),
+            )
+            .unwrap();
+            let expected = rows
+                .iter()
+                .filter(|other| {
+                    other["source"] == row["source"] && other["path"] == row["path"]
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(exact["results"], json!(expected));
+            assert_eq!(exact["total"], expected.len());
+        }
+        let roots = rows
+            .iter()
+            .filter(|row| row["path"] == json!([]))
+            .cloned()
+            .collect::<Vec<_>>();
+        let root_page = search_typed_properties(
+            &path,
+            &json!({"includeNodes":true,"propertyPath":[],"offset":1,"limit":1}),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(root_page["total"], roots.len());
+        assert_eq!(
+            root_page["results"],
+            json!(roots.iter().skip(1).take(1).cloned().collect::<Vec<_>>())
+        );
+        for invalid in [json!("Health"), json!([4])] {
+            assert!(matches!(
+                search_typed_properties(
+                    &path,
+                    &json!({"includeNodes":true,"propertyPath":invalid}),
+                    Some(&backend),
+                ),
+                Err(CoreError::InvalidRequest(_))
+            ));
+        }
         assert!(rows.iter().any(|row| row["source"] == "metadata"));
         assert!(rows.iter().any(|row| row["source"] == "public"));
         assert!(rows.iter().any(|row| row["kind"] == "array"));
@@ -30344,15 +31228,23 @@ mod tests {
     /// Full private payload. MainContainer is deliberately NOT at index 0 in
     /// m_Keys/Items so the implementation must match by enum value.
     fn typed_inventory_private_payload(other_slots: &[Vec<u8>], main_slots: &[Vec<u8>]) -> Vec<u8> {
-        let keys = inv_enum_array_property("m_Keys", &[INV_OTHER_LABEL, INV_MAIN_LABEL]);
-        let items = inv_struct_array_property(
-            "Items",
-            "ContainerVirtualData",
-            &[
-                inv_container(INV_OTHER_LABEL, other_slots),
-                inv_container(INV_MAIN_LABEL, main_slots),
-            ],
-        );
+        typed_inventory_containers_payload(&[
+            (INV_OTHER_LABEL, other_slots),
+            (INV_MAIN_LABEL, main_slots),
+        ])
+    }
+
+    fn typed_inventory_containers_payload(containers: &[(&str, &[Vec<u8>])]) -> Vec<u8> {
+        let labels = containers
+            .iter()
+            .map(|(label, _)| *label)
+            .collect::<Vec<_>>();
+        let keys = inv_enum_array_property("m_Keys", &labels);
+        let container_values = containers
+            .iter()
+            .map(|(label, slots)| inv_container(label, slots))
+            .collect::<Vec<_>>();
+        let items = inv_struct_array_property("Items", "ContainerVirtualData", &container_values);
         let values = inv_struct_property("m_Values", "ContainerVirtualDataArray", &items);
         let mut inventory_props = keys;
         inventory_props.extend_from_slice(&values);
@@ -31143,6 +32035,131 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["slotId"], 7);
         assert_eq!(items[1]["slotId"], 9);
+    }
+
+    #[test]
+    fn complete_player_inventory_keeps_duplicate_armor_metadata_on_its_own_slot() {
+        let path = "/Script/Angelscript.Ore_Armor_H";
+        let upgrades = inv_struct_property(
+            "m_GenericData",
+            "StringMap",
+            &[
+                private_str_array_property("m_Keys", &["m_CurrentUpperBodyUpgrade"]),
+                private_str_array_property("m_Values", &["HeavyArmorUpgrade"]),
+            ]
+            .concat(),
+        );
+        let armor = [inv_item_slot(0, ARMOR_SLOT_ENUM_LABEL, path, 1, &upgrades)];
+        let main = [
+            inv_item_slot(0, INV_MAIN_LABEL, path, 1, &inv_empty_payload_map()),
+            inv_item_slot(1, INV_MAIN_LABEL, path, 1, &inv_empty_payload_map()),
+        ];
+        let payload = typed_inventory_containers_payload(&[
+            (ARMOR_SLOT_ENUM_LABEL, &armor),
+            (INV_MAIN_LABEL, &main),
+        ]);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let summary = actor_inventory_summary_with_containers(&root, None, true);
+        let items = summary["items"].as_array().unwrap();
+        assert_eq!(
+            items.len(),
+            3,
+            "one row per actual slot despite identical class/count"
+        );
+        assert_eq!(items[0]["containerType"], "ArmorSlot");
+        assert_eq!(items[0]["equipped"], true);
+        assert_eq!(
+            items[0]["upgrades"],
+            json!([
+                {"key":"m_CurrentUpperBodyUpgrade","value":"HeavyArmorUpgrade"}
+            ])
+        );
+        for (index, item) in items[1..].iter().enumerate() {
+            assert_eq!(item["containerType"], "MainContainer");
+            assert_eq!(item["slotId"], index);
+            assert_eq!(item["equipped"], false);
+            assert_eq!(item["upgrades"], json!([]));
+            assert_eq!(item["removable"], true);
+        }
+    }
+
+    #[test]
+    fn player_count_edits_use_container_and_slot_to_disambiguate_duplicate_stacks() {
+        let path = "/Script/Angelscript.ItMi_Orenugget";
+        let mut payload = typed_inventory_private_payload(
+            &[inv_item_slot(
+                0,
+                INV_OTHER_LABEL,
+                path,
+                7,
+                &inv_empty_payload_map(),
+            )],
+            &[
+                inv_item_slot(0, INV_MAIN_LABEL, path, 1, &inv_empty_payload_map()),
+                inv_item_slot(1, INV_MAIN_LABEL, path, 1, &inv_empty_payload_map()),
+            ],
+        );
+        let edit = PrivateInventoryItemCountEdit {
+            path: Some(path.into()),
+            count: 5,
+            slot_id: Some(1),
+            container_type: Some("MainContainer".into()),
+            ..Default::default()
+        };
+        apply_private_inventory_item_count_edit_to_payload(&mut payload, &edit).unwrap();
+        let rows = |payload: &[u8]| {
+            let root = properties::parse_private_root(payload).unwrap();
+            actor_inventory_summary_with_containers(&root, None, true)["items"].clone()
+        };
+        let items = rows(&payload);
+        assert_eq!(items[0]["count"], 7);
+        assert_eq!(items[1]["count"], 1);
+        assert_eq!(items[2]["count"], 5);
+        let before = payload.clone();
+        assert!(
+            apply_private_inventory_item_count_edit_to_payload(
+                &mut payload,
+                &PrivateInventoryItemCountEdit {
+                    slot_id: Some(42),
+                    ..edit.clone()
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(
+            payload, before,
+            "a stale slot selector never touches another stack"
+        );
+        apply_private_inventory_item_count_edit_to_payload(
+            &mut payload,
+            &PrivateInventoryItemCountEdit {
+                slot_id: Some(0),
+                container_type: Some("Quickslots".into()),
+                count: 8,
+                ..edit.clone()
+            },
+        )
+        .unwrap();
+        let items = rows(&payload);
+        assert_eq!(items[0]["count"], 8);
+        assert_eq!(items[1]["count"], 1);
+        assert_eq!(items[2]["count"], 5);
+        apply_private_inventory_remove_item_to_payload(
+            &mut payload,
+            &PrivateInventoryRemoveItemEdit {
+                path: path.into(),
+                slot_id: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let items = rows(&payload);
+        assert_eq!(items.as_array().unwrap().len(), 2);
+        assert_eq!(
+            items[1]["slotId"], 0,
+            "the other duplicate survives removal"
+        );
+        assert_eq!(items[1]["count"], 1);
     }
 
     #[test]

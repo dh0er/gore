@@ -2562,7 +2562,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get editorSkillsEffectConflict =>
-      'Sono in sospeso una modifica alle Abilità e una modifica in Tutti i dati per lo stesso effetto del personaggio (ActiveEffects › EffectSpec › Def). Non possono essere salvate insieme. Reimposta o annulla una delle due, quindi salva di nuovo.';
+      'Sono in sospeso una modifica alle Abilità e una modifica in Tutti i dati per lo stesso effetto del personaggio (ActiveEffects). Non possono essere salvate insieme. Reimposta o annulla una delle due, quindi salva di nuovo.';
 
   @override
   String get editorInventoryResetConflict =>

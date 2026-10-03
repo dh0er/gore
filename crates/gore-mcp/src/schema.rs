@@ -166,6 +166,7 @@ fn argument_schema(arg: &ArgSpec) -> Value {
             schema
         }
         ArgKind::Bool => json!({ "type": "boolean", "description": description }),
+        ArgKind::Float => json!({ "type": "number", "description": description }),
         ArgKind::Enum(values) => {
             json!({ "type": "string", "enum": values, "description": description })
         }
@@ -341,6 +342,22 @@ fn describe_arguments(command: &CommandSpec) -> String {
 }
 
 fn safety_note(safety: &Safety) -> String {
+    if let Some(switch) = safety.mutates_when_switch {
+        let mut note = format!(
+            "{}, but `{switch}: true` needs --allow-write",
+            safety.base.label()
+        );
+        if let Some((switch, input)) = safety.mutates_when_switch_without {
+            note.push_str(&format!("; `{switch}: true` without `{input}` also changes shared state and needs --allow-write"));
+        }
+        return note;
+    }
+    if let Some((switch, input)) = safety.mutates_when_switch_without {
+        return format!(
+            "{}, but `{switch}: true` without `{input}` changes shared state and needs --allow-write",
+            safety.base.label()
+        );
+    }
     if let Some((arg, offline_value)) = safety.offline_when {
         return format!(
             "writes new files and stays offline when `{arg}: {offline_value}`; other values may launch the game and modify the installation, which needs consent"

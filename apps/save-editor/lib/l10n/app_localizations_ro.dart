@@ -2558,7 +2558,7 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get editorSkillsEffectConflict =>
-      'O modificare de Abilități și o editare din Toate datele a aceluiași efect de actor (ActiveEffects › EffectSpec › Def) sunt ambele în coadă. Nu pot fi salvate împreună — resetează sau anulează una dintre ele, apoi salvează din nou.';
+      'O modificare de Abilități și o editare din Toate datele a aceluiași efect de actor (ActiveEffects) sunt ambele în coadă. Nu pot fi salvate împreună — resetează sau anulează una dintre ele, apoi salvează din nou.';
 
   @override
   String get editorInventoryResetConflict =>

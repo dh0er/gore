@@ -13,6 +13,7 @@ gore --version
 
 | Command | Subcommands | Purpose | Guide |
 |---------|-------------|---------|-------|
+| `save` | 142 commands across saves, profiles, characters, inventory, progression, raw data, drafts, settings and reports | Native Save Editor functionality with JSON output and validated dry runs. | [save-games](save-games.md) |
 | `config` | `set` · `get` · `unset` · `list` · `path` · `detect` | Persist shared settings (the game path) so other commands can omit `--game`. | [getting-started](getting-started.md#point-gore-at-the-game) |
 | `doctor` | — | Diagnose the setup in one read-only pass: game path, install, deployment, leftovers, catalog staleness, standalone compiler. | [getting-started](getting-started.md#check-the-setup) |
 | `mcp` | `serve` · `tools` | Serve the whole CLI over the Model Context Protocol (stdio JSON-RPC) for AI assistants. | [mcp](mcp.md) |
@@ -522,3 +523,14 @@ commit it was built from.
 | `GORE_AS_BINDS` | `as` decompile/emit native-call arities; tag-map evidence |
 | `GORE_AS_USMAP` | `as tag-map-sites` / `patch-tag-map` evidence |
 | `GORE_AS_DIAGNOSTICS_HOOK` | explicit trusted diagnostics helper for `as compile*` |
+
+## `save`
+
+The [save-games guide](save-games.md) lists every family and the editing workflow.
+`gore save core capabilities --json` describes every native command, edit and
+Editor feature. `gore save <family> <operation> --help` lists its arguments.
+
+Save paths are positional. Reads support `--json`; edits support `--dry-run`,
+`--draft <JSON>` and `--out <SAVE>`. Profile synchronization requires writing
+the original save. `--lang auto` uses the shared Editor language setting; an
+explicit `--lang de` (or another supported language) overrides it.

@@ -69,6 +69,7 @@ jobs:
       - name: Docs, plugin, and release contracts
         working-directory: .
         run: |
+          python apps/save-editor/tools/build_cli_presentation.py --check
           python scripts/check_docs_links.py
           python scripts/check_plugin.py
           python scripts/check_release_workflow.py

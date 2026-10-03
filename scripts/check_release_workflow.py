@@ -750,6 +750,7 @@ def _validate_ci(root: dict[str, Field], problems: list[str]) -> None:
         problems,
     )
     expected_run = (
+        "python apps/save-editor/tools/build_cli_presentation.py --check\n"
         "python scripts/check_docs_links.py\n"
         "python scripts/check_plugin.py\n"
         "python scripts/check_release_workflow.py\n"

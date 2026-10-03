@@ -1,0 +1,556 @@
+{
+  "format": "gore.save.editor-parity.v1",
+  "features": [
+    {
+      "id": "S01",
+      "editor": "Save-Verzeichnis wählen, automatisch ermitteln, neu einlesen",
+      "cliPaths": [
+        "save settings get",
+        "save settings set",
+        "save list",
+        "save refresh"
+      ]
+    },
+    {
+      "id": "S02",
+      "editor": "Profile, aktives Profil, zugeordnete Saves und „Andere Saves“ anzeigen/auswählen",
+      "cliPaths": [
+        "save profiles list",
+        "save profiles show",
+        "save list",
+        "save draft create"
+      ]
+    },
+    {
+      "id": "S03",
+      "editor": "Externe Datei öffnen; externe Einträge merken/entfernen; andere Saves dauerhaft ausblenden, ohne sie zu löschen",
+      "cliPaths": [
+        "save inspect",
+        "save library add",
+        "save library remove",
+        "save library hide",
+        "save library unhide",
+        "save library list"
+      ]
+    },
+    {
+      "id": "S04",
+      "editor": "Save-Metadaten: Slot, Anzeigename, Profil, Kapitel, Karte, Spiel-/Ladezeit, Quick-/Autosave, Größe, Hash, Format, Kompression, Status",
+      "cliPaths": [
+        "save inspect",
+        "save list"
+      ]
+    },
+    {
+      "id": "S05",
+      "editor": "Screenshot anzeigen, Diagnose-JSON anzeigen und kopieren",
+      "cliPaths": [
+        "save screenshot export",
+        "save inspect"
+      ]
+    },
+    {
+      "id": "S06",
+      "editor": "Save-Anzeigename ändern und die Profilmetadaten synchronisieren",
+      "cliPaths": [
+        "save rename"
+      ]
+    },
+    {
+      "id": "S07",
+      "editor": "Save einem Profil zuordnen/umzuordnen; externe Datei in freien Slot importieren; Namenskollisionen vermeiden",
+      "cliPaths": [
+        "save profile assign",
+        "save import"
+      ]
+    },
+    {
+      "id": "S08",
+      "editor": "Profilzuordnung entfernen; verwaiste Referenzen entfernen; physische Datei behalten",
+      "cliPaths": [
+        "save profile detach"
+      ]
+    },
+    {
+      "id": "S09",
+      "editor": "Save löschen samt korrekter Profilaktualisierung und Recovery-Eintrag",
+      "cliPaths": [
+        "save delete"
+      ]
+    },
+    {
+      "id": "S10",
+      "editor": "Gelöschten Save einschließlich passendem Profilstand wiederherstellen; Recovery anzeigen/verwerfen; Neustart-/Crash-Fall",
+      "cliPaths": [
+        "save recovery list",
+        "save recovery show",
+        "save recovery restore",
+        "save recovery dismiss",
+        "save recovery repair"
+      ]
+    },
+    {
+      "id": "S11",
+      "editor": "Save-Backups und Backups von `PersistentDataList.sav` auflisten",
+      "cliPaths": [
+        "save backups list"
+      ]
+    },
+    {
+      "id": "S12",
+      "editor": "Backup-Anzeigenamen vergeben, ändern und entfernen",
+      "cliPaths": [
+        "save backups rename"
+      ]
+    },
+    {
+      "id": "S13",
+      "editor": "Save-Backup oder Profil-Begleitbackup wiederherstellen; Placement-Notizen und Begleitdatei-Status beachten",
+      "cliPaths": [
+        "save backups restore"
+      ]
+    },
+    {
+      "id": "S14",
+      "editor": "Backup nach Bestätigung dauerhaft löschen",
+      "cliPaths": [
+        "save backups delete"
+      ]
+    },
+    {
+      "id": "C01",
+      "editor": "Gemeinsame Charakterliste aus Akteuren, Wissen und Ereignissen; Player, NPCs, Kreaturen; Kategorien, Rollen, Tod, Händlerstatus, Suche/Filter",
+      "cliPaths": [
+        "save characters list",
+        "save characters show",
+        "save npc list",
+        "save npc show"
+      ]
+    },
+    {
+      "id": "C02",
+      "editor": "Sämtliche Spieler-/NPC-Attribute lesen und BaseValue/CurrentValue bearbeiten; Gruppen, Schutzwerte, Level, Erfahrung, Lernpunkte, Mana, Lebenspunkte und Erklärungen",
+      "cliPaths": [
+        "save attributes list",
+        "save attributes show",
+        "save attributes set"
+      ]
+    },
+    {
+      "id": "C03",
+      "editor": "Sämtliche Skill-Kategorien und angebotenen Stufen lesen, lernen, umlernen und verlernen; unbekannte gespeicherte Skills anzeigen",
+      "cliPaths": [
+        "save skills list",
+        "save skills show",
+        "save skills set"
+      ]
+    },
+    {
+      "id": "C04",
+      "editor": "NPC wiederbeleben einschließlich HP, Todes-/Niederlagserinnerungen, Tags und Leichenzustand",
+      "cliPaths": [
+        "save npc revive"
+      ]
+    },
+    {
+      "id": "C05",
+      "editor": "Explizite NPC-Beziehung zum Spieler anzeigen und alle Editor-Optionen setzen",
+      "cliPaths": [
+        "save npc relationship show",
+        "save npc relationship set"
+      ]
+    },
+    {
+      "id": "C06",
+      "editor": "Spielerposition XYZ und Rotation Pitch/Yaw/Roll lesen und setzen",
+      "cliPaths": [
+        "save position show",
+        "save position set"
+      ]
+    },
+    {
+      "id": "C07",
+      "editor": "NPC-Position/Rotation lesen und setzen; Spawnposition/-rotation als Referenz anzeigen; fehlende oder nie platzierte Akteure korrekt behandeln",
+      "cliPaths": [
+        "save position show",
+        "save position set"
+      ]
+    },
+    {
+      "id": "C08",
+      "editor": "Benannte Orte suchen, nach Gebiet/Art filtern, Position übernehmen; Richtung wahlweise übernehmen",
+      "cliPaths": [
+        "save locations list",
+        "save locations show",
+        "save position set"
+      ]
+    },
+    {
+      "id": "C09",
+      "editor": "NPC auf die gespeicherte Spawnposition/-rotation zurücksetzen",
+      "cliPaths": [
+        "save position reset-to-spawn"
+      ]
+    },
+    {
+      "id": "C10",
+      "editor": "NPC am Ort halten: Routine deaktivieren, ursprünglichen Zustand erfassen; wiederholtes Umsetzen eines bereits fixierten NPCs",
+      "cliPaths": [
+        "save position set",
+        "save position pin-status"
+      ]
+    },
+    {
+      "id": "C11",
+      "editor": "Fixierung aufheben und Routine wiederherstellen; vollständigen Move rückgängig machen; veraltete Undo-Notiz ablehnen",
+      "cliPaths": [
+        "save position resume-routine",
+        "save position undo"
+      ]
+    },
+    {
+      "id": "I01",
+      "editor": "Spieler-/NPC-Inventar lesen; alle Container und mehrfach vorkommenden Stacks unterscheiden; belegte/leere Slots, Actor-ID, unbekannte Items und Schreibbarkeit",
+      "cliPaths": [
+        "save inventory list",
+        "save inventory show"
+      ]
+    },
+    {
+      "id": "I02",
+      "editor": "Anzahl eines vorhandenen Stacks ändern",
+      "cliPaths": [
+        "save inventory set-count"
+      ]
+    },
+    {
+      "id": "I03",
+      "editor": "Neue Gegenstände aus dem vollständigen Katalog auswählen und hinzufügen",
+      "cliPaths": [
+        "save items list",
+        "save items show",
+        "save inventory add"
+      ]
+    },
+    {
+      "id": "I04",
+      "editor": "Den konkret gewählten Stack entfernen; Hinzufügen/Entfernen vor dem Speichern zurücknehmen",
+      "cliPaths": [
+        "save inventory remove",
+        "save draft reset"
+      ]
+    },
+    {
+      "id": "I05",
+      "editor": "Inventar auf sauberen Startzustand zurücksetzen, einschließlich Ressourcenstufe und NPC-spezifischem Verhalten",
+      "cliPaths": [
+        "save inventory reset"
+      ]
+    },
+    {
+      "id": "I06",
+      "editor": "Beschädigte Slot-IDs erkennen und reparieren; Auswirkungen auf sämtliche betroffenen Container ausweisen",
+      "cliPaths": [
+        "save inventory check-slots",
+        "save inventory repair-slots"
+      ]
+    },
+    {
+      "id": "I07",
+      "editor": "Spielgetreue Kategorien, Item-Details/Tooltips: Typ, Wert, Gewicht, Stackgröße, Schaden, Schutz/OnEquip, Anforderungen, Magiekreis, Spell-Level/-Mana, Verbrauchseffekte, Rezepte, Schrifttexte, Zutaten, natürliche Waffen",
+      "cliPaths": [
+        "save items show",
+        "save inventory show"
+      ]
+    },
+    {
+      "id": "I08",
+      "editor": "Itembilder und Kategorie-/Attribut-/Schutz-/Skill-Symbole aus der Installation verwenden; ohne Bilder bedienbar bleiben",
+      "cliPaths": [
+        "save assets prepare",
+        "save assets list",
+        "save assets export",
+        "save assets open"
+      ]
+    },
+    {
+      "id": "W01",
+      "editor": "Spielzeit als Gesamtsekunden und Tag/Uhrzeit lesen/setzen; nullbasierte Tage und Wertebereiche wie im Editor",
+      "cliPaths": [
+        "save time show",
+        "save time set"
+      ]
+    },
+    {
+      "id": "W02",
+      "editor": "Profilschwierigkeit: Preset, Kampf/Ressourcen/Fortschritt, Flow Helper, Permadeath; Custom-Regeln, Novice-Regeln und unbekannte Presets",
+      "cliPaths": [
+        "save difficulty show",
+        "save difficulty set"
+      ]
+    },
+    {
+      "id": "W03",
+      "editor": "Quests und Tutorials mit Gruppen, Zuständen, Namen, Suche, Zählungen und Seiten lesen; alle angebotenen Zustände bearbeiten",
+      "cliPaths": [
+        "save quests list",
+        "save quests show",
+        "save quests set-state",
+        "save tutorials list",
+        "save tutorials show",
+        "save tutorials set-state"
+      ]
+    },
+    {
+      "id": "W04",
+      "editor": "Story-Zustände aus gespeichertem Stand und Katalog zusammenführen; gesetzte/ungesetzte/ unbekannte IDs, Rohwert, vorhandene Editor-Darstellung, Suchen/Filtern",
+      "cliPaths": [
+        "save story list",
+        "save story show"
+      ]
+    },
+    {
+      "id": "W05",
+      "editor": "Story-ID erstellen, Wert ändern und Eintrag entfernen; Expected-Werte prüfen; unbekannte Neuanlage ausdrücklich erlauben; case-insensitive Identität",
+      "cliPaths": [
+        "save story set",
+        "save story unset"
+      ]
+    },
+    {
+      "id": "W06",
+      "editor": "Glossar für NPCs, Kreaturen und Orte lesen; Dokumente, Kategorien, Texte und Entdeckungszustände",
+      "cliPaths": [
+        "save glossary list",
+        "save glossary show"
+      ]
+    },
+    {
+      "id": "W07",
+      "editor": "NPC-Entdeckung sowie Dokument-/Questzustände und einzelne Textsegmente freigeben/sperren; Unlock-/Viewed-Ereignisse korrekt berücksichtigen",
+      "cliPaths": [
+        "save glossary set-state",
+        "save glossary segment unlock",
+        "save glossary segment lock"
+      ]
+    },
+    {
+      "id": "W08",
+      "editor": "Glossarporträts und Spieltexte laden und anzeigen/exportieren",
+      "cliPaths": [
+        "save glossary show",
+        "save assets export",
+        "save assets open"
+      ]
+    },
+    {
+      "id": "W09",
+      "editor": "Wissen pro Spieler/NPC lesen, suchen, hinzufügen und entfernen; Charaktereintrag erstmalig anlegen; Katalogauswahl",
+      "cliPaths": [
+        "save knowledge list",
+        "save knowledge add",
+        "save knowledge remove",
+        "save knowledge create-character",
+        "save catalog search"
+      ]
+    },
+    {
+      "id": "W10",
+      "editor": "Ereignisse pro Spieler/NPC lesen: Tags, Zeit, Dauer, Magnitude, Beteiligte, optionale Klassen, Position und Payload; Ereignisse entfernen/duplizieren; Änderungen zurücknehmen",
+      "cliPaths": [
+        "save events list",
+        "save events show",
+        "save events remove",
+        "save events duplicate",
+        "save draft reset"
+      ]
+    },
+    {
+      "id": "W11",
+      "editor": "Fraktionsverbrechen, Verbrechensarten und offene/erlassene Summen lesen; Verbrechen einer Gilde vergeben",
+      "cliPaths": [
+        "save factions list",
+        "save factions show",
+        "save factions forgive"
+      ]
+    },
+    {
+      "id": "W12",
+      "editor": "Alle katalogisierten Truhen/Türen samt Region, Schlüsseln, Schwierigkeit und Save-Zustand lesen; öffnen und erneut sperren einschließlich Tür-Nebenzuständen",
+      "cliPaths": [
+        "save locks list",
+        "save locks show",
+        "save locks unlock",
+        "save locks lock"
+      ]
+    },
+    {
+      "id": "W13",
+      "editor": "Händlerliste/Details: aktueller Bestand, gespeicherter Restock-Bestand, Erz/Kaufkraft, Platzhalterzeilen und generierte Ereignisse",
+      "cliPaths": [
+        "save traders list",
+        "save traders show"
+      ]
+    },
+    {
+      "id": "W14",
+      "editor": "In beiden Händlerbeständen Mengen ändern, Positionen hinzufügen/entfernen und Erz bearbeiten",
+      "cliPaths": [
+        "save traders stock set",
+        "save traders stock add",
+        "save traders stock remove"
+      ]
+    },
+    {
+      "id": "W15",
+      "editor": "Händleraktivitätszeit lesen/setzen, „nie aktiv“ darstellen, Restock-Fenster und Voraussetzungen berechnen; Editor-Aktion zum Fälligstellen",
+      "cliPaths": [
+        "save traders timing show",
+        "save traders timing set",
+        "save traders timing make-due"
+      ]
+    },
+    {
+      "id": "R01",
+      "editor": "Alle Daten durchsuchen: Quelle, Datentyp, editierbar/read-only, Container/Structs, Query, Pfade, Trefferzahl und Seiten",
+      "cliPaths": [
+        "save data search"
+      ]
+    },
+    {
+      "id": "R02",
+      "editor": "Jeden vom Editor angebotenen Werttyp lesen/bearbeiten, einschließlich nativer Struct-/Vektor-/Rotator-Werte; Roh- und Fachansichten desselben Ziels",
+      "cliPaths": [
+        "save data show",
+        "save data set"
+      ]
+    },
+    {
+      "id": "R03",
+      "editor": "Elemente in typisierten Sets hinzufügen/entfernen und Arrayelemente entfernen/duplizieren",
+      "cliPaths": [
+        "save data set-add",
+        "save data set-remove",
+        "save data array-remove",
+        "save data array-duplicate"
+      ]
+    },
+    {
+      "id": "R04",
+      "editor": "Vollständiges Core-Protokoll einschließlich öffentlicher Namen, privater Namens- und FString-Operationen zugänglich machen",
+      "cliPaths": [
+        "save core exec",
+        "save core capabilities"
+      ]
+    },
+    {
+      "id": "R05",
+      "editor": "Codec-Status und Format-/Codec-Roundtrip prüfen; Decode-only-/nicht verifizierte Daten entsprechend sperren",
+      "cliPaths": [
+        "save codec status",
+        "save validate"
+      ]
+    },
+    {
+      "id": "A01",
+      "editor": "Übersicht und alle Statistikwerte mit denselben Zählregeln, unbekannten Zuständen und Datenquellen",
+      "cliPaths": [
+        "save overview",
+        "save statistics"
+      ]
+    },
+    {
+      "id": "A02",
+      "editor": "Spieltexte automatisch oder aus gewählter `.lcache` extrahieren; Status/Metadaten anzeigen, Texte suchen, Quelle wechseln/neu laden; alle Editor-Sprachen und Fallbacks",
+      "cliPaths": [
+        "save localization status",
+        "save localization prepare",
+        "save localization find"
+      ]
+    },
+    {
+      "id": "A03",
+      "editor": "Bildcache vorbereiten, Quellidentität feststellen, erneuern und freigeben; Originalporträts nutzen; fehlende/stale Quelle anzeigen",
+      "cliPaths": [
+        "save assets prepare",
+        "save assets status",
+        "save assets release"
+      ]
+    },
+    {
+      "id": "A04",
+      "editor": "Editor-Einstellungen lesen/ändern/zurücksetzen: Save-Verzeichnis, externe/ausgeblendete Pfade; UI-/Spieltextsprache, IDs, Theme, Schrift, Skalierung, Fenstergröße/-status, Update-Option und Quellhinweisstatus; alte Einstellungen migrieren",
+      "cliPaths": [
+        "save settings show",
+        "save settings get",
+        "save settings set",
+        "save settings reset"
+      ]
+    },
+    {
+      "id": "A05",
+      "editor": "Visuelle Informationen gemeinsam betrachten, einschließlich Screenshots, Porträts, Symbole und Tooltips",
+      "cliPaths": [
+        "save report"
+      ]
+    },
+    {
+      "id": "A06",
+      "editor": "Versions-/About-Daten, Lizenz-/Schriftinformationen, Release-/Projektlinks und Updateprüfung",
+      "cliPaths": [
+        "save about",
+        "save licenses",
+        "save updates check",
+        "save updates open-release"
+      ]
+    },
+    {
+      "id": "A07",
+      "editor": "Verfügbare Editor-Aktualisierung durchführen; installiertes und portables Verhalten korrekt abbilden",
+      "cliPaths": [
+        "save updates install"
+      ]
+    },
+    {
+      "id": "A08",
+      "editor": "Änderungen je Save und Akteur vormerken, anzeigen, ersetzen und zurücknehmen; ungültige Entwürfe blockieren; Kontextwechsel/Refresh mit ungespeicherten Änderungen behandeln",
+      "cliPaths": [
+        "save draft create",
+        "save draft show",
+        "save draft stage",
+        "save draft remove",
+        "save draft reset",
+        "save draft validate",
+        "save draft apply",
+        "save refresh"
+      ]
+    },
+    {
+      "id": "A09",
+      "editor": "Speichern aller Änderungen: Konflikterkennung, geordnete Teilschritte, Backup einmal, Fortschritt, Teilerfolg und unverbrauchte Änderungen",
+      "cliPaths": [
+        "save draft apply",
+        "save core exec"
+      ]
+    },
+    {
+      "id": "A10",
+      "editor": "Zustand nach Schreib-/Restorefehler neu lesen; Erfolg trotz nachgelagertem Anzeige-/Sidecarfehler korrekt melden; Recovery nicht verlieren",
+      "cliPaths": [
+        "save refresh",
+        "save recovery list",
+        "save draft apply"
+      ]
+    },
+    {
+      "id": "A11",
+      "editor": "Komfortaktionen wie Ordner-/Dateiauswahl, Kopieren, Details öffnen und erneutes Einlesen",
+      "cliPaths": [
+        "save inspect",
+        "save assets open",
+        "save report",
+        "save refresh"
+      ]
+    }
+  ]
+}

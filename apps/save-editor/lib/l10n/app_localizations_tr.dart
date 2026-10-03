@@ -2543,7 +2543,7 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get editorSkillsEffectConflict =>
-      'Bir Beceriler değişikliği ile aynı aktörün etkisine (ActiveEffects › EffectSpec › Def) yönelik Tüm veri düzenlemesi ikisi de sırada. Birlikte kaydedilemezler — birini sıfırla veya geri al, sonra tekrar kaydet.';
+      'Bir Beceriler değişikliği ile aynı aktörün etkisine (ActiveEffects) yönelik Tüm veri düzenlemesi ikisi de sırada. Birlikte kaydedilemezler — birini sıfırla veya geri al, sonra tekrar kaydet.';
 
   @override
   String get editorInventoryResetConflict =>

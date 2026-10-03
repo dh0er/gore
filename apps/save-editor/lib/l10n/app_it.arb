@@ -714,7 +714,7 @@
   "editorRelationshipConflict": "Una modifica a una relazione e un’altra modifica in sospeso in Tutti i dati riguardano entrambe la stessa voce di relazione di un PNG ({path}). La modifica strutturata della relazione può sostituire i modificatori della voce, quindi non possono essere salvate insieme. Reimposta o annulla una delle due, quindi salva di nuovo.",
   "editorMultipleStructuralArrayEdits": "Più modifiche strutturali in sospeso riguardano lo stesso array ({path}). Salva o reimposta la prima modifica prima di aggiungerne un’altra.",
   "editorStructuralArrayConflict": "Una modifica strutturale a un evento e un’altra modifica in sospeso in Tutti i dati riguardano entrambe {path}. Salva o reimposta una delle due prima di continuare.",
-  "editorSkillsEffectConflict": "Sono in sospeso una modifica alle Abilità e una modifica in Tutti i dati per lo stesso effetto del personaggio (ActiveEffects › EffectSpec › Def). Non possono essere salvate insieme. Reimposta o annulla una delle due, quindi salva di nuovo.",
+  "editorSkillsEffectConflict": "Sono in sospeso una modifica alle Abilità e una modifica in Tutti i dati per lo stesso effetto del personaggio (ActiveEffects). Non possono essere salvate insieme. Reimposta o annulla una delle due, quindi salva di nuovo.",
   "editorInventoryResetConflict": "Sono in sospeso un ripristino dell’inventario e un’altra modifica allo stesso inventario. Il ripristino sostituisce l’intero inventario e annullerebbe l’altra modifica. Reimposta o annulla una delle due, quindi salva di nuovo.",
   "editorUseFolder": "Usa la cartella",
   "editorGothicSavegameFileType": "Salvataggio Gothic",

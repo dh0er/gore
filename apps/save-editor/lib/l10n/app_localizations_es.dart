@@ -2559,7 +2559,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get editorSkillsEffectConflict =>
-      'Hay pendientes un cambio de Habilidades y otro de Todos los datos para el mismo efecto del personaje (ActiveEffects › EffectSpec › Def). No se pueden guardar juntos. Restablece o deshaz uno de ellos y vuelve a guardar.';
+      'Hay pendientes un cambio de Habilidades y otro de Todos los datos para el mismo efecto del personaje (ActiveEffects). No se pueden guardar juntos. Restablece o deshaz uno de ellos y vuelve a guardar.';
 
   @override
   String get editorInventoryResetConflict =>

@@ -1258,7 +1258,7 @@ fn memorized_events_array_path(root: &RootObject, id: &str) -> Option<Vec<String
 /// (`"Character_" + id + "_" + <digits>`, e.g.
 /// `Character_OM_GRD_Drake_260-WorldPointActor_Drake_2146328221`). Match the exact
 /// form OR the `_<digits>`-suffixed form so a suffixed corpse is still removed.
-fn is_corpse_key_for(key: &str, id: &str) -> bool {
+pub(crate) fn is_corpse_key_for(key: &str, id: &str) -> bool {
     let Some(rest) = key.strip_prefix("Character_") else {
         return false;
     };
