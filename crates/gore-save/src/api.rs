@@ -264,10 +264,8 @@ pub fn refresh_edit_persistent_snapshots(
     }
 }
 
-pub(crate) fn check_persistent_snapshot(
-    path: &std::path::Path,
-    payload: &Value,
-) -> Result<(), CoreError> {
+/// Check the source save's profile snapshot used by a synchronized save write.
+pub fn check_persistent_snapshot(path: &std::path::Path, payload: &Value) -> Result<(), CoreError> {
     let physical = path.canonicalize().unwrap_or_else(|_| path.to_owned());
     let profile = physical
         .parent()

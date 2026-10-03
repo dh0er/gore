@@ -1064,6 +1064,23 @@ fn selected_recovery<'a>(data: &'a Value, o: &Options) -> Result<&'a Value> {
         .context("no matching recovery")
 }
 
+fn draft_is_stale(draft: &Value) -> bool {
+    let Some(path) = draft["path"].as_str().map(Path::new) else {
+        return true;
+    };
+    if !api::file_sha1(path).is_ok_and(|hash| draft["expectedSha1"] == hash) {
+        return true;
+    }
+    if draft["syncPersistentDataList"].as_bool().unwrap_or(false)
+        && api::check_persistent_snapshot(path, draft).is_err()
+    {
+        return true;
+    }
+    draft["edits"]
+        .as_array()
+        .is_none_or(|edits| api::check_edit_persistent_snapshots(path, edits).is_err())
+}
+
 pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
     match (g, v) {
         ("settings", _) => settings(v, o),
@@ -1082,11 +1099,7 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             }
             if let Some(file) = &o.draft {
                 let draft = read_json(file)?;
-                let stale = draft["path"]
-                    .as_str()
-                    .map(Path::new)
-                    .and_then(|p| api::file_sha1(p).ok())
-                    .is_none_or(|h| draft["expectedSha1"] != h);
+                let stale = draft_is_stale(&draft);
                 data["draft"] = json!({"path":file,"pending":draft["edits"].as_array().map(Vec::len),"stale":stale,"preserved":true});
             }
             display::filter(&mut data, "saves", o);
@@ -1241,6 +1254,54 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn draft_staleness_checks_only_consumed_profile_snapshots() {
+        let temp = tempfile::tempdir().unwrap();
+        let save = temp.path().join("G1R-001.sav");
+        fs::write(&save, b"source").unwrap();
+        let profile = temp.path().join("PersistentDataList.sav");
+        fs::write(&profile, b"profile before").unwrap();
+        let initial = json!({"path":save,"expectedSha1":api::file_sha1(&save).unwrap(),
+            "expectedPersistentSha1":api::file_sha1(&profile).unwrap(),"edits":[]});
+        let mut synced = initial.clone();
+        synced["syncPersistentDataList"] = json!(true);
+        let mut derived = initial.clone();
+        derived["edits"] = json!([{"path":"private.inventory.reset","value":{
+            "resourcesLevel":"Hard","expectedPersistentSha1":initial["expectedPersistentSha1"]}}]);
+        for draft in [&initial, &synced, &derived] {
+            assert!(!draft_is_stale(draft));
+        }
+        fs::write(&profile, b"profile after").unwrap();
+        assert!(!draft_is_stale(&initial));
+        assert!(draft_is_stale(&synced));
+        assert!(draft_is_stale(&derived));
+
+        let external = tempfile::tempdir().unwrap();
+        let external_profile = external.path().join("PersistentDataList.sav");
+        fs::write(&external_profile, b"independent profile").unwrap();
+        derived["edits"][0]["value"]["persistentPath"] = json!(external_profile);
+        derived["edits"][0]["value"]["expectedPersistentSha1"] =
+            json!(api::file_sha1(&external_profile).unwrap());
+        assert!(!draft_is_stale(&derived));
+        fs::write(&external_profile, b"external change").unwrap();
+        assert!(draft_is_stale(&derived));
+        derived["edits"][0]["value"]
+            .as_object_mut()
+            .unwrap()
+            .remove("expectedPersistentSha1");
+        assert!(!draft_is_stale(&derived));
+
+        fs::remove_file(&profile).unwrap();
+        synced["expectedPersistentSha1"] = Value::Null;
+        assert!(!draft_is_stale(&synced));
+        fs::write(&profile, b"new profile").unwrap();
+        assert!(draft_is_stale(&synced));
+        fs::write(&save, b"source after").unwrap();
+        assert!(draft_is_stale(&initial));
+        fs::remove_file(&save).unwrap();
+        assert!(draft_is_stale(&initial));
+    }
 
     #[test]
     fn staging_placement_actions_replaces_opposite_and_same_case_variants_for_one_npc() {

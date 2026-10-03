@@ -1595,6 +1595,88 @@ fn administrative_dry_runs_keep_slot_values_when_launched_from_the_save_director
 }
 
 #[test]
+fn refresh_marks_only_changed_profile_dependencies_as_stale() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let hash = gore_save::api::file_sha1(&save).unwrap();
+    let profile = home.join("PersistentDataList.sav");
+    let profile_bytes = profile_fixture("Hard");
+    fs::write(&profile, &profile_bytes).unwrap();
+    let renamed = home.join("rename.json");
+    let derived = home.join("derived.json");
+    let explicit = home.join("explicit.json");
+    for (file, mut args) in [
+        (
+            &renamed,
+            vec!["rename", save.to_str().unwrap(), "--name", "Staged name"],
+        ),
+        (&derived, vec!["inventory", "reset", save.to_str().unwrap()]),
+        (
+            &explicit,
+            vec![
+                "inventory",
+                "reset",
+                save.to_str().unwrap(),
+                "--resources-level",
+                "Novice",
+            ],
+        ),
+    ] {
+        args.extend(["--draft", file.to_str().unwrap()]);
+        run(home, &args);
+    }
+    let snapshots = [&renamed, &derived, &explicit].map(|file| (file, fs::read(file).unwrap()));
+    let check = |file: &Path, stale: bool| {
+        for verb in ["refresh", "list"] {
+            let result = run(
+                home,
+                &[
+                    verb,
+                    "--root",
+                    home.to_str().unwrap(),
+                    "--draft",
+                    file.to_str().unwrap(),
+                ],
+            );
+            assert_eq!(result["draft"]["stale"], stale, "{verb}: {file:?}");
+            assert_eq!(result["draft"]["pending"], 1);
+            assert_eq!(result["draft"]["preserved"], true);
+        }
+    };
+    for (file, _) in &snapshots {
+        check(file, false);
+    }
+    let changed = profile_fixture("Easy");
+    fs::write(&profile, &changed).unwrap();
+    for (file, expected) in [(&renamed, true), (&derived, true), (&explicit, false)] {
+        check(file, expected);
+        if expected {
+            let error = run_failure(home, &["draft", "validate", file.to_str().unwrap()]);
+            assert!(error.to_string().contains("profile changed"), "{error}");
+        } else {
+            run(home, &["draft", "validate", file.to_str().unwrap()]);
+        }
+    }
+    assert_eq!(fs::read(&profile).unwrap(), changed);
+    fs::write(&profile, &profile_bytes).unwrap();
+    for (file, _) in &snapshots {
+        check(file, false);
+    }
+    fs::remove_file(&profile).unwrap();
+    for (file, expected) in [(&renamed, true), (&derived, true), (&explicit, false)] {
+        check(file, expected);
+    }
+    assert!(!profile.exists());
+    for (file, bytes) in snapshots {
+        assert_eq!(fs::read(file).unwrap(), bytes);
+    }
+    assert_eq!(gore_save::api::file_sha1(&save).unwrap(), hash);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
 fn profile_derived_reset_drafts_reject_profile_changes_and_preserve_pending_edits() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
