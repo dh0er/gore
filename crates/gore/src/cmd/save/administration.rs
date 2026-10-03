@@ -1707,6 +1707,57 @@ mod tests {
     }
 
     #[test]
+    fn partial_draft_retry_rejects_a_concurrent_save_change() {
+        let temp = tempfile::tempdir().unwrap();
+        let save = temp.path().join("G1R-001.sav");
+        let file = temp.path().join("draft.json");
+        fs::write(
+            &save,
+            include_bytes!("../../../../gore-save/assets/start_saves/resources_gothic.sav"),
+        )
+        .unwrap();
+        let reset = json!({"path":"private.inventory.reset","value":{}});
+        let story = json!({"path":"private.story.apply","value":{"changes":[{
+            "id":"CLI_Concurrent_Retry_Test","present":true,"rawValue":1,
+            "expected":{"stored":false},"allowUnknownCreate":true
+        }]}});
+        stage(&file, &json!({"path":save,"edits":[reset,story]}), false).unwrap();
+        let original = read_json(&file).unwrap();
+        let mut committed_sha1 = String::new();
+        let result = gore_save::workflow::apply_with_progress(&original, |progress| {
+            assert_eq!(progress["committed"], json!([0]));
+            committed_sha1 = api::file_sha1(&save).unwrap();
+            api::execute(&api::Request {
+                command: "write_save".into(),
+                payload: json!({"path":save,"backup":false,
+                    "edits":[{"path":"public.m_PlayerSaveName","value":"Concurrent save change"}]}),
+            })
+            .unwrap();
+        })
+        .unwrap();
+        assert_eq!(result["complete"], false);
+        assert_eq!(result["committed"], json!([0]));
+        let remaining = draft_after_apply(original, &result).unwrap();
+        assert_eq!(remaining["edits"], json!([story]));
+        assert_eq!(remaining["expectedSha1"], committed_sha1);
+        api::update_json_file(&file, |_| Ok(remaining)).unwrap();
+        let before_retry = fs::read(&save).unwrap();
+        let options = Options {
+            save: Some(file),
+            ..Default::default()
+        };
+        for verb in ["validate", "apply"] {
+            assert!(
+                draft(verb, &options)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("save changed since the draft was created")
+            );
+            assert_eq!(fs::read(&save).unwrap(), before_retry);
+        }
+    }
+
+    #[test]
     fn partial_draft_apply_preserves_an_independent_profile_snapshot_for_retry() {
         let temp = tempfile::tempdir().unwrap();
         let save = temp.path().join("G1R-001.sav");
@@ -1727,10 +1778,12 @@ mod tests {
         )
         .unwrap();
         let original = read_json(&file).unwrap();
+        let mut committed_bytes = Vec::new();
         let result = gore_save::workflow::apply_with_progress(&original, |progress| {
             assert_eq!(progress["committed"], json!([0]));
             // A concurrent writer invalidates the second group and changes the
             // profile before the remaining draft is published.
+            committed_bytes = fs::read(&save).unwrap();
             api::execute(&api::Request {
                 command: "write_save".into(),
                 payload: json!({"path":save,"backup":false,
@@ -1750,6 +1803,9 @@ mod tests {
             original["expectedPersistentSha1"]
         );
         api::update_json_file(&file, |_| Ok(remaining)).unwrap();
+        // Restore our committed save snapshot to isolate the independent profile
+        // guard; the concurrent save guard is covered by the preceding test.
+        fs::write(&save, committed_bytes).unwrap();
         let before_retry = api::file_sha1(&save).unwrap();
         let options = Options {
             save: Some(file),

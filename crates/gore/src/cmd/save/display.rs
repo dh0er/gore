@@ -824,7 +824,15 @@ pub(super) fn position(v: &str, o: &Options) -> Result<Value> {
         fill_transform(&mut next, o)?;
     }
     for (leaf, path) in [("location", "locationPath"), ("rotation", "rotationPath")] {
-        if next[leaf] != pose[leaf] {
+        let staged = pending
+            .as_ref()
+            .and_then(|draft| draft["edits"].as_array())
+            .is_some_and(|edits| {
+                edits.iter().any(|edit| {
+                    edit["path"] == "private.typed.setValue" && edit["value"]["path"] == pose[path]
+                })
+            });
+        if next[leaf] != pose[leaf] || staged {
             edits.push(edit(
                 "private.typed.setValue",
                 json!({"path":pose[path],"value":next[leaf]}),

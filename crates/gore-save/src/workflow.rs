@@ -676,6 +676,8 @@ pub fn apply_with_progress(
     let mut results = Vec::new();
     let mut committed = Vec::new();
     let mut error = None;
+    // Retry guards must follow our own committed bytes, never a later writer.
+    let mut committed_sha1 = hashes[0].clone();
     for (step, group) in groups.iter().enumerate() {
         let source = if step == 0 { path.as_path() } else { target };
         let current = match fs::read(source) {
@@ -713,6 +715,7 @@ pub fn apply_with_progress(
             payload: request,
         }) {
             Ok(result) => {
+                committed_sha1 = hashes[step + 1].clone();
                 crate::api::refresh_edit_persistent_snapshots(&path, &mut operations, &result);
                 results.push(result);
                 committed.extend(group.iter().copied());
@@ -729,7 +732,7 @@ pub fn apply_with_progress(
     let remaining: Vec<_> = (0..raw.len()).filter(|i| !committed.contains(i)).collect();
     Ok(
         json!({"complete":error.is_none(),"error":error,"committed":committed,"remaining":remaining,
-        "results":results,"path":target,"sha1":fs::read(target).ok().map(|b|crate::sha1_hex(&b))}),
+        "results":results,"path":target,"sha1":committed_sha1}),
     )
 }
 
@@ -1940,6 +1943,7 @@ mod tests {
             } else {
                 request["placementNotes"] = json!([{"npc":npc,"note":note}]);
             }
+            let mut committed_sha1 = String::new();
             let interrupted = apply_with_progress(&request, |progress| {
                 assert_eq!(progress["step"], 1);
                 assert_eq!(
@@ -1947,11 +1951,13 @@ mod tests {
                     if clear { None } else { Some(&note) },
                     "the committed NPC group must publish or clear its own sidecar"
                 );
+                committed_sha1 = crate::api::file_sha1(&path).unwrap();
                 fs::write(&path, b"external change").unwrap();
             })
             .unwrap();
             assert_eq!(interrupted["committed"], json!([0, 2]));
             assert_eq!(interrupted["remaining"], json!([1]));
+            assert_eq!(interrupted["sha1"], committed_sha1);
             assert_ne!(crate::placement::read_notes(&path), initial);
             let mut remaining = request.clone();
             remaining["edits"] = json!([raw[1]]);

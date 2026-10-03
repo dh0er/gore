@@ -2733,6 +2733,86 @@ fn adjacent_legacy_backup_dry_runs_validate_without_changing_live_files() {
 }
 
 #[test]
+fn staging_npc_pose_back_to_live_replaces_pending_location_and_rotation() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let actor = "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN";
+    let original = run(home, &["position", "show", save_arg, "--actor", actor]);
+    let original_bytes = fs::read(&save).unwrap();
+    let x = original["pose"]["location"]["x"].as_f64().unwrap();
+    let yaw = original["pose"]["rotation"]["yaw"].as_f64().unwrap();
+    let draft = home.join("reverted-pose.json");
+    let draft_arg = draft.to_str().unwrap();
+    run(home, &["draft", "create", draft_arg, "--target", save_arg]);
+    run(
+        home,
+        &[
+            "position",
+            "set",
+            save_arg,
+            "--actor",
+            actor,
+            "--x",
+            &(x + 100.0).to_string(),
+            "--yaw",
+            &(yaw + 15.0).to_string(),
+            "--draft",
+            draft_arg,
+        ],
+    );
+    let before_preview = fs::read(&draft).unwrap();
+    run(
+        home,
+        &[
+            "position",
+            "set",
+            save_arg,
+            "--actor",
+            actor,
+            "--x",
+            &x.to_string(),
+            "--draft",
+            draft_arg,
+            "--dry-run",
+        ],
+    );
+    assert_eq!(fs::read(&draft).unwrap(), before_preview);
+    for (flag, value) in [("--x", x), ("--yaw", yaw)] {
+        run(
+            home,
+            &[
+                "position",
+                "set",
+                save_arg,
+                "--actor",
+                actor,
+                flag,
+                &value.to_string(),
+                "--draft",
+                draft_arg,
+            ],
+        );
+    }
+    let staged = run(home, &["draft", "show", draft_arg]);
+    for (leaf, path) in [("location", "locationPath"), ("rotation", "rotationPath")] {
+        let edit = staged["edits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|edit| edit["value"]["path"] == original["pose"][path])
+            .unwrap();
+        assert_eq!(edit["value"]["value"], original["pose"][leaf]);
+    }
+    assert_eq!(fs::read(&save).unwrap(), original_bytes);
+    assert_eq!(run(home, &["draft", "apply", draft_arg])["complete"], true);
+    let applied = run(home, &["position", "show", save_arg, "--actor", actor]);
+    assert_eq!(applied["pose"], original["pose"]);
+}
+
+#[test]
 fn mixed_case_pending_placement_note_survives_a_later_move_without_stay() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
