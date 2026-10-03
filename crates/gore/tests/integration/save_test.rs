@@ -2622,6 +2622,140 @@ fn hero_transform_raw_collisions_reject_core_writes_and_keep_staged_drafts() {
 }
 
 #[test]
+fn repeated_player_fields_refuse_publication_and_allow_disjoint_components() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let original = fs::read(&save).unwrap();
+    let hash = gore_save::api::file_sha1(&save).unwrap();
+    let draft = home.join("overlap.json");
+    let request = home.join("request.json");
+    let base =
+        json!({"path":"private.player.setAttribute","value":{"id":"Strength","baseValue":20}});
+    let current =
+        json!({"path":"private.player.setAttribute","value":{"id":"Strength","currentValue":21}});
+    let location =
+        json!({"path":"private.player.setTransform","value":{"location":{"x":1,"y":2,"z":3}}});
+    let rotation = json!({"path":"private.player.setTransform","value":{"rotation":{"pitch":4,"yaw":5,"roll":6}}});
+    let pairs = [
+        (
+            json!({"path":"private.player.setPlayerName","value":"First player"}),
+            json!({"path":"private.player.setPlayerName","value":{"name":"Second player"}}),
+        ),
+        (
+            json!({"path":"private.profile.setProfileName","value":"First profile"}),
+            json!({"path":"private.profile.setProfileName","value":{"name":"Second profile"}}),
+        ),
+        (
+            base.clone(),
+            json!({"path":"private.player.setAttribute","value":{"id":"Strength","value":22}}),
+        ),
+        (
+            current.clone(),
+            json!({"path":"private.player.setAttribute","value":{"id":"Strength","currentValue":23}}),
+        ),
+        (
+            location.clone(),
+            json!({"path":"private.player.setTransform","value":{"location":{"x":7,"y":8,"z":9}}}),
+        ),
+        (
+            rotation.clone(),
+            json!({"path":"private.player.setTransform","value":{"location":{"x":7,"y":8,"z":9},"rotation":{"pitch":10,"yaw":11,"roll":12}}}),
+        ),
+    ];
+    for (first, second) in pairs {
+        // Start-save resources omit private user names. Valid name writes and
+        // duplicate refusal use the core's existing synthetic name fixtures.
+        if first["path"] != "private.player.setPlayerName"
+            && first["path"] != "private.profile.setProfileName"
+        {
+            for edit in [&first, &second] {
+                execute_core(
+                    "apply_edits",
+                    json!({"path":save,"edits":[edit],"dryRun":true}),
+                );
+                assert_eq!(fs::read(&save).unwrap(), original);
+            }
+        }
+        for edits in [vec![first.clone(), second.clone()], vec![second, first]] {
+            for command in ["plan_edits", "write_save", "apply_edits"] {
+                for dry in [false, true] {
+                    let payload = json!({"path":save,"edits":edits,"dryRun":dry,"backup":true});
+                    let error = gore_save::api::execute(&gore_save::api::Request {
+                        command: command.into(),
+                        payload: payload.clone(),
+                    })
+                    .unwrap_err();
+                    assert!(
+                        matches!(
+                            error,
+                            gore_save::CoreError::PlanConflict {
+                                kind: "property",
+                                ..
+                            } | gore_save::CoreError::UnsupportedEdit(_)
+                        ),
+                        "{error}"
+                    );
+                    if command == "apply_edits" {
+                        fs::write(
+                            &request,
+                            serde_json::to_vec(&json!({"command":command,"payload":payload}))
+                                .unwrap(),
+                        )
+                        .unwrap();
+                        let error = run_failure(
+                            home,
+                            &["core", "exec", "--request-file", request.to_str().unwrap()],
+                        );
+                        assert_eq!(error["code"], "PLAN_CONFLICT", "{error}");
+                    }
+                    assert_eq!(fs::read(&save).unwrap(), original);
+                    assert!(!home.join("goresave_backups").exists());
+                }
+            }
+            let pending = serde_json::to_vec(&json!({"format":"gore.save.draft.v1","path":save.canonicalize().unwrap(),"expectedSha1":hash,"edits":edits})).unwrap();
+            fs::write(&draft, &pending).unwrap();
+            for flags in [vec!["validate"], vec!["apply"], vec!["apply", "--dry-run"]] {
+                let mut args = vec!["draft", flags[0], draft.to_str().unwrap()];
+                args.extend_from_slice(&flags[1..]);
+                let error = run_failure(home, &args);
+                assert!(
+                    error.to_string().contains("pending edit conflict"),
+                    "{error}"
+                );
+                assert_eq!(fs::read(&draft).unwrap(), pending);
+                assert_eq!(fs::read(&save).unwrap(), original);
+                assert!(!home.join("goresave_backups").exists());
+            }
+        }
+    }
+    let result = execute_core(
+        "apply_edits",
+        json!({"path":save,"edits":[base,current,location,rotation],"backup":false}),
+    );
+    assert_eq!(result["complete"], true, "{result}");
+    assert_eq!(result["committed"], json!([0, 1, 2, 3]));
+    let inspect = execute_core("inspect_save", json!({"path":save,"includePrivate":true}));
+    let attributes = inspect["private"]["player"]["attributes"]
+        .as_array()
+        .unwrap();
+    let strength = attributes
+        .iter()
+        .find(|row| row["id"] == "Strength")
+        .unwrap();
+    assert_eq!(strength["baseValue"], 20.0);
+    assert_eq!(strength["currentValue"], 21.0);
+    let transform = &inspect["private"]["player"]["transform"];
+    assert_eq!(transform["location"], json!({"x":1.0,"y":2.0,"z":3.0}));
+    assert_eq!(
+        transform["rotation"],
+        json!({"pitch":4.0,"yaw":5.0,"roll":6.0})
+    );
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
 fn duplicate_public_renames_preserve_save_profile_and_manual_drafts() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

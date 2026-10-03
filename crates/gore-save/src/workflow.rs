@@ -280,14 +280,21 @@ pub fn plan(raw: &[Value]) -> Result<Vec<Vec<usize>>, CoreError> {
     }
     for (i, edit) in edits.iter().enumerate() {
         for j in i + 1..edits.len() {
-            if targets[i].is_some() && targets[i] == targets[j] {
-                let (description, key) = targets[i].as_ref().unwrap();
+            let overlap = if targets[i].is_some() && targets[i] == targets[j] {
+                targets[i].clone()
+            } else {
+                specs[i]
+                    .as_ref()
+                    .zip(specs[j].as_ref())
+                    .and_then(|(first, second)| crate::player_field_overlap(first, second))
+            };
+            if let Some((description, key)) = overlap {
                 let key = key
                     .split(['\u{1f}', '\u{1e}'])
                     .filter(|part| !part.is_empty())
                     .collect::<Vec<_>>()
                     .join(" › ");
-                let path = [PathSeg::Name((*description).into()), PathSeg::Name(key)];
+                let path = [PathSeg::Name(description.into()), PathSeg::Name(key)];
                 return Err(pending("property", Some(&path)));
             }
             if specs[i]
@@ -680,6 +687,81 @@ pub fn apply_with_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repeated_private_names_are_refused_in_either_order() {
+        for path in [
+            "private.player.setPlayerName",
+            "private.profile.setProfileName",
+        ] {
+            let first = json!({"path":path,"value":"First name"});
+            let second = json!({"path":path,"value":{"name":"Second name"}});
+            for edit in [&first, &second] {
+                assert!(plan(&[edit.clone()]).is_ok());
+            }
+            for edits in [
+                vec![first.clone(), second.clone()],
+                vec![second, first.clone()],
+                vec![first.clone(), first],
+            ] {
+                assert!(
+                    matches!(
+                        plan(&edits),
+                        Err(CoreError::PlanConflict {
+                            kind: "property",
+                            ..
+                        })
+                    ),
+                    "{edits:?}"
+                );
+            }
+        }
+        let public = json!({"path":"public.m_PlayerSaveName","value":"Save name"});
+        let player = json!({"path":"private.player.setPlayerName","value":"Player name"});
+        let profile = json!({"path":"private.profile.setProfileName","value":"Profile name"});
+        assert!(plan(&[public, player, profile]).is_ok());
+    }
+    #[test]
+    fn player_components_conflict_only_when_fields_overlap() {
+        let base =
+            json!({"path":"private.player.setAttribute","value":{"id":"Strength","baseValue":20}});
+        let current = json!({"path":"private.player.setAttribute","value":{"id":"Strength","currentValue":21}});
+        let both =
+            json!({"path":"private.player.setAttribute","value":{"id":"Strength","value":22}});
+        let location =
+            json!({"path":"private.player.setTransform","value":{"location":{"x":1,"y":2,"z":3}}});
+        let rotation = json!({"path":"private.player.setTransform","value":{"rotation":{"pitch":4,"yaw":5,"roll":6}}});
+        let transform = json!({"path":"private.player.setTransform","value":{"location":{"x":7,"y":8,"z":9},"rotation":{"pitch":10,"yaw":11,"roll":12}}});
+        for (first, second) in [
+            (base.clone(), base.clone()),
+            (current.clone(), current.clone()),
+            (base.clone(), both.clone()),
+            (current.clone(), both),
+            (location.clone(), location.clone()),
+            (rotation.clone(), rotation.clone()),
+            (location.clone(), transform.clone()),
+            (rotation.clone(), transform),
+        ] {
+            assert!(plan(&[first.clone()]).is_ok());
+            assert!(plan(&[second.clone()]).is_ok());
+            for edits in [vec![first.clone(), second.clone()], vec![second, first]] {
+                assert!(
+                    matches!(
+                        plan(&edits),
+                        Err(CoreError::PlanConflict {
+                            kind: "property",
+                            ..
+                        })
+                    ),
+                    "{edits:?}"
+                );
+            }
+        }
+        assert!(plan(&[base.clone(), current]).is_ok());
+        assert!(plan(&[location.clone(), rotation]).is_ok());
+        let other =
+            json!({"path":"private.player.setAttribute","value":{"id":"Dexterity","baseValue":23}});
+        assert!(plan(&[base, other, location]).is_ok());
+    }
     #[test]
     fn repeated_public_renames_are_refused_before_grouping() {
         let first = json!({"path":"public.m_PlayerSaveName","value":"First name"});

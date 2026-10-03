@@ -1547,6 +1547,47 @@ void main() {
   );
 
   test(
+    'saveAllPending preserves overlapping player and profile fields',
+    () async {
+      const paths = [
+        'private.player.setPlayerName',
+        'private.profile.setProfileName',
+        'private.player.setAttribute',
+        'private.player.setTransform',
+      ];
+      for (final path in paths) {
+        for (final secondFirst in [false, true]) {
+          final core = _RecordingCoreService();
+          final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+          await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+          Object value(int n) => switch (path) {
+            'private.player.setAttribute' => {'id': 'Strength', 'baseValue': n},
+            'private.player.setTransform' => {
+              'location': {'x': n, 'y': 2, 'z': 3},
+            },
+            _ => {'name': 'Name $n'},
+          };
+          final first = <String, Object?>{'path': path, 'value': value(20)};
+          final second = <String, Object?>{'path': path, 'value': value(21)};
+          final firstKey = secondFirst ? 'b-first' : 'a-first';
+          final secondKey = secondFirst ? 'a-second' : 'b-second';
+          notifier.setPendingEdit(firstKey, PendingSaveEdit(edits: [first]));
+          notifier.setPendingEdit(secondKey, PendingSaveEdit(edits: [second]));
+          expect(await notifier.saveAllPending(), isFalse);
+          expect(notifier.state.error, contains('same property'));
+          expect(
+            core.requests.where((r) => r.command == 'write_save'),
+            isEmpty,
+          );
+          expect(notifier.state.pendingEdits, hasLength(2));
+          expect(notifier.state.pendingEdits[firstKey]!.edits, [first]);
+          expect(notifier.state.pendingEdits[secondKey]!.edits, [second]);
+        }
+      }
+    },
+  );
+
+  test(
     'saveAllPending retains conflicting public rename entries without writing',
     () async {
       for (final secondFirst in [false, true]) {

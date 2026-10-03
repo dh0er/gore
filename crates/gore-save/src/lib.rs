@@ -11711,6 +11711,12 @@ fn apply_private_edits(
     }
     for (first_at, first) in edit_specs.iter().enumerate() {
         for (second_at, second) in edit_specs.iter().enumerate().skip(first_at + 1) {
+            if let Some((field, _)) = player_field_overlap(first, second) {
+                return Err(CoreError::UnsupportedEdit(format!(
+                    "{} (edit {first_at}) and {} (edit {second_at}) rewrite the same {field}; save them separately",
+                    edits[first_at].path, edits[second_at].path
+                )));
+            }
             if inventory_count_removal_conflict(first, second) {
                 return Err(CoreError::UnsupportedEdit(format!(
                     "{} (edit {first_at}) and {} (edit {second_at}) change and remove \
@@ -11918,6 +11924,8 @@ fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> 
             .join("\u{1f}")
     }
     match edit {
+        PrivateEdit::PlayerName(_) => Some(("player name", key([skills::HERO, ""]))),
+        PrivateEdit::ProfileName(_) => Some(("profile name", key(["profile", ""]))),
         PrivateEdit::NpcRelationship(relationship) => Some((
             "relationship of that NPC",
             key([relationship.id.as_str(), ""]),
@@ -11963,6 +11971,35 @@ fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> 
                 line.path.as_str(),
             ]),
         )),
+        _ => None,
+    }
+}
+
+/// Partial attribute and transform edits can batch only when their fields are disjoint.
+fn player_field_overlap(first: &PrivateEdit, second: &PrivateEdit) -> Option<(&'static str, String)> {
+    match (first, second) {
+        (PrivateEdit::PlayerAttribute(first), PrivateEdit::PlayerAttribute(second))
+            if first.id == second.id =>
+        {
+            let field = if first.base_value.is_some() && second.base_value.is_some() {
+                "BaseValue"
+            } else if first.current_value.is_some() && second.current_value.is_some() {
+                "CurrentValue"
+            } else {
+                return None;
+            };
+            Some(("player attribute", format!("{}\u{1f}{field}", first.id)))
+        }
+        (PrivateEdit::PlayerTransform(first), PrivateEdit::PlayerTransform(second)) => {
+            let field = if first.location.is_some() && second.location.is_some() {
+                "location"
+            } else if first.rotation.is_some() && second.rotation.is_some() {
+                "rotation"
+            } else {
+                return None;
+            };
+            Some(("player transform", field.into()))
+        }
         _ => None,
     }
 }
@@ -24680,6 +24717,33 @@ mod tests {
         assert!(refs.iter().any(|r| r.value == "None"));
     }
 
+    fn assert_duplicate_private_names_do_not_write(
+        path: &Path,
+        output: &Path,
+        backend: &dyn codec_backend::CodecBackend,
+        edit_path: &str,
+    ) {
+        let original = fs::read(path).unwrap();
+        let exported = fs::read(output).unwrap();
+        let first = json!({"path":edit_path,"value":"First name"});
+        let second = json!({"path":edit_path,"value":{"name":"Second name"}});
+        for edits in [
+            vec![first.clone(), second.clone()],
+            vec![second, first.clone()],
+            vec![first.clone(), first],
+        ] {
+            for target in [None, Some(output)] {
+                let error = write_save_with_codec_backend(path, &edits, true, target, Some(backend))
+                    .unwrap_err();
+                assert!(matches!(error, CoreError::UnsupportedEdit(_)), "{error}");
+                assert!(error.to_string().contains("rewrite the same"), "{error}");
+                assert_eq!(fs::read(path).unwrap(), original);
+                assert_eq!(fs::read(output).unwrap(), exported);
+                assert!(!path.parent().unwrap().join("goresave_backups").exists());
+            }
+        }
+    }
+
     #[test]
     fn write_save_updates_private_player_name_property_only() {
         let dir = tempdir().unwrap();
@@ -24720,6 +24784,12 @@ mod tests {
         let value =
             inspect_save_with_codec_backend(&output_path, true, Some(&backend), None).unwrap();
         assert_eq!(value["private"]["player"]["playerName"], "Nameless");
+        assert_duplicate_private_names_do_not_write(
+            &path,
+            &output_path,
+            &backend,
+            "private.player.setPlayerName",
+        );
         assert_eq!(
             value["private"]["player"]["writable"],
             json!(["private.player.setPlayerName"])
@@ -24770,6 +24840,12 @@ mod tests {
         let value =
             inspect_save_with_codec_backend(&output_path, true, Some(&backend), None).unwrap();
         assert_eq!(value["private"]["player"]["profileName"], "goresave");
+        assert_duplicate_private_names_do_not_write(
+            &path,
+            &output_path,
+            &backend,
+            "private.profile.setProfileName",
+        );
         assert_eq!(
             value["private"]["player"]["writable"],
             json!(["private.profile.setProfileName"])
