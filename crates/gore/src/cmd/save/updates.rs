@@ -255,6 +255,10 @@ pub(super) fn run(verb: &str, o: &Options) -> Result<Value> {
     }
     let xml = String::from_utf8(curl(FEED, None, 1024 * 1024)?)?;
     let release = parse(&xml)?;
+    apply_release(verb, o, release)
+}
+
+fn apply_release(verb: &str, o: &Options, release: Release) -> Result<Value> {
     let page = format!(
         "https://github.com/dh0er/gore/releases/tag/gore-save-editor-v{}",
         release.version
@@ -264,7 +268,9 @@ pub(super) fn run(verb: &str, o: &Options) -> Result<Value> {
         && (o.kind.as_deref() == Some("installed")
             || (o.target.is_some() && o.kind.as_deref() != Some("portable")))
     {
-        bail!("installed target must contain the Editor's unins000.exe; use --kind portable for a portable copy");
+        bail!(
+            "installed target must contain the Editor's unins000.exe; use --kind portable for a portable copy"
+        );
     }
     let current = include_str!("../../../../../apps/save-editor/pubspec.yaml")
         .lines()
@@ -272,12 +278,14 @@ pub(super) fn run(verb: &str, o: &Options) -> Result<Value> {
         .map(str::trim)
         .unwrap_or("unknown");
     let numbers = |v: &str| {
-        v.split('+')
-            .next()
-            .unwrap_or(v)
-            .split('.')
-            .map(|s| s.parse::<u32>().unwrap_or(0))
-            .collect::<Vec<_>>()
+        let mut parts = [0u32; 4];
+        for (part, value) in parts
+            .iter_mut()
+            .zip(v.split('+').next().unwrap_or(v).split('.'))
+        {
+            *part = value.parse().unwrap_or(0);
+        }
+        parts
     };
     let available = numbers(&release.version) > numbers(current);
     let mut result = json!({"updateAvailable":available,"product":"save-editor","bundledEditorVersion":current,"latestVersion":release.version,"release":page,"feed":FEED,"installer":release.url,"installedTarget":installed,"mode":if installed.is_some(){"installed"}else{"portable"},"dryRun":o.dry_run});
@@ -288,6 +296,10 @@ pub(super) fn run(verb: &str, o: &Options) -> Result<Value> {
             display::open(Path::new(&page))?;
         }
         result["action"] = json!("download-page");
+        return Ok(result);
+    }
+    if verb == "install" && !available {
+        result["action"] = json!("up-to-date");
         return Ok(result);
     }
     if verb != "install" || o.dry_run {
@@ -318,6 +330,63 @@ pub(super) fn run(verb: &str, o: &Options) -> Result<Value> {
 mod tests {
     use super::*;
     #[test]
+    fn installed_updates_skip_older_and_equal_feeds_before_download_or_execution() {
+        let temp = tempfile::tempdir().unwrap();
+        let uninstaller = temp.path().join("unins000.exe");
+        fs::write(&uninstaller, b"existing installation").unwrap();
+        let options = Options {
+            target: Some(temp.path().to_owned()),
+            kind: Some("installed".into()),
+            ..Options::default()
+        };
+        let current = include_str!("../../../../../apps/save-editor/pubspec.yaml")
+            .lines()
+            .find_map(|s| s.strip_prefix("version:"))
+            .unwrap()
+            .trim();
+        let current = current.split('+').next().unwrap();
+        let release = |version: &str| Release {
+            version: version.into(),
+            // A download attempt would fail: old/equal feeds must return before
+            // inspecting either the installer URL or its signature.
+            url: "must-not-be-downloaded".into(),
+            length: 1,
+            signature: "not-a-signature".into(),
+        };
+        for version in [
+            "0.0.0".to_owned(),
+            current.to_owned(),
+            format!("{current}.0"),
+        ] {
+            for dry_run in [false, true] {
+                let options = Options {
+                    dry_run,
+                    ..options.clone()
+                };
+                let result = apply_release("install", &options, release(&version)).unwrap();
+                assert_eq!(result["updateAvailable"], false);
+                assert_eq!(result["action"], "up-to-date");
+                assert_eq!(result["mode"], "installed");
+                assert_eq!(fs::read(&uninstaller).unwrap(), b"existing installation");
+                assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+            }
+        }
+        let simulated = Options {
+            dry_run: true,
+            ..options
+        };
+        let newer = apply_release("install", &simulated, release("9999.0.0")).unwrap();
+        assert_eq!(newer["updateAvailable"], true);
+        assert!(newer.get("action").is_none());
+        let portable = Options {
+            kind: Some("portable".into()),
+            ..simulated
+        };
+        let manual = apply_release("install", &portable, release(current)).unwrap();
+        assert_eq!(manual["action"], "download-page");
+        assert_eq!(manual["updateAvailable"], false);
+    }
+    #[test]
     fn native_verification_matches_openssl_and_rejects_modified_installer() {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/winsparkle-signature.json"
@@ -327,16 +396,18 @@ mod tests {
         let signature = fixture["signature"].as_str().unwrap();
         verify_dsa(b"abc", key, signature).unwrap();
         assert!(verify_dsa(b"abd", key, signature).is_err());
-        assert!(verify_dsa(
-            b"abc",
-            include_str!("../../../../../apps/save-editor/dsa_pub.pem"),
-            signature
-        )
-        .is_err());
+        assert!(
+            verify_dsa(
+                b"abc",
+                include_str!("../../../../../apps/save-editor/dsa_pub.pem"),
+                signature
+            )
+            .is_err()
+        );
     }
     #[test]
     fn appcast_cannot_redirect_installation_to_another_product_or_unsigned_file() {
-        let xml="<sparkle:version>1.4.1</sparkle:version><enclosure url=\"https://github.com/dh0er/gore/releases/download/gore-save-editor-v1.4.1/gore-save-editor-1.4.1-setup.exe\" length=\"3\" sparkle:dsaSignature=\"YWJj\"/>";
+        let xml = "<sparkle:version>1.4.1</sparkle:version><enclosure url=\"https://github.com/dh0er/gore/releases/download/gore-save-editor-v1.4.1/gore-save-editor-1.4.1-setup.exe\" length=\"3\" sparkle:dsaSignature=\"YWJj\"/>";
         let release = parse(xml).unwrap();
         assert_eq!(release.version, "1.4.1");
         assert!(parse(&xml.replace("/gore-save-editor-v", "/gore-mod-studio-v")).is_err());
