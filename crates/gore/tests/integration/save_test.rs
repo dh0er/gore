@@ -4368,6 +4368,112 @@ fn npc_restores_require_the_original_pinned_routine_and_preserve_its_note() {
 }
 
 #[test]
+fn lock_reads_follow_saved_names_and_include_uncatalogued_unlocks() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    for name in [
+        "AMR_Storage_Room_Door",
+        "AbandonedMine_Fence_Door",
+        "Modded_Lock_CLI_Test",
+    ] {
+        run(
+            home,
+            &["locks", "unlock", save.to_str().unwrap(), "--lock", name],
+        );
+        let shown = run(
+            home,
+            &["locks", "show", save.to_str().unwrap(), "--lock", name],
+        );
+        assert_eq!(shown["total"], 1, "{shown}");
+        assert_eq!(shown["locks"][0]["unlocked"], true, "{name}");
+        assert!(
+            run(
+                home,
+                &[
+                    "locks",
+                    "list",
+                    save.to_str().unwrap(),
+                    "--state",
+                    "unlocked",
+                    "--all"
+                ]
+            )["locks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["n"] == name)
+        );
+        run(
+            home,
+            &["locks", "lock", save.to_str().unwrap(), "--lock", name],
+        );
+        let shown = run(
+            home,
+            &["locks", "show", save.to_str().unwrap(), "--lock", name],
+        );
+        if name == "Modded_Lock_CLI_Test" {
+            assert_eq!(shown["total"], 0);
+        } else {
+            assert_eq!(shown["locks"][0]["unlocked"], false);
+        }
+    }
+}
+
+#[test]
+fn exact_data_reads_return_only_the_requested_native_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let property = json!(["m_GenericData", "{GameTime}", "CurrentTime", "TotalSeconds"]);
+    let path = home.join("path.json");
+    fs::write(&path, serde_json::to_vec(&property).unwrap()).unwrap();
+    run(
+        home,
+        &[
+            "data",
+            "set",
+            save.to_str().unwrap(),
+            "--path-file",
+            path.to_str().unwrap(),
+            "--value-json",
+            "123456.0",
+        ],
+    );
+    let before = fs::read(&save).unwrap();
+    let output = Command::cargo_bin("gore")
+        .unwrap()
+        .timeout(std::time::Duration::from_secs(60))
+        .env("LOCALAPPDATA", home)
+        .env("APPDATA", home)
+        .env("XDG_DATA_HOME", home)
+        .env("GORE_DISABLE_GAME_AUTODETECT", "1")
+        .args([
+            "save",
+            "data",
+            "show",
+            save.to_str().unwrap(),
+            "--path-file",
+            path.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let data: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(data["ok"], true);
+    let data = &data["data"];
+    assert_eq!(data["total"], 1);
+    assert_eq!(data["results"][0]["path"], property);
+    assert_eq!(data["results"][0]["editValue"], 123456.0);
+    assert_eq!(fs::read(&save).unwrap(), before);
+}
+
+#[test]
 fn exact_npc_reads_filter_before_pagination() {
     let temp = tempfile::tempdir().unwrap();
     let save = fixture();

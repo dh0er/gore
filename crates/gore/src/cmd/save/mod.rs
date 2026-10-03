@@ -1223,10 +1223,19 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 .clone();
             for row in &mut rows {
                 row["unlocked"] = json!(unlocked.iter().any(|id| id.as_str().is_some_and(|s| {
-                    row["l"]
+                    row["n"]
                         .as_str()
                         .is_some_and(|id| s.eq_ignore_ascii_case(id))
                 })));
+            }
+            for name in unlocked.iter().filter_map(Value::as_str) {
+                if !rows.iter().any(|row| {
+                    row["n"]
+                        .as_str()
+                        .is_some_and(|known| known.eq_ignore_ascii_case(name))
+                }) {
+                    rows.push(json!({"n":name,"unlocked":true,"catalogued":false}));
+                }
             }
             data["locks"] = json!(rows);
             let mut selected = o.clone();
@@ -1276,6 +1285,7 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             p["includeNodes"] = json!(true);
             if v == "show" {
                 let path = typed_path(o)?;
+                p["propertyPath"] = path.clone();
                 let mut data = paged(
                     "search_typed_properties",
                     p,

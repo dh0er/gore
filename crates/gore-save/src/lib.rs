@@ -7713,6 +7713,7 @@ impl SaveDataNode {
 
 struct SaveDataRequest<'a> {
     source: &'a str,
+    property_path: Option<&'a [String]>,
     query_terms: Vec<String>,
     type_filter: Option<&'a str>,
     kind_filter: Option<&'a str>,
@@ -7777,18 +7778,20 @@ impl SaveDataPage {
         } else {
             self.limit.saturating_sub(self.results.len())
         };
-        let browsed = properties::browse_properties(
-            root,
-            &properties::PropertyBrowseOptions {
-                query: request.query_terms.join(" ").as_str(),
-                type_filter: request.type_filter,
-                kind_filter: request.kind_filter,
-                editable_filter: request.editable_filter,
-                offset: local_offset,
-                limit: local_limit,
-                allow_edits,
-            },
-        );
+        let query = request.query_terms.join(" ");
+        let options = properties::PropertyBrowseOptions {
+            query: &query,
+            type_filter: request.type_filter,
+            kind_filter: request.kind_filter,
+            editable_filter: request.editable_filter,
+            offset: local_offset,
+            limit: local_limit,
+            allow_edits,
+        };
+        let browsed = match request.property_path {
+            Some(path) => properties::browse_property_path(root, &options, path),
+            None => properties::browse_properties(root, &options),
+        };
         self.total += browsed.total;
         *self
             .stats
@@ -7834,6 +7837,12 @@ fn merge_browse_counts(target: &mut BTreeMap<String, usize>, source: BTreeMap<St
 }
 
 fn save_data_node_matches(node: &SaveDataNode, request: &SaveDataRequest<'_>) -> bool {
+    if request
+        .property_path
+        .is_some_and(|path| path != node.path.as_slice())
+    {
+        return false;
+    }
     if request.editable_filter == Some(true) {
         return false;
     }
@@ -7918,8 +7927,19 @@ fn browse_save_data(
         Some(Value::String(value)) if value == "readOnly" => Some(false),
         _ => None,
     };
+    let property_path = payload
+        .get("propertyPath")
+        .filter(|value| !value.is_null())
+        .map(|value| serde_json::from_value::<Vec<String>>(value.clone()))
+        .transpose()
+        .map_err(|error| {
+            CoreError::InvalidRequest(format!(
+                "propertyPath must be an array of path strings: {error}"
+            ))
+        })?;
     let request = SaveDataRequest {
         source,
+        property_path: property_path.as_deref(),
         query_terms: query.split_whitespace().map(str::to_lowercase).collect(),
         type_filter: payload.get("type").and_then(Value::as_str),
         kind_filter: payload.get("kind").and_then(Value::as_str),
@@ -25418,6 +25438,54 @@ mod tests {
             json!(["public", "private"])
         );
         let rows = response["results"].as_array().unwrap();
+        // Exact-path requests retain the same IDs, editability and values as
+        // the complete browser, without paginating unrelated nodes.
+        for row in rows {
+            let exact = search_typed_properties(
+                &path,
+                &json!({
+                    "includeNodes":true,"source":row["source"],
+                    "propertyPath":row["path"],"limit":1000
+                }),
+                Some(&backend),
+            )
+            .unwrap();
+            let expected = rows
+                .iter()
+                .filter(|other| {
+                    other["source"] == row["source"] && other["path"] == row["path"]
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(exact["results"], json!(expected));
+            assert_eq!(exact["total"], expected.len());
+        }
+        let roots = rows
+            .iter()
+            .filter(|row| row["path"] == json!([]))
+            .cloned()
+            .collect::<Vec<_>>();
+        let root_page = search_typed_properties(
+            &path,
+            &json!({"includeNodes":true,"propertyPath":[],"offset":1,"limit":1}),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(root_page["total"], roots.len());
+        assert_eq!(
+            root_page["results"],
+            json!(roots.iter().skip(1).take(1).cloned().collect::<Vec<_>>())
+        );
+        for invalid in [json!("Health"), json!([4])] {
+            assert!(matches!(
+                search_typed_properties(
+                    &path,
+                    &json!({"includeNodes":true,"propertyPath":invalid}),
+                    Some(&backend),
+                ),
+                Err(CoreError::InvalidRequest(_))
+            ));
+        }
         assert!(rows.iter().any(|row| row["source"] == "metadata"));
         assert!(rows.iter().any(|row| row["source"] == "public"));
         assert!(rows.iter().any(|row| row["kind"] == "array"));
