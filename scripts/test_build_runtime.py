@@ -360,6 +360,10 @@ class AppLocalMsvcRuntimeTest(unittest.TestCase):
             fixture.patched(),
             mock.patch.object(gore_build, "build_project"),
             mock.patch.object(gore_build, "stage_companions"),
+            mock.patch.object(gore_build, "_stage_standalone_compiler_bundle"),
+            mock.patch.object(gore_build, "_standalone_compiler_signing_exclusions", return_value=()),
+            mock.patch.object(gore_build, "_verify_staged_product_host_catalogs"),
+            mock.patch.object(gore_build, "_verify_staged_standalone_compiler_bundle"),
             mock.patch.object(gore_build, "read_version", return_value=version),
             mock.patch.object(gore_build, "sign_paths"),
             mock.patch.object(
@@ -389,6 +393,10 @@ class AppLocalMsvcRuntimeTest(unittest.TestCase):
             fixture.patched(),
             mock.patch.object(gore_build, "build_project"),
             mock.patch.object(gore_build, "stage_companions"),
+            mock.patch.object(gore_build, "_stage_standalone_compiler_bundle"),
+            mock.patch.object(gore_build, "_standalone_compiler_signing_exclusions", return_value=()),
+            mock.patch.object(gore_build, "_verify_staged_product_host_catalogs"),
+            mock.patch.object(gore_build, "_verify_staged_standalone_compiler_bundle"),
             mock.patch.object(gore_build, "read_version", return_value=version),
             mock.patch.object(gore_build, "sign_paths"),
         ):

@@ -753,4 +753,32 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get close => 'Schließen';
+
+  @override
+  String get scriptUpdateConfirmationTitle =>
+      'Script-Änderungen nach Spielupdate prüfen';
+
+  @override
+  String get scriptUpdateConfirmationBody =>
+      'Das Spielupdate betrifft Script-Module, die auch diese Mods liefern oder bearbeiten. Ein Neubau aus den mitgelieferten Mod-Quellen kann Spielkorrekturen überschreiben oder veraltete Spiellogik wiederherstellen. Fahre nur fort, wenn du dieses Risiko akzeptierst.';
+
+  @override
+  String get scriptUpdateConfirmationAction => 'Neu bauen und anwenden';
+
+  @override
+  String scriptUpdateConfirmationModule(String modName, String module) {
+    return '$modName: $module';
+  }
+
+  @override
+  String get scriptUpdateModuleChanged =>
+      'Das Originalmodul des Spiels wurde verändert.';
+
+  @override
+  String get scriptUpdateModuleMissing =>
+      'Das Originalmodul ist im Spiel nicht mehr vorhanden.';
+
+  @override
+  String get scriptUpdateModuleNowExists =>
+      'Das Spiel enthält inzwischen ein Modul mit dem gleichen Namen wie das neue Modul dieser Mod.';
 }

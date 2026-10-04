@@ -85,6 +85,7 @@ class StatusNotifier extends StateNotifier<StatusState> {
   final MgrFfi _mgr;
   int _statusGeneration = 0;
   String? _selectedRoot;
+  int _rootSelectionGeneration = 0;
   int _activeStatusReads = 0;
   bool _mutationInFlight = false;
   _QueuedRefresh? _queuedRefresh;
@@ -124,10 +125,43 @@ class StatusNotifier extends StateNotifier<StatusState> {
 
   /// Apply the current loadout and establish status again before settling.
   /// A second physical mutation is refused while this exclusive lane is busy.
-  Future<void> apply(String gameRoot) => _runMutation(
+  Future<void> apply(
+    String gameRoot, {
+    Future<bool> Function(MgrScriptRebuildConfirmation)? confirmScriptRebuild,
+  }) => _runMutation(
     gameRoot,
     clearStudioAtStart: true,
-    command: () => _mgr.apply(gameRoot),
+    command: () async {
+      final selection = _rootSelectionGeneration;
+      String? token;
+      while (true) {
+        try {
+          return await _mgr.apply(gameRoot, scriptRebuildConfirmation: token);
+        } on MgrFfiException catch (error) {
+          final details = error.details;
+          if (error.code != 'SCRIPT_REBUILD_CONFIRMATION_REQUIRED' ||
+              details is! MgrScriptRebuildConfirmation ||
+              confirmScriptRebuild == null) {
+            rethrow;
+          }
+          if (!mounted ||
+              _selectedRoot != gameRoot ||
+              selection != _rootSelectionGeneration) {
+            return null;
+          }
+          final confirmed = await confirmScriptRebuild(details);
+          // The exclusive lane remains held while the dialog is pending. A
+          // root switch (including A -> B -> A) invalidates this approval.
+          if (!confirmed ||
+              !mounted ||
+              _selectedRoot != gameRoot ||
+              selection != _rootSelectionGeneration) {
+            return null;
+          }
+          token = details.token;
+        }
+      }
+    },
   );
 
   /// Remove everything the manager deployed and establish status again before
@@ -235,6 +269,7 @@ class StatusNotifier extends StateNotifier<StatusState> {
     } on Object catch (error) {
       commandError = error;
     }
+    if (_settleDisposedMutation()) return;
 
     // A native write can fail after touching disk. Always inspect the exact
     // mutation root afterward; the command error remains the user-facing
@@ -246,6 +281,7 @@ class StatusNotifier extends StateNotifier<StatusState> {
     } on Object catch (error) {
       postflightError = error;
     }
+    if (_settleDisposedMutation()) return;
 
     final queued = _queuedRefresh;
     final stillSelected = _selectedRoot == gameRoot;
@@ -308,6 +344,7 @@ class StatusNotifier extends StateNotifier<StatusState> {
 
   void _selectRoot(String? gameRoot) {
     if (_selectedRoot == gameRoot) return;
+    _rootSelectionGeneration++;
     _selectedRoot = gameRoot;
     // Status, reports, and the transient studio flag are installation-bound.
     state = state.copyWith(
@@ -319,6 +356,19 @@ class StatusNotifier extends StateNotifier<StatusState> {
       gameRoot: gameRoot,
       clearGameRoot: gameRoot == null,
     );
+  }
+
+  bool _settleDisposedMutation() {
+    if (mounted) return false;
+    _mutationInFlight = false;
+    final queued = _queuedRefresh;
+    _queuedRefresh = null;
+    if (queued != null) {
+      for (final waiter in queued.waiters) {
+        if (!waiter.isCompleted) waiter.complete();
+      }
+    }
+    return true;
   }
 
   void _invalidateStatusReads() {

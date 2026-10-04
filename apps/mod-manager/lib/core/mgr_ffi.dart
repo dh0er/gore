@@ -121,8 +121,14 @@ class MgrFfi {
   }
 
   /// Declaratively apply the current loadout to the game install.
-  Future<ApplyReportView> apply(String gameRoot) async {
-    final r = await _call('mgr_apply', {'game_root': gameRoot});
+  Future<ApplyReportView> apply(
+    String gameRoot, {
+    String? scriptRebuildConfirmation,
+  }) async {
+    final r = await _call('mgr_apply', {
+      'game_root': gameRoot,
+      'script_rebuild_confirmation': ?scriptRebuildConfirmation,
+    });
     final report = r['report'];
     return report is Map
         ? ApplyReportView.fromJson(report.cast<String, Object?>())
@@ -246,8 +252,53 @@ MgrFfiErrorDetails? _mgrErrorDetails(String code, Object? raw) {
   return switch (code) {
     'IMPORT_DUPLICATE_AMBIGUOUS' => _duplicateImportDetails(details),
     'IMPORT_IDENTITY_CONFLICT' => _identityConflictDetails(details),
+    'SCRIPT_REBUILD_CONFIRMATION_REQUIRED' => _scriptRebuildDetails(details),
     _ => null,
   };
+}
+
+MgrScriptRebuildConfirmation? _scriptRebuildDetails(
+  Map<String, Object?> details,
+) {
+  final token = details['token'];
+  final rawWarnings = details['warnings'];
+  if (token is! String ||
+      token.trim().isEmpty ||
+      rawWarnings is! List ||
+      rawWarnings.isEmpty) {
+    return null;
+  }
+  final warnings = <MgrScriptModuleUpdateWarning>[];
+  for (final raw in rawWarnings) {
+    if (raw is! Map || raw.keys.any((key) => key is! String)) return null;
+    for (final field in [
+      'mod_id',
+      'mod_name',
+      'module',
+      'reason',
+      'original_sha256',
+    ]) {
+      if (raw[field] is! String || (raw[field]! as String).isEmpty) return null;
+    }
+    if (!raw.containsKey('current_sha256') ||
+        (raw['current_sha256'] != null && raw['current_sha256'] is! String)) {
+      return null;
+    }
+    warnings.add(
+      MgrScriptModuleUpdateWarning(
+        modId: raw['mod_id']! as String,
+        modName: raw['mod_name']! as String,
+        module: raw['module']! as String,
+        reason: raw['reason']! as String,
+        originalSha256: raw['original_sha256']! as String,
+        currentSha256: raw['current_sha256'] as String?,
+      ),
+    );
+  }
+  return MgrScriptRebuildConfirmation(
+    token: token,
+    warnings: List.unmodifiable(warnings),
+  );
 }
 
 MgrImportDuplicateAmbiguousDetails? _duplicateImportDetails(
@@ -373,6 +424,34 @@ class MgrImportOutcome {
 
 sealed class MgrFfiErrorDetails {
   const MgrFfiErrorDetails();
+}
+
+class MgrScriptRebuildConfirmation extends MgrFfiErrorDetails {
+  const MgrScriptRebuildConfirmation({
+    required this.token,
+    required this.warnings,
+  });
+
+  final String token;
+  final List<MgrScriptModuleUpdateWarning> warnings;
+}
+
+class MgrScriptModuleUpdateWarning {
+  const MgrScriptModuleUpdateWarning({
+    required this.modId,
+    required this.modName,
+    required this.module,
+    required this.reason,
+    required this.originalSha256,
+    required this.currentSha256,
+  });
+
+  final String modId;
+  final String modName;
+  final String module;
+  final String reason;
+  final String originalSha256;
+  final String? currentSha256;
 }
 
 sealed class MgrImportRefusalDetails extends MgrFfiErrorDetails {

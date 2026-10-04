@@ -10,13 +10,13 @@
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use std::io::Write as _;
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use gore_mod::mgr::{
     self,
     analyze::{Conflict, Severity},
-    apply::undeploy_manager_only,
+    apply::{undeploy_manager_only, ApplyOptions, ApplyReport},
     import,
     model::FootprintCoverage,
     status::ManagerStatus,
@@ -126,6 +126,9 @@ pub enum MgrAction {
         library: Option<PathBuf>,
         #[arg(long)]
         loadout: Option<PathBuf>,
+        /// Exact script-update warning token explicitly approved for this apply
+        #[arg(long)]
+        script_update_confirmation: Option<String>,
     },
     /// Show whether the game is in sync with the target loadout
     Status {
@@ -367,12 +370,18 @@ pub fn run(action: MgrAction) -> Result<()> {
             game,
             library,
             loadout,
+            script_update_confirmation,
         } => {
             let game = gore_loc::config::game_root(game)?;
             let (lib, ld_path) = store_paths(library, loadout)?;
 
             let store = StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let report = match store.apply(&game) {
+            let report = match apply_with_script_confirmation(
+                |options| store.apply_with_options(&game, options),
+                script_update_confirmation,
+                &mut std::io::stdin().lock(),
+                &mut std::io::stderr().lock(),
+            ) {
                 Ok(r) => r,
                 Err(e) => {
                     let msg = e.to_string();
@@ -450,6 +459,60 @@ pub fn run(action: MgrAction) -> Result<()> {
                 println!("reset: nothing was deployed");
             }
             Ok(())
+        }
+    }
+}
+
+/// Keep approval scoped to Native's exact warning token. A changed token on the
+/// retry needs a new review; an explicit noninteractive token never becomes a
+/// blanket permission or falls back to an interactive prompt.
+fn apply_with_script_confirmation(
+    mut apply: impl FnMut(&ApplyOptions) -> std::result::Result<ApplyReport, gore_mod::ModError>,
+    confirmation: Option<String>,
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+) -> Result<ApplyReport> {
+    let mut options = ApplyOptions {
+        script_rebuild_confirmation: confirmation,
+    };
+    let interactive = options.script_rebuild_confirmation.is_none();
+    loop {
+        match apply(&options) {
+            Ok(report) => return Ok(report),
+            Err(gore_mod::ModError::ScriptRebuildConfirmationRequired(confirmation)) => {
+                writeln!(
+                    output,
+                    "Warning: the game update affects script modules supplied or changed by these mods:"
+                )?;
+                for warning in &confirmation.warnings {
+                    let change = if warning.reason == "added_module_now_exists" {
+                        "the game now contains a module with the same name as this mod's new module"
+                    } else if warning.current_sha256.is_some() {
+                        "the original game module changed"
+                    } else {
+                        "the original game module is no longer present"
+                    };
+                    writeln!(
+                        output,
+                        "  {} ({}) — {}: {change}",
+                        warning.mod_name, warning.mod_id, warning.module
+                    )?;
+                }
+                writeln!(output, "Rebuilding from the mod's sources can overwrite game fixes or restore outdated game logic.")?;
+                writeln!(output, "Exact confirmation token: {}", confirmation.token)?;
+                if !interactive {
+                    anyhow::bail!("script-update confirmation changed; review the warnings and rerun with --script-update-confirmation <TOKEN>");
+                }
+                write!(output, "Rebuild and apply these mod sources? [y/N] ")?;
+                output.flush()?;
+                let mut reply = String::new();
+                input.read_line(&mut reply)?;
+                if !matches!(reply.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+                    anyhow::bail!("apply cancelled; script sources were not rebuilt or deployed");
+                }
+                options.script_rebuild_confirmation = Some(confirmation.token);
+            }
+            Err(error) => return Err(error.into()),
         }
     }
 }
@@ -744,6 +807,130 @@ mod tests {
     use super::*;
     use gore_as::compile::InstallMutationGuard;
     use gore_mod::mgr::analyze::ConflictKind;
+
+    fn script_confirmation(token: &str) -> gore_mod::ModError {
+        gore_mod::ModError::ScriptRebuildConfirmationRequired(
+            serde_json::from_value(serde_json::json!({
+                "token": token,
+                "warnings": [{
+                    "mod_id": "dialog-mod", "mod_name": "Diego Dialog",
+                    "module": "NPC/Diego", "reason": "vanilla_module_changed",
+                    "original_sha256": "a".repeat(64), "current_sha256": "b".repeat(64),
+                }],
+            }))
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn script_update_approval_retries_with_exact_native_token_and_reports_warnings() {
+        let mut tokens = Vec::new();
+        let mut output = Vec::new();
+        let report = apply_with_script_confirmation(
+            |options| {
+                tokens.push(options.script_rebuild_confirmation.clone());
+                if tokens.len() == 1 {
+                    Err(script_confirmation("exact-token"))
+                } else {
+                    Ok(ApplyReport {
+                        applied: vec!["Diego Dialog".into()],
+                        warnings: vec!["Recompiled NPC/Diego".into()],
+                    })
+                }
+            },
+            None,
+            &mut std::io::Cursor::new("y\n"),
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(tokens, vec![None, Some("exact-token".into())]);
+        assert_eq!(report.warnings, vec!["Recompiled NPC/Diego"]);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Diego Dialog (dialog-mod) — NPC/Diego"));
+        assert!(output.contains("overwrite game fixes"));
+        assert!(output.contains("[y/N]"));
+    }
+
+    #[test]
+    fn script_update_decline_empty_reply_and_eof_never_retry_apply() {
+        for reply in ["n\n", "\n", "", "sure\n"] {
+            let mut calls = 0;
+            let result = apply_with_script_confirmation(
+                |_| {
+                    calls += 1;
+                    Err(script_confirmation("token"))
+                },
+                None,
+                &mut std::io::Cursor::new(reply),
+                &mut Vec::new(),
+            );
+            assert!(result.unwrap_err().to_string().contains("cancelled"));
+            assert_eq!(calls, 1);
+        }
+    }
+
+    #[test]
+    fn changed_script_update_token_requires_another_explicit_approval() {
+        let mut tokens = Vec::new();
+        let result = apply_with_script_confirmation(
+            |options| {
+                tokens.push(options.script_rebuild_confirmation.clone());
+                Err(script_confirmation(if tokens.len() == 1 {
+                    "first"
+                } else {
+                    "second"
+                }))
+            },
+            None,
+            &mut std::io::Cursor::new("yes\nn\n"),
+            &mut Vec::new(),
+        );
+        assert!(result.is_err());
+        assert_eq!(tokens, vec![None, Some("first".into())]);
+    }
+
+    #[test]
+    fn noninteractive_script_update_token_never_grants_blanket_approval() {
+        let mut calls = 0;
+        let mut output = Vec::new();
+        let result = apply_with_script_confirmation(
+            |options| {
+                calls += 1;
+                assert_eq!(
+                    options.script_rebuild_confirmation.as_deref(),
+                    Some("explicit")
+                );
+                Err(script_confirmation("changed"))
+            },
+            Some("explicit".into()),
+            &mut std::io::Cursor::new("y\n"),
+            &mut output,
+        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("confirmation changed"));
+        assert_eq!(calls, 1);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Exact confirmation token: changed"));
+        assert!(!output.contains("[y/N]"));
+    }
+
+    #[test]
+    fn cli_accepts_only_an_explicit_script_update_token_option() {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct Cli {
+            #[command(subcommand)]
+            action: MgrAction,
+        }
+        let cli =
+            Cli::try_parse_from(["mgr", "apply", "--script-update-confirmation", "exact"]).unwrap();
+        assert!(
+            matches!(cli.action, MgrAction::Apply { script_update_confirmation: Some(token), .. } if token == "exact")
+        );
+        assert!(Cli::try_parse_from(["mgr", "apply", "--force"]).is_err());
+    }
 
     #[test]
     fn custom_store_overrides_must_be_paired() {

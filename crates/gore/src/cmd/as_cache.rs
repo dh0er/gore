@@ -2376,6 +2376,7 @@ fn compile_full_graph_command(
             .context("multi-module mini-cache path layout")?;
         // Also covers no-clobber: an existing destination is refused here.
         validate_auxiliary_output_path(path, &game, "multi-module mini-cache")?;
+        gore_mod::script_sources::preflight_script_source_provenance_v1(path)?;
     }
 
     let executable_path = compiler_executable_path(&game);
@@ -2693,6 +2694,7 @@ fn compile_full_graph_command(
             &game,
             &work_dir,
             mini_path,
+            &opts.changes,
         ) {
             Ok(published) => Some(published),
             Err(error) => {
@@ -2800,6 +2802,7 @@ fn publish_full_graph_mini(
     game: &Path,
     work_dir: &Path,
     mini_path: &Path,
+    source_changes: &[gore_as::compile::FullGraphCompileChangeV1],
 ) -> Result<PublishedMini> {
     use gore_as::compile::FullGraphCompileOperationV1;
     use std::fmt::Write as _;
@@ -2874,6 +2877,33 @@ fn publish_full_graph_mini(
     let has_edit = authored
         .iter()
         .any(|(_, op)| *op == FullGraphCompileOperationV1::Edit);
+    let sources = source_changes
+        .iter()
+        .filter(|change| change.operation != FullGraphCompileOperationV1::Delete)
+        .map(|change| {
+            Ok(gore_mod::script_sources::ScriptSourceInputV1 {
+                module: change.module_name.clone(),
+                op: match change.operation {
+                    FullGraphCompileOperationV1::Add => "add",
+                    FullGraphCompileOperationV1::Edit => "edit",
+                    FullGraphCompileOperationV1::Delete => unreachable!(),
+                }.into(),
+                relative_path: change.relative_path.clone(),
+                mini: String::new(),
+                source: change.source.clone()
+                    .context("authored mini module is missing retained compiler source")?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if let Err(error) = gore_mod::script_sources::write_script_source_provenance_from_bytes_v1(
+        &destination,
+        &mini,
+        base_cache,
+        sources,
+    ) {
+        let cleanup = file.set_len(0).and_then(|()| file.sync_all());
+        bail!("publishing mini source provenance failed: {error}; neutralizing mini output: {cleanup:?}");
+    }
     // Name an edited shipped module in the spec entry when there is one: deploy requires an
     // `edit` mini to carry at least one module that exists in the cache.
     let spec_module = authored
@@ -3835,6 +3865,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let game = gore_loc::config::game_root(game).context("resolving game path")?;
             let expected_base = expected_base_from_args(expect_base, expect_base_sha256)?;
             let work_dir = resolve_compile_module_work_dir(work_dir, &game)?;
+            gore_mod::script_sources::preflight_script_source_provenance_v1(&out)?;
             let source_bytes = read_regular_bounded(
                 &source,
                 gore_as::generation_receipt::MAX_GENERATION_SOURCE_FILE_BYTES_V1 as u64,
@@ -4207,6 +4238,12 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let mini = gore_as::generation_receipt::read_compile_output_bytes_v1(&compiled)
                 .map_err(anyhow::Error::msg)
                 .context("reading the exact retained compiled mini-cache")?;
+            let mini_modules = gore_as::compile::base_full_graph_manifest_v1(&mini)
+                .map_err(anyhow::Error::new)
+                .context("reading canonical compiled module identity for source provenance")?;
+            let compiled_relative_path = mini_modules.iter()
+                .find(|module| module.module_name == compiled.module_name)
+                .context("compiled module missing its canonical source path")?.relative_path.clone();
             if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("creating {}", parent.display()))?;
@@ -4225,6 +4262,21 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             } else {
                 std::fs::write(&out, &mini)
                     .with_context(|| format!("writing {}", out.display()))?;
+            }
+            if let Err(error) = gore_mod::script_sources::write_script_source_provenance_from_bytes_v1(
+                &out,
+                &mini,
+                &base_override,
+                vec![gore_mod::script_sources::ScriptSourceInputV1 {
+                    module: compiled.module_name.clone(),
+                    op: opts.op.clone(),
+                    relative_path: compiled_relative_path,
+                    mini: String::new(),
+                    source: source_bytes.clone(),
+                }],
+            ) {
+                let cleanup = gore_as::generation_receipt::rollback_generation_output_v1(&out, &mini);
+                bail!("SCRIPT_SOURCE_PUBLICATION_FAILED: {error}; compiler output cleanup: {cleanup:?}");
             }
             if let (Some(path), Some(receipt)) = (
                 compiler.generation_receipt.as_ref(),

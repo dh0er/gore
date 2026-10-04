@@ -40,6 +40,7 @@ use super::model::{
     ComponentInfo, LibraryEntry, LibraryRoot, ModEntryMeta, PayloadTreeSnapshot, RawTarget,
     TreeSnapshotLimits,
 };
+use crate::script_sources::{ScriptSourceEntryV1, ScriptSourcesManifestV1};
 use crate::{DeployPlan, DeployRecord, ModError};
 
 /// Outcome of an apply: the enabled mods realized (display names, in loadout order) and any
@@ -48,6 +49,13 @@ use crate::{DeployPlan, DeployRecord, ModError};
 pub struct ApplyReport {
     pub applied: Vec<String>,
     pub warnings: Vec<String>,
+}
+
+/// Explicit approval of the changed vanilla modules reported by a previous Apply attempt.
+/// The opaque token is re-derived from the current cache, ordered loadout and source contents.
+#[derive(Debug, Clone, Default)]
+pub struct ApplyOptions {
+    pub script_rebuild_confirmation: Option<String>,
 }
 
 /// Finite resource envelope for rebuilding one manager loadout.  The file/total ceilings mirror
@@ -120,12 +128,93 @@ struct ApplyBudget {
     tree_bytes: u64,
     additive_bytes: u64,
     loose_bytes: u64,
+    source_bytes: u64,
+    source_entries: usize,
 }
 
 #[derive(Debug, Clone)]
 struct PendingPayload {
     entry: LibraryEntry,
     rel: PathBuf,
+}
+
+type ScriptPayloadKey = (PathBuf, PathBuf);
+
+fn script_payload_key(payload: &PendingPayload) -> ScriptPayloadKey {
+    (payload.entry.path().to_path_buf(), payload.rel.clone())
+}
+
+struct ScriptSourceGroup {
+    mod_id: String,
+    mod_name: String,
+    base_cache_sha256: String,
+    entries: Vec<ScriptSourceEntryV1>,
+    source_bytes: BTreeMap<String, Vec<u8>>,
+}
+
+struct ScriptRecompileOutput {
+    mini: Vec<u8>,
+    authority: Option<gore_as::manager_rebuild::ManagerRebuildResultV1>,
+}
+
+trait ScriptRecompiler {
+    fn compile(
+        &mut self,
+        game_root: &Path,
+        pristine: &Path,
+        base: &[u8],
+        groups: &[&ScriptSourceGroup],
+    ) -> crate::Result<ScriptRecompileOutput>;
+}
+
+struct ProductScriptRecompiler;
+
+impl ScriptRecompiler for ProductScriptRecompiler {
+    fn compile(
+        &mut self,
+        game_root: &Path,
+        pristine: &Path,
+        base: &[u8],
+        groups: &[&ScriptSourceGroup],
+    ) -> crate::Result<ScriptRecompileOutput> {
+        let host_module =
+            std::env::current_exe().map_err(crate::io("locating Manager compiler host"))?;
+        let temporary = tempfile::Builder::new()
+            .prefix("gore-manager-rebuild-")
+            .tempdir()
+            .map_err(crate::io("creating Manager compiler workspace"))?;
+        let sources = groups
+            .iter()
+            .flat_map(|group| {
+                group
+                    .entries
+                    .iter()
+                    .map(|entry| gore_as::manager_rebuild::ManagerRebuildSourceV1 {
+                        module_name: &entry.module,
+                        relative_path: &entry.relative_path,
+                        source: &group.source_bytes[&entry.source],
+                    })
+            })
+            .collect::<Vec<_>>();
+        let mut result = gore_as::manager_rebuild::rebuild_manager_sources_v1(
+            gore_as::manager_rebuild::ManagerRebuildInputsV1 {
+                host_module: &host_module,
+                game_root,
+                pristine_shipping_cache: pristine,
+                base_cache: base,
+                sources: &sources,
+                temporary_root: temporary.path(),
+            },
+        )
+        .map_err(|error| {
+            ModError::Other(format!("cannot rebuild loadout script sources: {error}"))
+        })?;
+        let mini = result.take_mini_cache();
+        Ok(ScriptRecompileOutput {
+            mini,
+            authority: Some(result),
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -321,6 +410,155 @@ fn read_manifest_payload(
         limits.max_manifest_total_bytes,
     )?;
     Ok(bytes)
+}
+
+fn load_script_source_groups(
+    entry: &LibraryEntry,
+    meta: &ModEntryMeta,
+    component: &str,
+    scripts: &[crate::ScriptEntry],
+    limits: ApplyLimits,
+    budget: &mut ApplyBudget,
+) -> crate::Result<Vec<(ScriptPayloadKey, ScriptSourceGroup)>> {
+    use crate::script_sources as source;
+    let relative = format!("{component}/sources.json");
+    validate_payload_rel(&relative, "script sources manifest", limits)?;
+    let remaining = remaining_bytes(
+        "manager manifests",
+        budget.manifest_bytes,
+        limits.max_manifest_total_bytes,
+    )?;
+    let Some(bytes) = entry.read_optional_payload_bounded(
+        Path::new(&relative),
+        "script sources manifest",
+        limits
+            .max_manifest_bytes
+            .min(source::MAX_SCRIPT_SOURCES_MANIFEST_BYTES_V1)
+            .min(remaining),
+    )?
+    else {
+        return Ok(Vec::new());
+    };
+    charge_bytes(
+        "manager manifests",
+        &mut budget.manifest_bytes,
+        bytes.len() as u64,
+        limits.max_manifest_total_bytes,
+    )?;
+    let manifest = source::read_script_sources_manifest_v1(&bytes)?;
+    charge_entries(
+        "manager script sources",
+        &mut budget.source_entries,
+        manifest.entries.len(),
+        source::MAX_SCRIPT_SOURCE_ENTRIES_V1,
+    )?;
+    charge_entries(
+        "manager manifests",
+        &mut budget.manifest_entries,
+        manifest.entries.len(),
+        limits.max_manifest_entries,
+    )?;
+    let source_paths = manifest
+        .entries
+        .iter()
+        .map(|source| source.source.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut retained = BTreeMap::new();
+    let mut mini_bytes = 0u64;
+    source::validate_script_sources_v1(&manifest, scripts, |relative, ceiling| {
+        validate_payload_rel(relative, "script sources payload", limits)?;
+        if source_paths.contains(relative) {
+            let remaining = remaining_bytes(
+                "manager script sources",
+                budget.source_bytes,
+                source::MAX_SCRIPT_SOURCE_TOTAL_BYTES_V1,
+            )?;
+            let bytes = entry.read_payload_bounded(
+                Path::new(relative),
+                "script source",
+                ceiling.min(remaining),
+            )?;
+            charge_bytes(
+                "manager script sources",
+                &mut budget.source_bytes,
+                bytes.len() as u64,
+                source::MAX_SCRIPT_SOURCE_TOTAL_BYTES_V1,
+            )?;
+            retained.insert(relative.to_owned(), bytes.clone());
+            Ok(bytes)
+        } else {
+            read_pending_payload(
+                &PendingPayload {
+                    entry: entry.clone(),
+                    rel: PathBuf::from(relative),
+                },
+                "source-owned script minis",
+                ceiling.min(limits.max_mini_bytes),
+                &mut mini_bytes,
+                limits.max_mini_total_bytes,
+            )
+        }
+    })?;
+    let ScriptSourcesManifestV1 {
+        base_cache_sha256,
+        entries,
+        ..
+    } = manifest;
+    let mut grouped = BTreeMap::<String, Vec<ScriptSourceEntryV1>>::new();
+    for source in entries {
+        grouped.entry(source.mini.clone()).or_default().push(source);
+    }
+    let mut groups = Vec::new();
+    for (mini, entries) in grouped {
+        let source_bytes = entries
+            .iter()
+            .map(|source| {
+                let bytes = retained
+                    .remove(&source.source)
+                    .expect("validated unique source payload");
+                (source.source.clone(), bytes)
+            })
+            .collect();
+        groups.push((
+            (entry.path().to_path_buf(), PathBuf::from(mini)),
+            ScriptSourceGroup {
+                mod_id: meta.id.clone(),
+                mod_name: meta.name.clone(),
+                base_cache_sha256: base_cache_sha256.clone(),
+                entries,
+                source_bytes,
+            },
+        ));
+    }
+    Ok(groups)
+}
+
+fn read_script_mini_payload(
+    payload: &PendingPayload,
+    rebuilt: &BTreeMap<ScriptPayloadKey, crate::SealedScriptMini>,
+    sources: &BTreeMap<ScriptPayloadKey, ScriptSourceGroup>,
+    label: &str,
+    file_limit: u64,
+    total: &mut u64,
+    total_limit: u64,
+) -> crate::Result<Vec<u8>> {
+    match rebuilt.get(&script_payload_key(payload)) {
+        Some(sealed) => crate::read_sealed_script_mini(sealed, file_limit, total, total_limit),
+        None => {
+            let bytes = read_pending_payload(payload, label, file_limit, total, total_limit)?;
+            if let Some(group) = sources.get(&script_payload_key(payload)) {
+                if crate::script_sources::script_source_sha256_v1(&bytes)
+                    != group.entries[0].mini_sha256
+                {
+                    return Err(ModError::Other(format!(
+                        "source-owned script mini hash changed after validation: {}",
+                        payload.rel.display()
+                    )));
+                }
+            }
+            Ok(bytes)
+        }
+    }
 }
 
 fn read_pending_payload(
@@ -663,6 +901,22 @@ pub fn apply_loadout(
     apply_loadout_with_limits(game_root, library_dir, loadout, DEFAULT_APPLY_LIMITS, false)
 }
 
+pub fn apply_loadout_with_options(
+    game_root: &Path,
+    library_dir: &Path,
+    loadout: &Loadout,
+    options: &ApplyOptions,
+) -> crate::Result<ApplyReport> {
+    apply_loadout_with_limits_and_options(
+        game_root,
+        library_dir,
+        loadout,
+        DEFAULT_APPLY_LIMITS,
+        false,
+        options,
+    )
+}
+
 /// Store routes have already completed replacement recovery while holding the library mutation
 /// lock, which they retain through this call. Keeping this entry point crate-private prevents an
 /// unlocked caller from accidentally bypassing recovery.
@@ -674,12 +928,66 @@ pub(crate) fn apply_loadout_after_store_snapshot(
     apply_loadout_with_limits(game_root, library_dir, loadout, DEFAULT_APPLY_LIMITS, true)
 }
 
+pub(crate) fn apply_loadout_after_store_snapshot_with_options(
+    game_root: &Path,
+    library_dir: &Path,
+    loadout: &Loadout,
+    options: &ApplyOptions,
+) -> crate::Result<ApplyReport> {
+    apply_loadout_with_limits_and_options(
+        game_root,
+        library_dir,
+        loadout,
+        DEFAULT_APPLY_LIMITS,
+        true,
+        options,
+    )
+}
+
 fn apply_loadout_with_limits(
     game_root: &Path,
     library_dir: &Path,
     loadout: &Loadout,
     limits: ApplyLimits,
     library_recovery_is_held: bool,
+) -> crate::Result<ApplyReport> {
+    apply_loadout_with_limits_and_options(
+        game_root,
+        library_dir,
+        loadout,
+        limits,
+        library_recovery_is_held,
+        &ApplyOptions::default(),
+    )
+}
+
+fn apply_loadout_with_limits_and_options(
+    game_root: &Path,
+    library_dir: &Path,
+    loadout: &Loadout,
+    limits: ApplyLimits,
+    library_recovery_is_held: bool,
+    options: &ApplyOptions,
+) -> crate::Result<ApplyReport> {
+    apply_loadout_with_recompiler(
+        game_root,
+        library_dir,
+        loadout,
+        limits,
+        library_recovery_is_held,
+        options,
+        &mut ProductScriptRecompiler,
+    )
+}
+
+fn apply_loadout_with_recompiler(
+    game_root: &Path,
+    library_dir: &Path,
+    loadout: &Loadout,
+    limits: ApplyLimits,
+    library_recovery_is_held: bool,
+    options: &ApplyOptions,
+    recompiler: &mut dyn ScriptRecompiler,
 ) -> crate::Result<ApplyReport> {
     // Absolutize like deploy()/undeploy() so every derived + persisted path is absolute. This MUST
     // happen before reading the record: deploy/undeploy/status all key the record off `abs_root`, so
@@ -780,6 +1088,8 @@ fn apply_loadout_with_limits(
     let mut audio: BTreeMap<(String, String), PendingPayload> = BTreeMap::new();
     let mut audio_bank_spellings: BTreeMap<String, String> = BTreeMap::new();
     let mut scripts: Vec<(String, String, PendingPayload)> = Vec::new();
+    let mut script_source_groups = BTreeMap::<ScriptPayloadKey, ScriptSourceGroup>::new();
+    let mut script_rebuild_authorities = Vec::new();
     let mut voice = crate::PendingVoiceEdits::new();
     let mut voice_order = 0usize;
     let mut budget = ApplyBudget::default();
@@ -1061,6 +1371,20 @@ fn apply_loadout_with_limits(
                         entries.len(),
                         limits.max_manifest_entries,
                     )?;
+                    for (key, group) in load_script_source_groups(
+                        &l.library_entry,
+                        &l.meta,
+                        rel,
+                        &entries,
+                        limits,
+                        &mut budget,
+                    )? {
+                        if script_source_groups.insert(key, group).is_some() {
+                            return Err(ModError::Other(
+                                "duplicate source-owned script mini".into(),
+                            ));
+                        }
+                    }
                     for e in entries {
                         validate_payload_rel(&e.mini, "mini-cache", limits)?;
                         scripts.push((
@@ -1390,6 +1714,7 @@ fn apply_loadout_with_limits(
 
     // scripts → fold add/edit onto the script-cache base (rawfile override or pristine cache).
     if !scripts.is_empty() {
+        let mut rebuilt_minis = BTreeMap::new();
         if let Some((op, module, _)) = scripts
             .iter()
             .find(|(op, _, _)| op != "add" && op != "edit")
@@ -1412,8 +1737,10 @@ fn apply_loadout_with_limits(
             // A read or budget failure is fatal here: swallowing it would let a later mini hide
             // the modules it carries from winner reduction. Only an unparseable payload falls
             // back to its manifest name; inspection reports that payload with its real error.
-            let mini = read_pending_payload(
+            let mini = read_script_mini_payload(
                 mini_payload,
+                &rebuilt_minis,
+                &script_source_groups,
                 "script mini-cache target scan",
                 limits.max_mini_bytes,
                 &mut target_scan_bytes,
@@ -1439,6 +1766,140 @@ fn apply_loadout_with_limits(
                 None => read_pristine_for_patch(&gp.script_cache, prior, limits, &mut budget)?,
             };
         plan.bind_backup_identity(&gp.script_cache, pristine_source.basis)?;
+        let base_sha256 = crate::script_sources::script_source_sha256_v1(&base);
+        let stale_keys = scripts
+            .iter()
+            .filter_map(|(_, _, payload)| {
+                let key = script_payload_key(payload);
+                script_source_groups
+                    .get(&key)
+                    .filter(|group| group.base_cache_sha256 != base_sha256)
+                    .map(|_| key)
+            })
+            .collect::<BTreeSet<_>>();
+        if !stale_keys.is_empty() {
+            let fingerprints =
+                gore_as::manager_rebuild::module_fingerprints(&base).map_err(|error| {
+                    ModError::Other(format!("inspect updated script modules: {error}"))
+                })?;
+            let mut update_warnings = Vec::new();
+            for key in &stale_keys {
+                let group = &script_source_groups[key];
+                for source in &group.entries {
+                    let current = fingerprints.get(&source.module);
+                    match &source.original_module {
+                        Some(original) if current != Some(&original.sha256) => {
+                            update_warnings.push(
+                                super::script_rebuild::ScriptModuleUpdateWarning {
+                                    mod_id: group.mod_id.clone(),
+                                    mod_name: group.mod_name.clone(),
+                                    module: source.module.clone(),
+                                    reason: if current.is_some() {
+                                        "vanilla_module_changed"
+                                    } else {
+                                        "vanilla_module_removed"
+                                    }
+                                    .into(),
+                                    original_sha256: original.sha256.clone(),
+                                    current_sha256: current.cloned(),
+                                },
+                            );
+                        }
+                        None if current.is_some() => {
+                            update_warnings.push(
+                                super::script_rebuild::ScriptModuleUpdateWarning {
+                                    mod_id: group.mod_id.clone(),
+                                    mod_name: group.mod_name.clone(),
+                                    module: source.module.clone(),
+                                    reason: "added_module_now_exists".into(),
+                                    original_sha256: "0".repeat(64),
+                                    current_sha256: current.cloned(),
+                                },
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let context = serde_json::to_vec(&(
+                abs_root.to_string_lossy(),
+                loaded
+                    .iter()
+                    .map(|loaded| (&loaded.entry.id, loaded.meta.fingerprint()))
+                    .collect::<Vec<_>>(),
+                scripts
+                    .iter()
+                    .filter_map(|(_, _, payload)| {
+                        script_source_groups
+                            .get(&script_payload_key(payload))
+                            .map(|group| (&group.mod_id, &group.base_cache_sha256, &group.entries))
+                    })
+                    .collect::<Vec<_>>(),
+            ))?;
+            warnings.extend(super::script_rebuild::require_confirmation(
+                &base,
+                &context,
+                update_warnings,
+                options.script_rebuild_confirmation.as_deref(),
+            )?);
+            // Compile the complete winning source union in one graph. A consumer in one mod
+            // can reference a provider added by another mod, including a provider whose own
+            // package already targets this cache. Shadowed modules never enter this graph.
+            let source_keys = scripts
+                .iter()
+                .map(|(_, _, payload)| script_payload_key(payload))
+                .filter(|key| script_source_groups.contains_key(key))
+                .collect::<Vec<_>>();
+            let groups = source_keys
+                .iter()
+                .map(|key| &script_source_groups[key])
+                .collect::<Vec<_>>();
+            let result = recompiler.compile(&abs_root, &pristine_source.path, &base, &groups)?;
+            let mut expected = groups
+                .iter()
+                .flat_map(|group| group.entries.iter().map(|source| source.module.clone()))
+                .collect::<Vec<_>>();
+            expected.sort();
+            let mut actual =
+                gore_as::cache::walk_modules::module_names(&result.mini).map_err(|error| {
+                    ModError::Other(format!("inspect rebuilt script mini: {error}"))
+                })?;
+            actual.sort();
+            if actual != expected
+                || gore_as::cache::header::CacheHeader::parse(&result.mini)
+                    .map_err(|error| ModError::Other(error.to_string()))?
+                    .hash
+                    != gore_as::cache::header::CacheHeader::parse(&base)
+                        .map_err(|error| ModError::Other(error.to_string()))?
+                        .hash
+            {
+                return Err(ModError::Other(
+                    "rebuilt mini does not match its reviewed modules and game cache".into(),
+                ));
+            }
+            if let Some(authority) = result.authority {
+                script_rebuild_authorities.push(authority);
+            }
+            let mut rebuilt_bytes = 0u64;
+            let sealed = crate::seal_script_mini(
+                result.mini,
+                limits.max_mini_bytes,
+                &mut rebuilt_bytes,
+                limits.max_mini_total_bytes,
+            )?;
+            let aggregate_key = source_keys[0].clone();
+            rebuilt_minis.insert(aggregate_key.clone(), sealed);
+            scripts.retain(|(_, _, payload)| {
+                let key = script_payload_key(payload);
+                key == aggregate_key || !script_source_groups.contains_key(&key)
+            });
+            for group in groups {
+                warnings.push(format!(
+                    "{}: script sources were recompiled for the updated game cache",
+                    group.mod_name
+                ));
+            }
+        }
         // Authenticate the actual selected base, including any raw replacement, once. Reuse this
         // exact evidence across all passes so a changed or unknown base gains no native authority.
         let binds = crate::qualified_native_binds_for_base(&gp.script_cache, &base);
@@ -1452,8 +1913,10 @@ fn apply_loadout_with_limits(
         }
         .map_err(|e| ModError::Other(format!("prepare script composition: {e}")))?;
         for (_, module, mini_payload) in &scripts {
-            let mini = read_pending_payload(
+            let mini = read_script_mini_payload(
                 mini_payload,
+                &rebuilt_minis,
+                &script_source_groups,
                 "script mini-cache payloads",
                 limits.max_mini_bytes,
                 &mut budget.mini_bytes,
@@ -1481,8 +1944,10 @@ fn apply_loadout_with_limits(
                 ))
             })?;
         for (_, module, mini_payload) in &scripts {
-            let mini = read_pending_payload(
+            let mini = read_script_mini_payload(
                 mini_payload,
+                &rebuilt_minis,
+                &script_source_groups,
                 "script mini-cache canonicalization",
                 limits.max_mini_bytes,
                 &mut rewrite_source_bytes,
@@ -1512,7 +1977,7 @@ fn apply_loadout_with_limits(
         .map_err(|e| ModError::Other(format!("prepare script composition: {e}")))?;
         let mut acc = base;
         let mut canonical_read_bytes = 0u64;
-        for ((op, module, _), sealed) in scripts.iter().zip(canonical_minis) {
+        for ((op, module, payload), sealed) in scripts.iter().zip(canonical_minis) {
             let mini = crate::read_sealed_script_mini(
                 &sealed,
                 limits.max_mini_bytes,
@@ -1525,37 +1990,49 @@ fn apply_loadout_with_limits(
             if gore_as::cache::walk_modules::module_count(&mini) > 1 {
                 crate::require_multi_module_carried_target(&mini, op, module)?;
             }
-            acc = match op.as_str() {
-                "add" => merge_guard
-                    .compose_add(&acc, &mini)
-                    .map_err(|e| ModError::Other(format!("splice {module}: {e}")))?,
-                // A multi-module mini edits and adds its modules as one unit. A module that an
-                // earlier, now-shadowed add introduced satisfies the edit-target requirement the
-                // same way a single-module edit may retry as an add after a shadowed add.
-                "edit" if gore_as::cache::walk_modules::module_count(&mini) > 1 => {
-                    let carried = gore_as::cache::walk_modules::module_names(&mini).map_err(|e| {
-                        ModError::Other(format!("reading script mini modules for {module}: {e}"))
-                    })?;
-                    if !carried
-                        .iter()
-                        .any(|name| shadowed_add_targets.contains(name))
-                    {
-                        crate::require_multi_module_edit_target(&acc, &mini, module)?;
+            // Reviewed source modules may include both additions and replacements after an
+            // update. The rebuilt union has exact validated coverage; use upsert for every
+            // carried module, including removed vanilla targets and new official collisions.
+            acc = if rebuilt_minis.contains_key(&script_payload_key(payload)) {
+                merge_guard
+                    .compose_upsert(&acc, &mini)
+                    .map_err(|e| ModError::Other(format!("compose rebuilt script sources: {e}")))?
+            } else {
+                match op.as_str() {
+                    "add" => merge_guard
+                        .compose_add(&acc, &mini)
+                        .map_err(|e| ModError::Other(format!("splice {module}: {e}")))?,
+                    // A multi-module mini edits and adds its modules as one unit. A module that an
+                    // earlier, now-shadowed add introduced satisfies the edit-target requirement the
+                    // same way a single-module edit may retry as an add after a shadowed add.
+                    "edit" if gore_as::cache::walk_modules::module_count(&mini) > 1 => {
+                        let carried =
+                            gore_as::cache::walk_modules::module_names(&mini).map_err(|e| {
+                                ModError::Other(format!(
+                                    "reading script mini modules for {module}: {e}"
+                                ))
+                            })?;
+                        if !carried
+                            .iter()
+                            .any(|name| shadowed_add_targets.contains(name))
+                        {
+                            crate::require_multi_module_edit_target(&acc, &mini, module)?;
+                        }
+                        merge_guard
+                            .compose_upsert(&acc, &mini)
+                            .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?
                     }
-                    merge_guard
-                        .compose_upsert(&acc, &mini)
-                        .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?
-                }
-                "edit" if winner_edits_after_add.contains(module) => merge_guard
-                    .compose_edit_or_add(&acc, &mini, module)
-                    .map_err(|e| ModError::Other(format!("replace or splice {module}: {e}")))?,
-                "edit" => merge_guard
-                    .compose_edit(&acc, &mini, module)
-                    .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?,
-                other => {
-                    return Err(ModError::Other(format!(
-                        "invalid script op {other:?} for module {module:?}"
-                    )));
+                    "edit" if winner_edits_after_add.contains(module) => merge_guard
+                        .compose_edit_or_add(&acc, &mini, module)
+                        .map_err(|e| ModError::Other(format!("replace or splice {module}: {e}")))?,
+                    "edit" => merge_guard
+                        .compose_edit(&acc, &mini, module)
+                        .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?,
+                    other => {
+                        return Err(ModError::Other(format!(
+                            "invalid script op {other:?} for module {module:?}"
+                        )));
+                    }
                 }
             };
             ensure_generated_fits(acc.len(), limits, &budget)?;
@@ -1635,7 +2112,24 @@ fn apply_loadout_with_limits(
             .collect(),
         ..Default::default()
     };
-    crate::commit_plan(&gp, &abs_root, plan, record, prev)?;
+    // Audit compiler dependencies only after installation ownership and plan identities are
+    // verified. No recovery record or live write precedes this final target check.
+    for authority in &mut script_rebuild_authorities {
+        authority.prepare_for_commit();
+    }
+    let mut compiler_commit_guards = Vec::new();
+    crate::commit_plan_with_precommit(&gp, &abs_root, plan, record, prev, || {
+        for authority in script_rebuild_authorities {
+            let guard = authority.prepare_commit_after_audit().map_err(|error| {
+                ModError::Other(format!(
+                    "script rebuild target changed before deployment: {error}"
+                ))
+            })?;
+            compiler_commit_guards.push(guard);
+        }
+        Ok(())
+    })?;
+    drop(compiler_commit_guards);
     // Explicitly document/latch the lifetime: managed-pak source paths above point into these
     // private candidates and must remain present until commit has completed its streaming copies.
     drop(additive_candidates);
@@ -2089,6 +2583,546 @@ mod tests {
         }
         out.extend_from_slice(&[0u8; 7 * 4]); // 7 empty tail tables
         out
+    }
+
+    fn source_test_cache(modules: &[(&str, i64)], guid: u8) -> Vec<u8> {
+        let mut cache = Vec::new();
+        cache.extend_from_slice(&[guid; 16]);
+        cache.extend_from_slice(&gore_as::cache::header::CACHE_MAGIC.to_le_bytes());
+        cache.extend_from_slice(&(modules.len() as u32).to_le_bytes());
+        for (module, code_hash) in modules {
+            cache.extend_from_slice(&as_fstring(module));
+            let mut value = as_module_value(module);
+            let offset = as_sia(module).len() + 5 * 4;
+            value[offset..offset + 8].copy_from_slice(&code_hash.to_le_bytes());
+            cache.extend_from_slice(&value);
+        }
+        cache.extend_from_slice(&[0u8; 7 * 4]);
+        cache
+    }
+
+    fn add_source_test_mod(
+        game: &FakeGame,
+        id: &str,
+        module: &str,
+        original: &[u8],
+        op: &str,
+    ) -> String {
+        add_source_test_group(game, id, module, original, op, &[(module, op)])
+    }
+
+    fn add_source_test_group(
+        game: &FakeGame,
+        id: &str,
+        module: &str,
+        original: &[u8],
+        op: &str,
+        sources: &[(&str, &str)],
+    ) -> String {
+        let modules = sources
+            .iter()
+            .map(|(module, _)| (*module, 99))
+            .collect::<Vec<_>>();
+        let mini = source_test_cache(&modules, original[0]);
+        let id = game.add_script_mod(id, id, op, module, &mini);
+        let mini_path = "scripts/0_mod.cache".to_owned();
+        let scripts = vec![crate::ScriptEntry {
+            op: op.into(),
+            module: module.into(),
+            mini: mini_path.clone(),
+        }];
+        let mut files = crate::Files::from([(mini_path.clone(), mini)]);
+        crate::script_sources::package_script_sources_v1(
+            &mut files,
+            "scripts",
+            &scripts,
+            original,
+            sources
+                .iter()
+                .map(|(module, op)| crate::script_sources::ScriptSourceInputV1 {
+                    module: (*module).into(),
+                    op: (*op).into(),
+                    relative_path: format!("{}.as", module.replace('.', "/")),
+                    mini: mini_path.clone(),
+                    source: format!("// authored source for {module}\n").into_bytes(),
+                })
+                .collect(),
+        )
+        .unwrap();
+        for (path, bytes) in files {
+            let path = game.lib.join(&id).join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        id
+    }
+
+    #[derive(Default)]
+    struct TestScriptRecompiler {
+        calls: Vec<String>,
+        batches: Vec<Vec<String>>,
+        required_modules: Vec<String>,
+        fail: bool,
+    }
+
+    impl ScriptRecompiler for TestScriptRecompiler {
+        fn compile(
+            &mut self,
+            _: &Path,
+            _: &Path,
+            base: &[u8],
+            groups: &[&ScriptSourceGroup],
+        ) -> crate::Result<ScriptRecompileOutput> {
+            self.calls
+                .extend(groups.iter().map(|group| group.mod_id.clone()));
+            self.batches
+                .push(groups.iter().map(|group| group.mod_id.clone()).collect());
+            if self.fail {
+                return Err(ModError::Other(
+                    "compiler diagnostic: unknown symbol".into(),
+                ));
+            }
+            for group in groups {
+                for source in &group.entries {
+                    assert_eq!(
+                        group.source_bytes[&source.source],
+                        format!("// authored source for {}\n", source.module).as_bytes()
+                    );
+                }
+            }
+            let modules = groups
+                .iter()
+                .flat_map(|group| {
+                    group
+                        .entries
+                        .iter()
+                        .map(|source| (source.module.as_str(), 99))
+                })
+                .collect::<Vec<_>>();
+            if self
+                .required_modules
+                .iter()
+                .any(|required| !modules.iter().any(|(name, _)| name == required))
+            {
+                return Err(ModError::Other(
+                    "compiler diagnostic: missing provider module".into(),
+                ));
+            }
+            Ok(ScriptRecompileOutput {
+                mini: source_test_cache(&modules, base[0]),
+                authority: None,
+            })
+        }
+    }
+
+    fn apply_source_test(
+        game: &FakeGame,
+        loadout: &Loadout,
+        token: Option<String>,
+        compiler: &mut TestScriptRecompiler,
+    ) -> crate::Result<ApplyReport> {
+        apply_loadout_with_recompiler(
+            &game.root,
+            &game.lib,
+            loadout,
+            DEFAULT_APPLY_LIMITS,
+            false,
+            &ApplyOptions {
+                script_rebuild_confirmation: token,
+            },
+            compiler,
+        )
+    }
+
+    #[test]
+    fn script_sources_rebuild_unchanged_modules_and_reset_to_updated_original() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Vanilla", 1), ("Diego", 2)], 1);
+        let updated = source_test_cache(&[("Vanilla", 3), ("Diego", 2)], 2);
+        fs::write(game.script_cache(), &updated).unwrap();
+        let id = add_source_test_mod(&game, "diego", "Diego", &original, "edit");
+        let original_mini = fs::read(game.lib.join(&id).join("scripts/0_mod.cache")).unwrap();
+        let mut compiler = TestScriptRecompiler::default();
+        let report =
+            apply_source_test(&game, &loadout(&[(&id, true)]), None, &mut compiler).unwrap();
+        assert_eq!(compiler.calls, [id.clone()]);
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("recompiled")));
+        assert_eq!(
+            fs::read(game.lib.join(&id).join("scripts/0_mod.cache")).unwrap(),
+            original_mini
+        );
+        let deployed = fs::read(game.script_cache()).unwrap();
+        assert_eq!(
+            gore_as::cache::header::CacheHeader::parse(&deployed)
+                .unwrap()
+                .hash,
+            [2; 16]
+        );
+        assert_eq!(
+            gore_as::manager_rebuild::module_fingerprints(&updated).unwrap()["Vanilla"],
+            gore_as::manager_rebuild::module_fingerprints(&deployed).unwrap()["Vanilla"]
+        );
+        undeploy_all(&game.root).unwrap();
+        assert_eq!(fs::read(game.script_cache()).unwrap(), updated);
+    }
+
+    #[test]
+    fn script_sources_changed_vanilla_requires_exact_confirmation_before_recompile() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Diego", 1)], 1);
+        let updated = source_test_cache(&[("Diego", 2)], 2);
+        fs::write(game.script_cache(), &updated).unwrap();
+        let id = add_source_test_mod(&game, "diego", "Diego", &original, "edit");
+        let loadout = loadout(&[(&id, true)]);
+        let mut compiler = TestScriptRecompiler::default();
+        let confirmation =
+            match apply_source_test(&game, &loadout, None, &mut compiler).unwrap_err() {
+                ModError::ScriptRebuildConfirmationRequired(confirmation) => confirmation,
+                error => panic!("unexpected refusal: {error}"),
+            };
+        assert!(compiler.calls.is_empty());
+        assert_eq!(confirmation.warnings[0].module, "Diego");
+        assert_eq!(confirmation.warnings[0].reason, "vanilla_module_changed");
+        assert_eq!(fs::read(game.script_cache()).unwrap(), updated);
+        assert!(!game
+            .script_cache()
+            .with_extension("Cache.gore-bak")
+            .exists());
+        let report =
+            apply_source_test(&game, &loadout, Some(confirmation.token), &mut compiler).unwrap();
+        assert_eq!(compiler.calls, [id]);
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("was confirmed")));
+        undeploy_all(&game.root).unwrap();
+        assert_eq!(fs::read(game.script_cache()).unwrap(), updated);
+    }
+
+    #[test]
+    fn script_sources_game_update_over_active_mod_refreshes_backup_only_after_confirmation() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Diego", 1)], 1);
+        fs::write(game.script_cache(), &original).unwrap();
+        let id = add_source_test_mod(&game, "diego", "Diego", &original, "edit");
+        let loadout = loadout(&[(&id, true)]);
+        let mut compiler = TestScriptRecompiler::default();
+        apply_source_test(&game, &loadout, None, &mut compiler).unwrap();
+        let backup = game.script_cache().with_extension("Cache.gore-bak");
+        assert_eq!(fs::read(&backup).unwrap(), original);
+        let old_record = fs::read(crate::record_path(&game.root)).unwrap();
+
+        let updated = source_test_cache(&[("Diego", 2)], 2);
+        fs::write(game.script_cache(), &updated).unwrap();
+        let ModError::ScriptRebuildConfirmationRequired(confirmation) =
+            apply_source_test(&game, &loadout, None, &mut compiler).unwrap_err()
+        else {
+            panic!("missing active-mod game-update warning")
+        };
+        assert!(compiler.calls.is_empty());
+        assert_eq!(fs::read(&backup).unwrap(), original);
+        assert_eq!(
+            fs::read(crate::record_path(&game.root)).unwrap(),
+            old_record
+        );
+        assert_eq!(fs::read(game.script_cache()).unwrap(), updated);
+        apply_source_test(&game, &loadout, Some(confirmation.token), &mut compiler).unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), updated);
+        undeploy_all(&game.root).unwrap();
+        assert_eq!(fs::read(game.script_cache()).unwrap(), updated);
+    }
+
+    #[test]
+    fn script_sources_stale_confirmation_and_failed_compiler_leave_game_unchanged() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Diego", 1)], 1);
+        let updated = source_test_cache(&[("Diego", 2)], 2);
+        fs::write(game.script_cache(), &updated).unwrap();
+        let id = add_source_test_mod(&game, "diego", "Diego", &original, "edit");
+        let loadout = loadout(&[(&id, true)]);
+        let mut compiler = TestScriptRecompiler::default();
+        let ModError::ScriptRebuildConfirmationRequired(first) =
+            apply_source_test(&game, &loadout, None, &mut compiler).unwrap_err()
+        else {
+            panic!("missing confirmation")
+        };
+        let newer = source_test_cache(&[("Diego", 3)], 3);
+        fs::write(game.script_cache(), &newer).unwrap();
+        let ModError::ScriptRebuildConfirmationRequired(second) =
+            apply_source_test(&game, &loadout, Some(first.token), &mut compiler).unwrap_err()
+        else {
+            panic!("accepted stale confirmation")
+        };
+        assert!(compiler.calls.is_empty());
+        compiler.fail = true;
+        assert!(
+            apply_source_test(&game, &loadout, Some(second.token), &mut compiler)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown symbol")
+        );
+        assert_eq!(fs::read(game.script_cache()).unwrap(), newer);
+        assert!(crate::read_record(&game.root).unwrap().is_none());
+    }
+
+    #[test]
+    fn script_sources_only_rebuild_winning_mods_and_combine_independent_edits() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Diego", 1), ("Milten", 1)], 1);
+        let updated = source_test_cache(&[("Diego", 1), ("Milten", 1)], 2);
+        fs::write(game.script_cache(), &updated).unwrap();
+        let first = add_source_test_mod(&game, "first", "Diego", &original, "edit");
+        let second = add_source_test_mod(&game, "second", "Diego", &original, "edit");
+        let independent = add_source_test_mod(&game, "independent", "Milten", &original, "edit");
+        let mut compiler = TestScriptRecompiler::default();
+        apply_source_test(
+            &game,
+            &loadout(&[(&first, true), (&second, true), (&independent, true)]),
+            None,
+            &mut compiler,
+        )
+        .unwrap();
+        assert_eq!(compiler.calls, [second.clone(), independent.clone()]);
+        assert_eq!(compiler.batches, [vec![second, independent]]);
+        let modules =
+            gore_as::cache::walk_modules::module_names(&fs::read(game.script_cache()).unwrap())
+                .unwrap();
+        assert_eq!(modules, ["Diego", "Milten"]);
+    }
+
+    #[test]
+    fn script_sources_current_base_uses_precompiled_mini_and_tampering_is_rejected() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Diego", 1)], 1);
+        fs::write(game.script_cache(), &original).unwrap();
+        let id = add_source_test_mod(&game, "diego", "Diego", &original, "edit");
+        let mut compiler = TestScriptRecompiler::default();
+        apply_source_test(&game, &loadout(&[(&id, true)]), None, &mut compiler).unwrap();
+        assert!(compiler.calls.is_empty());
+        undeploy_all(&game.root).unwrap();
+        fs::write(
+            game.lib.join(&id).join("scripts/source/0.as"),
+            b"// tampered\n",
+        )
+        .unwrap();
+        let error =
+            apply_source_test(&game, &loadout(&[(&id, true)]), None, &mut compiler).unwrap_err();
+        assert!(error.to_string().contains("source hash mismatch"));
+        assert_eq!(fs::read(game.script_cache()).unwrap(), original);
+    }
+
+    #[test]
+    fn script_sources_later_mini_reads_reject_changed_bytes_after_provenance_validation() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Diego", 1)], 1);
+        let id = add_source_test_mod(&game, "diego", "Diego", &original, "edit");
+        let entry = LibraryRoot::open(&game.lib).unwrap().entry(&id).unwrap();
+        let meta = entry.read_meta().unwrap();
+        let mini_path = PathBuf::from("scripts/0_mod.cache");
+        let scripts = [crate::ScriptEntry {
+            op: "edit".into(),
+            module: "Diego".into(),
+            mini: mini_path.to_string_lossy().into_owned(),
+        }];
+        let groups = load_script_source_groups(
+            &entry,
+            &meta,
+            "scripts",
+            &scripts,
+            DEFAULT_APPLY_LIMITS,
+            &mut ApplyBudget::default(),
+        )
+        .unwrap()
+        .into_iter()
+        .collect();
+        fs::write(
+            game.lib.join(&id).join(&mini_path),
+            source_test_cache(&[("Diego", 100)], 1),
+        )
+        .unwrap();
+        let payload = PendingPayload {
+            entry,
+            rel: mini_path,
+        };
+        let error = read_script_mini_payload(
+            &payload,
+            &BTreeMap::new(),
+            &groups,
+            "source mini",
+            DEFAULT_APPLY_LIMITS.max_mini_bytes,
+            &mut 0,
+            DEFAULT_APPLY_LIMITS.max_mini_total_bytes,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("mini hash changed after validation"));
+        assert!(crate::read_record(&game.root).unwrap().is_none());
+    }
+
+    #[test]
+    fn script_sources_rebuild_consumers_with_other_mods_current_provider_sources() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Vanilla", 1)], 1);
+        let updated = source_test_cache(&[("Vanilla", 1)], 2);
+        fs::write(game.script_cache(), &updated).unwrap();
+        let consumer = add_source_test_mod(&game, "consumer", "Consumer", &original, "add");
+        let provider = add_source_test_mod(&game, "provider", "Provider", &updated, "add");
+        let mut compiler = TestScriptRecompiler {
+            required_modules: vec!["Consumer".into(), "Provider".into()],
+            ..Default::default()
+        };
+        apply_source_test(
+            &game,
+            &loadout(&[(&consumer, true), (&provider, true)]),
+            None,
+            &mut compiler,
+        )
+        .unwrap();
+        let modules =
+            gore_as::cache::walk_modules::module_names(&fs::read(game.script_cache()).unwrap())
+                .unwrap();
+        assert_eq!(modules, ["Vanilla", "Consumer", "Provider"]);
+        undeploy_all(&game.root).unwrap();
+        assert_eq!(fs::read(game.script_cache()).unwrap(), updated);
+    }
+
+    #[test]
+    fn script_sources_confirmed_multi_module_collisions_and_removed_roots_are_upserted() {
+        for (op, original_modules, updated_modules, sources, changed) in [
+            (
+                "add",
+                vec![("Vanilla", 1)],
+                vec![("Vanilla", 1), ("Provider", 2)],
+                vec![("Root", "add"), ("Provider", "add")],
+                "Provider",
+            ),
+            (
+                "edit",
+                vec![("Root", 1)],
+                vec![("Vanilla", 1)],
+                vec![("Root", "edit"), ("Provider", "add")],
+                "Root",
+            ),
+        ] {
+            let game = FakeGame::new();
+            let original = source_test_cache(&original_modules, 1);
+            let updated = source_test_cache(&updated_modules, 2);
+            fs::write(game.script_cache(), &updated).unwrap();
+            let id = add_source_test_group(&game, "atomic", "Root", &original, op, &sources);
+            let loadout = loadout(&[(&id, true)]);
+            let mut compiler = TestScriptRecompiler::default();
+            let ModError::ScriptRebuildConfirmationRequired(confirmation) =
+                apply_source_test(&game, &loadout, None, &mut compiler).unwrap_err()
+            else {
+                panic!("missing multi-module update warning")
+            };
+            assert_eq!(confirmation.warnings.len(), 1);
+            assert_eq!(confirmation.warnings[0].module, changed);
+            apply_source_test(&game, &loadout, Some(confirmation.token), &mut compiler).unwrap();
+            let modules =
+                gore_as::cache::walk_modules::module_names(&fs::read(game.script_cache()).unwrap())
+                    .unwrap();
+            assert!(modules.iter().any(|name| name == "Root"));
+            assert!(modules.iter().any(|name| name == "Provider"));
+            undeploy_all(&game.root).unwrap();
+            assert_eq!(fs::read(game.script_cache()).unwrap(), updated);
+        }
+    }
+
+    #[test]
+    fn script_sources_import_validates_source_payloads_before_publication() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Diego", 1)], 1);
+        let id = add_source_test_mod(&game, "diego", "Diego", &original, "edit");
+        let bundle = game._tmp.path().join("source-bundle");
+        for relative in [
+            "scripts/manifest.json",
+            "scripts/0_mod.cache",
+            "scripts/sources.json",
+            "scripts/source/0.as",
+        ] {
+            let destination = bundle.join(relative);
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::copy(game.lib.join(&id).join(relative), destination).unwrap();
+        }
+        fs::write(
+            bundle.join("gore-mod.json"),
+            serde_json::to_vec(&crate::ModManifest {
+                format: 1,
+                mod_meta: crate::ModMeta {
+                    name: "Source bundle".into(),
+                    version: "1".into(),
+                    author: "test".into(),
+                },
+                components: vec![crate::Component::AngelScriptPatch {
+                    path: "scripts".into(),
+                }],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        super::super::import::inspect_gore_bundle(&bundle).unwrap();
+        fs::write(
+            bundle.join("scripts/source/0.as"),
+            b"// modified after packaging\n",
+        )
+        .unwrap();
+        let error = super::super::import::inspect_gore_bundle(&bundle).unwrap_err();
+        assert!(error.to_string().contains("source hash mismatch"));
+        let library = game._tmp.path().join("import-library");
+        assert!(super::super::import::import(&library, &bundle).is_err());
+        if library.exists() {
+            assert!(fs::read_dir(library).unwrap().all(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with('.')));
+        }
+    }
+
+    #[test]
+    fn script_sources_removed_vanilla_and_new_official_collision_can_be_confirmed() {
+        for (op, old_modules, updated_modules, reason) in [
+            (
+                "edit",
+                vec![("Diego", 1)],
+                vec![("Other", 1)],
+                "vanilla_module_removed",
+            ),
+            (
+                "add",
+                vec![("Other", 1)],
+                vec![("Other", 1), ("Diego", 1)],
+                "added_module_now_exists",
+            ),
+        ] {
+            let game = FakeGame::new();
+            let original = source_test_cache(&old_modules, 1);
+            let updated = source_test_cache(&updated_modules, 2);
+            fs::write(game.script_cache(), &updated).unwrap();
+            let id = add_source_test_mod(&game, "diego", "Diego", &original, op);
+            let loadout = loadout(&[(&id, true)]);
+            let mut compiler = TestScriptRecompiler::default();
+            let ModError::ScriptRebuildConfirmationRequired(confirmation) =
+                apply_source_test(&game, &loadout, None, &mut compiler).unwrap_err()
+            else {
+                panic!("missing module update warning")
+            };
+            assert_eq!(confirmation.warnings[0].reason, reason);
+            apply_source_test(&game, &loadout, Some(confirmation.token), &mut compiler).unwrap();
+            assert!(gore_as::cache::walk_modules::module_names(
+                &fs::read(game.script_cache()).unwrap()
+            )
+            .unwrap()
+            .iter()
+            .any(|module| module == "Diego"));
+            undeploy_all(&game.root).unwrap();
+            assert_eq!(fs::read(game.script_cache()).unwrap(), updated);
+        }
     }
 
     /// One-module allow-new-shaped cache with `STR 0`, private T1â€“T7 rows, and deterministic
@@ -3593,10 +4627,8 @@ mod tests {
     fn reapply_migrates_recorded_legacy_manager_name_and_reset_cleans_new_name() {
         let g = FakeGame::new();
         let id = g.add_pak_mod("mod-a", "Alpha", "alpha_P", b"PAK-A");
-        let meta: ModEntryMeta = serde_json::from_slice(
-            &fs::read(g.lib.join(&id).join(META_FILE)).unwrap(),
-        )
-        .unwrap();
+        let meta: ModEntryMeta =
+            serde_json::from_slice(&fs::read(g.lib.join(&id).join(META_FILE)).unwrap()).unwrap();
         let legacy = g.mods().join("zzz_gm000_alpha_P.pak");
         fs::write(&legacy, b"OLD-MANAGER-PAK").unwrap();
         let unrelated = g.mods().join("user-owned.pak");

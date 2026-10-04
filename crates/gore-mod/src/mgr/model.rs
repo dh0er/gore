@@ -2264,6 +2264,29 @@ impl LibraryEntry {
         self.read_payload_bounded_with(rel, label, limit, |_| {})
     }
 
+    /// Read optional metadata through the same anchored no-follow and stability checks. Only a
+    /// missing payload returns `None`; links, directories, oversized files and raced reads fail.
+    pub(crate) fn read_optional_payload_bounded(
+        &self,
+        rel: &Path,
+        label: &str,
+        limit: u64,
+    ) -> crate::Result<Option<Vec<u8>>> {
+        let Some(mut file) = self.open_optional_payload_file(rel, label)? else {
+            return Ok(None);
+        };
+        let expected = file.len();
+        if expected > limit {
+            return Err(crate::ModError::Other(format!(
+                "{label} exceeds the {limit} byte limit: {}",
+                file.path().display()
+            )));
+        }
+        let path = file.path().to_path_buf();
+        self.read_open_payload_bounded(path, &mut file, expected, label, limit)
+            .map(Some)
+    }
+
     fn read_payload_bounded_with<F>(
         &self,
         rel: &Path,

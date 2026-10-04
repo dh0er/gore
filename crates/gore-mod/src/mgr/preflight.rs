@@ -975,7 +975,11 @@ fn validate_component_payload_presence(
         }
         ComponentInfo::TexturePatch { rel, .. } => directory(rel, "texture component"),
         ComponentInfo::AngelScriptPatch { rel, .. } => {
-            file(&format!("{rel}/manifest.json"), "script manifest")
+            file(&format!("{rel}/manifest.json"), "script manifest")?;
+            entry.validate_optional_payload_file(
+                Path::new(&format!("{rel}/sources.json")),
+                "script sources manifest",
+            )
         }
         ComponentInfo::FilePatch { rel, .. } => {
             file(&format!("{rel}/manifest.json"), "loose file manifest")

@@ -221,5 +221,12 @@
   "minimize": "Свернуть",
   "restore": "Восстановить",
   "maximize": "Развернуть",
-  "close": "Закрыть"
+  "close": "Закрыть",
+  "scriptUpdateConfirmationTitle": "Проверка скриптов после обновления игры",
+  "scriptUpdateConfirmationBody": "Обновление игры затронуло модули скриптов, которые также добавляют или меняют эти моды. Перекомпиляция из включённых исходников модов может перезаписать исправления игры или вернуть устаревшую логику. Продолжайте, только если принимаете этот риск.",
+  "scriptUpdateConfirmationAction": "Перекомпилировать и применить",
+  "scriptUpdateConfirmationModule": "{modName}: {module}",
+  "scriptUpdateModuleChanged": "Исходный модуль игры изменён.",
+  "scriptUpdateModuleMissing": "Исходного модуля больше нет в игре.",
+  "scriptUpdateModuleNowExists": "Игра теперь содержит модуль с тем же именем, что и новый модуль этого мода."
 }

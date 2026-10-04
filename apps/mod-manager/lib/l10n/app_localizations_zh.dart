@@ -699,6 +699,30 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get close => '关闭';
+
+  @override
+  String get scriptUpdateConfirmationTitle => '检查游戏更新后的脚本变化';
+
+  @override
+  String get scriptUpdateConfirmationBody =>
+      '游戏更新影响了这些模组也提供或修改的脚本模块。使用随附的模组源码重新编译可能覆盖游戏修复或恢复过时的游戏逻辑。仅在接受此风险时继续。';
+
+  @override
+  String get scriptUpdateConfirmationAction => '重新编译并应用';
+
+  @override
+  String scriptUpdateConfirmationModule(String modName, String module) {
+    return '$modName：$module';
+  }
+
+  @override
+  String get scriptUpdateModuleChanged => '游戏原始模块已更改。';
+
+  @override
+  String get scriptUpdateModuleMissing => '游戏中已不存在原始模块。';
+
+  @override
+  String get scriptUpdateModuleNowExists => '游戏现在包含与此模组新增模块同名的模块。';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -1396,4 +1420,28 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get close => '关闭';
+
+  @override
+  String get scriptUpdateConfirmationTitle => '检查游戏更新后的脚本变化';
+
+  @override
+  String get scriptUpdateConfirmationBody =>
+      '游戏更新影响了这些模组也提供或修改的脚本模块。使用随附的模组源码重新编译可能覆盖游戏修复或恢复过时的游戏逻辑。仅在接受此风险时继续。';
+
+  @override
+  String get scriptUpdateConfirmationAction => '重新编译并应用';
+
+  @override
+  String scriptUpdateConfirmationModule(String modName, String module) {
+    return '$modName：$module';
+  }
+
+  @override
+  String get scriptUpdateModuleChanged => '游戏原始模块已更改。';
+
+  @override
+  String get scriptUpdateModuleMissing => '游戏中已不存在原始模块。';
+
+  @override
+  String get scriptUpdateModuleNowExists => '游戏现在包含与此模组新增模块同名的模块。';
 }

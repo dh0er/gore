@@ -1387,6 +1387,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Close'**
   String get close;
+
+  /// No description provided for @scriptUpdateConfirmationTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Review script changes after game update'**
+  String get scriptUpdateConfirmationTitle;
+
+  /// No description provided for @scriptUpdateConfirmationBody.
+  ///
+  /// In en, this message translates to:
+  /// **'The game update affects script modules also supplied or changed by these mods. Rebuilding from the bundled mod sources can overwrite game fixes or restore outdated game logic. Continue only if you accept this risk.'**
+  String get scriptUpdateConfirmationBody;
+
+  /// No description provided for @scriptUpdateConfirmationAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Rebuild and apply'**
+  String get scriptUpdateConfirmationAction;
+
+  /// No description provided for @scriptUpdateConfirmationModule.
+  ///
+  /// In en, this message translates to:
+  /// **'{modName}: {module}'**
+  String scriptUpdateConfirmationModule(String modName, String module);
+
+  /// No description provided for @scriptUpdateModuleChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The original game module changed.'**
+  String get scriptUpdateModuleChanged;
+
+  /// No description provided for @scriptUpdateModuleMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'The original game module is no longer present.'**
+  String get scriptUpdateModuleMissing;
+
+  /// No description provided for @scriptUpdateModuleNowExists.
+  ///
+  /// In en, this message translates to:
+  /// **'The game now includes a module with the same name as this mod’s new module.'**
+  String get scriptUpdateModuleNowExists;
 }
 
 class _AppLocalizationsDelegate

@@ -17,6 +17,7 @@ use gore_modgen::gen::SingleOverride;
 
 pub mod dialog;
 pub mod mgr;
+pub mod script_sources;
 
 pub use dialog::DialogTopicSpec;
 
@@ -51,6 +52,8 @@ const MAX_PORTABLE_MOD_NAME_BYTES: usize = 198;
 // ── Errors ───────────────────────────────────────────────────────────────────
 #[derive(Debug, thiserror::Error)]
 pub enum ModError {
+    #[error("script update confirmation required")]
+    ScriptRebuildConfirmationRequired(crate::mgr::script_rebuild::ScriptRebuildConfirmation),
     #[error("io: {0}")]
     Io(String),
     #[error(transparent)]
@@ -795,6 +798,8 @@ pub fn build_bundle_relative_to(spec: &BuildSpec, base: &Path) -> Result<Bundle>
     // scripts → manifest + compiled mini-caches (spliced/replaced at deploy)
     if !spec.scripts.is_empty() {
         let mut entries: Vec<ScriptEntry> = Vec::new();
+        let mut mini_paths = Vec::new();
+        let mut mini_total = 0u64;
         for (i, s) in spec.scripts.iter().enumerate() {
             if s.op != "add" && s.op != "edit" {
                 return Err(ModError::Other(format!(
@@ -803,10 +808,13 @@ pub fn build_bundle_relative_to(spec: &BuildSpec, base: &Path) -> Result<Bundle>
                 )));
             }
             let source = resolve_spec_path(base, &s.mini_cache);
-            let mini = std::fs::read(&source).map_err(io(&format!(
-                "reading scripts[{i}] mini-cache {}",
-                source.display()
-            )))?;
+            let mini = read_regular_file_limited(
+                &source,
+                &format!("scripts[{i}] mini-cache"),
+                MAX_SCRIPT_MINI_BYTES.min(MAX_SCRIPT_MINI_TOTAL_BYTES - mini_total),
+            )?;
+            mini_total += mini.len() as u64;
+            mini_paths.push(source);
             let mini_rel = format!("scripts/{i}_{}.cache", sanitize(&s.module_name));
             files.insert(mini_rel.clone(), mini);
             entries.push(ScriptEntry {
@@ -819,6 +827,12 @@ pub fn build_bundle_relative_to(spec: &BuildSpec, base: &Path) -> Result<Bundle>
             "scripts/manifest.json".into(),
             serde_json::to_vec_pretty(&entries)?,
         );
+        script_sources::package_adjacent_script_sources_v1(
+            &mut files,
+            "scripts",
+            &entries,
+            &mini_paths,
+        )?;
         components.push(Component::AngelScriptPatch {
             path: "scripts".into(),
         });
@@ -6355,9 +6369,24 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
 pub(crate) fn commit_plan(
     gp: &GamePaths,
     abs_root: &Path,
+    plan: DeployPlan,
+    record: DeployRecord,
+    prev: Option<StoredDeployRecord>,
+) -> Result<DeployRecord> {
+    commit_plan_with_precommit(gp, abs_root, plan, record, prev, || Ok(()))
+}
+
+/// Commit after one final caller audit under live installation ownership. The hook runs only
+/// after the prepared record and target identities have been verified, immediately before the
+/// guarded commit can stage backups or persist recovery authority. A rejected audit releases
+/// the installation lock without changing the deployment.
+pub(crate) fn commit_plan_with_precommit(
+    gp: &GamePaths,
+    abs_root: &Path,
     mut plan: DeployPlan,
     record: DeployRecord,
     prev: Option<StoredDeployRecord>,
+    precommit: impl FnOnce() -> Result<()>,
 ) -> Result<DeployRecord> {
     let prior = prev.as_ref().map(|stored| &stored.record);
     if let Some(prior) = prior {
@@ -6392,6 +6421,7 @@ pub(crate) fn commit_plan(
             return Err(recovery_required_error());
         }
         verify_prepared_target_identities(&plan)?;
+        precommit()?;
         commit_plan_guarded(gp, abs_root, plan, record, prev, transaction_id.as_deref())
     })();
     finish_live_install_mutation(result, mutation)
@@ -14652,6 +14682,72 @@ mod tests {
 
         undeploy(&game).unwrap();
         assert!(!deployed.exists());
+    }
+
+    #[test]
+    fn commit_plan_precommit_rejection_holds_install_ownership_and_preserves_deployment() {
+        let temp = tempfile::tempdir().unwrap();
+        let (game, bundle, deployed, shipping) = install_mutation_fixture(temp.path());
+        let mut active = deploy(&bundle, &game).unwrap();
+        active.owner = "manager".into();
+        write_record_file(&game, &active).unwrap();
+        let record_before = std::fs::read(record_path(&game)).unwrap();
+        let shipping_before = std::fs::read(&shipping).unwrap();
+        let deployed_before = std::fs::read(deployed.join("Scripts/main.lua")).unwrap();
+        let entries = || {
+            std::fs::read_dir(&game)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<BTreeSet<_>>()
+        };
+        let entries_before = entries();
+        let mut plan = DeployPlan {
+            writes: vec![(shipping.clone(), b"SHOULD-NOT-BE-DEPLOYED".to_vec())],
+            ..Default::default()
+        };
+        let source = select_pristine_source(&shipping, Some(&active)).unwrap();
+        plan.bind_backup_identity(&shipping, source.basis).unwrap();
+        let mut hook_calls = 0;
+        let error = commit_plan_with_precommit(
+            &resolve_game_paths(&game),
+            &game,
+            plan,
+            DeployRecord {
+                mod_name: "RejectedAudit".into(),
+                owner: "manager".into(),
+                ..Default::default()
+            },
+            read_record(&game).unwrap(),
+            || {
+                hook_calls += 1;
+                assert!(matches!(
+                    probe_manager_install_recovery(&game),
+                    ManagerInstallRecoveryReadiness::Active
+                ));
+                assert!(
+                    gore_as::compile::InstallMutationGuard::acquire(&game, "gore-as:test").is_err()
+                );
+                assert_eq!(std::fs::read(record_path(&game)).unwrap(), record_before);
+                assert_eq!(std::fs::read(&shipping).unwrap(), shipping_before);
+                assert!(!bak_path(&shipping).exists());
+                Err(ModError::Other("target pin audit rejected".into()))
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("target pin audit rejected"), "got: {error}");
+        assert_eq!(hook_calls, 1);
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), record_before);
+        assert_eq!(std::fs::read(&shipping).unwrap(), shipping_before);
+        assert_eq!(
+            std::fs::read(deployed.join("Scripts/main.lua")).unwrap(),
+            deployed_before
+        );
+        assert!(!bak_path(&shipping).exists());
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+        assert_eq!(entries(), entries_before);
+        let guard = acquire_live_install_mutation(&game, "gore-mod:manager-apply").unwrap();
+        finish_live_install_mutation(Ok(()), guard).unwrap();
     }
 
     #[test]
