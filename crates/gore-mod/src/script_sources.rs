@@ -87,10 +87,17 @@ fn path(value: &str) -> bool {
     value.len() <= MAX_IDENTITY_BYTES && crate::is_safe_rel_path(value)
 }
 
+fn source_path(value: &str) -> bool {
+    path(value)
+        && value
+            .get(value.len().saturating_sub(3)..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".as"))
+}
+
 fn source_bytes(bytes: &[u8], limit: u64) -> Result<()> {
-    if bytes.is_empty() || bytes.len() as u64 > limit {
+    if bytes.len() as u64 > limit {
         return Err(invalid(format!(
-            "source payload is empty or exceeds the {limit}-byte limit"
+            "source payload exceeds the {limit}-byte limit"
         )));
     }
     let text = std::str::from_utf8(bytes).map_err(|_| invalid("source payload is not UTF-8"))?;
@@ -109,9 +116,9 @@ fn remaining_source_payload_limit(retained: u64) -> Result<u64> {
 
 fn charge_source_payload_bytes(retained: &mut u64, byte_len: u64) -> Result<()> {
     let limit = remaining_source_payload_limit(*retained)?;
-    if byte_len == 0 || byte_len > limit {
+    if byte_len > limit {
         return Err(invalid(format!(
-            "source payload is empty or exceeds the {limit}-byte remaining limit"
+            "source payload exceeds the {limit}-byte remaining limit"
         )));
     }
     *retained += byte_len;
@@ -139,10 +146,8 @@ impl ScriptSourcesManifestV1 {
             if entry.module.is_empty()
                 || entry.module.len() > MAX_IDENTITY_BYTES
                 || entry.module.chars().any(char::is_control)
-                || !path(&entry.relative_path)
-                || !entry.relative_path.ends_with(".as")
-                || !path(&entry.source)
-                || !entry.source.ends_with(".as")
+                || !source_path(&entry.relative_path)
+                || !source_path(&entry.source)
                 || !path(&entry.mini)
                 || !hex(&entry.source_sha256, 64)
                 || !hex(&entry.mini_sha256, 64)
@@ -834,6 +839,16 @@ mod tests {
     use super::*;
 
     fn cache(names: &[&str], guid: u8) -> Vec<u8> {
+        cache_with_paths(
+            &names
+                .iter()
+                .map(|name| (*name, format!("{name}.as")))
+                .collect::<Vec<_>>(),
+            guid,
+        )
+    }
+
+    fn cache_with_paths(modules: &[(&str, String)], guid: u8) -> Vec<u8> {
         fn string(value: &str, fstring: bool) -> Vec<u8> {
             let length = value.len() as i32 + i32::from(fstring);
             let mut bytes = length.to_le_bytes().to_vec();
@@ -845,14 +860,14 @@ mod tests {
         }
         let mut bytes = vec![guid; 16];
         bytes.extend_from_slice(&gore_as::cache::header::CACHE_MAGIC.to_le_bytes());
-        bytes.extend_from_slice(&(names.len() as u32).to_le_bytes());
-        for name in names {
+        bytes.extend_from_slice(&(modules.len() as u32).to_le_bytes());
+        for (name, relative_path) in modules {
             bytes.extend(string(name, true));
             bytes.extend(string(name, false));
             bytes.extend_from_slice(&[0; 32]);
             bytes.extend(string("", false));
             bytes.extend_from_slice(&[0; 8]);
-            bytes.extend(string(&format!("{name}.as"), false));
+            bytes.extend(string(relative_path, false));
             bytes.extend_from_slice(&[0; 4]);
         }
         bytes.extend(vec![0; 4 * gore_as::cache::tables::N_TABLES]);
@@ -1233,6 +1248,58 @@ mod tests {
         )
         .unwrap();
         assert!(crate::build_bundle_relative_to(&spec, temp.path()).is_err());
+    }
+
+    #[test]
+    fn compiler_provenance_round_trips_empty_and_uppercase_extension_sources() {
+        for (relative_path, source) in [
+            ("Vanilla.as", ""),
+            ("Vanilla.AS", "// uppercase extension\n"),
+            ("Vanilla.As", "// mixed case extension\n"),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let mini_path = temp.path().join("authored.cache");
+            let base = cache_with_paths(&[("Vanilla", relative_path.into())], 1);
+            std::fs::write(&mini_path, &base).unwrap();
+            write_script_source_provenance_v1(
+                &mini_path,
+                &base,
+                vec![ScriptSourceInputV1 {
+                    relative_path: relative_path.into(),
+                    source: source.as_bytes().to_vec(),
+                    ..input("Vanilla", "edit", "")
+                }],
+            )
+            .unwrap();
+            let spec: crate::BuildSpec = serde_json::from_value(serde_json::json!({
+                "meta": {"name": "Authored"},
+                "scripts": [{"op": "edit", "module_name": "Vanilla", "mini_cache": "authored.cache"}],
+            }))
+            .unwrap();
+            let bundle = crate::build_bundle_relative_to(&spec, temp.path()).unwrap();
+            let scripts: Vec<ScriptEntry> =
+                serde_json::from_slice(&bundle.files["scripts/manifest.json"]).unwrap();
+            let manifest =
+                read_script_sources_manifest_v1(&bundle.files["scripts/sources.json"]).unwrap();
+            assert_eq!(manifest.entries[0].relative_path, relative_path);
+            assert_eq!(bundle.files[&manifest.entries[0].source], source.as_bytes());
+            let destination = temp.path().join("bundle");
+            crate::write_bundle(&destination, &bundle).unwrap();
+            assert_eq!(
+                load_script_sources_v1(&destination, "scripts", &scripts).unwrap(),
+                Some(manifest)
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_source_payload_accepts_uppercase_extension() {
+        let (mut files, scripts, mut manifest) = fixture();
+        let entry = &mut manifest.entries[0];
+        let bytes = files.remove(&entry.source).unwrap();
+        entry.source = "sources/Vanilla.AS".into();
+        files.insert(entry.source.clone(), bytes);
+        validate(&manifest, &scripts, &files).unwrap();
     }
 
     #[test]
