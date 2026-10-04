@@ -989,14 +989,30 @@ fn editor_selection_recovery_rejects_foreign_targets_without_mutating_snapshots(
 
 #[test]
 fn editor_selection_position_extends_valid_partial_transform_drafts() {
-    for (partial, axis, value) in [
+    for (partials, axis, value) in [
         (
-            json!({"rotation":{"pitch":4.0,"yaw":5.0,"roll":6.0}}),
+            vec![
+                json!({"location":{"x":1.0,"y":2.0,"z":3.0}}),
+                json!({"rotation":{"pitch":4.0,"yaw":5.0,"roll":6.0}}),
+            ],
             "--x",
             "123",
         ),
         (
-            json!({"location":{"x":1.0,"y":2.0,"z":3.0}}),
+            vec![
+                json!({"rotation":{"pitch":4.0,"yaw":5.0,"roll":6.0}}),
+                json!({"location":{"x":1.0,"y":2.0,"z":3.0}}),
+            ],
+            "--yaw",
+            "456",
+        ),
+        (
+            vec![json!({"rotation":{"pitch":4.0,"yaw":5.0,"roll":6.0}})],
+            "--x",
+            "123",
+        ),
+        (
+            vec![json!({"location":{"x":1.0,"y":2.0,"z":3.0}})],
             "--yaw",
             "456",
         ),
@@ -1012,7 +1028,7 @@ fn editor_selection_position_extends_valid_partial_transform_drafts() {
         let draft_arg = draft.to_str().unwrap();
         fs::write(&draft, serde_json::to_vec(&json!({"format":"gore.save.draft.v1",
             "path":save.canonicalize().unwrap(),"expectedSha1":gore_save::api::file_sha1(&save).unwrap(),
-            "edits":[{"path":"private.player.setTransform","value":partial}]})).unwrap()).unwrap();
+            "edits":partials.iter().map(|partial| json!({"path":"private.player.setTransform","value":partial})).collect::<Vec<_>>()})).unwrap()).unwrap();
         run(home, &["draft", "validate", draft_arg]);
         run(
             home,
@@ -1023,8 +1039,10 @@ fn editor_selection_position_extends_valid_partial_transform_drafts() {
         let staged = run(home, &["draft", "show", draft_arg]);
         assert_eq!(staged["edits"].as_array().unwrap().len(), 1);
         let mut expected = original_transform;
-        for (key, value) in partial.as_object().unwrap() {
-            expected[key] = value.clone();
+        for partial in &partials {
+            for (key, value) in partial.as_object().unwrap() {
+                expected[key] = value.clone();
+            }
         }
         if axis == "--x" {
             expected["location"]["x"] = json!(123.0);

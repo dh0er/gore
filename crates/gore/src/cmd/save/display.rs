@@ -939,13 +939,12 @@ pub(super) fn position(v: &str, o: &Options) -> Result<Value> {
     if hero {
         let original = &data["private"]["player"]["transform"];
         let mut transform = original.clone();
-        if let Some(staged) = pending
+        for staged in pending
             .as_ref()
             .and_then(|d| d["edits"].as_array())
-            .and_then(|rows| {
-                rows.iter()
-                    .find(|e| e["path"] == "private.player.setTransform")
-            })
+            .into_iter()
+            .flatten()
+            .filter(|e| e["path"] == "private.player.setTransform")
             .map(|e| &e["value"])
         {
             let fields = staged
