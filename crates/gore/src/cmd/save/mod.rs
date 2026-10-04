@@ -455,6 +455,8 @@ pub fn run(action: SaveAction) -> Result<()> {
     if o.lang == "auto" {
         o.lang = preferences["appLocale"]
             .as_str()
+            .map(str::trim)
+            .filter(|code| !code.is_empty())
             .unwrap_or("en")
             .to_string();
     }
@@ -462,7 +464,8 @@ pub fn run(action: SaveAction) -> Result<()> {
         o.game_lang = if automatic_ui {
             preferences["gameTextLocale"]
                 .as_str()
-                .filter(|s| !s.trim().is_empty())
+                .map(str::trim)
+                .filter(|code| !code.is_empty())
         } else {
             None
         }

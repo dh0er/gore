@@ -1303,6 +1303,74 @@ fn editor_parity_skills_localize_before_search_and_keep_write_values() {
 }
 
 #[test]
+fn shared_locale_preferences_trim_codes_and_treat_blanks_as_unset() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = fixture();
+    let original = fs::read(&save).unwrap();
+    let save_arg = save.to_str().unwrap();
+    let initial = run(home, &["quests", "list", save_arg]);
+    let class = initial["quests"][0]["questClass"].as_str().unwrap();
+    let name = class
+        .rsplit('.')
+        .next()
+        .unwrap()
+        .strip_prefix("Quest_")
+        .unwrap()
+        .to_lowercase();
+    let catalog = home.join("gore/loc_catalog.json");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    fs::write(
+        catalog,
+        json!({format!("quest-{name}-name"):{"english":"English quest","german":"Deutsche Quest","japanese":"日本語"}}).to_string(),
+    )
+    .unwrap();
+    let settings = home.join("gore/gore-save/ui_settings.json");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    for (ui, game, skill, quest) in [
+        (" de ", " de ", "Bogen", "Deutsche Quest"),
+        ("", "", "Bow", "English quest"),
+        (" \t ", " \n ", "Bow", "English quest"),
+        ("de", " \t ", "Bogen", "Deutsche Quest"),
+        (" \t ", " ja ", "Bow", "日本語"),
+    ] {
+        let bytes =
+            json!({"appLocale":ui,"gameTextLocale":game,"unrelatedPreference":"keep"}).to_string();
+        fs::write(&settings, &bytes).unwrap();
+        assert_eq!(
+            run(home, &["skills", "show", save_arg, "--skill", "Ranged_Bow"])["label"],
+            skill,
+            "ui={ui:?}, game={game:?}"
+        );
+        assert_eq!(
+            run(home, &["quests", "list", save_arg])["quests"][0]["label"],
+            quest
+        );
+        assert_eq!(fs::read(&settings).unwrap(), bytes.as_bytes());
+    }
+    assert_eq!(
+        run(
+            home,
+            &[
+                "skills",
+                "show",
+                save_arg,
+                "--skill",
+                "Ranged_Bow",
+                "--lang",
+                "en"
+            ]
+        )["label"],
+        "Bow"
+    );
+    assert_eq!(
+        run(home, &["quests", "list", save_arg, "--lang", "en"])["quests"][0]["label"],
+        "English quest"
+    );
+    assert_eq!(fs::read(&save).unwrap(), original);
+}
+
+#[test]
 fn editor_parity_bad_optional_settings_preserve_explicit_save_operations() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
