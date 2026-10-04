@@ -13,6 +13,22 @@ uses the matching version section as the GitHub release notes.
 - Expose the native save protocol and complete CLI surface through MCP.
   Add shared catalogs, ten-language presentation, screenshots, verified game
   images and standalone HTML reports using the Editor's display preferences.
+- Retain exact, complete original `.as` inputs and fingerprints of replaced
+  vanilla modules by default in `gore as compile-module`, `gore as compile --mini`
+  and `values` builds. `gore mod build` automatically packages the captured
+  sources alongside compiled scripts.
+- Rebuild winning source-backed modules together in `gore mgr apply` after
+  pristine cache updates, including dependencies provided by other source-backed
+  mods, using the packaged standalone compiler.
+- List affected mods and modules and require confirmation when edited vanilla
+  modules changed or were removed, or new mod modules now collide with game
+  modules. Use the `[y/N]` prompt or pass the exact reviewed token with
+  `--script-update-confirmation <TOKEN>`; changes to the cache, loadout or sources
+  require fresh confirmation. Declining leaves the installation unchanged.
+- Rebuilds use complete authored modules without merging updated vanilla logic.
+  Binary-only script mods still need an author rebuild after cache updates.
+  Rebuilds require a compatible compiler profile and native bindings;
+  confirmation does not bypass compiler errors.
 
 ## [0.4.0] - 2026-09-29
 
