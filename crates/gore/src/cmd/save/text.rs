@@ -103,7 +103,7 @@ impl Texts {
             .unwrap_or(key)
             .into()
     }
-    fn get(&self, id: &str) -> Option<String> {
+    pub(super) fn get(&self, id: &str) -> Option<String> {
         let entry = &self.catalog[id.to_lowercase()];
         self.sets
             .iter()
@@ -115,6 +115,79 @@ impl Texts {
                     .filter(|s| !s.trim().is_empty())
                     .map(str::to_owned)
             })
+    }
+    pub(super) fn character_name(&self, id: &str) -> String {
+        let key = id.split('-').next().unwrap_or(id);
+        if let Some(name) = self.get(key) {
+            return name;
+        }
+        let mut rest = key;
+        loop {
+            let prefix = [
+                "OC_",
+                "OM_",
+                "NPC_",
+                "Creature_",
+                "AM_",
+                "PC_",
+                "BL_",
+                "VLK_",
+                "KDF_",
+                "STT_",
+                "SLD_",
+                "GRD_",
+                "MIL_",
+                "EBR_",
+                "BAU_",
+                "TPL_",
+                "NOV_",
+                "DJG_",
+                "SFB_",
+                "GUR_",
+                "OUT_",
+                "SUM_",
+            ]
+            .into_iter()
+            .find(|prefix| {
+                rest.len() > prefix.len()
+                    && rest
+                        .get(..prefix.len())
+                        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+            });
+            let Some(prefix) = prefix else {
+                break;
+            };
+            rest = &rest[prefix.len()..];
+        }
+        rest = rest
+            .trim_end_matches(|c: char| c.is_ascii_digit())
+            .trim_end_matches(['_', '-']);
+        if rest.is_empty() {
+            rest = key;
+        }
+        readable(rest)
+    }
+    pub(super) fn key_name(&self, id: &str) -> String {
+        if let Some(name) = self.get(id) {
+            return name;
+        }
+        for prefix in [
+            "ItMw_", "ItRw_", "ItAr_", "ItFo_", "ItMi_", "ItAt_", "ItWr_", "ItMs_", "ItKe_",
+            "ItAm_",
+        ] {
+            if let Some(name) = id.strip_prefix(prefix) {
+                let name = name.replace('_', " ");
+                return if name.trim().is_empty() {
+                    id.to_owned()
+                } else {
+                    name.trim().to_owned()
+                };
+            }
+        }
+        if id.starts_with("It") && id.as_bytes().get(2).is_some_and(u8::is_ascii_uppercase) {
+            return readable(&id[2..]);
+        }
+        id.replace('_', " ").trim().to_owned()
     }
     fn knowledge(&self, id: &str, metadata: &Value) -> Option<String> {
         if let Some(value) = metadata["loc_key"].as_str().and_then(|key| self.get(key)) {
@@ -349,6 +422,23 @@ impl Texts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn displayed_actor_and_key_names_resolve_catalog_ids_and_editor_fallbacks() {
+        let texts = Texts {
+            catalog: json!({"nc_org_wolf_855":{"german":"Rüstungsmeister"}, "itke_quentin_01":{"english":"Cave key"}}),
+            sets: vec!["german"],
+            lang: "en".into(),
+        };
+        assert_eq!(
+            texts.character_name("NC_ORG_Wolf_855-WorldPointActor_wolf"),
+            "Rüstungsmeister"
+        );
+        assert_eq!(texts.character_name("OC_VLK_Guard_01-1234"), "Guard");
+        assert_eq!(texts.character_name("Creature_Meatbug"), "Meatbug");
+        assert_eq!(texts.key_name("ItKe_Quentin_01"), "Cave key");
+        assert_eq!(texts.key_name("ItKe_Quentin_02"), "Quentin 02");
+        assert_eq!(texts.key_name("ItChestKey01"), "Chest Key 01");
+    }
 
     #[test]
     fn quests_search_localized_titles_and_descriptions_before_pagination() {

@@ -2084,6 +2084,218 @@ fn dictionary_catalog_queries_and_pages_work_through_the_cli() {
     }
 }
 
+#[test]
+fn character_queries_use_resolved_names_and_ignore_unrelated_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let catalog = home.join("gore/loc_catalog.json");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    let texts = json!({"nc_org_wolf_855":{"german":"Rüstungsmeister Z"},"oc_stt_diego":{"german":"Rüstungsmeister A"}}).to_string();
+    fs::write(&catalog, &texts).unwrap();
+    let base = [
+        "characters",
+        "list",
+        save.to_str().unwrap(),
+        "--lang",
+        "en",
+        "--game-lang",
+        "de",
+        "--query",
+        "Rüstungsmeister",
+    ];
+    let mut args = base.to_vec();
+    args.push("--all");
+    let all = run(home, &args);
+    assert_eq!(all["total"], 2, "{all}");
+    assert_eq!(all["characters"][0]["uniqueNameText"], "Rüstungsmeister A");
+    assert_eq!(all["characters"][1]["uniqueNameText"], "Rüstungsmeister Z");
+    let mut args = base.to_vec();
+    args.extend(["--offset", "1", "--limit", "1"]);
+    let second = run(home, &args);
+    assert_eq!(second["total"], 2);
+    assert_eq!(second["count"], 1);
+    assert_eq!(second["characters"], json!([all["characters"][1].clone()]));
+    let raw = run(
+        home,
+        &[
+            "characters",
+            "list",
+            save.to_str().unwrap(),
+            "--query",
+            "NC_ORG_Wolf_855",
+            "--game-lang",
+            "de",
+        ],
+    );
+    assert_eq!(raw["total"], 1);
+    assert_eq!(raw["characters"][0]["uniqueNameText"], "Rüstungsmeister Z");
+    let unrelated = run(
+        home,
+        &[
+            "characters",
+            "list",
+            save.to_str().unwrap(),
+            "--id",
+            "NC_ORG_Wolf_855",
+            "--query",
+            "teacher",
+        ],
+    );
+    assert_eq!(
+        unrelated["total"], 0,
+        "field names and roles are not character names"
+    );
+    assert_eq!(fs::read(&save).unwrap(), before);
+    assert_eq!(fs::read_to_string(&catalog).unwrap(), texts);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
+fn trader_and_lock_queries_resolve_names_before_pagination() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture().with_file_name("resources_novice.sav"), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let catalog = home.join("gore/loc_catalog.json");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    let texts = json!({
+        "itke_quentin_01":{"german":"Prüfschlüssel zur Höhle"},
+        "nc_nov_baalkagan_1332":{"german":"Prüfhändler Kagan"},
+        "nc_nov_baalisidro_1333":{"german":"Prüfhändler Isidro"}
+    })
+    .to_string();
+    fs::write(&catalog, &texts).unwrap();
+    for (domain, query, raw) in [
+        ("traders", "Prüfhändler", "NC_NOV_Baal"),
+        ("locks", "Prüfschlüssel", "ItKe_Quentin_01"),
+    ] {
+        let base = [
+            domain,
+            "list",
+            save.to_str().unwrap(),
+            "--lang",
+            "en",
+            "--game-lang",
+            "de",
+            "--query",
+            query,
+        ];
+        let mut args = base.to_vec();
+        args.push("--all");
+        let all = run(home, &args);
+        assert_eq!(all["total"], 2, "{domain}: {all}");
+        for offset in ["0", "1"] {
+            let mut args = base.to_vec();
+            args.extend(["--offset", offset, "--limit", "1"]);
+            let page = run(home, &args);
+            assert_eq!(page["total"], 2);
+            assert_eq!(page["count"], 1);
+            assert_eq!(
+                page[domain],
+                json!([all[domain][offset.parse::<usize>().unwrap()].clone()])
+            );
+        }
+        let raw_matches = run(
+            home,
+            &[
+                domain,
+                "list",
+                save.to_str().unwrap(),
+                "--game-lang",
+                "de",
+                "--query",
+                raw,
+                "--all",
+            ],
+        );
+        assert_eq!(raw_matches[domain], all[domain]);
+    }
+    assert_eq!(fs::read(&save).unwrap(), before);
+    assert_eq!(fs::read_to_string(&catalog).unwrap(), texts);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
+fn story_queries_find_localized_glossary_context_before_pagination() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture().with_file_name("resources_novice.sav"), &save).unwrap();
+    let before = fs::read(&save).unwrap();
+    let catalog = home.join("gore/loc_catalog.json");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    let texts = json!({
+        "ocr_grd_stone_219":{"german":"Prüfschmied"},
+        "text_wip_tmninll_20250515_115330":{"german":"Prüfgeschichte über die Erzrüstung"},
+        "text_wip_tmninll_20250515_113030":{"german":"Prüfgeschichte über den Lehrer"}
+    })
+    .to_string();
+    fs::write(&catalog, &texts).unwrap();
+    for query in ["Prüfschmied", "Prüfgeschichte", "Stone Prüfgeschichte"] {
+        let base = [
+            "story",
+            "list",
+            save.to_str().unwrap(),
+            "--lang",
+            "en",
+            "--game-lang",
+            "de",
+            "--include-unset",
+            "--query",
+            query,
+        ];
+        let mut args = base.to_vec();
+        args.push("--all");
+        let all = run(home, &args);
+        assert_eq!(all["total"], 2, "{query}: {all}");
+        assert_eq!(all["entries"][0]["id"], "Stone_OreArmor");
+        assert_eq!(all["entries"][1]["id"], "Stone_Teacher");
+        assert_eq!(
+            all["semanticTypeCounts"]
+                .as_object()
+                .unwrap()
+                .values()
+                .filter_map(Value::as_u64)
+                .sum::<u64>(),
+            2
+        );
+        for offset in ["0", "1"] {
+            let mut args = base.to_vec();
+            args.extend(["--offset", offset, "--limit", "1"]);
+            let page = run(home, &args);
+            assert_eq!(page["total"], 2);
+            assert_eq!(page["count"], 1);
+            assert_eq!(page["query"], query);
+            assert_eq!(
+                page["entries"],
+                json!([all["entries"][offset.parse::<usize>().unwrap()].clone()])
+            );
+        }
+    }
+    let raw = run(
+        home,
+        &[
+            "story",
+            "list",
+            save.to_str().unwrap(),
+            "--include-unset",
+            "--query",
+            "Stone_OreArmor",
+            "--game-lang",
+            "de",
+        ],
+    );
+    assert_eq!(raw["total"], 1);
+    assert_eq!(raw["entries"][0]["id"], "Stone_OreArmor");
+    assert_eq!(fs::read(&save).unwrap(), before);
+    assert_eq!(fs::read_to_string(&catalog).unwrap(), texts);
+    assert!(!home.join("goresave_backups").exists());
+}
+
 fn write_legacy_hero_attribute_save(save: &Path) {
     use gore_save::codec_backend::{CodecBackend, KrakenBackend};
     fn string(value: &str) -> Vec<u8> {

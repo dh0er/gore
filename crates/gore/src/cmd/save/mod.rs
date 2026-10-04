@@ -14,6 +14,7 @@ mod display;
 mod presentation;
 mod progression_filters;
 mod report;
+mod story_context;
 mod text;
 mod updates;
 
@@ -686,7 +687,10 @@ fn progression(section: &str, o: &Options) -> Result<Value> {
             .or_else(|| p["relationship"].as_str().map(str::to_owned)),
         ..o.clone()
     };
-    let mut data = if matches!(section, "quests" | "tutorials" | "glossary" | "knowledge") {
+    let mut data = if matches!(
+        section,
+        "quests" | "tutorials" | "glossary" | "knowledge" | "story"
+    ) {
         // The Editor loads complete rows before localization, search and facets.
         // The core caps each page at 1000, so collect every page unfiltered.
         let object = p.as_object_mut().unwrap();
@@ -746,6 +750,7 @@ fn progression_page(
 ) -> Result<Value> {
     if section == "story" {
         presentation::annotate_story(&mut data);
+        story_context::annotate(&mut data, o)?;
     }
     texts.apply(&mut data)?;
     match section {
@@ -763,18 +768,136 @@ fn progression_page(
             };
         }
         "glossary" => filter_glossary(&mut data, o),
-        "knowledge" => {
-            display::filter(&mut data, "entries", o);
-            display::paginate(&mut data, "entries", o);
+        "knowledge" | "story" => {
+            if section == "story" {
+                filter_story_context(&mut data, o);
+            } else {
+                display::filter(&mut data, "entries", o);
+            }
+            let page = Options {
+                limit: if section == "story" {
+                    o.limit.clamp(1, 1000)
+                } else {
+                    o.limit
+                },
+                ..o.clone()
+            };
+            display::paginate(&mut data, "entries", &page);
             data["limit"] = if o.all {
                 data["count"].clone()
             } else {
-                json!(o.limit)
+                json!(page.limit)
             };
         }
         _ => {}
     }
     Ok(data)
+}
+fn filter_story_context(data: &mut Value, o: &Options) {
+    let query = o.query.as_deref().unwrap_or("");
+    let terms = query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
+    let mut counts = json!({"timeMarker":0,"chapter":0,"integer":0,"unknown":0});
+    if let Some(rows) = data["entries"].as_array_mut() {
+        rows.retain(|row| {
+            let mut searchable = ["id", "declaredType", "semanticType"]
+                .iter()
+                .filter_map(|field| row[*field].as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            if let Some(value) = row["rawValue"].as_i64() {
+                searchable.push_str(&format!(" {value}"));
+            }
+            for part in row["path"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                searchable.push_str(&format!(" {part}"));
+            }
+            searchable.push_str(if row["stored"] == true {
+                " stored"
+            } else {
+                " unset"
+            });
+            searchable.push_str(if row["catalogKnown"] == true {
+                " catalog"
+            } else {
+                " unknown"
+            });
+            searchable.push_str(&format!(
+                " {}",
+                text::readable(row["id"].as_str().unwrap_or(""))
+            ));
+            let link = &row["glossaryLink"];
+            for field in ["npcName", "segmentLabel"] {
+                if let Some(value) = link[field].as_str() {
+                    searchable.push_str(&format!(" {value}"));
+                }
+            }
+            for paragraph in link["paragraphs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                searchable.push_str(&format!(" {paragraph}"));
+            }
+            let searchable = searchable.to_lowercase();
+            terms.iter().all(|term| searchable.contains(term))
+        });
+        for row in rows {
+            let kind = row["semanticType"].as_str().unwrap_or("unknown");
+            if let Some(count) = counts.get_mut(kind) {
+                *count = json!(count.as_u64().unwrap_or(0) + 1);
+            }
+        }
+    }
+    data["query"] = json!(query);
+    data["semanticTypeCounts"] = counts;
+}
+fn character_key(row: &Value) -> &str {
+    row["globalId"]
+        .as_str()
+        .or(row["uniqueName"].as_str())
+        .unwrap_or("")
+}
+fn annotate_character_name(row: &mut Value, texts: &text::Texts) {
+    row["displayName"] = json!(texts.character_name(character_key(row)));
+}
+fn filter_character_names(data: &mut Value, key: &str, o: &Options) {
+    if let Some(rows) = data[key].as_array_mut() {
+        let query = o.query.as_deref().unwrap_or("").trim().to_lowercase();
+        rows.retain(|row| {
+            (query.is_empty()
+                || ["globalId", "uniqueName", "displayName"]
+                    .iter()
+                    .any(|field| {
+                        row[*field]
+                            .as_str()
+                            .is_some_and(|value| value.to_lowercase().contains(&query))
+                    }))
+                && o.id.as_deref().is_none_or(|id| {
+                    ["globalId", "uniqueName"].iter().any(|field| {
+                        row[*field]
+                            .as_str()
+                            .is_some_and(|value| value.eq_ignore_ascii_case(id))
+                    })
+                })
+        });
+    }
+    display::filter(
+        data,
+        key,
+        &Options {
+            query: None,
+            id: None,
+            ..o.clone()
+        },
+    );
 }
 pub(super) fn actor_row(o: &Options) -> Result<Value> {
     let index = call("private.characters.list", json!({"path":save(o)?}))?;
@@ -965,17 +1088,37 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
             };
             let mut row = actor_row(&selected)?;
             presentation::Characters::load()?.annotate(&mut row);
+            annotate_character_name(&mut row, &text::Texts::load_options(o)?);
+            display::localize(&mut row, o)?;
             Ok(row)
         }
         ("characters", _) => {
-            let mut data = call("private.characters.list", payload(o)?)?;
+            let mut p = payload(o)?;
+            let filters = Options {
+                query: p["query"].as_str().map(str::to_owned),
+                ..o.clone()
+            };
+            p.as_object_mut().unwrap().remove("query");
+            let mut data = call("private.characters.list", p)?;
             let classifier = presentation::Characters::load()?;
+            let texts = text::Texts::load_options(o)?;
             if let Some(rows) = data["characters"].as_array_mut() {
                 for row in rows {
                     classifier.annotate(row);
+                    annotate_character_name(row, &texts);
                 }
             }
-            display::filter(&mut data, "characters", o);
+            texts.apply(&mut data)?;
+            filter_character_names(&mut data, "characters", &filters);
+            if let Some(rows) = data["characters"].as_array_mut() {
+                rows.sort_by_cached_key(|row| {
+                    (
+                        row["displayName"].as_str().unwrap_or("").to_lowercase(),
+                        row["category"] != "human",
+                        character_key(row).to_owned(),
+                    )
+                });
+            }
             display::paginate(&mut data, "characters", o);
             Ok(data)
         }
@@ -1221,12 +1364,22 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 .as_array()
                 .context("invalid lock catalog")?
                 .clone();
+            let texts = text::Texts::load_options(o)?;
             for row in &mut rows {
                 row["unlocked"] = json!(unlocked.iter().any(|id| id.as_str().is_some_and(|s| {
                     row["n"]
                         .as_str()
                         .is_some_and(|id| s.eq_ignore_ascii_case(id))
                 })));
+                row["keyNames"] = json!(
+                    row["keys"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(|id| texts.key_name(id))
+                        .collect::<Vec<_>>()
+                );
             }
             for name in unlocked.iter().filter_map(Value::as_str) {
                 if !rows.iter().any(|row| {
@@ -1238,6 +1391,7 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 }
             }
             data["locks"] = json!(rows);
+            texts.apply(&mut data)?;
             let mut selected = o.clone();
             selected.id = selected.lock.clone().or(selected.id);
             display::filter(&mut data, "locks", &selected);
@@ -1254,7 +1408,14 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
         ),
         ("traders", "list") => {
             let mut data = call("private.traders.list", payload(o)?)?;
-            display::filter(&mut data, "traders", o);
+            let texts = text::Texts::load_options(o)?;
+            if let Some(rows) = data["traders"].as_array_mut() {
+                for row in rows {
+                    annotate_character_name(row, &texts);
+                }
+            }
+            texts.apply(&mut data)?;
+            filter_character_names(&mut data, "traders", o);
             display::paginate(&mut data, "traders", o);
             Ok(data)
         }
@@ -2106,17 +2267,19 @@ mod tests {
         duplicate["results"].as_array_mut().unwrap().push(json!({
             "id":"Strength","setClass":"/Script/G1R.AttributeSet_Other","editable":true
         }));
-        assert!(legacy_hero_attribute_edit(
-            &duplicate,
-            &Options {
-                set_class: Some("AttributeSet_Strength".into()),
-                current: Some(90.0),
-                ..legacy_attribute_options()
-            }
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("uniquely by id"));
+        assert!(
+            legacy_hero_attribute_edit(
+                &duplicate,
+                &Options {
+                    set_class: Some("AttributeSet_Strength".into()),
+                    current: Some(90.0),
+                    ..legacy_attribute_options()
+                }
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("uniquely by id")
+        );
     }
 
     #[test]
