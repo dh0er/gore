@@ -2,8 +2,9 @@
 //!
 //! This route runs only the product standalone compiler. It never acquires an install-mutation
 //! guard, launches the game, emits vanilla sources, or selects another base on the caller's behalf.
-//! Complete authored modules are sparse overlays; the existing FullGraph planner and compiler
-//! retain all other modules from the base and perform preservation and reference validation.
+//! Complete authored modules are sparse overlays. Compatible binary winners are admitted against
+//! pristine and retained in the compiler graph, with the original native declaration authority.
+//! FullGraph preservation and reference validation produce one atomic source/binary mini.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -13,13 +14,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
+use crate::cache::manager_binary_graph::{build_manager_binary_graph_v1, ManagerBinaryGraphV1};
 use crate::cache::remap::{remap_module_to_base_with_options_and_binds, RemapOptions};
 use crate::cache::semantic_observer::observe_whole_cache_semantics_v1;
 use crate::cache::splice::{extract_modules, SequentialMiniGuard};
 use crate::compile::{
-    compile_full_graph_standalone_v1, resolved_path_is_within_v1, FullGraphCompileOptsV1,
-    FullGraphCompileOutcomeV1, FullGraphPublicationDispositionV1,
-    ProjectCompilerClosingAuditDisposition, StandaloneCompilerRunnerV1,
+    compile_full_graph_standalone_v1, compile_manager_binary_graph_sources_v1,
+    resolved_path_is_within_v1, FullGraphCompileOptsV1, FullGraphCompileOutcomeV1,
+    FullGraphPublicationDispositionV1, ProjectCompilerClosingAuditDisposition,
+    StandaloneCompilerRunnerV1,
 };
 use crate::compiler_backend::{CompilerBackendDiagnosticV1, CompilerBackendNameV1};
 use crate::compiler_target::{
@@ -51,6 +54,15 @@ pub struct ManagerRebuildSourceV1<'a> {
     pub module_name: &'a str,
     pub relative_path: &'a str,
     pub source: &'a [u8],
+}
+
+/// One enabled binary winner, read lazily from the caller's sealed private snapshot. It must
+/// independently pass pristine mini admission before it can supply declarations to sources.
+pub struct ManagerBinaryProviderV1 {
+    pub op: String,
+    pub module: String,
+    pub allow_edit_as_add: bool,
+    pub mini_cache: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -245,6 +257,21 @@ pub fn module_fingerprints(
 pub fn rebuild_manager_sources_v1(
     inputs: ManagerRebuildInputsV1<'_>,
 ) -> Result<ManagerRebuildResultV1, ManagerRebuildErrorV1> {
+    rebuild_manager_sources_with_binary_providers_v1(inputs, 0, |_| {
+        Err("no binary provider was requested".into())
+    })
+}
+
+/// Compile source winners with the exact compatible binary winners, retaining them together in
+/// one atomic mini. The original selected base must still equal authenticated pristine Shipping.
+pub fn rebuild_manager_sources_with_binary_providers_v1<F>(
+    inputs: ManagerRebuildInputsV1<'_>,
+    provider_count: usize,
+    read_provider: F,
+) -> Result<ManagerRebuildResultV1, ManagerRebuildErrorV1>
+where
+    F: FnMut(usize) -> Result<ManagerBinaryProviderV1, String>,
+{
     validate_base_size(inputs.base_cache)?;
     validate_sources(inputs.sources)?;
     if crate::force::enabled() {
@@ -292,16 +319,40 @@ pub fn rebuild_manager_sources_v1(
     ensure_pristine_base(package.target_inputs().shipping_cache(), inputs.base_cache)?;
     let workspace = RebuildWorkspaceV1::create(inputs.temporary_root)?;
     let attempt = (|| {
-        let mut runner = package
-            .sidecar_runner(workspace.root.join("sidecar"))
+        let graph = (provider_count != 0)
+            .then(|| {
+                build_manager_binary_graph_v1(
+                    inputs.base_cache,
+                    package.target_inputs().binds_cache(),
+                    provider_count,
+                    read_provider,
+                )
+            })
+            .transpose()
             .map_err(|error| {
-                ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::Unsupported, error)
+                ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::InvalidInput, error)
             })?;
+        let graph_path = workspace.root.join("binary-base.cache");
+        let graph_pin = graph
+            .as_ref()
+            .map(|graph| stage_binary_graph(&graph_path, graph.cache()))
+            .transpose()?;
+        let mut runner = match &graph {
+            Some(graph) => package.sidecar_runner_for_manager_graph(
+                graph,
+                &graph_path,
+                workspace.root.join("sidecar"),
+            ),
+            None => package.sidecar_runner(workspace.root.join("sidecar")),
+        }
+        .map_err(|error| {
+            ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::Unsupported, error)
+        })?;
         // Keep compiler-package authority live for the entire attempt, without transferring the
         // target to a report that would release its pins before Manager receives the result.
         let (_authority, mut target) = package.into_execution_parts();
         let audit = TargetAuditV1::capture(&mut target)?;
-        let output = compile_sources_with_runner(
+        let output = compile_sources_with_binary_graph_and_runner(
             &game,
             inputs.base_cache,
             target.binds_cache().to_vec(),
@@ -309,11 +360,13 @@ pub fn rebuild_manager_sources_v1(
             &workspace,
             &mut runner,
             || audit.validate(&mut target),
+            graph.as_ref(),
         )?;
         audit.validate(&mut target).map_err(|mut error| {
             error.diagnostics = output.diagnostics.clone();
             error
         })?;
+        drop(graph_pin);
         Ok(ManagerRebuildResultV1 {
             output,
             target: target.into_pin_handles(),
@@ -329,6 +382,44 @@ fn ensure_pristine_base(pristine: &[u8], effective: &[u8]) -> Result<(), Manager
             "effective script base differs from the authenticated selected pristine Shipping cache; raw-cache replacement source recompilation is unsupported"));
     }
     Ok(())
+}
+
+fn stage_binary_graph(path: &Path, bytes: &[u8]) -> Result<File, ManagerRebuildErrorV1> {
+    use std::io::Write;
+    let error = |error| ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::Audit, error);
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(error)?;
+    output.write_all(bytes).map_err(error)?;
+    output.sync_all().map_err(error)?;
+    // Windows denies writes and deletion through the held read-only sharing handle below.
+    // A FILE_ATTRIBUTE_READONLY flag would prevent workspace cleanup after releasing it.
+    #[cfg(not(windows))]
+    {
+        let mut permissions = output.metadata().map_err(error)?.permissions();
+        permissions.set_readonly(true);
+        output.set_permissions(permissions).map_err(error)?;
+    }
+    drop(output);
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(1).custom_flags(0x0020_0000); // Read sharing; open reparse point itself.
+    }
+    let pin = options.open(path).map_err(error)?;
+    if file_seal(&pin, MAX_BASE_CACHE_BYTES as u64)?
+        != (bytes.len() as u64, <[u8; 32]>::from(Sha256::digest(bytes)))
+    {
+        return Err(ManagerRebuildErrorV1::new(
+            ManagerRebuildErrorKindV1::Audit,
+            "staged binary graph differs from admitted bytes",
+        ));
+    }
+    Ok(pin)
 }
 
 fn validate_base_size(bytes: &[u8]) -> Result<(), ManagerRebuildErrorV1> {
@@ -381,6 +472,7 @@ fn validate_sources(sources: &[ManagerRebuildSourceV1<'_>]) -> Result<(), Manage
     Ok(())
 }
 
+#[cfg(test)]
 fn compile_sources_with_runner<A>(
     game: &Path,
     base: &[u8],
@@ -393,7 +485,40 @@ fn compile_sources_with_runner<A>(
 where
     A: FnOnce() -> Result<(), ManagerRebuildErrorV1>,
 {
+    compile_sources_with_binary_graph_and_runner(
+        game,
+        base,
+        binds,
+        sources,
+        workspace,
+        runner,
+        closing_audit,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_sources_with_binary_graph_and_runner<A>(
+    game: &Path,
+    base: &[u8],
+    binds: Vec<u8>,
+    sources: &[ManagerRebuildSourceV1<'_>],
+    workspace: &RebuildWorkspaceV1,
+    runner: &mut dyn StandaloneCompilerRunnerV1,
+    closing_audit: A,
+    graph: Option<&ManagerBinaryGraphV1>,
+) -> Result<ManagerRebuildOutputV1, ManagerRebuildErrorV1>
+where
+    A: FnOnce() -> Result<(), ManagerRebuildErrorV1>,
+{
     validate_sources(sources)?;
+    if graph.is_some_and(|graph| !graph.matches_pristine(base, &binds)) {
+        return Err(ManagerRebuildErrorV1::new(
+            ManagerRebuildErrorKindV1::InvalidInput,
+            "binary graph does not derive from selected pristine cache and Binds",
+        ));
+    }
+    let compile_base = graph.map_or(base, ManagerBinaryGraphV1::cache);
     let overlays = sources
         .iter()
         .map(|source| AuthoredSourceV1 {
@@ -402,26 +527,33 @@ where
             bytes: source.source.to_vec(),
         })
         .collect();
-    let plan = plan_named_source_overlays_v1(base, overlays).map_err(|error| {
+    let plan = plan_named_source_overlays_v1(compile_base, overlays).map_err(|error| {
         ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::InvalidInput, error)
     })?;
     let (changes, final_manifest) = plan.into_parts();
-    let module_names = changes
+    let mut module_names = changes
         .iter()
         .map(|change| change.module_name.clone())
         .collect::<Vec<_>>();
+    if let Some(graph) = graph {
+        module_names.extend(graph.modules().iter().cloned());
+        module_names.sort();
+        module_names.dedup();
+    }
     let opts = FullGraphCompileOptsV1 {
         game_dir: game.to_path_buf(),
         work_dir: workspace.root.join("work"),
         output_path: workspace.root.join("output/rebuilt.cache"),
         changes,
         final_manifest,
-        base_cache: base.to_vec(),
+        base_cache: compile_base.to_vec(),
         binds_cache: binds,
     };
-    let report = compile_full_graph_standalone_v1(&opts, runner, || {
-        closing_audit().map_err(|error| error.to_string())
-    });
+    let audit = || closing_audit().map_err(|error| error.to_string());
+    let report = match graph {
+        Some(graph) => compile_manager_binary_graph_sources_v1(&opts, graph, runner, audit),
+        None => compile_full_graph_standalone_v1(&opts, runner, audit),
+    };
     let diagnostics = report.backend_diagnostics().to_vec();
     let recovery_required = report.recovery_required();
     let valid_evidence = report.backend_name() == Some(CompilerBackendNameV1::Standalone)
@@ -709,7 +841,14 @@ impl RebuildWorkspaceV1 {
                 NEXT_WORKSPACE.fetch_add(1, Ordering::Relaxed)
             ));
             match std::fs::create_dir(&candidate) {
-                Ok(()) => return Ok(Self { root: candidate }),
+                Ok(()) => {
+                    let workspace = Self { root: candidate };
+                    // The authenticated runner requires an existing real scratch directory.
+                    std::fs::create_dir(workspace.root.join("sidecar")).map_err(|error| {
+                        ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::InvalidInput, error)
+                    })?;
+                    return Ok(workspace);
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => {
                     return Err(ManagerRebuildErrorV1::new(
@@ -806,6 +945,211 @@ mod tests {
         string(&mut bytes, "NativeCall");
         bytes.extend_from_slice(&[0u8; 32]);
         bytes
+    }
+
+    fn binary_provider(mini: &[u8]) -> ManagerBinaryProviderV1 {
+        ManagerBinaryProviderV1 {
+            op: "add".into(),
+            module: "Provider".into(),
+            allow_edit_as_add: false,
+            mini_cache: mini.to_vec(),
+        }
+    }
+
+    #[test]
+    fn binary_graph_admits_pristine_providers_and_rejects_drift_or_bad_operations() {
+        let base = cache(&[("Keep", "Keep.as")]);
+        let mini = cache(&[("Provider", "Provider.as")]);
+        let graph =
+            build_manager_binary_graph_v1(&base, &binds(), 1, |_| Ok(binary_provider(&mini)))
+                .unwrap();
+        assert!(graph.matches_pristine(&base, &binds()));
+        assert!(graph.matches_compile_inputs(graph.cache(), &binds()));
+        assert!(!graph.matches_compile_inputs(&base, &binds()));
+        assert!(!graph.matches_pristine(graph.cache(), &binds()));
+        assert!(!graph.matches_pristine(&base, b"different Binds"));
+        assert_eq!(graph.modules(), ["Provider"]);
+        assert_eq!(
+            extract_modules(&base, &["Keep"]).unwrap(),
+            extract_modules(graph.cache(), &["Keep"]).unwrap()
+        );
+        // Multi-module edit eligibility matches Manager: the named root may be new when
+        // another carried module really edits an existing target.
+        let mixed = cache(&[("Provider", "Provider.as"), ("Keep", "Keep.as")]);
+        let multi_edit = build_manager_binary_graph_v1(&base, &binds(), 1, |_| {
+            let mut provider = binary_provider(&mixed);
+            provider.op = "edit".into();
+            Ok(provider)
+        })
+        .unwrap();
+        assert_eq!(multi_edit.modules(), ["Keep", "Provider"]);
+
+        let mut pass = 0;
+        let changed = build_manager_binary_graph_v1(&base, &binds(), 1, |_| {
+            pass += 1;
+            let mut provider = binary_provider(&mini);
+            if pass == 2 {
+                change_empty_module_hash(&mut provider.mini_cache, "Provider");
+            }
+            Ok(provider)
+        });
+        assert!(changed
+            .err()
+            .unwrap()
+            .contains("changed between graph passes"));
+        for bad in [
+            "missing-root",
+            "missing-edit",
+            "delete",
+            "stale",
+            "malformed",
+        ] {
+            let result = build_manager_binary_graph_v1(&base, &binds(), 1, |_| {
+                let mut provider = binary_provider(&mini);
+                match bad {
+                    "missing-root" => provider.module = "Missing".into(),
+                    "missing-edit" => provider.op = "edit".into(),
+                    "delete" => provider.op = "delete".into(),
+                    "stale" => provider.mini_cache[..16].fill(0x92),
+                    "malformed" => provider.mini_cache = b"broken".to_vec(),
+                    _ => unreachable!(),
+                }
+                Ok(provider)
+            });
+            assert!(result.is_err(), "{bad}");
+        }
+        assert!(build_manager_binary_graph_v1(&base, &binds(), 2, |_| {
+            Ok(binary_provider(&mini))
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn binary_provider_graph_is_retained_in_the_atomic_rebuilt_mini() {
+        struct ImportRunner {
+            output_path: PathBuf,
+            output: Vec<u8>,
+            calls: usize,
+        }
+        impl StandaloneCompilerRunnerV1 for ImportRunner {
+            fn run_regen(
+                &mut self,
+                _: StandaloneCompilerInputsV1<'_>,
+            ) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1> {
+                panic!("Manager must use FullGraph");
+            }
+            fn run_full_graph(
+                &mut self,
+                inputs: StandaloneFullGraphCompilerInputsV1<'_>,
+            ) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1> {
+                self.calls += 1;
+                assert_eq!(
+                    module_names(inputs.base_cache).unwrap(),
+                    ["Keep", "Provider"]
+                );
+                assert_eq!(inputs.changes.len(), 1);
+                assert_eq!(inputs.final_manifest.len(), 3);
+                assert!(!inputs.source_tree.join("Provider.as").exists());
+                assert_eq!(
+                    std::fs::read(inputs.source_tree.join("Consumer.as")).unwrap(),
+                    b"import void Provide() from \"Provider\";\n"
+                );
+                std::fs::write(&self.output_path, &self.output).unwrap();
+                let path = self.output_path.clone();
+                Ok(StandaloneCompilerOutputV1::with_cleanup_and_diagnostics(
+                    path.clone(),
+                    vec![],
+                    move || std::fs::remove_file(path).map_err(|error| error.to_string()),
+                ))
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let temporary = root.path().join("temporary");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&temporary).unwrap();
+        let base = cache(&[("Keep", "Keep.as")]);
+        let mut mini = cache(&[("Provider", "Provider.as")]);
+        change_empty_module_hash(&mut mini, "Provider");
+        let graph =
+            build_manager_binary_graph_v1(&base, &binds(), 1, |_| Ok(binary_provider(&mini)))
+                .unwrap();
+        let mut output = cache(&[
+            ("Keep", "Keep.as"),
+            ("Provider", "Provider.as"),
+            ("Consumer", "Consumer.as"),
+        ]);
+        // FullGraph output may regenerate retained binary modules. Selective publication must
+        // preserve the admitted binary provider, then return it alongside the source consumer.
+        change_empty_module_hash(&mut output, "Keep");
+        let ranges = module_ranges(&output).unwrap();
+        let (_, start, _) = ranges
+            .iter()
+            .find(|(name, _, _)| name == "Consumer")
+            .unwrap();
+        let imported_modules = start + ("Consumer".len() + 5) * 2 + 5 * 4 + 8;
+        let mut import = 1i32.to_le_bytes().to_vec();
+        import.extend_from_slice(&8i32.to_le_bytes());
+        import.extend_from_slice(b"Provider\0");
+        output.splice(imported_modules..imported_modules + 4, import);
+        output[..16].fill(0x76);
+        let workspace = RebuildWorkspaceV1::create(&temporary).unwrap();
+        let mut runner = ImportRunner {
+            output_path: workspace.root.join("runner.cache"),
+            output,
+            calls: 0,
+        };
+        let result = compile_sources_with_binary_graph_and_runner(
+            &game,
+            &base,
+            binds(),
+            &[ManagerRebuildSourceV1 {
+                module_name: "Consumer",
+                relative_path: "Consumer.as",
+                source: b"import void Provide() from \"Provider\";\n",
+            }],
+            &workspace,
+            &mut runner,
+            || Ok(()),
+            Some(&graph),
+        );
+        let result = finish_cleanup(workspace, result).unwrap();
+        assert_eq!(runner.calls, 1);
+        assert_eq!(result.module_names, ["Consumer", "Provider"]);
+        assert_eq!(
+            extract_modules(&result.mini_cache, &["Provider"]).unwrap(),
+            mini
+        );
+        let mut guard = SequentialMiniGuard::new_with_binds(&base, &binds()).unwrap();
+        let composed = guard.compose_upsert(&base, &result.mini_cache).unwrap();
+        let mut names = module_names(&composed).unwrap();
+        names.sort();
+        assert_eq!(names, ["Consumer", "Keep", "Provider"]);
+        assert_eq!(
+            extract_modules(&base, &["Keep"]).unwrap(),
+            extract_modules(&composed, &["Keep"]).unwrap()
+        );
+        assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(&game).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn staged_binary_graph_releases_its_pin_before_workspace_cleanup() {
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = RebuildWorkspaceV1::create(temporary.path()).unwrap();
+        assert!(workspace.root.join("sidecar").is_dir());
+        let path = workspace.root.join("binary-base.cache");
+        let bytes = cache(&[("Provider", "Provider.as")]);
+        let pin = stage_binary_graph(&path, &bytes).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        #[cfg(windows)]
+        {
+            assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
+            assert!(std::fs::remove_file(&path).is_err());
+        }
+        drop(pin);
+        finish_cleanup(workspace, Ok(())).unwrap();
+        assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 0);
     }
 
     #[test]

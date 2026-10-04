@@ -19,12 +19,14 @@ uses the matching version section as the GitHub release notes.
   sources alongside compiled scripts.
 - Rebuild winning source-backed modules together in `gore mgr apply` after
   pristine cache updates, including dependencies provided by other source-backed
-  mods, using the packaged standalone compiler.
+  mods and compatible binary mods, using the packaged standalone compiler.
+  Preserve binary winners in the rebuilt result.
 - List affected mods and modules and require confirmation when edited vanilla
   modules changed or were removed, or new mod modules now collide with game
   modules. Use the `[y/N]` prompt or pass the exact reviewed token with
   `--script-update-confirmation <TOKEN>`; changes to the cache, loadout or sources
-  require fresh confirmation. Declining leaves the installation unchanged.
+  require fresh confirmation, as do changes to binary provider payloads.
+  Declining leaves the installation unchanged.
   MCP exposes the same optional token; installation consent remains required.
 - Rebuilds use complete authored modules without merging updated vanilla logic.
   Binary-only script mods still need an author rebuild after cache updates.

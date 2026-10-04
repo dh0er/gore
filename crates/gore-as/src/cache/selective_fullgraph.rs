@@ -224,11 +224,13 @@ fn preservation_gate<T, Deferred>(
             ));
             Ok(None)
         }
-        Err(reason) => Err(AttemptFailure::Fatal(SelectiveFullGraphError::Preservation {
-            module_name: module_name.to_owned(),
-            stage,
-            reason: crate::force::refusal(reason),
-        })),
+        Err(reason) => Err(AttemptFailure::Fatal(
+            SelectiveFullGraphError::Preservation {
+                module_name: module_name.to_owned(),
+                stage,
+                reason: crate::force::refusal(reason),
+            },
+        )),
     }
 }
 
@@ -383,12 +385,31 @@ pub(crate) fn compose_selective_full_graph(
 pub(super) fn compose_selective_full_graph_with_native_authority(
     pristine: &[u8],
     full_graph: &[u8],
-    mut changes: Vec<SelectiveFullGraphChange>,
+    changes: Vec<SelectiveFullGraphChange>,
     native_authority: &PristineNativeApiAuthority,
 ) -> Result<SelectiveFullGraphOutput, SelectiveFullGraphError> {
     if !native_authority.matches_pristine(pristine) {
         return Err(SelectiveFullGraphError::NativeAuthorityMismatch);
     }
+    compose_selected_full_graph(pristine, full_graph, changes, native_authority)
+}
+
+// Only the opaque manager graph proof may call this without original-cache byte equality.
+// Its immutable base was produced through pristine admission and guarded binary composition.
+pub(super) fn compose_manager_binary_graph_sources(
+    graph: &super::manager_binary_graph::ManagerBinaryGraphV1,
+    full_graph: &[u8],
+    changes: Vec<SelectiveFullGraphChange>,
+) -> Result<SelectiveFullGraphOutput, SelectiveFullGraphError> {
+    compose_selected_full_graph(graph.cache(), full_graph, changes, graph.native_authority())
+}
+
+fn compose_selected_full_graph(
+    pristine: &[u8],
+    full_graph: &[u8],
+    mut changes: Vec<SelectiveFullGraphChange>,
+    native_authority: &PristineNativeApiAuthority,
+) -> Result<SelectiveFullGraphOutput, SelectiveFullGraphError> {
     validate_standalone_script_cache(pristine).map_err(|source| {
         SelectiveFullGraphError::InvalidCache {
             which: "pristine",
@@ -567,7 +588,11 @@ fn attempt_change(
                 .unwrap_or(mini);
         }
         if let Some(structure) = &preservation.structure {
-            preservation_gate(module_name, "existing module structure", structure.verify(&mini))?;
+            preservation_gate(
+                module_name,
+                "existing module structure",
+                structure.verify(&mini),
+            )?;
         }
     }
 

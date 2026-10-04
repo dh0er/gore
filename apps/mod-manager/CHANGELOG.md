@@ -10,11 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Rebuild source-backed script mods during Apply after the pristine game cache
   changes. Compile winning modules together, including dependencies provided
-  by other source-backed mods, following the selected load order.
+  by other source-backed mods and compatible binary mods, following the selected
+  load order. Preserve binary winners in the rebuilt result.
 - Name affected mods and modules and require confirmation when an edited
   vanilla module changed or was removed, or a new mod module now collides with
   a game module. Cancel leaves the installation unchanged; confirmation covers
-  only the reviewed cache, loadout and sources.
+  only the reviewed cache, loadout, sources and binary provider payloads.
 - Include the standalone AngelScript compiler in portable and installer builds
   for source rebuilds.
 - Rebuilds use complete authored modules without merging game-update fixes into

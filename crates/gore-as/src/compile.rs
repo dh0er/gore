@@ -2296,8 +2296,58 @@ enum FullGraphResultPolicyV1 {
     CompleteQualification,
 }
 
+/// Manager retains original native authority while compiling a guarded binary-provider graph.
+pub(crate) fn compile_manager_binary_graph_sources_v1<A>(
+    opts: &FullGraphCompileOptsV1,
+    graph: &crate::cache::manager_binary_graph::ManagerBinaryGraphV1,
+    standalone: &mut dyn StandaloneCompilerRunnerV1,
+    closing_audit: A,
+) -> FullGraphCompileReportV1
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    compile_full_graph_with_manager_graph_v1(
+        opts,
+        &crate::diagnostics::DiagnosticsOptions::default(),
+        CompilerBackendModeV1::Standalone,
+        FullGraphResultPolicyV1::SelectivePublication,
+        Some(standalone),
+        None,
+        closing_audit,
+        None,
+        Some(graph),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compile_full_graph_with_backend_v1_with_guard_and_optional_target<A>(
+    opts: &FullGraphCompileOptsV1,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mode: CompilerBackendModeV1,
+    result_policy: FullGraphResultPolicyV1,
+    standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    guard: Option<InstallMutationGuard>,
+    closing_audit: A,
+    target: Option<ValidatedCompilerTargetInputsV1>,
+) -> FullGraphCompileReportV1
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    compile_full_graph_with_manager_graph_v1(
+        opts,
+        diagnostics,
+        mode,
+        result_policy,
+        standalone,
+        guard,
+        closing_audit,
+        target,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_full_graph_with_manager_graph_v1<A>(
     opts: &FullGraphCompileOptsV1,
     diagnostics: &crate::diagnostics::DiagnosticsOptions,
     mode: CompilerBackendModeV1,
@@ -2306,6 +2356,7 @@ fn compile_full_graph_with_backend_v1_with_guard_and_optional_target<A>(
     guard: Option<InstallMutationGuard>,
     closing_audit: A,
     target: Option<ValidatedCompilerTargetInputsV1>,
+    manager_graph: Option<&crate::cache::manager_binary_graph::ManagerBinaryGraphV1>,
 ) -> FullGraphCompileReportV1
 where
     A: FnOnce() -> Result<(), String>,
@@ -2325,6 +2376,16 @@ where
     let standalone_backend_diagnostics = std::cell::RefCell::new(Vec::new());
 
     let mut result = (|| -> Result<(Vec<u8>, PreparedFullGraphRequestV1), CompileError> {
+        if let Some(graph) = manager_graph {
+            if mode != CompilerBackendModeV1::Standalone
+                || target.borrow().is_some()
+                || !graph.matches_compile_inputs(&opts.base_cache, &opts.binds_cache)
+            {
+                return Err(CompileError::Other(
+                    "Manager binary graph inputs differ from their admitted proof".into(),
+                ));
+            }
+        }
         match (mode, guard.borrow().is_some()) {
             (CompilerBackendModeV1::Standalone, true) => {
                 return Err(CompileError::Other(
@@ -2599,12 +2660,12 @@ where
             FullGraphResultPolicyV1::CompleteQualification => bytes,
             FullGraphResultPolicyV1::SelectivePublication => {
                 let selective_changes = std::mem::take(&mut prepared.selective_changes);
-                let selective = crate::cache::selective_fullgraph::compose_selective_full_graph(
-                    &opts.base_cache,
-                    &opts.binds_cache,
-                    &bytes,
-                    selective_changes,
-                )
+                let selective = match manager_graph {
+                    Some(graph) => graph.compose_sources(&bytes, selective_changes),
+                    None => crate::cache::selective_fullgraph::compose_selective_full_graph(
+                        &opts.base_cache, &opts.binds_cache, &bytes, selective_changes,
+                    ),
+                }
                 .map_err(|error| {
                     CompileError::Other(format!(
                         "selectively composing the validated FullGraph result onto the sealed base: {error}"
@@ -13884,9 +13945,14 @@ mod tests {
         let overlays = root.join("overlays");
         std::fs::create_dir(&overlays).unwrap();
         for change in &opts.changes {
-            std::fs::write(overlays.join(&change.relative_path), change.source.as_ref().unwrap()).unwrap();
+            std::fs::write(
+                overlays.join(&change.relative_path),
+                change.source.as_ref().unwrap(),
+            )
+            .unwrap();
         }
-        let planned = crate::full_graph_plan::plan_source_overlays_v1(&opts.base_cache, &overlays).unwrap();
+        let planned =
+            crate::full_graph_plan::plan_source_overlays_v1(&opts.base_cache, &overlays).unwrap();
         (opts.changes, opts.final_manifest) = planned.into_parts();
         // The public planner owns an immutable snapshot; the backend must not reopen the inputs.
         std::fs::remove_dir_all(&overlays).unwrap();
