@@ -1269,6 +1269,11 @@ fn selected_recovery<'a>(data: &'a Value, o: &Options) -> Result<&'a Value> {
                         .as_str()
                         .is_some_and(|backup| same_path(backup, &p.to_string_lossy()))
                 })
+                && o.target.as_ref().or(o.save.as_ref()).is_none_or(|target| {
+                    r["targetPath"]
+                        .as_str()
+                        .is_some_and(|path| same_path(path, &target.to_string_lossy()))
+                })
         })
         .context("no matching recovery")
 }
@@ -1606,6 +1611,40 @@ pub(super) fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_selection_combines_target_and_backup_without_selecting_another_save() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("G1R-001.sav");
+        let second = root.path().join("G1R-002.sav");
+        let backup = root.path().join("first.bak");
+        let data = json!({"recoveries":[{"targetPath":first,"backupPath":backup},
+            {"targetPath":second,"backupPath":root.path().join("second.bak")}]});
+        for selector in ["target", "save"] {
+            let mut options = Options::default();
+            if selector == "target" {
+                options.target = Some(root.path().join("./G1R-001.sav"));
+            } else {
+                options.save = Some(first.clone());
+            }
+            assert_eq!(
+                selected_recovery(&data, &options).unwrap(),
+                &data["recoveries"][0]
+            );
+            options.backup = Some(root.path().join("second.bak"));
+            assert!(selected_recovery(&data, &options).is_err());
+        }
+        assert!(
+            selected_recovery(
+                &data,
+                &Options {
+                    target: Some(root.path().join("G1R-003.sav")),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn simulation_copies_requested_files_without_extensions_and_preserves_remapped_manifests() {

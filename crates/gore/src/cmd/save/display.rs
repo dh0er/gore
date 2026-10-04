@@ -938,15 +938,24 @@ pub(super) fn position(v: &str, o: &Options) -> Result<Value> {
     };
     if hero {
         let original = &data["private"]["player"]["transform"];
-        let mut transform = pending
+        let mut transform = original.clone();
+        if let Some(staged) = pending
             .as_ref()
             .and_then(|d| d["edits"].as_array())
             .and_then(|rows| {
                 rows.iter()
                     .find(|e| e["path"] == "private.player.setTransform")
             })
-            .map(|e| e["value"].clone())
-            .unwrap_or_else(|| original.clone());
+            .map(|e| &e["value"])
+        {
+            let fields = staged
+                .as_object()
+                .context("pending transform must be an object")?;
+            transform
+                .as_object_mut()
+                .context("player transform is unavailable")?
+                .extend(fields.clone());
+        }
         fill_transform(&mut transform, o)?;
         return write(
             o,

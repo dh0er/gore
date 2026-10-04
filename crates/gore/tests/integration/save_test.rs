@@ -901,6 +901,154 @@ fn run(home: &Path, args: &[&str]) -> Value {
 }
 
 #[test]
+fn editor_selection_recovery_rejects_foreign_targets_without_mutating_snapshots() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    let profile = home.join("PersistentDataList.sav");
+    fs::copy(fixture(), &save).unwrap();
+    fs::write(&profile, profile_fixture("Easy")).unwrap();
+    let original_save = fs::read(&save).unwrap();
+    let original_profile = fs::read(&profile).unwrap();
+    run(home, &["delete", save.to_str().unwrap(), "--profile", "0"]);
+    let deleted_profile = fs::read(&profile).unwrap();
+    let recovery = run(
+        home,
+        &["recovery", "show", "--root", home.to_str().unwrap()],
+    );
+    let backup = recovery["backupPath"].as_str().unwrap();
+    let snapshots: Vec<_> = fs::read_dir(home.join("goresave_backups"))
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    let other = home.join("G1R-002.sav");
+    fs::write(&other, b"unrelated target").unwrap();
+    for operation in ["restore", "dismiss", "show"] {
+        for selector in ["--target", "positional"] {
+            for with_backup in [false, true] {
+                for dry in [false, true] {
+                    let mut args = vec!["recovery", operation, "--root", home.to_str().unwrap()];
+                    if selector == "--target" {
+                        args.push(selector);
+                    }
+                    args.push(other.to_str().unwrap());
+                    if with_backup {
+                        args.extend(["--backup", backup]);
+                    }
+                    if dry {
+                        args.push("--dry-run");
+                    }
+                    run_failure(home, &args);
+                    assert!(!save.exists());
+                    assert_eq!(fs::read(&other).unwrap(), b"unrelated target");
+                    assert_eq!(fs::read(&profile).unwrap(), deleted_profile);
+                    for (path, bytes) in &snapshots {
+                        assert_eq!(fs::read(path).unwrap(), *bytes);
+                    }
+                }
+            }
+        }
+    }
+    let alias = home.join("./G1R-001.sav");
+    run(
+        home,
+        &[
+            "recovery",
+            "restore",
+            "--root",
+            home.to_str().unwrap(),
+            "--target",
+            alias.to_str().unwrap(),
+            "--backup",
+            backup,
+            "--dry-run",
+        ],
+    );
+    assert!(!save.exists());
+    assert_eq!(fs::read(&profile).unwrap(), deleted_profile);
+    run(
+        home,
+        &[
+            "recovery",
+            "restore",
+            "--root",
+            home.to_str().unwrap(),
+            "--target",
+            alias.to_str().unwrap(),
+            "--backup",
+            backup,
+        ],
+    );
+    assert_eq!(fs::read(&save).unwrap(), original_save);
+    assert_eq!(fs::read(&profile).unwrap(), original_profile);
+}
+
+#[test]
+fn editor_selection_position_extends_valid_partial_transform_drafts() {
+    for (partial, axis, value) in [
+        (
+            json!({"rotation":{"pitch":4.0,"yaw":5.0,"roll":6.0}}),
+            "--x",
+            "123",
+        ),
+        (
+            json!({"location":{"x":1.0,"y":2.0,"z":3.0}}),
+            "--yaw",
+            "456",
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let save = home.join("G1R-001.sav");
+        fs::copy(fixture(), &save).unwrap();
+        let original = fs::read(&save).unwrap();
+        let save_arg = save.to_str().unwrap();
+        let original_transform = run(home, &["position", "show", save_arg]);
+        let draft = home.join("partial.json");
+        let draft_arg = draft.to_str().unwrap();
+        fs::write(&draft, serde_json::to_vec(&json!({"format":"gore.save.draft.v1",
+            "path":save.canonicalize().unwrap(),"expectedSha1":gore_save::api::file_sha1(&save).unwrap(),
+            "edits":[{"path":"private.player.setTransform","value":partial}]})).unwrap()).unwrap();
+        run(home, &["draft", "validate", draft_arg]);
+        run(
+            home,
+            &[
+                "position", "set", save_arg, axis, value, "--draft", draft_arg,
+            ],
+        );
+        let staged = run(home, &["draft", "show", draft_arg]);
+        assert_eq!(staged["edits"].as_array().unwrap().len(), 1);
+        let mut expected = original_transform;
+        for (key, value) in partial.as_object().unwrap() {
+            expected[key] = value.clone();
+        }
+        if axis == "--x" {
+            expected["location"]["x"] = json!(123.0);
+        } else {
+            expected["rotation"]["yaw"] = json!(456.0);
+        }
+        assert_eq!(
+            staged["edits"][0]["value"]["location"],
+            expected["location"]
+        );
+        assert_eq!(
+            staged["edits"][0]["value"]["rotation"],
+            expected["rotation"]
+        );
+        run(home, &["draft", "apply", draft_arg, "--dry-run"]);
+        assert_eq!(fs::read(&save).unwrap(), original);
+        run(home, &["draft", "apply", draft_arg]);
+        let actual = run(home, &["position", "show", save_arg]);
+        assert_eq!(actual["location"], expected["location"]);
+        assert_eq!(actual["rotation"], expected["rotation"]);
+    }
+}
+
+#[test]
 fn repeated_inventory_resets_replace_only_the_same_actors_pending_reset() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
