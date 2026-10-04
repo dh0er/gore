@@ -674,7 +674,12 @@ fn validate_temporary_root(game: &Path, root: &Path) -> Result<(), ManagerRebuil
     let resolved = root.canonicalize().map_err(|error| {
         ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::InvalidInput, error)
     })?;
-    if resolved_path_is_within_v1(&resolved, game) || resolved_path_is_within_v1(game, &resolved) {
+    // Both operands must be resolved, including Windows short-name aliases.
+    let game = game.canonicalize().map_err(|error| {
+        ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::InvalidInput, error)
+    })?;
+    if resolved_path_is_within_v1(&resolved, &game) || resolved_path_is_within_v1(&game, &resolved)
+    {
         return Err(ManagerRebuildErrorV1::new(
             ManagerRebuildErrorKindV1::InvalidInput,
             "temporary root overlaps the game installation",
@@ -1262,6 +1267,25 @@ mod tests {
         assert!(validate_temporary_root(&game, &game).is_err());
         assert!(validate_temporary_root(&game, root.path()).is_err());
         assert_eq!(std::fs::read_dir(&nested).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temporary_roots_inside_a_game_path_alias_are_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let nested = game.join("nested");
+        let alias = root.path().join("game-alias");
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&game, &alias).unwrap();
+        assert!(validate_temporary_root(&alias, &nested).is_err());
+        assert!(validate_temporary_root(&alias, &game).is_err());
+        assert!(validate_temporary_root(&alias, root.path()).is_err());
+        validate_temporary_root(&alias, &outside).unwrap();
+        assert_eq!(std::fs::read_dir(&nested).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
     }
 
     #[cfg(unix)]
