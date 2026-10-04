@@ -3260,6 +3260,23 @@ mod tests {
     }
 
     #[test]
+    fn manager_script_update_token_reaches_cli_without_granting_install_consent() {
+        let args = json!({ "script_update_confirmation": "reviewed-update-token" });
+        assert_eq!(
+            argv_of("gore_mgr", "apply", args.clone()),
+            vec![
+                "mgr",
+                "apply",
+                "--script-update-confirmation",
+                "reviewed-update-token",
+            ]
+        );
+        let consent = question("gore_mgr", "apply", args, &options()).expect("must ask");
+        assert!(consent.needs.write);
+        assert!(!consent.needs.game_launch);
+    }
+
+    #[test]
     fn positionals_are_ordered_and_separated_from_flags() {
         assert_eq!(
             argv_of(

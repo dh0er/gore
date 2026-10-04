@@ -728,6 +728,19 @@ const MGR_ORDER_ARGS: &[ArgSpec] = &[
 
 const MGR_GAME_ARGS: &[ArgSpec] = &[GAME, LIBRARY, LOADOUT];
 
+const MGR_APPLY_ARGS: &[ArgSpec] = &[
+    GAME,
+    LIBRARY,
+    LOADOUT,
+    ArgSpec::new(
+        "script_update_confirmation",
+        Long("script-update-confirmation"),
+        Str,
+        "Exact script-update warning token explicitly approved for this apply",
+        false,
+    ),
+];
+
 const MGR_RESET_ARGS: &[ArgSpec] = &[GAME];
 
 const MGR_RECOVER_ARGS: &[ArgSpec] = &[
@@ -856,7 +869,7 @@ const MGR_COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
         "apply",
         "Compose the enabled loadout into one deployment against the game",
-        MGR_GAME_ARGS,
+        MGR_APPLY_ARGS,
         Safety::mutate(),
         T_LONG,
     )

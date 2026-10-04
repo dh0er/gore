@@ -25,6 +25,7 @@ uses the matching version section as the GitHub release notes.
   modules. Use the `[y/N]` prompt or pass the exact reviewed token with
   `--script-update-confirmation <TOKEN>`; changes to the cache, loadout or sources
   require fresh confirmation. Declining leaves the installation unchanged.
+  MCP exposes the same optional token; installation consent remains required.
 - Rebuilds use complete authored modules without merging updated vanilla logic.
   Binary-only script mods still need an author rebuild after cache updates.
   Rebuilds require a compatible compiler profile and native bindings;
