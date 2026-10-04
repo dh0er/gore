@@ -121,6 +121,177 @@ fn asset_release_releases_durable_leases_across_cli_processes() {
 }
 
 #[test]
+fn bare_icon_manifest_paths_match_relative_and_absolute_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let manifest = item_icon_fixture(home);
+    let generation = manifest.parent().unwrap();
+    let before = fs::read(&manifest).unwrap();
+    let expected = run(
+        home,
+        &["assets", "list", "--manifest", manifest.to_str().unwrap()],
+    );
+    for path in ["manifest.json", "./manifest.json"] {
+        let actual = run_from(
+            home,
+            Some(generation),
+            &["assets", "list", "--manifest", path],
+        );
+        assert_eq!(actual, expected);
+        assert_eq!(actual["items"], json!({"ItMi_One":"images/one.png"}));
+        let opened = run_from(
+            home,
+            Some(generation),
+            &[
+                "assets",
+                "open",
+                "--manifest",
+                path,
+                "--id",
+                "ItMi_One",
+                "--dry-run",
+            ],
+        );
+        assert_eq!(
+            PathBuf::from(opened["path"].as_str().unwrap()),
+            generation.join("images/one.png").canonicalize().unwrap()
+        );
+    }
+    assert_eq!(fs::read(&manifest).unwrap(), before);
+}
+
+#[test]
+fn staged_export_destinations_remain_bound_after_changing_directories() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let first = home.join("first");
+    let second = home.join("second");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let source_before = fs::read(&save).unwrap();
+    let draft = home.join("rename.json");
+    let unrelated = second.join("edited.sav");
+    fs::write(&unrelated, b"unrelated file must survive").unwrap();
+    run_from(
+        home,
+        Some(&first),
+        &[
+            "rename",
+            save.to_str().unwrap(),
+            "--name",
+            "Export in first",
+            "--draft",
+            draft.to_str().unwrap(),
+            "--out",
+            "edited.sav",
+        ],
+    );
+    let staged_before = fs::read(&draft).unwrap();
+    let legacy = home.join("legacy.json");
+    let mut legacy_data: Value = serde_json::from_slice(&staged_before).unwrap();
+    legacy_data["outputPath"] = json!("edited.sav");
+    fs::write(&legacy, serde_json::to_vec(&legacy_data).unwrap()).unwrap();
+    let legacy_before = fs::read(&legacy).unwrap();
+    let error = run_failure_from(
+        home,
+        Some(&second),
+        &["draft", "apply", legacy.to_str().unwrap()],
+    );
+    assert!(error.to_string().contains("requires --out"), "{error}");
+    assert_eq!(fs::read(&legacy).unwrap(), legacy_before);
+    assert_eq!(
+        fs::read(&unrelated).unwrap(),
+        b"unrelated file must survive"
+    );
+    let validated = run_from(
+        home,
+        Some(&second),
+        &["draft", "validate", draft.to_str().unwrap()],
+    );
+    assert_eq!(validated["dryRun"], true, "{validated}");
+    assert_eq!(fs::read(&draft).unwrap(), staged_before);
+    assert!(!first.join("edited.sav").exists());
+    run_from(
+        home,
+        Some(&second),
+        &["draft", "apply", draft.to_str().unwrap()],
+    );
+    assert!(first.join("edited.sav").is_file());
+    assert_eq!(
+        fs::read(&unrelated).unwrap(),
+        b"unrelated file must survive"
+    );
+    assert_eq!(fs::read(&save).unwrap(), source_before);
+    assert_eq!(
+        run(
+            home,
+            &["inspect", first.join("edited.sav").to_str().unwrap()]
+        )["public"]["playerSaveName"],
+        "Export in first"
+    );
+}
+
+#[test]
+fn existing_uncatalogued_items_accept_short_id_count_edits() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let path = "/Script/Angelscript.ItMi_PR123_Unknown";
+    let properties = execute_core(
+        "search_typed_properties",
+        json!({"path":save,"query":"ItWr_Scroll_Letter_01","includeNodes":true,"limit":1000}),
+    );
+    let property = properties["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| {
+            row["editable"] == true
+                && row["editValue"] == "/Script/Angelscript.ItWr_Scroll_Letter_01"
+        })
+        .unwrap();
+    assert_eq!(
+        execute_core(
+            "apply_edits",
+            json!({"path":save,"edits":[{"path":"private.typed.setValue","value":{"path":property["path"],"value":path}}]})
+        )["complete"],
+        true
+    );
+    let before = fs::read(&save).unwrap();
+    let args = [
+        "inventory",
+        "set-count",
+        save.to_str().unwrap(),
+        "--item",
+        "ItMi_PR123_Unknown",
+        "--count",
+        "3",
+    ];
+    let mut dry = args.to_vec();
+    dry.push("--dry-run");
+    assert_eq!(run(home, &dry)["dryRun"], true);
+    assert_eq!(fs::read(&save).unwrap(), before);
+    run(home, &args);
+    let inventory = run(
+        home,
+        &[
+            "inventory",
+            "list",
+            save.to_str().unwrap(),
+            "--id",
+            "ItMi_PR123_Unknown",
+            "--all",
+        ],
+    );
+    assert_eq!(inventory["total"], 1);
+    assert_eq!(inventory["items"][0]["path"], path);
+    assert_eq!(inventory["items"][0]["count"], 3);
+}
+
+#[test]
 fn export_previews_reject_missing_output_parents_without_creating_them() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
@@ -749,20 +920,23 @@ fn run_from(home: &Path, directory: Option<&Path>, args: &[&str]) -> Value {
 }
 
 fn run_failure(home: &Path, args: &[&str]) -> Value {
-    let output = Command::cargo_bin("gore")
-        .unwrap()
+    run_failure_from(home, None, args)
+}
+
+fn run_failure_from(home: &Path, directory: Option<&Path>, args: &[&str]) -> Value {
+    let mut command = Command::cargo_bin("gore").unwrap();
+    command
         .env("LOCALAPPDATA", home)
         .env("APPDATA", home)
         .env("XDG_DATA_HOME", home)
         .env("GORE_DISABLE_GAME_AUTODETECT", "1")
         .arg("save")
         .args(args)
-        .arg("--json")
-        .assert()
-        .failure()
-        .get_output()
-        .stdout
-        .clone();
+        .arg("--json");
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+    let output = command.assert().failure().get_output().stdout.clone();
     let value: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["ok"], false, "{value}");
     value["error"].clone()

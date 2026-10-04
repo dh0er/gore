@@ -1902,7 +1902,43 @@ fn inventory(v: &str, o: &Options) -> Result<Value> {
             }
         }
     } else if let Some(item) = item {
-        data["path"] = json!(display::existing_item_path(item)?)
+        data["path"] = json!(if v == "set-count" && !item.starts_with('/') {
+            let saved = inventory(
+                "list",
+                &Options {
+                    all: true,
+                    offset: 0,
+                    query: None,
+                    category: None,
+                    state: None,
+                    role: None,
+                    item: None,
+                    id: None,
+                    ..o.clone()
+                },
+            )?;
+            let paths = saved["items"]
+                .as_array()
+                .context("inventory is unavailable")?
+                .iter()
+                .filter(|row| {
+                    row["id"]
+                        .as_str()
+                        .is_some_and(|id| id.eq_ignore_ascii_case(item))
+                })
+                .filter_map(|row| row["path"].as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            if paths.len() != 1 {
+                bail!(
+                    "inventory item must resolve to one saved definition; provide its path or --container and --slot"
+                );
+            }
+            // One legacy item selector can cover several stacks/containers.
+            // Resolve its definition, without narrowing its established scope.
+            paths.first().unwrap().to_string()
+        } else {
+            display::existing_item_path(item)?
+        })
     }
     if let Some(count) = o.count {
         data["count"] = json!(count)

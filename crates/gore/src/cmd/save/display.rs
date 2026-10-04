@@ -462,12 +462,14 @@ pub(super) fn catalog_page(domain: &str, o: &Options, texts: &super::text::Texts
                 .context("invalid hero attribute catalog")?
                 .remove("groups")
                 .context("hero attribute catalog has no groups")?;
-            data["entries"] = json!(groups
-                .as_object()
-                .context("invalid attribute groups")?
-                .iter()
-                .map(|(id, attributes)| json!({"id":id,"attributes":attributes}))
-                .collect::<Vec<_>>());
+            data["entries"] = json!(
+                groups
+                    .as_object()
+                    .context("invalid attribute groups")?
+                    .iter()
+                    .map(|(id, attributes)| json!({"id":id,"attributes":attributes}))
+                    .collect::<Vec<_>>()
+            );
         }
         _ => {}
     }
@@ -670,10 +672,12 @@ fn assets(v: &str, o: &Options) -> Result<Value> {
     if v == "status" {
         return call("item_icons_source_identity", payload(o)?);
     }
-    let manifest = o
-        .manifest
-        .as_deref()
-        .context("--manifest required (from assets prepare)")?;
+    let manifest_path = std::path::absolute(
+        o.manifest
+            .as_deref()
+            .context("--manifest required (from assets prepare)")?,
+    )?;
+    let manifest = manifest_path.as_path();
     if v == "release" {
         if o.dry_run {
             let would_release =

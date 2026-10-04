@@ -155,6 +155,60 @@ fn relayed_approval_id(refusal: &Value) -> String {
 }
 
 #[test]
+fn save_count_dry_run_accepts_an_existing_uncatalogued_short_id() {
+    let temp = TempDir::new().unwrap();
+    let save = temp.path().join("G1R-001.sav");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../gore-save/assets/start_saves/resources_gothic.sav"),
+        &save,
+    )
+    .unwrap();
+    let core = |command: &str, payload: Value| {
+        gore_save::api::execute(&gore_save::api::Request {
+            command: command.into(),
+            payload,
+        })
+        .unwrap()
+    };
+    let properties = core(
+        "search_typed_properties",
+        json!({"path":save,"query":"ItWr_Scroll_Letter_01","includeNodes":true,"limit":1000}),
+    );
+    let property = properties["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| {
+            row["editable"] == true
+                && row["editValue"] == "/Script/Angelscript.ItWr_Scroll_Letter_01"
+        })
+        .unwrap();
+    assert_eq!(
+        core(
+            "apply_edits",
+            json!({"path":save,"edits":[{"path":"private.typed.setValue","value":{"path":property["path"],"value":"/Script/Angelscript.ItMi_PR123_Unknown"}}]})
+        )["complete"],
+        true
+    );
+    let before = std::fs::read(&save).unwrap();
+    let mut server = Server::spawn(temp.path());
+    server.initialize();
+    server.send(json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"gore_save","arguments":{"subcommand":"inventory set-count","args":{"save":save,"item":"ItMi_PR123_Unknown","count":3,"dry_run":true}}}}));
+    let response = server.recv();
+    let result = &response["result"];
+    assert_eq!(result["isError"], false, "{response}");
+    let output: Value =
+        serde_json::from_str(result["content"][1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(output["ok"], true);
+    assert_eq!(output["data"]["dryRun"], true);
+    assert_eq!(std::fs::read(&save).unwrap(), before);
+    let (code, stderr) = server.shutdown();
+    assert_eq!(code, Some(0), "{stderr}");
+}
+
+
+#[test]
 fn initialize_negotiates_and_identifies_the_server() {
     let tmp = TempDir::new().unwrap();
     let mut server = Server::spawn(tmp.path());

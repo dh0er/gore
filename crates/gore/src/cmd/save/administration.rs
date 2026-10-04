@@ -475,7 +475,16 @@ pub(super) fn stage(file: &Path, payload: &Value, dry_run: bool) -> Result<Value
     let path = PathBuf::from(payload["path"].as_str().context("draft has no save path")?)
         .canonicalize()?;
     let hash = api::file_sha1(&path)?;
-    if let Some(output) = payload["outputPath"].as_str() {
+    let output = payload
+        .get("outputPath")
+        .map(|output| -> Result<Value> {
+            Ok(match output.as_str() {
+                Some(path) => json!(std::path::absolute(Path::new(path))?),
+                None => output.clone(),
+            })
+        })
+        .transpose()?;
+    if let Some(output) = output.as_ref().and_then(Value::as_str) {
         api::validate_output_path(&path, Path::new(output))?;
     }
     api::check_edit_persistent_snapshots(
@@ -650,10 +659,15 @@ pub(super) fn stage(file: &Path, payload: &Value, dry_run: bool) -> Result<Value
                 current["expectedPersistentSha1"] = json!(hash);
             }
         }
-        if let Some(output) = payload.get("outputPath") {
+        if let Some(output) = &output {
             current["outputPath"] = output.clone();
         }
         if let Some(output) = current["outputPath"].as_str() {
+            if !Path::new(output).is_absolute() {
+                return Err(gore_save::CoreError::Validation(
+                    "relative output in legacy draft requires an explicit outputPath".into(),
+                ));
+            }
             api::validate_output_path(&path, Path::new(output))?;
         }
         api::check_edit_persistent_snapshots(
@@ -811,9 +825,12 @@ fn draft(v: &str, o: &Options) -> Result<Value> {
     }
     let mut execution = data.clone();
     if let Some(output) = &o.out {
-        execution["outputPath"] = json!(output);
+        execution["outputPath"] = json!(std::path::absolute(output)?);
     }
     if let Some(output) = execution["outputPath"].as_str() {
+        if !Path::new(output).is_absolute() {
+            bail!("relative output in legacy draft requires --out to select its destination");
+        }
         api::validate_output_path(file, Path::new(output))
             .context("output must preserve the draft file")?;
         // Exported copies do not update either source or destination profile.

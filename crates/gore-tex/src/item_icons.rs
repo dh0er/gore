@@ -977,7 +977,7 @@ pub fn verified_item_icon_manifest(path: &Path) -> Result<ItemIconManifest> {
     if path.file_name().and_then(|s|s.to_str())!=Some(MANIFEST_FILE_NAME) {
         return Err(invalid_data("item icon path must name manifest.json"));
     }
-    let directory=path.parent().ok_or_else(||invalid_data("manifest has no directory"))?;
+    let directory=path.parent().filter(|parent|!parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
     if !complete_cache_is_owned(directory)? {return Err(invalid_data("item icon cache is incomplete or its seals no longer match"));}
     structurally_complete_owned_manifest(directory)?.ok_or_else(||invalid_data("item icon manifest disappeared during verification"))
 }
@@ -1954,6 +1954,43 @@ fn invalid_data(message: &'static str) -> TexError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bare_manifest_filename_verifies_the_current_generation() {
+        const CHILD: &str = "GORE_ICON_BARE_MANIFEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let actual = verified_item_icon_manifest(Path::new("manifest.json")).unwrap();
+            let expected = verified_item_icon_manifest(
+                &std::env::current_dir().unwrap().join(MANIFEST_FILE_NAME),
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(actual).unwrap(),
+                serde_json::to_value(expected).unwrap()
+            );
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let mut source = FakeSource::stable("build-a");
+        let manifest =
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut source).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "item_icons::tests::bare_manifest_filename_verifies_the_current_generation",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .current_dir(manifest.parent().unwrap())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     const HEADER_ONLY_RGBA8_PNG: [u8; 33] = [
         137, 80, 78, 71, 13, 10, 26, 10, // signature
