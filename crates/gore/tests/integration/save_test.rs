@@ -900,6 +900,127 @@ fn run(home: &Path, args: &[&str]) -> Value {
     run_from(home, None, args)
 }
 
+#[test]
+fn editor_parity_skills_localize_before_search_and_keep_write_values() {
+    let temp = tempfile::tempdir().unwrap();
+    let save = fixture();
+    let save = save.to_str().unwrap();
+    let english = run(
+        temp.path(),
+        &[
+            "skills",
+            "show",
+            save,
+            "--skill",
+            "Ranged_Bow",
+            "--lang",
+            "en",
+        ],
+    );
+    let german = run(
+        temp.path(),
+        &[
+            "skills",
+            "show",
+            save,
+            "--skill",
+            "Ranged_Bow",
+            "--lang",
+            "de",
+        ],
+    );
+    assert_eq!(german["label"], "Bogen");
+    for field in ["base", "current", "kind", "category", "learned"] {
+        assert_eq!(german[field], english[field], "{field}");
+    }
+    assert_eq!(
+        german["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| &o["value"])
+            .collect::<Vec<_>>(),
+        english["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| &o["value"])
+            .collect::<Vec<_>>()
+    );
+    let found = run(
+        temp.path(),
+        &[
+            "skills", "list", save, "--query", "Bogen", "--lang", "de", "--limit", "1",
+        ],
+    );
+    assert_eq!(found["total"], 1);
+    assert_eq!(found["skills"][0], german);
+}
+
+#[test]
+fn editor_parity_bad_optional_settings_preserve_explicit_save_operations() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let original = fs::read(&save).unwrap();
+    let settings = home.join("gore/gore-save/settings.json");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    for bytes in [b"{broken".as_slice(), b"null".as_slice()] {
+        fs::write(&settings, bytes).unwrap();
+        let listed = run(home, &["list", "--root", home.to_str().unwrap()]);
+        assert_eq!(listed["saves"].as_array().unwrap().len(), 1);
+        run(
+            home,
+            &["inventory", "reset", save.to_str().unwrap(), "--dry-run"],
+        );
+        assert_eq!(fs::read(&settings).unwrap(), bytes);
+        assert_eq!(fs::read(&save).unwrap(), original);
+        assert!(!home.join("goresave_backups").exists());
+    }
+}
+
+#[test]
+fn editor_parity_bad_optional_text_cache_preserves_gameplay_and_reports() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let original = fs::read(&save).unwrap();
+    let catalog = home.join("gore/loc_catalog.json");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    let report = home.join("report.html");
+    fs::write(&report, b"existing report").unwrap();
+    for bytes in [b"{broken".as_slice(), b"null".as_slice()] {
+        fs::write(&catalog, bytes).unwrap();
+        run(
+            home,
+            &[
+                "inventory",
+                "remove",
+                save.to_str().unwrap(),
+                "--item",
+                "ItMs_Glossary",
+                "--dry-run",
+            ],
+        );
+        run(
+            home,
+            &[
+                "report",
+                save.to_str().unwrap(),
+                "--out",
+                report.to_str().unwrap(),
+                "--dry-run",
+            ],
+        );
+        assert_eq!(fs::read(&report).unwrap(), b"existing report");
+        assert_eq!(fs::read(&catalog).unwrap(), bytes);
+        assert_eq!(fs::read(&save).unwrap(), original);
+        assert!(!home.join("goresave_backups").exists());
+    }
+}
+
 fn run_from(home: &Path, directory: Option<&Path>, args: &[&str]) -> Value {
     let mut command = Command::cargo_bin("gore").unwrap();
     command

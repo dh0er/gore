@@ -44,11 +44,12 @@ pub(super) fn settings_read(scope: &str) -> Result<Value> {
             .or_else(|| old.exists().then_some(old))
     };
     if let Some(path) = source {
-        let value = read_json(&path)?;
-        if !value.is_object() {
-            bail!("settings must be a JSON object");
-        }
-        Ok(value)
+        // The Editor treats unreadable or malformed optional preferences as defaults.
+        // Reading preferences must never repair or overwrite the source file.
+        Ok(read_json(&path)
+            .ok()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({})))
     } else {
         Ok(json!({}))
     }

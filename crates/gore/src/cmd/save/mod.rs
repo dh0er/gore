@@ -1148,6 +1148,7 @@ fn dispatch(g: &str, v: &str, o: &Options) -> Result<Value> {
                 p["actor"] = json!(npc_id(o)?);
             }
             let mut data = call("private.skills.list", p)?;
+            text::Texts::load_options(o)?.skills(&mut data);
             let mut filter = o.clone();
             filter.id = o.skill.clone().or(o.id.clone());
             display::filter(&mut data, "skills", &filter);

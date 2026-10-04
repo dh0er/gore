@@ -207,6 +207,29 @@ fn save_count_dry_run_accepts_an_existing_uncatalogued_short_id() {
     assert_eq!(code, Some(0), "{stderr}");
 }
 
+#[test]
+fn editor_parity_mcp_searches_localized_skills_without_write_consent() {
+    let temp = TempDir::new().unwrap();
+    let save = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../gore-save/assets/start_saves/resources_gothic.sav");
+    let mut server = Server::spawn(temp.path());
+    server.initialize();
+    server.send(json!({"jsonrpc":"2.0","id":13,"method":"tools/call","params":{
+        "name":"gore_save","arguments":{"subcommand":"skills list",
+        "args":{"save":save,"query":"Bogen","lang":"de","limit":1}}
+    }}));
+    let response = server.recv();
+    let result = &response["result"];
+    assert_eq!(result["isError"], false, "{response}");
+    let output: Value = serde_json::from_str(result["content"][1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(output["ok"], true);
+    assert_eq!(output["data"]["total"], 1);
+    assert_eq!(output["data"]["skills"][0]["base"], "Ranged_Bow");
+    assert_eq!(output["data"]["skills"][0]["label"], "Bogen");
+    let (code, stderr) = server.shutdown();
+    assert_eq!(code, Some(0), "{stderr}");
+}
+
 
 #[test]
 fn initialize_negotiates_and_identifies_the_server() {

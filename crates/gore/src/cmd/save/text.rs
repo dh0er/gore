@@ -86,11 +86,11 @@ impl Texts {
             _ => bail!("unsupported game text language {game}"),
         };
         let path = gore_loc::paths::loc_catalog_path();
-        let catalog = if path.is_file() {
-            read_json(&path)?
-        } else {
-            json!({})
-        };
+        // The Editor uses raw/derived names when its optional text cache is unusable.
+        let catalog = read_json(&path)
+            .ok()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
         Ok(Self {
             catalog,
             sets,
@@ -115,6 +115,58 @@ impl Texts {
                     .filter(|s| !s.trim().is_empty())
                     .map(str::to_owned)
             })
+    }
+    pub(super) fn skills(&self, data: &mut Value) {
+        let Some(rows) = data["skills"].as_array_mut() else {
+            return;
+        };
+        for row in rows {
+            let base = row["base"].as_str().unwrap_or("").to_owned();
+            let kind = row["kind"].as_str().unwrap_or("").to_owned();
+            if let Some(key) = presentation::metadata()["skillNames"][&base].as_str() {
+                row["label"] = json!(self.ui(key));
+            }
+            let category = row["category"].as_str().unwrap_or("");
+            row["categoryLabel"] = json!(
+                presentation::metadata()["skillCategories"][category]
+                    .as_str()
+                    .map(|key| self.ui(key))
+                    .unwrap_or_else(|| category.into())
+            );
+            row["currentLabel"] =
+                json!(self.skill_option_label(&base, &kind, row["current"].as_str().unwrap_or("")));
+            if let Some(options) = row["options"].as_array_mut() {
+                for option in options {
+                    option["label"] = json!(self.skill_option_label(
+                        &base,
+                        &kind,
+                        option["value"].as_str().unwrap_or("")
+                    ));
+                }
+            }
+        }
+    }
+    fn skill_option_label(&self, base: &str, kind: &str, value: &str) -> String {
+        let key = match (base, kind, value) {
+            ("Crafting_Blacksmith", _, "Trained") => "skillSmithing1H",
+            ("Crafting_Blacksmith", _, "Master") => "skillSmithing2H",
+            ("Hunting_Scutes", _, "Trained") => "skillScutesTrained",
+            ("Hunting_Scutes", _, "Master") => "skillScutesMaster",
+            (_, "circle", "Amateur") => "skillCircleNovice",
+            (_, "circle", "1") => "skillCircle1",
+            (_, "circle", "2") => "skillCircle2",
+            (_, "circle", "3") => "skillCircle3",
+            (_, "circle", "4") => "skillCircle4",
+            (_, "circle", "5") => "skillCircle5",
+            (_, "circle", "6") => "skillCircle6",
+            (_, _, "Master") => "skillTierMaster",
+            (_, _, "Trained" | "Skilled") => "skillTierTrained",
+            (_, "ladder" | "circle", "Learned") => "skillTierLearned",
+            (_, _, "Learned") => "skillTierTrained",
+            (_, _, "Untrained") => "skillTierUntrained",
+            _ => return value.into(),
+        };
+        self.ui(key)
     }
     pub(super) fn character_name(&self, id: &str) -> String {
         let key = id.split('-').next().unwrap_or(id);
@@ -422,6 +474,42 @@ impl Texts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn skill_labels_preserve_unknown_names_and_tiers_and_editor_special_cases() {
+        let texts = Texts {
+            catalog: json!({}),
+            sets: vec![],
+            lang: "de".into(),
+        };
+        let mut data = json!({"skills":[{
+            "base":"Uncatalogued_Skill","label":"Uncatalogued Skill","category":"Other",
+            "kind":"ladder","current":"Journeyman","options":[{"value":"Journeyman"},{"value":"Untrained"}]
+        }]});
+        texts.skills(&mut data);
+        assert_eq!(data["skills"][0]["label"], "Uncatalogued Skill");
+        assert_eq!(data["skills"][0]["currentLabel"], "Journeyman");
+        assert_eq!(
+            data["skills"][0]["options"][0],
+            json!({"value":"Journeyman","label":"Journeyman"})
+        );
+        for (base, kind, tier, key) in [
+            (
+                "Crafting_Blacksmith",
+                "ladder",
+                "Trained",
+                "skillSmithing1H",
+            ),
+            ("Crafting_Blacksmith", "ladder", "Master", "skillSmithing2H"),
+            ("Hunting_Scutes", "ladder", "Trained", "skillScutesTrained"),
+            ("Hunting_Scutes", "ladder", "Master", "skillScutesMaster"),
+            ("Mage_Circle", "circle", "Amateur", "skillCircleNovice"),
+            ("Mage_Circle", "circle", "6", "skillCircle6"),
+            ("Uncatalogued", "ladder", "Learned", "skillTierLearned"),
+            ("Acrobatics", "binary", "Learned", "skillTierTrained"),
+        ] {
+            assert_eq!(texts.skill_option_label(base, kind, tier), texts.ui(key));
+        }
+    }
     #[test]
     fn displayed_actor_and_key_names_resolve_catalog_ids_and_editor_fallbacks() {
         let texts = Texts {

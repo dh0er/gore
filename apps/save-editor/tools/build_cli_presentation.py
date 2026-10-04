@@ -81,6 +81,13 @@ def build():
     item_categories = dict(re.findall(r"'([^']+)'\s*=>\s*ItemCategory\.(\w+)", filter_table))
     if len(item_categories) != 10:
         raise ValueError("could not extract the Editor inventory category table")
+    skills = read("lib/features/editor/ui/skills_panel.dart", sources)
+    skill_names = dict(re.findall(r"case '([^']+)':\s*return l10n\.(\w+);",
+                                 skills.split("String _skillName(", 1)[1].split("String _optionLabel(", 1)[0]))
+    skill_categories = dict(re.findall(r"case '([^']+)':\s*return l10n\.(\w+);",
+                                      skills.split("String _categoryLabel(", 1)[1]))
+    if len(skill_names) != 38 or len(skill_categories) != 8:
+        raise ValueError("could not extract the complete Editor skill presentation tables")
     ui, selects = {}, {}
     for lang in defaults:
         file = lang.replace("-", "_")
@@ -89,7 +96,8 @@ def build():
         selects[lang] = {key: arms for key, value in ui[lang].items() if (arms := select_arms(value))}
     return {"schema": 1, "sources": sources, "story": entries,
             "attributeGroups": groups, "hiddenAttributes": sorted(set(hidden)), "ui": ui,
-            "gameTextDefaults": defaults, "selects": selects, "itemCategories": item_categories}
+            "gameTextDefaults": defaults, "selects": selects, "itemCategories": item_categories,
+            "skillNames": skill_names, "skillCategories": skill_categories}
 
 
 def main():
