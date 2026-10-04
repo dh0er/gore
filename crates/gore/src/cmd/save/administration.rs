@@ -525,7 +525,7 @@ impl LibraryCleanup {
                 return Err(gore_save::CoreError::Parse("invalid settings".into()));
             }
             for key in self.keys {
-                if let Some(entries) = settings[key].as_array_mut() {
+                if let Some(entries) = settings.get_mut(key).and_then(Value::as_array_mut) {
                     entries.retain(|entry| {
                         entry.as_str().is_none_or(|entry| {
                             !self

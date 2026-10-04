@@ -901,6 +901,66 @@ fn run(home: &Path, args: &[&str]) -> Value {
 }
 
 #[test]
+fn repeated_inventory_resets_replace_only_the_same_actors_pending_reset() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let original = fs::read(&save).unwrap();
+    let draft = home.join("resets.json");
+    let save_arg = save.to_str().unwrap();
+    let draft_arg = draft.to_str().unwrap();
+    let npc = "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN";
+    for (actor, level) in [
+        ("Hero", "Hard"),
+        (npc, "Hard"),
+        ("Hero", "Novice"),
+        (npc, "Novice"),
+    ] {
+        run(
+            home,
+            &[
+                "inventory",
+                "reset",
+                save_arg,
+                "--actor",
+                actor,
+                "--resources-level",
+                level,
+                "--draft",
+                draft_arg,
+            ],
+        );
+    }
+    let staged = run(home, &["draft", "show", draft_arg]);
+    let edits = staged["edits"].as_array().unwrap();
+    assert_eq!(edits.len(), 2);
+    assert!(
+        edits
+            .iter()
+            .all(|edit| edit["value"]["resourcesLevel"] == "Novice")
+    );
+    assert_eq!(
+        edits
+            .iter()
+            .filter(|edit| edit["value"]["actorId"].is_null())
+            .count(),
+        1
+    );
+    assert_eq!(
+        edits
+            .iter()
+            .filter(|edit| edit["value"]["actorId"] == npc)
+            .count(),
+        1
+    );
+    run(home, &["draft", "validate", draft_arg]);
+    assert_eq!(fs::read(&save).unwrap(), original);
+    run(home, &["draft", "apply", draft_arg]);
+    assert_eq!(run(home, &["draft", "show", draft_arg])["edits"], json!([]));
+}
+
+#[test]
 fn editor_workflow_routine_restoration_survives_subsequent_position_changes() {
     for operation in ["resume-routine", "undo"] {
         let temp = tempfile::tempdir().unwrap();
@@ -978,7 +1038,6 @@ fn editor_workflow_profile_mutations_reconcile_library_after_success_only() {
     run(home, &["profile", "assign", save_arg, "--profile", "0"]);
     run(home, &["profile", "detach", save_arg, "--profile", "0"]);
     run(home, &["library", "hide", save_arg]);
-    run(home, &["library", "add", save_arg]);
     let settings = home.join("gore/gore-save/settings.json");
     let mut preferences: Value = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
     preferences["unrelatedPreference"] = json!("keep");
@@ -993,7 +1052,7 @@ fn editor_workflow_profile_mutations_reconcile_library_after_success_only() {
     assert_eq!(fs::read(&settings).unwrap(), hidden_bytes);
     run(home, &["profile", "assign", save_arg, "--profile", "0"]);
     let listed = run(home, &["library", "list"]);
-    assert_eq!(listed["externalSavePaths"], json!([]));
+    assert!(listed.get("externalSavePaths").is_none());
     assert_eq!(listed["hiddenOtherSavePaths"], json!([]));
     run(home, &["library", "hide", save_arg]);
     run(home, &["profile", "detach", save_arg, "--profile", "0"]);

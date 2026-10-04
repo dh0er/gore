@@ -194,6 +194,13 @@ pub fn replacement_key(raw: &Value) -> Option<String> {
     if edit.path == "private.typed.setValue" {
         return Some(format!("typed:{:?}", typed(&edit).ok()??));
     }
+    if let PrivateEdit::InventoryReset(reset) = &spec {
+        return Some(format!(
+            "{}:{}",
+            edit.path,
+            json!(reset.actor_id.as_deref().map(str::to_lowercase))
+        ));
+    }
     if let PrivateEdit::InventoryItemCount(count) = &spec {
         let container = if count.actor_id.is_none()
             && count.container_type.is_none()
@@ -1347,6 +1354,31 @@ mod tests {
             assert!(plan(&[reset.clone(), other.clone()]).is_ok());
             assert!(plan(&[other, reset]).is_ok());
         }
+    }
+
+    #[test]
+    fn reset_replacement_keys_follow_actor_identity_and_preserve_distinct_actors() {
+        let reset = |actor: Value, level: &str| json!({"path":"private.inventory.reset", "value":{"actorId":actor,"resourcesLevel":level}});
+        let hero = reset(Value::Null, "Hard");
+        let other = reset(json!("NPC-Diego"), "Hard");
+        assert!(replacement_key(&hero).is_some());
+        assert_eq!(
+            replacement_key(&hero),
+            replacement_key(&reset(Value::Null, "Novice"))
+        );
+        assert_eq!(
+            replacement_key(&other),
+            replacement_key(&reset(json!("npc-diego"), "Novice"))
+        );
+        assert_eq!(
+            replacement_key(&other),
+            replacement_key(&reset(json!(" NPC-Diego "), "Novice"))
+        );
+        assert_ne!(replacement_key(&hero), replacement_key(&other));
+        assert_ne!(
+            replacement_key(&other),
+            replacement_key(&reset(json!("NPC-Milten"), "Hard"))
+        );
     }
 
     #[test]
