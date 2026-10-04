@@ -1332,12 +1332,14 @@ fn attribute_set_class(row: &Value) -> &str {
     row["path"]
         .as_array()
         .or_else(|| row["basePath"].as_array())
+        .or_else(|| row["currentPath"].as_array())
         .and_then(|path| {
             path.iter()
                 .position(|s| s == "AttributeSetsByClass")
                 .and_then(|i| path.get(i + 1))
         })
         .and_then(Value::as_str)
+        .or_else(|| row["setClass"].as_str())
         .map(|s| s.trim_matches(['{', '}']))
         .unwrap_or("")
 }
@@ -1345,13 +1347,162 @@ fn attribute_set_class(row: &Value) -> &str {
 fn attribute_set_matches(row: &Value, class: Option<&str>) -> bool {
     class.is_none_or(|class| {
         let set = attribute_set_class(row);
-        set == class || set.rsplit('.').next() == Some(class)
+        !set.is_empty() && (set == class || set.rsplit('.').next() == Some(class))
     })
+}
+
+fn hero_attribute_hit(row: &Value) -> bool {
+    row["editable"] == true
+        && row["type"] == "FloatProperty"
+        && row["path"].as_array().is_some_and(|path| {
+            path.windows(2)
+                .any(|pair| pair[0] == "AttributesByGlobalId" && pair[1] == "{Hero}")
+                && path.len() >= 4
+                && path[path.len() - 2]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with('{') && id.ends_with('}'))
+                && path
+                    .last()
+                    .is_some_and(|leaf| leaf == "BaseValue" || leaf == "CurrentValue")
+        })
+}
+
+fn legacy_hero_attributes(inspection: &Value) -> Option<Value> {
+    let private = &inspection["private"];
+    if private["status"] != "decoded" && private["status"] != "decoded_preview" {
+        return None;
+    }
+    let player = &private["player"];
+    let attributes = player["attributes"]
+        .as_array()
+        .filter(|rows| !rows.is_empty())?;
+    let editable = private["status"] == "decoded"
+        && private["preview"] != true
+        && player["writable"]
+            .as_array()
+            .is_some_and(|ops| ops.iter().any(|op| op == "private.player.setAttribute"));
+    let rows: Vec<_> = attributes
+        .iter()
+        .map(|attribute| {
+            let mut row = attribute.clone();
+            row["editable"] = json!(editable);
+            row
+        })
+        .collect();
+    Some(json!({
+        "source":"private.player",
+        "results":rows,
+        "writable":player["writable"],
+        "offset":0,
+        "limit":rows.len(),
+        "total":rows.len(),
+        "count":rows.len()
+    }))
+}
+
+fn hero_attribute_data(
+    typed: Result<Value>,
+    inspect: impl FnOnce() -> Result<Value>,
+) -> Result<Value> {
+    if typed.as_ref().is_ok_and(|data| {
+        data["results"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(hero_attribute_hit))
+    }) {
+        return typed;
+    }
+    // Match the Editor's legacy surface when the typed load fails or has no
+    // attribute leaves. A failed fallback must not swallow the typed error.
+    if let Ok(inspection) = inspect() {
+        if let Some(data) = legacy_hero_attributes(&inspection) {
+            return Ok(data);
+        }
+    }
+    typed
+}
+
+fn attribute_page(mut data: Value, key: &str, o: &Options) -> Result<Value> {
+    if let Some(rows) = data[key].as_array_mut() {
+        for row in rows.iter_mut() {
+            let path = row["path"]
+                .as_array()
+                .or_else(|| row["basePath"].as_array());
+            let id = row["key"]
+                .as_str()
+                .or_else(|| row["id"].as_str())
+                .or_else(|| {
+                    path.and_then(|p| p.get(p.len().saturating_sub(2)))
+                        .and_then(Value::as_str)
+                        .map(|s| s.trim_matches(['{', '}']))
+                })
+                .unwrap_or("");
+            let id = id.to_string();
+            let set = attribute_set_class(row).to_string();
+            row["presentation"] = presentation::attribute_info(&id, &set, &o.lang);
+            row["attributeId"] = json!(id);
+            row["setClass"] = json!(set);
+        }
+        rows.retain(|r| {
+            (o.all || r["presentation"]["hidden"] != true)
+                && o.group
+                    .as_ref()
+                    .is_none_or(|g| r["presentation"]["group"] == *g)
+                && attribute_set_matches(r, o.set_class.as_deref())
+        });
+    }
+    let mut filter = o.clone();
+    filter.id = o.attribute.clone().or(o.id.clone());
+    display::localize(&mut data, o)?;
+    display::filter(&mut data, key, &filter);
+    display::paginate(&mut data, key, o);
+    Ok(data)
+}
+
+fn legacy_hero_attribute_edit(data: &Value, o: &Options) -> Result<Value> {
+    let id = required(&o.attribute, "attribute")?;
+    let rows = data["results"].as_array().context("no attributes")?;
+    // Core's structured operation accepts only an id, not a class selector.
+    // Never disambiguate duplicate ids by a class that the writer cannot use.
+    let matches: Vec<_> = rows.iter().filter(|row| row["id"] == id).collect();
+    if matches.len() != 1 {
+        bail!("legacy attribute must resolve uniquely by id");
+    }
+    let row = matches[0];
+    if !attribute_set_matches(row, o.set_class.as_deref()) {
+        bail!("--set-class does not match a known legacy attribute set class");
+    }
+    if row["editable"] != true {
+        return Err(gore_save::CoreError::UnsupportedEdit(
+            "private.player.setAttribute is not writable for this save".into(),
+        )
+        .into());
+    }
+    let mut value = json!({"id":id});
+    for (field, member, explicit) in [
+        ("base", "baseValue", o.base),
+        ("current", "currentValue", o.current),
+    ] {
+        let val = explicit.or_else(|| {
+            (field == o.field)
+                .then(|| o.value_json.as_deref().and_then(|s| s.parse::<f64>().ok()))
+                .flatten()
+        });
+        if let Some(val) = val {
+            if !val.is_finite() {
+                bail!("attribute value must be finite");
+            }
+            value[member] = json!(val);
+        }
+    }
+    if value.as_object().unwrap().len() == 1 {
+        bail!("provide --base, --current or --value-json");
+    }
+    Ok(edit("private.player.setAttribute", value))
 }
 
 fn attributes(v: &str, o: &Options) -> Result<Value> {
     let mut p = payload(o)?;
-    let mut data = if o.actor.eq_ignore_ascii_case("hero") {
+    let data = if o.actor.eq_ignore_ascii_case("hero") {
         p["query"] = json!("AttributesByGlobalId {Hero}");
         p["offset"] = json!(0);
         p["limit"] = json!(1000);
@@ -1359,7 +1510,11 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
         all.all = true;
         all.offset = 0;
         all.limit = 1000;
-        paged("search_typed_properties", p, &all)?
+        hero_attribute_data(paged("search_typed_properties", p, &all), || {
+            let mut p = payload(o)?;
+            p["includePrivate"] = json!(true);
+            call("inspect_save", p)
+        })?
     } else {
         p["id"] = json!(npc_id(o)?);
         call("private.npc.attributes", p)?
@@ -1370,39 +1525,10 @@ fn attributes(v: &str, o: &Options) -> Result<Value> {
         } else {
             "attributes"
         };
-        if let Some(rows) = data[key].as_array_mut() {
-            for row in rows.iter_mut() {
-                let path = row["path"]
-                    .as_array()
-                    .or_else(|| row["basePath"].as_array());
-                let id = row["key"]
-                    .as_str()
-                    .or_else(|| {
-                        path.and_then(|p| p.get(p.len().saturating_sub(2)))
-                            .and_then(Value::as_str)
-                            .map(|s| s.trim_matches(['{', '}']))
-                    })
-                    .unwrap_or("");
-                let id = id.to_string();
-                let set = attribute_set_class(row).to_string();
-                row["presentation"] = presentation::attribute_info(&id, &set, &o.lang);
-                row["attributeId"] = json!(id);
-                row["setClass"] = json!(set);
-            }
-            rows.retain(|r| {
-                (o.all || r["presentation"]["hidden"] != true)
-                    && o.group
-                        .as_ref()
-                        .is_none_or(|g| r["presentation"]["group"] == *g)
-                    && attribute_set_matches(r, o.set_class.as_deref())
-            });
-        }
-        let mut filter = o.clone();
-        filter.id = o.attribute.clone().or(o.id.clone());
-        display::localize(&mut data, o)?;
-        display::filter(&mut data, key, &filter);
-        display::paginate(&mut data, key, o);
-        return Ok(data);
+        return attribute_page(data, key, o);
+    }
+    if o.actor.eq_ignore_ascii_case("hero") && data["source"] == "private.player" {
+        return write(o, vec![legacy_hero_attribute_edit(&data, o)?], json!({}));
     }
     let id = required(&o.attribute, "attribute")?;
     let mut edits = Vec::new();
@@ -1699,6 +1825,299 @@ fn time(v: &str, o: &Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn legacy_attribute_inspection() -> Value {
+        json!({"private":{
+            "status":"decoded", "typedParse":{"status":"failed"},
+            "player":{
+                "writable":["private.player.setAttribute"],
+                "attributes":[
+                    {"id":"Health","baseValue":40.0,"currentValue":25.0},
+                    {"id":"Strength","baseValue":20.0,"currentValue":35.0},
+                    {"id":"MagicianLevel","baseValue":0.0,"currentValue":0.0}
+                ]
+            }
+        }})
+    }
+
+    fn legacy_attribute_options() -> Options {
+        Options {
+            actor: "hero".into(),
+            attribute: Some("Strength".into()),
+            field: "current".into(),
+            lang: "de".into(),
+            game_lang: "en".into(),
+            limit: 100,
+            ..Options::default()
+        }
+    }
+
+    #[test]
+    fn hero_attributes_fall_back_on_failed_empty_or_unavailable_typed_data() {
+        for typed in [
+            Err(gore_save::CoreError::Parse("legacy layout".into()).into()),
+            Ok(json!({"results":[],"total":0})),
+            Ok(json!({"results":[{"type":"IntProperty","editable":true,
+                "path":["AttributesByGlobalId","{Hero}","Unrelated"]}]})),
+        ] {
+            let data = hero_attribute_data(typed, || Ok(legacy_attribute_inspection())).unwrap();
+            assert_eq!(data["source"], "private.player");
+            let row = &data["results"][1];
+            assert_eq!(row["id"], "Strength");
+            assert_eq!(row["baseValue"], 20.0);
+            assert_eq!(row["currentValue"], 35.0);
+            assert_eq!(row["editable"], true);
+            assert!(row.get("path").is_none());
+            assert!(row.get("setClass").is_none());
+        }
+        let typed = json!({"results":[{"type":"FloatProperty","editable":true,
+            "path":["AttributesByGlobalId","{Hero}","AttributeSetsByClass",
+                "{/Script/G1R.AttributeSet_Strength}","Attributes","{Strength}","BaseValue"],
+            "value":"20"}]});
+        let data =
+            hero_attribute_data(Ok(typed.clone()), || panic!("typed data is preferred")).unwrap();
+        assert_eq!(data, typed);
+    }
+
+    #[test]
+    fn hero_attributes_preserve_typed_errors_when_legacy_data_is_unavailable() {
+        for inspection in [
+            json!({"private":{"status":"decode_failed"}}),
+            json!({"private":{"status":"decoded","player":{"attributes":[]}}}),
+        ] {
+            let error = hero_attribute_data(
+                Err(gore_save::CoreError::Parse("typed layout failed".into()).into()),
+                || Ok(inspection),
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error.downcast_ref::<gore_save::CoreError>(),
+                Some(gore_save::CoreError::Parse(_))
+            ));
+        }
+        let empty = json!({"results":[],"total":0});
+        assert_eq!(
+            hero_attribute_data(Ok(empty.clone()), || bail!("inspection failed")).unwrap(),
+            empty
+        );
+    }
+
+    #[test]
+    fn hero_attributes_legacy_reads_keep_filters_pagination_and_presentation() {
+        let mut data = legacy_hero_attributes(&legacy_attribute_inspection()).unwrap();
+        data["results"].as_array_mut().unwrap().push(json!({
+            "id":"Level","baseValue":4.0,"currentValue":4.0,"editable":true
+        }));
+        let options = Options {
+            attribute: None,
+            ..legacy_attribute_options()
+        };
+        let page = attribute_page(
+            data.clone(),
+            "results",
+            &Options {
+                offset: 1,
+                limit: 1,
+                group: Some("core".into()),
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(page["total"], 3);
+        assert_eq!(page["count"], 1);
+        assert_eq!(page["offset"], 1);
+        let row = &page["results"][0];
+        assert_eq!(row["attributeId"], "Strength");
+        assert_eq!(row["presentation"]["label"], "Strength");
+        assert_eq!(row["presentation"]["group"], "core");
+        assert_eq!(row["setClass"], "");
+        assert_eq!(row["baseValue"], 20.0);
+        for selected in [
+            Options {
+                query: Some("Strength".into()),
+                ..options.clone()
+            },
+            legacy_attribute_options(),
+        ] {
+            let page = attribute_page(data.clone(), "results", &selected).unwrap();
+            assert_eq!(page["total"], 1);
+            assert_eq!(page["results"][0]["id"], "Strength");
+        }
+        let page = attribute_page(
+            data.clone(),
+            "results",
+            &Options {
+                query: Some("Stufe".into()),
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(page["total"], 1);
+        assert_eq!(page["results"][0]["id"], "Level");
+        assert_eq!(page["results"][0]["presentation"]["label"], "Stufe");
+        let page = attribute_page(
+            data.clone(),
+            "results",
+            &Options {
+                all: true,
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(page["count"], 4);
+        let page = attribute_page(
+            data,
+            "results",
+            &Options {
+                set_class: Some("AttributeSet_Strength".into()),
+                ..options
+            },
+        )
+        .unwrap();
+        assert_eq!(page["count"], 0);
+    }
+
+    #[test]
+    fn hero_attributes_legacy_edits_keep_base_and_current_independent() {
+        let data = legacy_hero_attributes(&legacy_attribute_inspection()).unwrap();
+        for (base, current, field, raw, expected) in [
+            (
+                Some(61.0),
+                None,
+                "current",
+                None,
+                json!({"id":"Strength","baseValue":61.0}),
+            ),
+            (
+                None,
+                Some(72.0),
+                "current",
+                None,
+                json!({"id":"Strength","currentValue":72.0}),
+            ),
+            (
+                Some(61.0),
+                Some(72.0),
+                "current",
+                None,
+                json!({"id":"Strength","baseValue":61.0,"currentValue":72.0}),
+            ),
+            (
+                None,
+                None,
+                "base",
+                Some("12.125"),
+                json!({"id":"Strength","baseValue":12.125}),
+            ),
+            (
+                None,
+                None,
+                "current",
+                Some("13.25"),
+                json!({"id":"Strength","currentValue":13.25}),
+            ),
+            (
+                Some(61.0),
+                None,
+                "base",
+                Some("90"),
+                json!({"id":"Strength","baseValue":61.0}),
+            ),
+        ] {
+            let edit = legacy_hero_attribute_edit(
+                &data,
+                &Options {
+                    base,
+                    current,
+                    field: field.into(),
+                    value_json: raw.map(str::to_owned),
+                    ..legacy_attribute_options()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                edit,
+                json!({"path":"private.player.setAttribute","value":expected})
+            );
+            assert_eq!(gore_save::workflow::plan(&[edit]).unwrap(), vec![vec![0]]);
+        }
+    }
+
+    #[test]
+    fn hero_attributes_legacy_edits_require_capability_and_full_decode() {
+        for (status, preview, writable) in [
+            ("decoded", false, json!([])),
+            (
+                "decoded_preview",
+                true,
+                json!(["private.player.setAttribute"]),
+            ),
+            ("decoded", true, json!(["private.player.setAttribute"])),
+        ] {
+            let mut inspection = legacy_attribute_inspection();
+            inspection["private"]["status"] = json!(status);
+            inspection["private"]["preview"] = json!(preview);
+            inspection["private"]["player"]["writable"] = writable;
+            let data = legacy_hero_attributes(&inspection).unwrap();
+            assert_eq!(data["results"][1]["editable"], false);
+            let error = legacy_hero_attribute_edit(
+                &data,
+                &Options {
+                    current: Some(90.0),
+                    ..legacy_attribute_options()
+                },
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error.downcast_ref::<gore_save::CoreError>(),
+                Some(gore_save::CoreError::UnsupportedEdit(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn hero_attributes_legacy_edits_reject_ambiguous_classes_and_invalid_values() {
+        let data = legacy_hero_attributes(&legacy_attribute_inspection()).unwrap();
+        for options in [
+            Options {
+                attribute: Some("Unknown".into()),
+                current: Some(90.0),
+                ..legacy_attribute_options()
+            },
+            Options {
+                set_class: Some("AttributeSet_Strength".into()),
+                current: Some(90.0),
+                ..legacy_attribute_options()
+            },
+            Options {
+                value_json: Some("NaN".into()),
+                ..legacy_attribute_options()
+            },
+            Options {
+                base: Some(f64::INFINITY),
+                ..legacy_attribute_options()
+            },
+            legacy_attribute_options(),
+        ] {
+            assert!(legacy_hero_attribute_edit(&data, &options).is_err());
+        }
+        let mut duplicate = data;
+        duplicate["results"][1]["setClass"] = json!("/Script/G1R.AttributeSet_Strength");
+        duplicate["results"].as_array_mut().unwrap().push(json!({
+            "id":"Strength","setClass":"/Script/G1R.AttributeSet_Other","editable":true
+        }));
+        assert!(legacy_hero_attribute_edit(
+            &duplicate,
+            &Options {
+                set_class: Some("AttributeSet_Strength".into()),
+                current: Some(90.0),
+                ..legacy_attribute_options()
+            }
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("uniquely by id"));
+    }
 
     #[test]
     fn glossary_filters_hide_locked_resource_entries() {

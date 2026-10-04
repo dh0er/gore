@@ -2084,6 +2084,209 @@ fn dictionary_catalog_queries_and_pages_work_through_the_cli() {
     }
 }
 
+fn write_legacy_hero_attribute_save(save: &Path) {
+    use gore_save::codec_backend::{CodecBackend, KrakenBackend};
+    fn string(value: &str) -> Vec<u8> {
+        let mut bytes = ((value.len() + 1) as i32).to_le_bytes().to_vec();
+        bytes.extend_from_slice(value.as_bytes());
+        bytes.push(0);
+        bytes
+    }
+    fn float(name: &str, value: f32) -> Vec<u8> {
+        [
+            string(name),
+            string("FloatProperty"),
+            0u32.to_le_bytes().to_vec(),
+            4u32.to_le_bytes().to_vec(),
+            vec![0],
+            value.to_le_bytes().to_vec(),
+        ]
+        .concat()
+    }
+    fn attribute(id: &str, base: f32, current: f32) -> Vec<u8> {
+        [
+            string("GameplayAttributeData"),
+            string("/Script/GameplayAbilities"),
+            string(id),
+            float("BaseValue", base),
+            float("CurrentValue", current),
+            string("None"),
+        ]
+        .concat()
+    }
+    // Same scanner-only shape as the Core hero_attribute_payload fixture.
+    let private = [
+        string("Lurker"),
+        string("AttributeSetsByClass"),
+        string("/Script/G1R.AttributeSet_Health"),
+        attribute("Health", 12.0, 12.0),
+        string("Hero"),
+        string("AttributeSetsByClass"),
+        string("MapProperty"),
+        string("ObjectProperty"),
+        string("StructProperty"),
+        string("CharacterStateSaveGameData_AttributeSet"),
+        string("/Script/G1R"),
+        string("/Script/G1R.AttributeSet_Health"),
+        string("Attributes"),
+        string("MapProperty"),
+        string("NameProperty"),
+        string("StructProperty"),
+        attribute("Health", 40.0, 25.0),
+        attribute("MaxHealth", 40.0, 40.0),
+        string("/Script/G1R.AttributeSet_Strength"),
+        string("Attributes"),
+        attribute("Strength", 10.0, 10.0),
+        string("/Script/G1R.AttributeSet_Dexterity"),
+        string("Attributes"),
+        attribute("Dexterity", 10.0, 10.0),
+        string("MemorizedEvents"),
+    ]
+    .concat();
+    assert!(gore_save::properties::parse_private_root(&private).is_err());
+    let compressed = KrakenBackend.compress(&private, 4).unwrap();
+    let mut stream = (private.len() as u64).to_le_bytes().to_vec();
+    stream.extend(string("Oodle"));
+    stream.extend(0x9E2A83C1u32.to_le_bytes());
+    stream.extend(0x22222222u32.to_le_bytes());
+    stream.extend((private.len() as u64).to_le_bytes());
+    stream.push(2);
+    for _ in 0..2 {
+        stream.extend((compressed.len() as u64).to_le_bytes());
+        stream.extend((private.len() as u64).to_le_bytes());
+    }
+    stream.extend(compressed);
+    let reference = fs::read(fixture()).unwrap();
+    let public_size = u32::from_le_bytes(reference[9..13].try_into().unwrap()) as usize;
+    let mut bytes = reference[..13 + public_size].to_vec();
+    let size = (bytes.len() + stream.len()) as u32;
+    bytes[5..9].copy_from_slice(&size.to_le_bytes());
+    bytes.extend(stream);
+    bytes.extend(0u32.to_le_bytes());
+    fs::write(save, bytes).unwrap();
+}
+
+#[test]
+fn legacy_hero_attribute_reads_and_edits_use_the_editor_fallback() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("legacy.sav");
+    write_legacy_hero_attribute_save(&save);
+    let before = fs::read(&save).unwrap();
+    let inspection = run(home, &["inspect", save.to_str().unwrap(), "--private"]);
+    assert_eq!(inspection["private"]["typedParse"]["status"], "failed");
+    assert!(
+        inspection["private"]["player"]["writable"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("private.player.setAttribute"))
+    );
+    let selected = run(
+        home,
+        &[
+            "attributes",
+            "list",
+            save.to_str().unwrap(),
+            "--attribute",
+            "Strength",
+            "--all",
+        ],
+    );
+    assert_eq!(selected["total"], 1);
+    let rows = selected
+        .get("attributes")
+        .or_else(|| selected.get("results"))
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["baseValue"], 10.0);
+    assert_eq!(rows[0]["currentValue"], 10.0);
+    let empty = run(
+        home,
+        &[
+            "attributes",
+            "list",
+            save.to_str().unwrap(),
+            "--query",
+            "PR123_NO_LEGACY_ATTRIBUTE_987654",
+        ],
+    );
+    assert_eq!(empty["total"], 0);
+    run(
+        home,
+        &[
+            "attributes",
+            "set",
+            save.to_str().unwrap(),
+            "--attribute",
+            "Strength",
+            "--current",
+            "35",
+            "--dry-run",
+        ],
+    );
+    assert_eq!(fs::read(&save).unwrap(), before);
+    assert!(!home.join("goresave_backups").exists());
+    let draft = home.join("legacy.json");
+    run(
+        home,
+        &[
+            "attributes",
+            "set",
+            save.to_str().unwrap(),
+            "--attribute",
+            "Strength",
+            "--base",
+            "20",
+            "--current",
+            "35",
+            "--draft",
+            draft.to_str().unwrap(),
+        ],
+    );
+    let staged = run(home, &["draft", "show", draft.to_str().unwrap()]);
+    assert_eq!(staged["edits"].as_array().unwrap().len(), 1);
+    assert_eq!(staged["edits"][0]["path"], "private.player.setAttribute");
+    run(home, &["draft", "validate", draft.to_str().unwrap()]);
+    assert_eq!(fs::read(&save).unwrap(), before);
+    assert_eq!(
+        run(home, &["draft", "apply", draft.to_str().unwrap()])["complete"],
+        true
+    );
+    let inspection = run(home, &["inspect", save.to_str().unwrap(), "--private"]);
+    let attributes = inspection["private"]["player"]["attributes"]
+        .as_array()
+        .unwrap();
+    let strength = attributes
+        .iter()
+        .find(|row| row["id"] == "Strength")
+        .unwrap();
+    assert_eq!(strength["baseValue"], 20.0);
+    assert_eq!(strength["currentValue"], 35.0);
+    let health = attributes.iter().find(|row| row["id"] == "Health").unwrap();
+    assert_eq!(health["baseValue"], 40.0);
+    assert_eq!(health["currentValue"], 25.0);
+    let after = fs::read(&save).unwrap();
+    for extra in [
+        vec!["--attribute", "Missing", "--current", "50"],
+        vec!["--attribute", "Strength", "--current", "NaN"],
+        vec![
+            "--attribute",
+            "Strength",
+            "--set-class",
+            "Nonexistent",
+            "--current",
+            "50",
+        ],
+    ] {
+        let mut args = vec!["attributes", "set", save.to_str().unwrap()];
+        args.extend(extra);
+        run_failure(home, &args);
+        assert_eq!(fs::read(&save).unwrap(), after);
+    }
+}
+
 #[test]
 fn failed_draft_exports_preserve_in_place_rename_and_profile_sync() {
     let temp = tempfile::tempdir().unwrap();
