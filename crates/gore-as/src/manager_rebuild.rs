@@ -349,7 +349,6 @@ fn validate_sources(sources: &[ManagerRebuildSourceV1<'_>]) -> Result<(), Manage
     }
     let mut total = 0usize;
     let mut names = BTreeSet::new();
-    let mut paths = BTreeSet::new();
     for source in sources {
         module_name_from_relative_path_v1(source.relative_path).map_err(|error| {
             ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::InvalidInput, error)
@@ -360,13 +359,12 @@ fn validate_sources(sources: &[ManagerRebuildSourceV1<'_>]) -> Result<(), Manage
         {
             return Err(invalid("invalid declared module name"));
         }
-        if !names.insert(source.module_name.to_lowercase())
-            || !paths.insert(source.relative_path.to_lowercase())
-        {
-            return Err(invalid(
-                "source overlays contain colliding module names or paths",
-            ));
+        if !names.insert(source.module_name.to_lowercase()) {
+            return Err(invalid("source overlays contain colliding module names"));
         }
+        // Historical paths may have been reused by newer vanilla modules. The named planner
+        // rebases each identity before enforcing current path uniqueness; FullGraph then checks
+        // the resulting layout against every retained base module before invoking the runner.
         if source.source.len() > MAX_MANAGER_REBUILD_SOURCE_FILE_BYTES_V1 {
             return Err(invalid("authored module source exceeds 16 MiB"));
         }
@@ -1114,6 +1112,111 @@ mod tests {
                 |entry| entry.module_name == "Mods.New" && entry.relative_path == "Mods/New.as"
             ));
         }
+    }
+
+    #[test]
+    fn rebuild_allows_historical_paths_reused_by_new_vanilla_modules() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let temporary = root.path().join("temporary");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&temporary).unwrap();
+        let base = cache(&[
+            ("Keep", "Keep.as"),
+            ("Edit", "Moved/Edit.as"),
+            ("Mods.New", "Shared.as"),
+        ]);
+        let mut output = base.clone();
+        output[..16].fill(0x76);
+        change_empty_module_hash(&mut output, "Edit");
+        change_empty_module_hash(&mut output, "Mods.New");
+        let workspace = RebuildWorkspaceV1::create(&temporary).unwrap();
+        let workspace_path = workspace.root.clone();
+        let mut runner = FakeRunner {
+            output_path: workspace.root.join("runner.cache"),
+            output,
+            edit_path: "Moved/Edit.as".into(),
+            added_path: "Shared.as".into(),
+            reject: false,
+            calls: 0,
+        };
+        let result = compile_sources_with_runner(
+            &game,
+            &base,
+            binds(),
+            &[
+                ManagerRebuildSourceV1 {
+                    module_name: "Edit",
+                    relative_path: "Shared.as",
+                    source: b"void Edited() {}\n",
+                },
+                ManagerRebuildSourceV1 {
+                    module_name: "Mods.New",
+                    relative_path: "Shared.as",
+                    source: b"void Added() {}\n",
+                },
+            ],
+            &workspace,
+            &mut runner,
+            || Ok(()),
+        );
+        let result = finish_cleanup(workspace, result).unwrap();
+        assert_eq!(runner.calls, 1);
+        assert!(!workspace_path.exists());
+        assert_eq!(std::fs::read_dir(&game).unwrap().count(), 0);
+        let mut guard = SequentialMiniGuard::new_with_binds(&base, &binds()).unwrap();
+        let composed = guard.compose_upsert(&base, &result.mini_cache).unwrap();
+        assert_eq!(
+            module_names(&composed).unwrap(),
+            ["Keep", "Edit", "Mods.New"]
+        );
+        assert_eq!(
+            extract_modules(&base, &["Keep"]).unwrap(),
+            extract_modules(&composed, &["Keep"]).unwrap()
+        );
+    }
+
+    #[test]
+    fn rebuild_rejects_colliding_current_paths_before_the_runner() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let temporary = root.path().join("temporary");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&temporary).unwrap();
+        let workspace = RebuildWorkspaceV1::create(&temporary).unwrap();
+        let mut runner = FakeRunner {
+            output_path: workspace.root.join("runner.cache"),
+            output: Vec::new(),
+            edit_path: "Mods/New.as".into(),
+            added_path: "Mods/New.as".into(),
+            reject: false,
+            calls: 0,
+        };
+        let result = compile_sources_with_runner(
+            &game,
+            &cache(&[("Keep", "Keep.as"), ("Edit", "Mods/New.as")]),
+            binds(),
+            &[
+                ManagerRebuildSourceV1 {
+                    module_name: "Edit",
+                    relative_path: "Historical/Edit.as",
+                    source: b"void Edited() {}\n",
+                },
+                ManagerRebuildSourceV1 {
+                    module_name: "Mods.New",
+                    relative_path: "Historical/New.as",
+                    source: b"void Added() {}\n",
+                },
+            ],
+            &workspace,
+            &mut runner,
+            || Ok(()),
+        );
+        let error = finish_cleanup(workspace, result).unwrap_err();
+        assert_eq!(error.kind(), ManagerRebuildErrorKindV1::InvalidInput);
+        assert!(error.detail().contains("collid"));
+        assert_eq!(runner.calls, 0);
+        assert_eq!(std::fs::read_dir(&game).unwrap().count(), 0);
     }
 
     #[test]
