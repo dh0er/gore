@@ -472,6 +472,76 @@ fn library(v: &str, o: &Options) -> Result<Value> {
     }
 }
 
+struct LibraryCleanup {
+    keys: Vec<&'static str>,
+    paths: Vec<String>,
+}
+impl LibraryCleanup {
+    fn prepare(command: &str, request: &Value) -> Result<Option<Self>> {
+        let keys = match command {
+            "assign_save_profile" | "delete_save" => {
+                vec!["externalSavePaths", "hiddenOtherSavePaths"]
+            }
+            "remove_save_from_profile"
+                if request["path"]
+                    .as_str()
+                    .is_some_and(|p| Path::new(p).is_file()) =>
+            {
+                vec!["hiddenOtherSavePaths"]
+            }
+            _ => return Ok(None),
+        };
+        let mut paths: Vec<String> = ["path", "destinationPath"]
+            .into_iter()
+            .filter_map(|key| request[key].as_str())
+            .map(|path| {
+                normalized_path(Path::new(path))
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        let settings = settings_read("editor")?;
+        // Resolve stored aliases before deletion removes the path we need to resolve.
+        let matching: Vec<String> = keys
+            .iter()
+            .flat_map(|key| settings[*key].as_array().into_iter().flatten())
+            .filter_map(Value::as_str)
+            .filter(|entry| paths.iter().any(|path| same_path(entry, path)))
+            .map(str::to_owned)
+            .collect();
+        if matching.is_empty() {
+            return Ok(None);
+        }
+        paths.extend(matching);
+        Ok(Some(Self { keys, paths }))
+    }
+    fn apply(self) -> Result<()> {
+        api::update_json_file(&settings_path("editor")?, |mut settings| {
+            if settings.as_object().is_some_and(|object| object.is_empty()) {
+                settings = settings_read("editor")
+                    .map_err(|e| gore_save::CoreError::Parse(e.to_string()))?;
+            }
+            if !settings.is_object() {
+                return Err(gore_save::CoreError::Parse("invalid settings".into()));
+            }
+            for key in self.keys {
+                if let Some(entries) = settings[key].as_array_mut() {
+                    entries.retain(|entry| {
+                        entry.as_str().is_none_or(|entry| {
+                            !self
+                                .paths
+                                .iter()
+                                .any(|path| entry == path || same_path(entry, path))
+                        })
+                    });
+                }
+            }
+            Ok(settings)
+        })?;
+        Ok(())
+    }
+}
+
 pub(super) fn stage(file: &Path, payload: &Value, dry_run: bool) -> Result<Value> {
     let path = PathBuf::from(payload["path"].as_str().context("draft has no save path")?)
         .canonicalize()?;
@@ -1070,7 +1140,16 @@ fn admin_write(command: &str, p: Value, o: &Options) -> Result<Value> {
         guard_profile_recovery(&profile)?;
     }
     if !o.dry_run {
-        return call(command, p);
+        let cleanup = LibraryCleanup::prepare(command, &p)?;
+        let mut result = call(command, p)?;
+        if let Some(cleanup) = cleanup {
+            // Save/profile publication has already succeeded; report a preference
+            // write failure as a warning so callers cannot mistake it for rollback.
+            if let Err(error) = cleanup.apply() {
+                result["libraryWarning"] = json!(error.to_string());
+            }
+        }
+        return Ok(result);
     }
     let temporary = tempfile::tempdir()?;
     let absolute = |p: &Path| -> Result<PathBuf> {

@@ -901,6 +901,126 @@ fn run(home: &Path, args: &[&str]) -> Value {
 }
 
 #[test]
+fn editor_workflow_routine_restoration_survives_subsequent_position_changes() {
+    for operation in ["resume-routine", "undo"] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let save = home.join("G1R-001.sav");
+        fs::copy(fixture(), &save).unwrap();
+        let save_arg = save.to_str().unwrap();
+        let actor = "OC_STT_Diego-WP_EZ_START_DIEGO_SPAWN";
+        let original = run(home, &["position", "show", save_arg, "--actor", actor]);
+        let x = original["pose"]["location"]["x"].as_f64().unwrap();
+        run(
+            home,
+            &[
+                "position",
+                "set",
+                save_arg,
+                "--actor",
+                actor,
+                "--x",
+                &(x + 100.0).to_string(),
+                "--stay",
+            ],
+        );
+        let draft = home.join("restore.json");
+        let draft_arg = draft.to_str().unwrap();
+        run(
+            home,
+            &[
+                "position", operation, save_arg, "--actor", actor, "--draft", draft_arg,
+            ],
+        );
+        let pinned_bytes = fs::read(&save).unwrap();
+        let notes = fs::read(gore_save::placement::notes_path(&save)).unwrap();
+        run(
+            home,
+            &[
+                "position",
+                "set",
+                save_arg,
+                "--actor",
+                actor,
+                "--x",
+                &(x + 200.0).to_string(),
+                "--draft",
+                draft_arg,
+            ],
+        );
+        let staged = run(home, &["draft", "show", draft_arg]);
+        assert_eq!(staged["clearPlacementNotes"], json!([actor]));
+        assert!(staged.get("placementNotes").is_none());
+        run(home, &["draft", "apply", draft_arg, "--dry-run"]);
+        assert_eq!(fs::read(&save).unwrap(), pinned_bytes);
+        assert_eq!(
+            fs::read(gore_save::placement::notes_path(&save)).unwrap(),
+            notes
+        );
+        run(home, &["draft", "apply", draft_arg]);
+        let restored = run(home, &["position", "show", save_arg, "--actor", actor]);
+        assert_eq!(restored["routineClass"], original["routineClass"]);
+        assert_eq!(restored["pose"]["location"]["x"], x + 200.0);
+        assert!(restored["undo"].is_null());
+    }
+}
+
+#[test]
+fn editor_workflow_profile_mutations_reconcile_library_after_success_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    // Keep the registry's first slot as the schema template during detachment.
+    fs::copy(fixture(), home.join("G1R-001.sav")).unwrap();
+    let save = home.join("G1R-002.sav");
+    fs::copy(fixture(), &save).unwrap();
+    fs::write(home.join("PersistentDataList.sav"), profile_fixture("Easy")).unwrap();
+    let save_arg = save.to_str().unwrap();
+    run(home, &["profile", "assign", save_arg, "--profile", "0"]);
+    run(home, &["profile", "detach", save_arg, "--profile", "0"]);
+    run(home, &["library", "hide", save_arg]);
+    run(home, &["library", "add", save_arg]);
+    let settings = home.join("gore/gore-save/settings.json");
+    let mut preferences: Value = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
+    preferences["unrelatedPreference"] = json!("keep");
+    fs::write(&settings, serde_json::to_vec(&preferences).unwrap()).unwrap();
+    let hidden_bytes = fs::read(&settings).unwrap();
+    run(
+        home,
+        &["profile", "assign", save_arg, "--profile", "0", "--dry-run"],
+    );
+    assert_eq!(fs::read(&settings).unwrap(), hidden_bytes);
+    run_failure(home, &["profile", "assign", save_arg, "--profile", "999"]);
+    assert_eq!(fs::read(&settings).unwrap(), hidden_bytes);
+    run(home, &["profile", "assign", save_arg, "--profile", "0"]);
+    let listed = run(home, &["library", "list"]);
+    assert_eq!(listed["externalSavePaths"], json!([]));
+    assert_eq!(listed["hiddenOtherSavePaths"], json!([]));
+    run(home, &["library", "hide", save_arg]);
+    run(home, &["profile", "detach", save_arg, "--profile", "0"]);
+    assert_eq!(
+        run(home, &["list", "--root", home.to_str().unwrap(), "--other"])["saves"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    run(home, &["profile", "assign", save_arg, "--profile", "0"]);
+    run(home, &["library", "add", save_arg]);
+    run(home, &["library", "hide", save_arg]);
+    let registered_bytes = fs::read(&settings).unwrap();
+    run(home, &["delete", save_arg, "--profile", "0", "--dry-run"]);
+    assert_eq!(fs::read(&settings).unwrap(), registered_bytes);
+    run_failure(home, &["delete", save_arg, "--profile", "999"]);
+    assert_eq!(fs::read(&settings).unwrap(), registered_bytes);
+    run(home, &["delete", save_arg, "--profile", "0"]);
+    assert!(!save.exists());
+    let listed = run(home, &["library", "list"]);
+    assert_eq!(listed["externalSavePaths"], json!([]));
+    assert_eq!(listed["hiddenOtherSavePaths"], json!([]));
+    assert_eq!(listed["unrelatedPreference"], "keep");
+}
+
+#[test]
 fn editor_parity_skills_localize_before_search_and_keep_write_values() {
     let temp = tempfile::tempdir().unwrap();
     let save = fixture();

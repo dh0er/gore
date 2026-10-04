@@ -1046,7 +1046,23 @@ pub(super) fn position(v: &str, o: &Options) -> Result<Value> {
     }
     let pinned =
         data["routineClass"] == data["inertRoutineClass"] && !data["routineClass"].is_null();
-    if o.stay || ((pinned || pending_note.is_some()) && matches!(v, "set" | "reset-to-spawn")) {
+    let pending_routine = pending
+        .as_ref()
+        .and_then(|draft| draft["edits"].as_array())
+        .and_then(|edits| {
+            edits.iter().find(|edit| {
+                edit["path"] == "private.typed.setValue"
+                    && edit["value"]["path"] == data["routineClassPath"]
+            })
+        })
+        .map(|edit| &edit["value"]["value"]);
+    // A queued restore takes precedence over the routine still stored on disk.
+    let effective_routine = pending_routine.unwrap_or(&data["routineClass"]);
+    let effective_pinned =
+        *effective_routine == data["inertRoutineClass"] && !effective_routine.is_null();
+    if o.stay
+        || ((effective_pinned || pending_note.is_some()) && matches!(v, "set" | "reset-to-spawn"))
+    {
         if data["inertRoutineClass"].is_null()
             || pose["location"].is_null()
             || data["routineClassPath"]
@@ -1055,16 +1071,6 @@ pub(super) fn position(v: &str, o: &Options) -> Result<Value> {
         {
             bail!("NPC cannot be pinned");
         }
-        let pending_routine = pending
-            .as_ref()
-            .and_then(|draft| draft["edits"].as_array())
-            .and_then(|edits| {
-                edits.iter().find(|edit| {
-                    edit["path"] == "private.typed.setValue"
-                        && edit["value"]["path"] == data["routineClassPath"]
-                })
-            })
-            .map(|edit| &edit["value"]["value"]);
         if !pinned || pending_routine.is_some_and(|class| *class != data["inertRoutineClass"]) {
             edits.push(edit(
                 "private.typed.setValue",
