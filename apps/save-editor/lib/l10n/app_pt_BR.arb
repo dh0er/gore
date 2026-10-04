@@ -714,7 +714,7 @@
   "editorRelationshipConflict": "Uma alteração de relacionamento e outra alteração pendente em “Todos os dados” afetam a mesma entrada de relacionamento de um NPC ({path}). A alteração estruturada do relacionamento pode substituir modificadores nessa entrada, portanto não podem ser salvas juntas. Redefina ou desfaça uma delas e salve novamente.",
   "editorMultipleStructuralArrayEdits": "Há mais de uma alteração estrutural pendente para a mesma matriz ({path}). Salve ou redefina a primeira alteração antes de adicionar outra.",
   "editorStructuralArrayConflict": "Uma alteração estrutural de evento e outra alteração pendente em “Todos os dados” afetam {path}. Salve ou redefina uma delas antes de continuar.",
-  "editorSkillsEffectConflict": "Há uma alteração em “Habilidades” e outra em “Todos os dados” para o mesmo efeito do personagem (ActiveEffects › EffectSpec › Def) pendentes. Elas não podem ser salvas juntas. Redefina ou desfaça uma delas e salve novamente.",
+  "editorSkillsEffectConflict": "Há uma alteração em “Habilidades” e outra em “Todos os dados” para o mesmo efeito do personagem (ActiveEffects) pendentes. Elas não podem ser salvas juntas. Redefina ou desfaça uma delas e salve novamente.",
   "editorInventoryResetConflict": "Há uma redefinição do inventário e outra alteração no mesmo inventário pendentes. A redefinição substitui todo o inventário e descartaria a outra alteração. Redefina ou desfaça uma delas e salve novamente.",
   "editorUseFolder": "Usar pasta",
   "editorGothicSavegameFileType": "Jogo salvo de Gothic",

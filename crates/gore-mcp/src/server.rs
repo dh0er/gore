@@ -1402,6 +1402,146 @@ mod tests {
     }
 
     #[test]
+    fn save_previews_spawn_without_elicitation_or_write_permission() {
+        let temp = tempfile::tempdir().unwrap();
+        let out = temp.path().join("existing.html");
+        std::fs::write(&out, b"existing output").unwrap();
+        for never_ask in [false, true] {
+            let mut opts = options();
+            opts.never_ask = never_ask;
+            let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("{}\n")));
+            let mut session = Session::with_spawn(opts, Box::new(std::sync::Arc::clone(&spawn)));
+            for sub in [
+                "rename",
+                "difficulty set",
+                "draft apply",
+                "report",
+                "assets export",
+                "screenshot export",
+            ] {
+                let args = json!({"save":"fixture.sav","name":"preview","out":out,"open":true,"with_assets":true,"dry_run":true});
+                let result = session
+                    .handle_unasked(&request(
+                        "tools/call",
+                        json!({"name":"gore_save","arguments":{"subcommand":sub,"args":args}}),
+                    ))
+                    .expect("answered")
+                    .result
+                    .unwrap();
+                assert_eq!(result["isError"], json!(false), "{sub}: {result}");
+                let calls = spawn.calls();
+                let call = calls.last().unwrap();
+                assert!(call.consent.is_none());
+                assert!(call.argv.iter().any(|arg| arg == "--dry-run"));
+            }
+            let count = spawn.calls().len();
+            for live in [
+                json!({}),
+                json!({"dry_run":false}),
+                json!({"dry_run":"true"}),
+            ] {
+                let result = session
+                    .handle_unasked(&request(
+                        "tools/call",
+                        json!({"name":"gore_save","arguments":{"subcommand":"rename","args":live}}),
+                    ))
+                    .expect("answered")
+                    .result
+                    .unwrap();
+                assert_eq!(result["isError"], json!(true), "{result}");
+                assert_eq!(spawn.calls().len(), count);
+            }
+        }
+        assert_eq!(std::fs::read(out).unwrap(), b"existing output");
+    }
+
+    #[test]
+    fn save_report_icon_cache_mutation_is_gated_before_spawning() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut session, spawn) = faked(exec::Outcome::success("{}\n"));
+        let result = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({
+                    "name":"gore_save", "arguments":{
+                        "subcommand":"report", "args":{
+                            "save":"fixture.sav", "out":temp.path().join("fresh.html"),
+                            "with_assets":true
+                        }
+                    }
+                }),
+            ))
+            .expect("answered")
+            .result
+            .expect("result");
+        assert_eq!(result["isError"], json!(true));
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("icon cache")
+        );
+        assert!(
+            spawn.calls().is_empty(),
+            "the shared cache must not be prepared before consent"
+        );
+    }
+
+    #[test]
+    fn save_exports_do_not_spawn_a_viewer_without_consent() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut session, spawn) = faked(exec::Outcome::success("{}\n"));
+        for subcommand in ["report", "assets export", "screenshot export"] {
+            let result = session.handle_unasked(&request("tools/call", json!({
+                "name":"gore_save", "arguments":{
+                    "subcommand":subcommand, "args":{
+                        "save":"fixture.sav", "out":temp.path().join("fresh.out"), "open":true
+                    }
+                }
+            }))).expect("answered").result.expect("result");
+            assert_eq!(result["isError"], json!(true), "{subcommand}");
+            assert!(
+                result["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("system viewer")
+            );
+            assert!(spawn.calls().is_empty());
+        }
+    }
+
+    #[test]
+    fn save_clipboard_arguments_are_rejected_before_any_command_is_spawned() {
+        let (mut session, spawn) = faked(exec::Outcome::success("{}\n"));
+        for subcommand in ["list", "inspect", "report", "screenshot export", "rename"] {
+            let result = session
+                .handle_unasked(&request(
+                    "tools/call",
+                    json!({
+                        "name":"gore_save", "arguments":{
+                            "subcommand":subcommand,"args":{"copy":true}
+                        }
+                    }),
+                ))
+                .expect("answered")
+                .result
+                .expect("result");
+            assert_eq!(result["isError"], json!(true), "{subcommand}: {result}");
+            assert!(
+                result["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("copy"),
+                "{result}"
+            );
+            assert!(
+                spawn.calls().is_empty(),
+                "the clipboard must never be touched through MCP"
+            );
+        }
+    }
+
+    #[test]
     fn a_bad_argument_is_a_tool_error_the_model_can_act_on() {
         let (mut session, spawn) = faked(exec::Outcome::success(""));
         let response = session

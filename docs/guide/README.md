@@ -11,6 +11,7 @@ Everything you need to mod Gothic 1 Remake with GORE. Start with
 | [CLI reference](cli-reference.md) | Every command, subcommand, and flag |
 | [Finding things](find.md) | `gore find`: class names, asset paths, and what an id does in game |
 | [Reading and editing dialog trees](dialog-trees.md) | `gore dialog`: inspect conversations; edit behavior/defaults; stage topics, complete conversations and all-new trees |
+| [Save games](save-games.md) | Complete Save Editor workflows from `gore save`, including drafts, backups and reports |
 | [MCP server](mcp.md) | Drive the whole CLI from an AI assistant over the Model Context Protocol |
 
 ## Modding domains

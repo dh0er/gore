@@ -18,6 +18,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Inspect, edit and manage save games with the Save Editor's Rust core
+    Save {
+        #[command(subcommand)]
+        action: cmd::save::SaveAction,
+    },
     /// Parse UE4SS SDK dump into gore-reflect reflection model JSON
     Dump {
         /// Path to the CXXHeaderDump/ directory
@@ -570,6 +575,7 @@ fn run_cli() {
             } => cmd::audio::apply_patch(patch, bank, out, key),
         },
         Commands::Voice { action } => cmd::voice::run(action),
+        Commands::Save { action } => cmd::save::run(action),
         Commands::Mod { action } => match action {
             ModAction::Build {
                 spec,

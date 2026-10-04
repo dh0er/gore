@@ -844,8 +844,15 @@ void main() {
           {
             'path': 'private.typed.setValue',
             'value': {
-              'path': ['x'],
+              'path': ['PositionByGlobalId', '{A}', 'CharacterLocation'],
               'value': {'x': 1.0, 'y': 2.0, 'z': 3.0},
+            },
+          },
+          {
+            'path': 'private.typed.setValue',
+            'value': {
+              'path': ['PositionByGlobalId', '{B}', 'CharacterLocation'],
+              'value': {'x': 0.0, 'y': 0.0, 'z': 0.0},
             },
           },
         ],
@@ -873,6 +880,98 @@ void main() {
     expect(kept.placementNotes.single['npc'], 'A');
     expect(kept.clearPlacementNotes, ['B']);
   });
+
+  for (final clear in [false, true]) {
+    test(
+      'placement ${clear ? "clears" : "notes"} commit with their group before a later failure',
+      () async {
+        for (final earlierPose in [false, true]) {
+          final core = _FailSecondWriteCoreService(
+            scanData: {
+              'saves': [
+                {
+                  'path': r'C:\tmp\saves\G1R-001.sav',
+                  'slot': 'G1R-001',
+                  'format': 'GSAV',
+                  'fileSize': 914367,
+                  'sha1': 'abc',
+                  'status': 'ok',
+                  'playerSaveName': 'Auto',
+                },
+              ],
+            },
+          );
+          final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+          await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+          Map<String, Object?> stock(int count) => {
+            'path': 'private.traders.setStock',
+            'value': {
+              'index': 0,
+              'path': '/Script/Angelscript.ItMi_Orenugget',
+              'count': count,
+            },
+          };
+          Map<String, Object?> pose(String npc) => {
+            'path': 'private.typed.setValue',
+            'value': {
+              'path': ['PositionByGlobalId', '{$npc}', 'CharacterLocation'],
+              'value': {'x': 1.0, 'y': 2.0, 'z': 3.0},
+            },
+          };
+          Map<String, Object?> note(String npc) => {
+            'npc': npc,
+            'note': {
+              'original_location': [0.0, 0.0, 0.0],
+              'written_location': [1.0, 2.0, 3.0],
+            },
+          };
+          const laterReset = <String, Object?>{
+            'path': 'private.inventory.reset',
+            'value': {'resourcesLevel': 'Gothic'},
+          };
+          final laterPose = pose('B');
+          notifier.setPendingEdit(
+            'mixed',
+            PendingSaveEdit(
+              edits: [
+                stock(100),
+                if (earlierPose) pose('A'),
+                laterReset,
+                laterPose,
+              ],
+              placementNotes: clear
+                  ? const []
+                  : [if (earlierPose) note('A'), note('B')],
+              clearPlacementNotes: clear
+                  ? [if (earlierPose) 'A', 'B']
+                  : const [],
+            ),
+          );
+          expect(await notifier.saveAllPending(), isFalse);
+          final writes = core.requests
+              .where((r) => r.command == 'write_save')
+              .toList();
+          expect(writes, hasLength(2));
+          final key = clear ? 'clearPlacementNotes' : 'placementNotes';
+          expect(writes.first.payload[key], [
+            if (earlierPose) clear ? 'A' : note('A'),
+            clear ? 'B' : note('B'),
+          ]);
+          expect(writes.last.payload[key], isNull);
+          final pending = notifier.state.pendingEdits['mixed']!;
+          expect(pending.edits, [laterReset]);
+          expect(pending.placementNotes, isEmpty);
+          expect(pending.clearPlacementNotes, isEmpty);
+          // A retry must not replay already committed NPC placement sidecars.
+          expect(await notifier.saveAllPending(), isFalse);
+          final retry = core.requests.lastWhere(
+            (r) => r.command == 'write_save',
+          );
+          expect(retry.payload[key], isNull);
+        }
+      },
+    );
+  }
 
   test('a failed undo note is reported beside the successful save', () async {
     // The core writes the note AFTER the bytes land and reports a failure beside
@@ -1165,7 +1264,10 @@ void main() {
           edits: [
             const <String, Object?>{
               'path': 'private.inventory.addItem',
-              'value': {'path': '/Game/Item_A', 'count': 1},
+              'value': {
+                'path': '/Script/Angelscript.ItMi_Orenugget',
+                'count': 1,
+              },
             },
             storyStateApplyEdit(const [
               StoryStateEdit(
@@ -1338,6 +1440,253 @@ void main() {
 
     expect(notifier.state.pendingEdits, isEmpty);
   });
+
+  test(
+    'saveAllPending keeps container changes inside a structurally edited array',
+    () async {
+      for (final parentOperation in [
+        'private.typed.arrayRemove',
+        'private.typed.arrayDuplicate',
+      ]) {
+        for (final childOperation in [
+          'private.typed.setAdd',
+          'private.typed.setRemove',
+          'private.typed.arrayRemove',
+          'private.typed.arrayDuplicate',
+        ]) {
+          for (final childFirst in [false, true]) {
+            final core = _RecordingCoreService();
+            final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+            await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+            final parent = <String, Object?>{
+              'path': parentOperation,
+              'value': {
+                'path': ['Events'],
+                'index': 1,
+              },
+            };
+            final child = <String, Object?>{
+              'path': childOperation,
+              'value': {
+                'path': [
+                  'Events',
+                  '[01]',
+                  childOperation.startsWith('private.typed.array')
+                      ? 'Notes'
+                      : 'Knowledge',
+                ],
+                'value': 'ChoiceB',
+                'index': 0,
+              },
+            };
+            final parentKey = childFirst ? 'b-parent' : 'a-parent';
+            final childKey = childFirst ? 'a-container' : 'b-container';
+            notifier.setPendingEdit(
+              parentKey,
+              PendingSaveEdit(edits: [parent]),
+            );
+            notifier.setPendingEdit(childKey, PendingSaveEdit(edits: [child]));
+            expect(await notifier.saveAllPending(), isFalse);
+            expect(notifier.state.error, contains('Events'));
+            expect(
+              core.requests.where((r) => r.command == 'write_save'),
+              isEmpty,
+            );
+            expect(notifier.state.pendingEdits, hasLength(2));
+            expect(notifier.state.pendingEdits[parentKey]!.edits, [parent]);
+            expect(notifier.state.pendingEdits[childKey]!.edits, [child]);
+          }
+        }
+      }
+    },
+  );
+
+  test(
+    'saveAllPending preserves conflicting NPC health and revival edits',
+    () async {
+      for (final field in ['BaseValue', 'CurrentValue']) {
+        for (final reviveFirst in [false, true]) {
+          final core = _RecordingCoreService();
+          final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+          await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+          final revive = <String, Object?>{
+            'path': 'private.npc.revive',
+            'value': {'id': 'NPC-A'},
+          };
+          final health = <String, Object?>{
+            'path': 'private.typed.setValue',
+            'value': {
+              'path': [
+                'AttributesByGlobalId',
+                '{NPC-A}',
+                'AttributeSetsByClass',
+                '{/Script/G1R.AttributeSet_Health}',
+                'Attributes',
+                '{Health}',
+                field,
+              ],
+              'value': 1,
+            },
+          };
+          final reviveKey = reviveFirst ? 'a-revive' : 'b-revive';
+          final healthKey = reviveFirst ? 'b-health' : 'a-health';
+          notifier.setPendingEdit(reviveKey, PendingSaveEdit(edits: [revive]));
+          notifier.setPendingEdit(healthKey, PendingSaveEdit(edits: [health]));
+          expect(await notifier.saveAllPending(), isFalse);
+          expect(notifier.state.error, contains('Health'));
+          expect(
+            core.requests.where((r) => r.command == 'write_save'),
+            isEmpty,
+          );
+          expect(notifier.state.pendingEdits, hasLength(2));
+          expect(notifier.state.pendingEdits[reviveKey]!.edits, [revive]);
+          expect(notifier.state.pendingEdits[healthKey]!.edits, [health]);
+        }
+      }
+    },
+  );
+
+  test('saveAllPending preserves opposing edits to one set element', () async {
+    for (final addFirst in [false, true]) {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      final add = <String, Object?>{
+        'path': 'private.typed.setAdd',
+        'value': {
+          'path': ['Events', '[01]', 'Knowledge'],
+          'value': 'ChoiceB',
+        },
+      };
+      final remove = <String, Object?>{
+        'path': 'private.typed.setRemove',
+        'value': {
+          'path': ['Events', '[1]', 'Knowledge'],
+          'value': 'ChoiceB',
+        },
+      };
+      final addKey = addFirst ? 'a-add' : 'b-add';
+      final removeKey = addFirst ? 'b-remove' : 'a-remove';
+      notifier.setPendingEdit(addKey, PendingSaveEdit(edits: [add]));
+      notifier.setPendingEdit(removeKey, PendingSaveEdit(edits: [remove]));
+      expect(await notifier.saveAllPending(), isFalse);
+      expect(notifier.state.error, contains('same property'));
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      expect(notifier.state.pendingEdits, hasLength(2));
+      expect(notifier.state.pendingEdits[addKey]!.edits, [add]);
+      expect(notifier.state.pendingEdits[removeKey]!.edits, [remove]);
+    }
+  });
+
+  test(
+    'saveAllPending preserves overlapping player and profile fields',
+    () async {
+      const paths = [
+        'private.player.setPlayerName',
+        'private.profile.setProfileName',
+        'private.player.setAttribute',
+        'private.player.setTransform',
+      ];
+      for (final path in paths) {
+        for (final secondFirst in [false, true]) {
+          final core = _RecordingCoreService();
+          final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+          await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+          Object value(int n) => switch (path) {
+            'private.player.setAttribute' => {'id': 'Strength', 'baseValue': n},
+            'private.player.setTransform' => {
+              'location': {'x': n, 'y': 2, 'z': 3},
+            },
+            _ => {'name': 'Name $n'},
+          };
+          final first = <String, Object?>{'path': path, 'value': value(20)};
+          final second = <String, Object?>{'path': path, 'value': value(21)};
+          final firstKey = secondFirst ? 'b-first' : 'a-first';
+          final secondKey = secondFirst ? 'a-second' : 'b-second';
+          notifier.setPendingEdit(firstKey, PendingSaveEdit(edits: [first]));
+          notifier.setPendingEdit(secondKey, PendingSaveEdit(edits: [second]));
+          expect(await notifier.saveAllPending(), isFalse);
+          expect(notifier.state.error, contains('same property'));
+          expect(
+            core.requests.where((r) => r.command == 'write_save'),
+            isEmpty,
+          );
+          expect(notifier.state.pendingEdits, hasLength(2));
+          expect(notifier.state.pendingEdits[firstKey]!.edits, [first]);
+          expect(notifier.state.pendingEdits[secondKey]!.edits, [second]);
+        }
+      }
+    },
+  );
+
+  test(
+    'saveAllPending retains conflicting public rename entries without writing',
+    () async {
+      for (final secondFirst in [false, true]) {
+        final core = _RecordingCoreService();
+        final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+        await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+        final first = <String, Object?>{
+          'path': 'public.m_PlayerSaveName',
+          'value': 'First name',
+        };
+        final second = <String, Object?>{
+          'path': 'public.m_PlayerSaveName',
+          'value': 'Second name',
+        };
+        final firstKey = secondFirst ? 'b-first' : 'a-first';
+        final secondKey = secondFirst ? 'a-second' : 'b-second';
+        notifier.setPendingEdit(firstKey, PendingSaveEdit(edits: [first]));
+        notifier.setPendingEdit(secondKey, PendingSaveEdit(edits: [second]));
+        expect(await notifier.saveAllPending(), isFalse);
+        expect(notifier.state.error, contains('m_PlayerSaveName'));
+        expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+        expect(notifier.state.pendingEdits, hasLength(2));
+        expect(notifier.state.pendingEdits[firstKey]!.edits, [first]);
+        expect(notifier.state.pendingEdits[secondKey]!.edits, [second]);
+      }
+    },
+  );
+
+  test(
+    'saveAllPending preserves repeated structured targets instead of splitting them',
+    () async {
+      for (final relationship in [true, false]) {
+        for (final secondFirst in [false, true]) {
+          final core = _RecordingCoreService();
+          final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+          await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+          final first = <String, Object?>{
+            'path': relationship
+                ? 'private.npc.setRelationship'
+                : 'private.knowledge.setEntry',
+            'value': relationship
+                ? {'id': 'NPC-A', 'relationship': 'friend'}
+                : {'character': 'Hero', 'entry': 'Info_Test', 'present': true},
+          };
+          final second = <String, Object?>{
+            'path': first['path'],
+            'value': relationship
+                ? {'id': 'npc-a', 'relationship': 'enemy'}
+                : {'character': 'hero', 'entry': 'INFO_TEST', 'present': false},
+          };
+          final firstKey = secondFirst ? 'b-first' : 'a-first';
+          final secondKey = secondFirst ? 'a-second' : 'b-second';
+          notifier.setPendingEdit(firstKey, PendingSaveEdit(edits: [first]));
+          notifier.setPendingEdit(secondKey, PendingSaveEdit(edits: [second]));
+          expect(await notifier.saveAllPending(), isFalse);
+          expect(notifier.state.error, contains('same property'));
+          expect(
+            core.requests.where((r) => r.command == 'write_save'),
+            isEmpty,
+          );
+          expect(notifier.state.pendingEdits, hasLength(2));
+          expect(notifier.state.pendingEdits[firstKey]!.edits, [first]);
+          expect(notifier.state.pendingEdits[secondKey]!.edits, [second]);
+        }
+      }
+    },
+  );
 
   test(
     'saveAllPending refuses conflicting edits for the same typed path',
@@ -1750,6 +2099,59 @@ void main() {
   });
 
   test(
+    'saveAllPending preserves count and removal intents for the same stack',
+    () async {
+      for (final actor in [null, 'NPC-Diego']) {
+        for (final removalFirst in [false, true]) {
+          final core = _RecordingCoreService();
+          final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+          await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+          final target = <String, dynamic>{
+            'actorId': ?actor,
+            'containerType': 'MainContainer',
+            'slotId': 7,
+            'path': '/Script/Angelscript.ItMi_Orenugget',
+          };
+          final count = PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.inventory.setItemCount',
+                'value': {...target, 'count': 9},
+              },
+            ],
+          );
+          final remove = PendingSaveEdit(
+            edits: [
+              {'path': 'private.inventory.removeItem', 'value': target},
+            ],
+          );
+          notifier.setPendingEdit(
+            removalFirst ? 'remove' : 'count',
+            removalFirst ? remove : count,
+          );
+          notifier.setPendingEdit(
+            removalFirst ? 'count' : 'remove',
+            removalFirst ? count : remove,
+          );
+
+          expect(await notifier.saveAllPending(), isFalse);
+          expect(
+            notifier.state.error,
+            AppLocalizationsEn().editorInventorySlotEditConflict,
+          );
+          expect(
+            core.requests.where((r) => r.command == 'write_save'),
+            isEmpty,
+          );
+          expect(notifier.state.pendingEdits, hasLength(2));
+          expect(notifier.state.pendingEdits['count']!.edits, count.edits);
+          expect(notifier.state.pendingEdits['remove']!.edits, remove.edits);
+        }
+      }
+    },
+  );
+
+  test(
     'saveAllPending orders a typed edit ahead of a splicing edit in one write',
     () async {
       final core = _RecordingCoreService();
@@ -2096,7 +2498,7 @@ void main() {
       // Refused: no write at all, and an explanatory error is surfaced.
       expect(ok, isFalse);
       expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
-      expect(notifier.state.error, contains('EffectSpec'));
+      expect(notifier.state.error, contains('ActiveEffects'));
     },
   );
 
@@ -2334,20 +2736,176 @@ void main() {
   // The core's SAME-TARGET rule is order-independent: a structured operation
   // rewrites its target wholesale, so a raw typed edit addressing what it
   // rewrites is refused in the same write whichever way round the two come.
-  // The packer must SPLIT those pairs into sequential sub-writes (which is how
-  // they ran before batching existed) instead of building a write the core
-  // rejects — a rejection fails the whole Save with nothing committed.
+  // Revive and knowledge collisions must also be refused before grouping:
+  // sequential writes can silently discard the raw operation's result. Keep
+  // both pending intents so the user can resolve the conflict before saving.
   // ---------------------------------------------------------------------------
 
+  for (final scenario in [
+    (
+      name: 'NPC inventory reset',
+      edit: <String, Object?>{
+        'path': 'private.inventory.reset',
+        'value': {'actorId': 'NPC-Diego'},
+      },
+      path: [
+        'InventoryByGlobalId',
+        '{NPC-Diego}',
+        'InventoryItems',
+        'm_Values',
+        'Items',
+        '[0]',
+        'm_Slots',
+        '[0]',
+        'm_SlotData',
+        'm_ItemCount',
+      ],
+    ),
+    (
+      name: 'skill unlearning',
+      edit: <String, Object?>{
+        'path': 'private.skills.set',
+        'value': {
+          'actor': 'Hero',
+          'base': 'Hunting_Scutes',
+          'tier': 'Untrained',
+        },
+      },
+      path: [
+        'ActiveEffectsByGlobalId',
+        '{Hero}',
+        'ActiveEffects',
+        '[2]',
+        'EffectSpec',
+        'Duration',
+      ],
+    ),
+  ]) {
+    test(
+      'saveAllPending preserves raw changes conflicting with ${scenario.name}',
+      () async {
+        final core = _RecordingCoreService();
+        final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+        await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+        notifier.setPendingEdit(
+          'structured',
+          PendingSaveEdit(edits: [scenario.edit]),
+        );
+        notifier.setPendingEdit(
+          'typed:descendant',
+          PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.typed.setValue',
+                'value': {'path': scenario.path, 'value': 7},
+              },
+            ],
+          ),
+        );
+
+        expect(await notifier.saveAllPending(), isFalse);
+        expect(notifier.state.error, isNotEmpty);
+        expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+        expect(notifier.state.pendingEdits, hasLength(2));
+      },
+    );
+  }
+
   test(
-    'saveAllPending splits an All-Data MemorizedEvents edit from an NPC revive',
+    'saveAllPending refuses raw edits that overwrite a pending Hero transform',
+    () async {
+      for (final leaf in ['m_Location', 'm_Rotation']) {
+        final core = _RecordingCoreService();
+        final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+        await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+        notifier.setPendingEdit(
+          'player.transform',
+          const PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.player.setTransform',
+                'value': {
+                  'location': {'x': 1.0, 'y': 2.0, 'z': 3.0},
+                  'rotation': {'pitch': 4.0, 'yaw': 5.0, 'roll': 6.0},
+                },
+              },
+            ],
+          ),
+        );
+        notifier.setPendingEdit(
+          'typed:pose',
+          PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.typed.setValue',
+                'value': {
+                  'path': ['m_SavedPlayers', '[0]', leaf],
+                  'value': 1,
+                },
+              },
+            ],
+          ),
+        );
+        expect(await notifier.saveAllPending(), isFalse);
+        expect(notifier.state.error, contains('Conflicting'));
+        expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+        expect(notifier.state.pendingEdits, hasLength(2));
+      }
+    },
+  );
+
+  test(
+    'saveAllPending permits a revive with another NPC tag or corpse edit',
+    () async {
+      for (final path in [
+        ['LooseTagsByGlobalId', '{NPC-B}'],
+        ['m_SavedInventories', '{Character_NPC-B_123}', 'Items'],
+      ]) {
+        final core = _RecordingCoreService();
+        final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+        await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+        notifier.setPendingEdit(
+          'npc.revive:NPC-A',
+          const PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.npc.revive',
+                'value': {'id': 'NPC-A'},
+              },
+            ],
+          ),
+        );
+        notifier.setPendingEdit(
+          'typed:NPC-B',
+          PendingSaveEdit(
+            edits: [
+              {
+                'path': 'private.typed.setValue',
+                'value': {'path': path, 'value': 1},
+              },
+            ],
+          ),
+        );
+        expect(await notifier.saveAllPending(), isTrue);
+        expect(notifier.state.error, isNull);
+        expect(
+          core.requests.where((r) => r.command == 'write_save'),
+          hasLength(1),
+        );
+        expect(notifier.state.pendingEdits, isEmpty);
+      }
+    },
+  );
+
+  test(
+    'saveAllPending refuses an All-Data MemorizedEvents edit with an NPC revive',
     () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-      // A plain value edit inside an NPC's MemorizedEvents (not a structural
-      // array op, so the memory-event guard above does not refuse it)...
+      // A plain value edit inside an NPC's MemorizedEvents is also discarded
+      // by a revive that removes the containing memory event.
       notifier.setPendingEdit(
         'typed:lizard-memory-time',
         const PendingSaveEdit(
@@ -2384,31 +2942,18 @@ void main() {
 
       final ok = await notifier.saveAllPending();
 
-      expect(ok, isTrue);
-      expect(notifier.state.error, isNull);
-      final writes = core.requests
-          .where((r) => r.command == 'write_save')
-          .toList();
-      // TWO writes: sequential, so the typed edit lands and the revive then
-      // re-reads the file and strips events from what is on disk.
-      expect(writes, hasLength(2));
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('Conflicting'));
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
       expect(
-        (writes[0].payload['edits'] as List).map((e) => (e as Map)['path']),
-        ['private.typed.setValue'],
+        notifier.state.pendingEdits.keys,
+        unorderedEquals(['typed:lizard-memory-time', 'npc.revive:Lizard-1']),
       );
-      expect(
-        (writes[1].payload['edits'] as List).map((e) => (e as Map)['path']),
-        ['private.npc.revive'],
-      );
-      // Backup-once still holds, on the first write.
-      expect(writes.where((w) => w.payload['backup'] == true), hasLength(1));
-      expect(writes.first.payload['backup'], isTrue);
-      expect(notifier.state.pendingEdits, isEmpty);
     },
   );
 
   test(
-    'saveAllPending splits a knowledge edit from a typed edit in the SAME entry',
+    'saveAllPending refuses a knowledge edit and a typed edit in the SAME entry',
     () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
@@ -2452,18 +2997,12 @@ void main() {
 
       final ok = await notifier.saveAllPending();
 
-      expect(ok, isTrue);
-      final writes = core.requests
-          .where((r) => r.command == 'write_save')
-          .toList();
-      expect(writes, hasLength(2));
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('Conflicting'));
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
       expect(
-        (writes[0].payload['edits'] as List).map((e) => (e as Map)['path']),
-        ['private.typed.setValue'],
-      );
-      expect(
-        (writes[1].payload['edits'] as List).map((e) => (e as Map)['path']),
-        ['private.knowledge.setEntry'],
+        notifier.state.pendingEdits.keys,
+        unorderedEquals(['knowledge', 'typed:diego-knowledge']),
       );
     },
   );
@@ -2527,16 +3066,14 @@ void main() {
   );
 
   test(
-    'saveAllPending splits a non-Def ActiveEffects edit from a same-actor skill edit',
+    'saveAllPending refuses a non-Def ActiveEffects edit with a same-actor skill edit',
     () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-      // A leaf of the hero's ActiveEffects that is NOT EffectSpec/Def, so the
-      // same-actor Def refusal does not fire — but the core still rejects the
-      // pair in one write, because a skill edit rewrites that actor's effect
-      // elements wholesale.
+      // Skill transitions can remove effect elements, including their Level
+      // field. Splitting the writes would still discard the raw change.
       notifier.setPendingEdit(
         'typed:effect-level',
         const PendingSaveEdit(
@@ -2576,22 +3113,10 @@ void main() {
 
       final ok = await notifier.saveAllPending();
 
-      // Not refused — split. The old Def-only check would have let this ride
-      // one write, which the core now rejects outright.
-      expect(ok, isTrue);
-      expect(notifier.state.error, isNull);
-      final writes = core.requests
-          .where((r) => r.command == 'write_save')
-          .toList();
-      expect(writes, hasLength(2));
-      expect(
-        (writes[0].payload['edits'] as List).map((e) => (e as Map)['path']),
-        ['private.typed.setValue'],
-      );
-      expect(
-        (writes[1].payload['edits'] as List).map((e) => (e as Map)['path']),
-        ['private.skills.set'],
-      );
+      expect(ok, isFalse);
+      expect(notifier.state.error, isNotEmpty);
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      expect(notifier.state.pendingEdits, hasLength(2));
     },
   );
 
@@ -2716,7 +3241,7 @@ void main() {
     },
   );
 
-  group('the same-target predicate the packer splits on', () {
+  group('the same-target predicate', () {
     Map<String, Object?> typedEdit(List<String> path) => {
       'path': 'private.typed.setValue',
       'value': {'path': path, 'value': 1},
@@ -2880,21 +3405,17 @@ void main() {
       );
     });
 
-    test('the packer really splits such a pair into two writes', () async {
+    test('the shared planner refuses such a pair before writing', () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(core, saveDir: r'C:	mp\saves');
       await notifier.inspect(r'C:	mp\saves\G1R-001.sav');
 
-      Map<String, Object?> entry(
-        String character,
-        String name,
-        bool present,
-      ) => {
+      Map<String, Object?> entry(String character, String name, bool present) => {
         'path': 'private.knowledge.setEntry',
         'value': {'character': character, 'entry': name, 'present': present},
       };
-      // Two registry entries the core folds into one target. It refuses the
-      // pair, so both have to reach it in writes of their own.
+      // Two registry entries address one normalized target. The planner must
+      // preserve both pending intents and refuse the pair before writing.
       notifier.setPendingEdit(
         'knowledge:a',
         PendingSaveEdit(edits: [entry('Diego', 'Info_Ore ', false)]),
@@ -2906,14 +3427,19 @@ void main() {
 
       final ok = await notifier.saveAllPending();
 
-      expect(ok, isTrue);
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('same property'));
       final writes = core.requests
           .where((request) => request.command == 'write_save')
           .toList();
-      expect(writes, hasLength(2));
-      for (final write in writes) {
-        expect((write.payload['edits'] as List), hasLength(1));
-      }
+      expect(writes, isEmpty);
+      expect(notifier.state.pendingEdits, hasLength(2));
+      expect(notifier.state.pendingEdits['knowledge:a']!.edits, [
+        entry('Diego', 'Info_Ore ', false),
+      ]);
+      expect(notifier.state.pendingEdits['knowledge:b']!.edits, [
+        entry('diego', 'Info_Ore', true),
+      ]);
     });
 
     test(
@@ -6219,6 +6745,58 @@ void main() {
   );
 
   test(
+    'saveAllPending keeps faction forgiveness and colliding raw crime flags',
+    () async {
+      for (final path in [
+        [
+          'm_GenericData',
+          '{CrimeMemoryPersistentData}',
+          'GlobalCrimeDataEntries',
+          '[0]',
+          'bIsForgiven',
+        ],
+        [
+          'm_GenericData',
+          '{CrimeMemoryPersistentData}',
+          'RelativeCrimeDataEntries',
+          '{OC_STT_Diego}',
+          'RelativeCrimes',
+          '[0]',
+          'bIsSuppressed',
+        ],
+      ]) {
+        for (final rawFirst in [false, true]) {
+          final core = _RecordingCoreService();
+          final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+          await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+          void raw() => notifier.setPendingEdit(
+            'typed:crime-flag',
+            PendingSaveEdit(
+              edits: [
+                {
+                  'path': 'private.typed.setValue',
+                  'value': {'path': path, 'value': false},
+                },
+              ],
+            ),
+          );
+          if (rawFirst) raw();
+          notifier.setPendingFactionForgive('Guild.Human.OldCamp');
+          if (!rawFirst) raw();
+
+          expect(await notifier.saveAllPending(), isFalse);
+          expect(notifier.state.error, contains('Conflicting'));
+          expect(
+            core.requests.where((r) => r.command == 'write_save'),
+            isEmpty,
+          );
+          expect(notifier.state.pendingEdits, hasLength(2));
+        }
+      }
+    },
+  );
+
+  test(
     'forgive rides the fixed-size batch (NOT a splicing write) on global save',
     () async {
       final core = _RecordingCoreService();
@@ -6511,6 +7089,14 @@ class _RecordingCoreService implements GoresaveCoreService {
   }) async {
     requests.add(_RecordedRequest(command, Map<String, Object?>.from(payload)));
     switch (command) {
+      case 'plan_edits':
+        final native = NativeGoresaveCoreService.tryCreate();
+        if (native == null) {
+          throw StateError(
+            'Build gore-save before running editor workflow tests',
+          );
+        }
+        return native.execute(command, payload: payload);
       case 'scan_save_dir':
         return {
           'ok': true,

@@ -1,3 +1,4 @@
+import 'support/shared_planner_core.dart';
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -153,7 +154,9 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(_EmptyCoreService()),
+          coreServiceProvider.overrideWithValue(
+            withSharedPlanner(_EmptyCoreService()),
+          ),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -189,7 +192,9 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(_EmptyCoreService()),
+          coreServiceProvider.overrideWithValue(
+            withSharedPlanner(_EmptyCoreService()),
+          ),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -229,7 +234,9 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(_EmptyCoreService()),
+          coreServiceProvider.overrideWithValue(
+            withSharedPlanner(_EmptyCoreService()),
+          ),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -256,7 +263,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(core),
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -670,7 +677,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(core),
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -777,7 +784,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(core),
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -905,7 +912,7 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            coreServiceProvider.overrideWithValue(core),
+            coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
             editorSettingsStoreProvider.overrideWithValue(
               const NoopEditorSettingsStore(),
             ),
@@ -956,7 +963,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(core),
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -1009,7 +1016,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(core),
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -1061,7 +1068,7 @@ void main() {
       ProviderScope(
         overrides: [
           coreServiceProvider.overrideWithValue(
-            _FakeCoreService(gameTimeTotalSeconds: 1413433),
+            withSharedPlanner(_FakeCoreService(gameTimeTotalSeconds: 1413433)),
           ),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
@@ -1095,7 +1102,7 @@ void main() {
       ProviderScope(
         overrides: [
           coreServiceProvider.overrideWithValue(
-            _FakeCoreService(playerSaveName: null),
+            withSharedPlanner(_FakeCoreService(playerSaveName: null)),
           ),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
@@ -1130,7 +1137,7 @@ void main() {
         ProviderScope(
           overrides: [
             coreServiceProvider.overrideWithValue(
-              _FakeCoreService(playerSaveName: ''),
+              withSharedPlanner(_FakeCoreService(playerSaveName: '')),
             ),
             editorSettingsStoreProvider.overrideWithValue(
               const NoopEditorSettingsStore(),
@@ -1172,7 +1179,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(core),
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -1232,7 +1239,9 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            coreServiceProvider.overrideWithValue(_FakeCoreService()),
+            coreServiceProvider.overrideWithValue(
+              withSharedPlanner(_FakeCoreService()),
+            ),
             editorSettingsStoreProvider.overrideWithValue(
               const NoopEditorSettingsStore(),
             ),
@@ -1277,7 +1286,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(core),
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -1305,7 +1314,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(core),
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -1382,7 +1391,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(core),
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -1483,7 +1492,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(core),
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -1692,7 +1701,7 @@ void main() {
       ProviderScope(
         overrides: [
           coreServiceProvider.overrideWithValue(
-            _ExpelledStatisticsCoreService(),
+            withSharedPlanner(_ExpelledStatisticsCoreService()),
           ),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
@@ -1731,7 +1740,7 @@ void main() {
       ProviderScope(
         overrides: [
           coreServiceProvider.overrideWithValue(
-            _UnavailableStatisticsCoreService(),
+            withSharedPlanner(_UnavailableStatisticsCoreService()),
           ),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
@@ -1775,7 +1784,7 @@ void main() {
       ProviderScope(
         overrides: [
           coreServiceProvider.overrideWithValue(
-            _TruncatedStatisticsCoreService(),
+            withSharedPlanner(_TruncatedStatisticsCoreService()),
           ),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
@@ -1805,7 +1814,7 @@ void main() {
       ProviderScope(
         overrides: [
           coreServiceProvider.overrideWithValue(
-            _UnknownCountStatisticsCoreService(),
+            withSharedPlanner(_UnknownCountStatisticsCoreService()),
           ),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
@@ -1835,7 +1844,7 @@ void main() {
       ProviderScope(
         overrides: [
           coreServiceProvider.overrideWithValue(
-            _GlobalInventoryStatisticsCoreService(),
+            withSharedPlanner(_GlobalInventoryStatisticsCoreService()),
           ),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
@@ -1865,7 +1874,7 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            coreServiceProvider.overrideWithValue(core),
+            coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
             editorSettingsStoreProvider.overrideWithValue(
               const NoopEditorSettingsStore(),
             ),
@@ -2035,7 +2044,9 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(_RecoveryCoreService()),
+          coreServiceProvider.overrideWithValue(
+            withSharedPlanner(_RecoveryCoreService()),
+          ),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -2071,7 +2082,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(core),
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -2125,7 +2136,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(core),
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -2170,7 +2181,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          coreServiceProvider.overrideWithValue(core),
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
@@ -2223,7 +2234,7 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            coreServiceProvider.overrideWithValue(core),
+            coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
             editorSettingsStoreProvider.overrideWithValue(
               const NoopEditorSettingsStore(),
             ),

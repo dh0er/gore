@@ -70,6 +70,7 @@ pub enum ArgKind {
         min: Option<i64>,
         max: Option<i64>,
     },
+    Float,
     Bool,
     /// A closed set of string values, rendered into the schema as an `enum`.
     Enum(&'static [&'static str]),
@@ -85,6 +86,7 @@ impl ArgKind {
             ArgKind::Str => "string",
             ArgKind::Hex => "hex",
             ArgKind::Int { .. } => "integer",
+            ArgKind::Float => "number",
             ArgKind::Bool => "boolean",
             ArgKind::Enum(_) => "enum",
             ArgKind::StrList => "string[]",
@@ -235,6 +237,9 @@ impl Derived {
 #[derive(Clone, Copy, Debug)]
 pub struct Safety {
     pub base: Class,
+    /// A switch whose explicit `true` value makes the entire call read-only.
+    /// Register only previews that skip every write and external side effect.
+    pub read_only_when: Option<&'static str>,
     /// A [`Class::GameLaunch`] command may have one explicitly offline mode.
     ///
     /// `as compile` and `as compile-module` default to a policy that may fall back to the game's
@@ -250,6 +255,11 @@ pub struct Safety {
     /// not. Treating them as unconditionally dangerous would block the safe usage; treating them
     /// as unconditionally safe would let an agent overwrite the game's own files.
     pub in_place_without: Option<&'static str>,
+    /// A switch that mutates shared state unless the caller supplies a prepared input.
+    /// For example, report images prepare the shared icon cache without a manifest.
+    pub mutates_when_switch_without: Option<(&'static str, &'static str)>,
+    /// A switch that enables a side effect outside the newly written output.
+    pub mutates_when_switch: Option<&'static str>,
     /// Arguments naming a path this command overwrites if it is already there.
     ///
     /// [`Class::Write`] promises "creates new files", and that is what lets it run ungated. A
@@ -328,8 +338,11 @@ impl Safety {
     const fn of(base: Class) -> Self {
         Self {
             base,
+            read_only_when: None,
             offline_when: None,
             in_place_without: None,
+            mutates_when_switch_without: None,
+            mutates_when_switch: None,
             truncates: &[],
             derives: &[],
             installs_via: &[],
@@ -395,6 +408,25 @@ impl Safety {
         }
     }
 
+    pub const fn mutates_when_switch_without(
+        mut self,
+        switch: &'static str,
+        input: &'static str,
+    ) -> Self {
+        self.mutates_when_switch_without = Some((switch, input));
+        self
+    }
+
+    pub const fn mutates_when_switch(mut self, switch: &'static str) -> Self {
+        self.mutates_when_switch = Some(switch);
+        self
+    }
+
+    pub const fn read_only_when(mut self, switch: &'static str) -> Self {
+        self.read_only_when = Some(switch);
+        self
+    }
+
     /// Register arguments that make this an installation change when they point into the game
     /// tree. See [`Safety::installs_via`].
     pub const fn installs_via(mut self, args: &'static [&'static str]) -> Self {
@@ -435,6 +467,12 @@ impl Safety {
 
     /// The class this specific call falls into.
     pub fn effective(&self, args: &Map<String, Value>) -> Class {
+        if self.is_explicitly_read_only(args) {
+            return Class::Read;
+        }
+        if self.mutates_shared_state(args) {
+            return self.base.max(Class::Mutate);
+        }
         if self.is_explicitly_offline(args) {
             return Class::Write;
         }
@@ -446,6 +484,9 @@ impl Safety {
 
     /// The worst case, used for descriptions and annotations where no arguments are known yet.
     pub fn worst_case(&self) -> Class {
+        if self.mutates_when_switch_without.is_some() || self.mutates_when_switch.is_some() {
+            return self.base.max(Class::Mutate);
+        }
         match self.in_place_without {
             Some(_) => self.base.max(Class::Mutate),
             None => self.base,
@@ -463,6 +504,13 @@ impl Safety {
     /// driving the game's own compiler stages a source tree into the installation and restores it
     /// afterwards, so the installation is touched either way.
     pub fn requirements(&self, args: &Map<String, Value>) -> Requirements {
+        if self.is_explicitly_read_only(args) {
+            return Requirements {
+                write: false,
+                game_launch: false,
+                rewrites_in_place: false,
+            };
+        }
         let rewrites_in_place = self
             .in_place_without
             .is_some_and(|escape| !args.contains_key(escape));
@@ -470,6 +518,7 @@ impl Safety {
             matches!(self.base, Class::GameLaunch) && !self.is_explicitly_offline(args);
         Requirements {
             write: rewrites_in_place
+                || self.mutates_shared_state(args)
                 || matches!(
                     self.base,
                     Class::ManagerWrite | Class::Mutate | Class::Destructive
@@ -480,10 +529,26 @@ impl Safety {
         }
     }
 
+    pub fn is_explicitly_read_only(&self, args: &Map<String, Value>) -> bool {
+        self.read_only_when
+            .is_some_and(|switch| args.get(switch).and_then(Value::as_bool) == Some(true))
+    }
+
     fn is_explicitly_offline(&self, args: &Map<String, Value>) -> bool {
         self.offline_when.is_some_and(|(arg, offline_value)| {
             args.get(arg).and_then(Value::as_str) == Some(offline_value)
         })
+    }
+
+    fn mutates_shared_state(&self, args: &Map<String, Value>) -> bool {
+        self.mutates_when_switch
+            .is_some_and(|switch| args.get(switch).and_then(Value::as_bool) == Some(true))
+            || self
+                .mutates_when_switch_without
+                .is_some_and(|(switch, input)| {
+                    args.get(switch).and_then(Value::as_bool) == Some(true)
+                        && !args.contains_key(input)
+                })
     }
 }
 
@@ -742,6 +807,7 @@ pub const T_COMPILE: u64 = 2700;
 /// Ordered roughly by how early a user meets them: configure, then edit content, then package and
 /// install, then the deeper script tooling.
 pub const GROUPS: &[GroupSpec] = &[
+    groups::save::SAVE,
     groups::core::CONFIG,
     groups::core::DOCTOR,
     groups::core::FIND,
@@ -768,7 +834,7 @@ pub const GROUPS: &[GroupSpec] = &[
 ///
 /// A literal, not a computed value: it is a claim about the CLI, and the integration test compares
 /// it against what clap actually exposes. Changing it should be a deliberate act.
-pub const EXPECTED_LEAF_COUNT: usize = 112;
+pub const EXPECTED_LEAF_COUNT: usize = 254;
 
 pub fn group(tool: &str) -> Option<&'static GroupSpec> {
     GROUPS.iter().find(|group| group.tool == tool)
@@ -800,7 +866,7 @@ mod tests {
     #[test]
     fn the_table_covers_every_leaf_of_the_cli() {
         assert_eq!(leaf_count(), EXPECTED_LEAF_COUNT);
-        assert_eq!(GROUPS.len(), 20);
+        assert_eq!(GROUPS.len(), 21);
     }
 
     #[test]
@@ -1156,6 +1222,9 @@ mod tests {
             ("gore_dialog", "text", &["out"]),
             ("gore_loc", "export", &["out"]),
             ("gore_loc", "import", &["out"]),
+            ("gore_save", "report", &["out"]),
+            ("gore_save", "assets export", &["out"]),
+            ("gore_save", "screenshot export", &["out"]),
             ("gore_texture", "extract", &["out"]),
             ("gore_texture", "index", &["out"]),
             ("gore_as", "replace", &["out"]),

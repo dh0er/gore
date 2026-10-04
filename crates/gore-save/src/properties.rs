@@ -1015,6 +1015,24 @@ pub fn browse_properties(
     root: &RootObject,
     options: &PropertyBrowseOptions<'_>,
 ) -> PropertyBrowseResult {
+    browse_properties_matching(root, options, None)
+}
+
+/// Collect only nodes at this exact browser path, retaining stable DFS IDs and
+/// read-only duplicate matches. Counts and pagination apply to matching nodes.
+pub fn browse_property_path(
+    root: &RootObject,
+    options: &PropertyBrowseOptions<'_>,
+    path: &[String],
+) -> PropertyBrowseResult {
+    browse_properties_matching(root, options, Some(path))
+}
+
+fn browse_properties_matching(
+    root: &RootObject,
+    options: &PropertyBrowseOptions<'_>,
+    exact_path: Option<&[String]>,
+) -> PropertyBrowseResult {
     let terms = options
         .query
         .split_whitespace()
@@ -1022,6 +1040,7 @@ pub fn browse_properties(
         .collect::<Vec<_>>();
     let mut ctx = BrowseCtx {
         terms,
+        exact_path: exact_path.map(<[String]>::to_vec),
         type_filter: options
             .type_filter
             .filter(|value| !value.is_empty())
@@ -1061,6 +1080,7 @@ pub fn browse_properties(
 
 struct BrowseCtx {
     terms: Vec<String>,
+    exact_path: Option<Vec<String>>,
     type_filter: Option<String>,
     kind_filter: Option<String>,
     editable_filter: Option<bool>,
@@ -1083,6 +1103,7 @@ impl BrowseCtx {
     #[allow(clippy::too_many_arguments)]
     fn slot(
         &mut self,
+        path: &[String],
         display: &str,
         type_name: &str,
         struct_type: Option<&str>,
@@ -1093,6 +1114,13 @@ impl BrowseCtx {
     ) -> Option<usize> {
         let ordinal = self.visited;
         self.visited += 1;
+        if self
+            .exact_path
+            .as_deref()
+            .is_some_and(|expected| expected != path)
+        {
+            return None;
+        }
         let editable = self.allow_edits && addressable_editable;
         if self
             .editable_filter
@@ -1206,6 +1234,7 @@ fn walk_browse_properties(
         let addressable_editable = addressable && browse_value_editable(&property.value);
         let child_count = browse_child_count(&property.value);
         if let Some(ordinal) = ctx.slot(
+            path,
             display,
             &property.type_name,
             struct_type,
@@ -1377,6 +1406,7 @@ fn descend_browse_inline<F>(
     display.push_str(segment);
     path.push(segment.to_string());
     if let Some(ordinal) = ctx.slot(
+        path,
         display,
         type_name,
         struct_type,
@@ -4260,6 +4290,29 @@ mod tests {
         assert_eq!(leaves.len(), 3);
         assert!(leaves.iter().all(|node| !node.editable));
         assert!(leaves.iter().all(|node| node.edit_value.is_none()));
+        for leaf in &leaves {
+            let exact = browse_property_path(
+                &root,
+                &PropertyBrowseOptions {
+                    query: "Leaf",
+                    type_filter: None,
+                    kind_filter: None,
+                    editable_filter: None,
+                    offset: 0,
+                    limit: 100,
+                    allow_edits: true,
+                },
+                &leaf.path,
+            );
+            let expected = result
+                .nodes
+                .iter()
+                .filter(|node| node.path == leaf.path)
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(exact.total, expected.len());
+            assert_eq!(exact.nodes, expected);
+        }
         assert!(
             leaves
                 .iter()

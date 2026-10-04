@@ -700,7 +700,7 @@
   "editorRelationshipConflict": "O suprascriere de relație și o altă editare nesalvată din Toate datele țintesc ambele aceeași înregistrare de relație NPC ({path}). Modificarea structurată de relație poate înlocui modificatorii din acea înregistrare, deci editările nu pot fi salvate împreună — resetează sau anulează una dintre ele, apoi salvează din nou.",
   "editorMultipleStructuralArrayEdits": "Mai mult de o editare structurală nesalvată țintește același array ({path}). Salvează sau resetează prima modificare înainte să pui alta în coadă.",
   "editorStructuralArrayConflict": "O modificare structurală de eveniment și o altă editare nesalvată din Toate datele țintesc ambele {path}. Salvează sau resetează una dintre ele înainte să continui.",
-  "editorSkillsEffectConflict": "O modificare de Abilități și o editare din Toate datele a aceluiași efect de actor (ActiveEffects › EffectSpec › Def) sunt ambele în coadă. Nu pot fi salvate împreună — resetează sau anulează una dintre ele, apoi salvează din nou.",
+  "editorSkillsEffectConflict": "O modificare de Abilități și o editare din Toate datele a aceluiași efect de actor (ActiveEffects) sunt ambele în coadă. Nu pot fi salvate împreună — resetează sau anulează una dintre ele, apoi salvează din nou.",
   "editorInventoryResetConflict": "O resetare de inventar și o altă editare a aceluiași inventar sunt ambele în coadă. Resetarea înlocuiește întregul inventar și ar anula cealaltă editare — resetează sau anulează una dintre ele, apoi salvează din nou.",
   "editorUseFolder": "Folosește folderul",
   "editorGothicSavegameFileType": "Salvare Gothic",

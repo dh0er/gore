@@ -2573,7 +2573,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get editorSkillsEffectConflict =>
-      'Une modification des compétences et une modification dans Toutes les données portant sur le même effet de personnage (ActiveEffects › EffectSpec › Def) sont toutes deux en attente. Elles ne peuvent pas être enregistrées ensemble. Réinitialisez ou annulez l’une des deux, puis enregistrez de nouveau.';
+      'Une modification des compétences et une modification dans Toutes les données portant sur le même effet de personnage (ActiveEffects) sont toutes deux en attente. Elles ne peuvent pas être enregistrées ensemble. Réinitialisez ou annulez l’une des deux, puis enregistrez de nouveau.';
 
   @override
   String get editorInventoryResetConflict =>

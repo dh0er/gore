@@ -2555,7 +2555,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get editorSkillsEffectConflict =>
-      'Eine Änderung der Fertigkeiten und eine Bearbeitung im Tab „Alle Daten“ für denselben Akteurseffekt (ActiveEffects › EffectSpec › Def) sind vorgemerkt. Sie lassen sich nicht gemeinsam speichern. Setze eine davon zurück oder mache sie rückgängig und speichere erneut.';
+      'Eine Änderung der Fertigkeiten und eine Bearbeitung im Tab „Alle Daten“ für denselben Akteurseffekt (ActiveEffects) sind vorgemerkt. Sie lassen sich nicht gemeinsam speichern. Setze eine davon zurück oder mache sie rückgängig und speichere erneut.';
 
   @override
   String get editorInventoryResetConflict =>

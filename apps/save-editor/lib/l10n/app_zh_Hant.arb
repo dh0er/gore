@@ -700,7 +700,7 @@
   "editorRelationshipConflict": "關係覆蓋設定和“全部資料”中另一項未儲存的修改都針對同一 NPC 關係條目 ({path})。結構化的關係更改可能會替換該條目中的修正值，因此兩項修改無法同時儲存。請重置或撤銷其中一項，然後再次儲存。",
   "editorMultipleStructuralArrayEdits": "同一陣列 ({path}) 有多項未儲存的結構更改。添加另一項更改前，請先儲存或重置第一項更改。",
   "editorStructuralArrayConflict": "事件結構更改和“全部資料”中另一項未儲存的修改都針對 {path}。繼續前，請儲存或重置其中一項。",
-  "editorSkillsEffectConflict": "“技能”中的更改和“全部資料”中針對同一角色效果 (ActiveEffects › EffectSpec › Def) 的修改都在等待儲存。兩項修改無法同時儲存。請重置或撤銷其中一項，然後再次儲存。",
+  "editorSkillsEffectConflict": "“技能”中的更改和“全部資料”中針對同一角色效果 (ActiveEffects) 的修改都在等待儲存。兩項修改無法同時儲存。請重置或撤銷其中一項，然後再次儲存。",
   "editorInventoryResetConflict": "重置物品欄和對同一物品欄的另一項修改都在等待儲存。重置會替換整個物品欄並丟棄另一項修改。請重置或撤銷其中一項，然後再次儲存。",
   "editorUseFolder": "使用此資料夾",
   "editorGothicSavegameFileType": "Gothic 存檔",

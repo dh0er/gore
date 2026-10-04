@@ -700,7 +700,7 @@
   "editorRelationshipConflict": "Bir ilişki geçersiz kılması ile başka kaydedilmemiş Tüm veri düzenlemesi aynı NPC ilişki girdisini ({path}) hedefliyor. Yapılandırılmış ilişki değişikliği bu girdideki değiştiricileri değiştirebilir; düzenlemeler birlikte kaydedilemez — birini sıfırla veya geri al, sonra tekrar kaydet.",
   "editorMultipleStructuralArrayEdits": "Birden fazla kaydedilmemiş yapısal düzenleme aynı diziyi ({path}) hedefliyor. Başka bir değişiklik sıraya almadan önce ilkini kaydet veya sıfırla.",
   "editorStructuralArrayConflict": "Yapısal bir olay değişikliği ile başka kaydedilmemiş Tüm veri düzenlemesi {path} hedefliyor. Devam etmeden birini kaydet veya sıfırla.",
-  "editorSkillsEffectConflict": "Bir Beceriler değişikliği ile aynı aktörün etkisine (ActiveEffects › EffectSpec › Def) yönelik Tüm veri düzenlemesi ikisi de sırada. Birlikte kaydedilemezler — birini sıfırla veya geri al, sonra tekrar kaydet.",
+  "editorSkillsEffectConflict": "Bir Beceriler değişikliği ile aynı aktörün etkisine (ActiveEffects) yönelik Tüm veri düzenlemesi ikisi de sırada. Birlikte kaydedilemezler — birini sıfırla veya geri al, sonra tekrar kaydet.",
   "editorInventoryResetConflict": "Bir envanter sıfırlaması ile aynı envantere yönelik başka bir düzenleme ikisi de sırada. Sıfırlama tüm envanteri değiştirir ve diğer düzenlemeyi yok sayar — birini sıfırla veya geri al, sonra tekrar kaydet.",
   "editorUseFolder": "Klasör kullan",
   "editorGothicSavegameFileType": "Gothic kaydı",

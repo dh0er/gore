@@ -714,7 +714,7 @@
   "editorRelationshipConflict": "关系覆盖设置和“全部数据”中另一项未保存的修改都针对同一 NPC 关系条目 ({path})。结构化的关系更改可能会替换该条目中的修正值，因此两项修改无法同时保存。请重置或撤销其中一项，然后再次保存。",
   "editorMultipleStructuralArrayEdits": "同一数组 ({path}) 有多项未保存的结构更改。添加另一项更改前，请先保存或重置第一项更改。",
   "editorStructuralArrayConflict": "事件结构更改和“全部数据”中另一项未保存的修改都针对 {path}。继续前，请保存或重置其中一项。",
-  "editorSkillsEffectConflict": "“技能”中的更改和“全部数据”中针对同一角色效果 (ActiveEffects › EffectSpec › Def) 的修改都在等待保存。两项修改无法同时保存。请重置或撤销其中一项，然后再次保存。",
+  "editorSkillsEffectConflict": "“技能”中的更改和“全部数据”中针对同一角色效果 (ActiveEffects) 的修改都在等待保存。两项修改无法同时保存。请重置或撤销其中一项，然后再次保存。",
   "editorInventoryResetConflict": "重置物品栏和对同一物品栏的另一项修改都在等待保存。重置会替换整个物品栏并丢弃另一项修改。请重置或撤销其中一项，然后再次保存。",
   "editorUseFolder": "使用此文件夹",
   "editorGothicSavegameFileType": "Gothic 存档",
