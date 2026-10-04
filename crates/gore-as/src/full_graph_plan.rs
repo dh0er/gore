@@ -41,10 +41,10 @@ impl PlannedFullGraphSourceTreeV1 {
 }
 
 #[derive(Debug)]
-struct AuthoredSourceV1 {
-    module_name: String,
-    relative_path: String,
-    bytes: Vec<u8>,
+pub(crate) struct AuthoredSourceV1 {
+    pub(crate) module_name: String,
+    pub(crate) relative_path: String,
+    pub(crate) bytes: Vec<u8>,
 }
 
 /// Build an exact Add/Edit/Delete plan for `source_root` without writing anywhere.
@@ -75,6 +75,34 @@ pub fn plan_source_overlays_v1(
         .map(|entry| (entry.module_name, entry.relative_path))
         .collect::<Vec<_>>();
     let sources = collect_authored_sources_bounded(source_root, MAX_SELECTIVE_FULLGRAPH_CHANGES)?;
+    plan_inventory_with_missing(base, sources, true, |_| Ok(false))
+}
+
+/// Plan retained, caller-validated original sources by declared identity. Existing modules use
+/// the selected base's current canonical filename; new or removed modules use the compiler's
+/// namespace filename. Source bytes are owned, and no original source tree is emitted or reopened.
+pub(crate) fn plan_named_source_overlays_v1(
+    base_cache: &[u8],
+    mut sources: Vec<AuthoredSourceV1>,
+) -> Result<PlannedFullGraphSourceTreeV1, FullGraphSourcePlanErrorV1> {
+    let base = base_full_graph_manifest_v1(base_cache)
+        .map_err(|error| FullGraphSourcePlanErrorV1::BaseCache(error.to_string()))?
+        .into_iter()
+        .map(|entry| (entry.module_name, entry.relative_path))
+        .collect::<Vec<_>>();
+    let current_paths = base
+        .iter()
+        .map(|(name, path)| (name.as_str(), path.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    for source in &mut sources {
+        if let Some(path) = current_paths.get(source.module_name.as_str()) {
+            source.relative_path = (*path).to_owned();
+        } else {
+            source.relative_path = format!("{}.as", source.module_name.replace('.', "/"));
+        }
+        // Enforce the existing portable .as path policy without deriving a module identity.
+        module_name_from_relative_path_v1(&source.relative_path)?;
+    }
     plan_inventory_with_missing(base, sources, true, |_| Ok(false))
 }
 

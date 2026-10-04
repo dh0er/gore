@@ -6,8 +6,7 @@
 //! retain all other modules from the base and perform preservation and reference validation.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::fs::File;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -27,7 +26,9 @@ use crate::compiler_target::{
     repin_compiler_target_parent_chains_v1, CompilerTargetInputPathsV1, CompilerTargetPinHandlesV1,
     ValidatedCompilerTargetInputsV1,
 };
-use crate::full_graph_plan::{module_name_from_relative_path_v1, plan_source_overlays_v1};
+use crate::full_graph_plan::{
+    module_name_from_relative_path_v1, plan_named_source_overlays_v1, AuthoredSourceV1,
+};
 use crate::generation_receipt_v2::read_full_graph_compile_output_bytes_v2;
 use crate::standalone_package_resolver::{
     resolve_embedded_product_standalone_compiler_package_for_inputs_v1,
@@ -350,13 +351,14 @@ fn validate_sources(sources: &[ManagerRebuildSourceV1<'_>]) -> Result<(), Manage
     let mut names = BTreeSet::new();
     let mut paths = BTreeSet::new();
     for source in sources {
-        let derived = module_name_from_relative_path_v1(source.relative_path).map_err(|error| {
+        module_name_from_relative_path_v1(source.relative_path).map_err(|error| {
             ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::InvalidInput, error)
         })?;
-        if derived != source.module_name {
-            return Err(invalid(
-                "source path does not identify the declared module name",
-            ));
+        if source.module_name.is_empty()
+            || source.module_name.len() > 4096
+            || source.module_name.chars().any(char::is_control)
+        {
+            return Err(invalid("invalid declared module name"));
         }
         if !names.insert(source.module_name.to_lowercase())
             || !paths.insert(source.relative_path.to_lowercase())
@@ -394,29 +396,15 @@ where
     A: FnOnce() -> Result<(), ManagerRebuildErrorV1>,
 {
     validate_sources(sources)?;
-    let source_root = workspace.root.join("authored");
-    std::fs::create_dir(&source_root).map_err(|error| {
-        ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::InvalidInput, error)
-    })?;
-    for source in sources {
-        let destination = source_root.join(source.relative_path);
-        std::fs::create_dir_all(
-            destination
-                .parent()
-                .expect("validated source path has a parent"),
-        )
-        .and_then(|()| {
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(destination)
+    let overlays = sources
+        .iter()
+        .map(|source| AuthoredSourceV1 {
+            module_name: source.module_name.to_owned(),
+            relative_path: source.relative_path.to_owned(),
+            bytes: source.source.to_vec(),
         })
-        .and_then(|mut file| file.write_all(source.source))
-        .map_err(|error| {
-            ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::InvalidInput, error)
-        })?;
-    }
-    let plan = plan_source_overlays_v1(base, &source_root).map_err(|error| {
+        .collect();
+    let plan = plan_named_source_overlays_v1(base, overlays).map_err(|error| {
         ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::InvalidInput, error)
     })?;
     let (changes, final_manifest) = plan.into_parts();
@@ -888,7 +876,7 @@ mod tests {
         assert!(validate_sources(&[source, source]).is_err());
         assert!(validate_sources(&vec![source; MAX_MANAGER_REBUILD_MODULES_V1 + 1]).is_err());
         assert!(validate_sources(&[ManagerRebuildSourceV1 {
-            module_name: "Wrong",
+            module_name: "",
             ..source
         }])
         .is_err());
@@ -929,6 +917,8 @@ mod tests {
     struct FakeRunner {
         output_path: PathBuf,
         output: Vec<u8>,
+        edit_path: String,
+        added_path: String,
         reject: bool,
         calls: u8,
     }
@@ -960,11 +950,11 @@ mod tests {
             assert_eq!(inputs.changes.len(), 2);
             assert_eq!(inputs.final_manifest.len(), 3);
             assert_eq!(
-                std::fs::read(inputs.source_tree.join("Edit.as")).unwrap(),
+                std::fs::read(inputs.source_tree.join(&self.edit_path)).unwrap(),
                 b"void Edited() {}\n"
             );
             assert_eq!(
-                std::fs::read(inputs.source_tree.join("Mods/New.as")).unwrap(),
+                std::fs::read(inputs.source_tree.join(&self.added_path)).unwrap(),
                 b"void Added() {}\n"
             );
             assert!(!inputs.source_tree.join("Keep.as").exists());
@@ -990,6 +980,24 @@ mod tests {
         audit_passes: bool,
         ignore_edit: bool,
     ) -> (Result<ManagerRebuildOutputV1, ManagerRebuildErrorV1>, u8) {
+        fixture_rebuild_with_paths(
+            reject,
+            audit_passes,
+            ignore_edit,
+            "Edit.as",
+            "Edit.as",
+            "Mods/New.as",
+        )
+    }
+
+    fn fixture_rebuild_with_paths(
+        reject: bool,
+        audit_passes: bool,
+        ignore_edit: bool,
+        current_path: &str,
+        original_path: &str,
+        added_path: &str,
+    ) -> (Result<ManagerRebuildOutputV1, ManagerRebuildErrorV1>, u8) {
         let root = tempfile::tempdir().unwrap();
         let game = root.path().join("game");
         let temporary_root = root.path().join("temporary");
@@ -997,10 +1005,10 @@ mod tests {
         std::fs::create_dir(&temporary_root).unwrap();
         std::fs::write(game.join("sentinel"), b"unchanged game installation").unwrap();
         validate_temporary_root(&game, &temporary_root).unwrap();
-        let base = cache(&[("Keep", "Keep.as"), ("Edit", "Edit.as")]);
+        let base = cache(&[("Keep", "Keep.as"), ("Edit", current_path)]);
         let mut output = cache(&[
             ("Keep", "Keep.as"),
-            ("Edit", "Edit.as"),
+            ("Edit", current_path),
             ("Mods.New", "Mods/New.as"),
         ]);
         output[..16].fill(0x76); // Compiler generation differs from the target generation.
@@ -1012,6 +1020,8 @@ mod tests {
         let mut runner = FakeRunner {
             output_path: workspace.root.join("runner.cache"),
             output,
+            edit_path: current_path.into(),
+            added_path: "Mods/New.as".into(),
             reject,
             calls: 0,
         };
@@ -1022,12 +1032,12 @@ mod tests {
             &[
                 ManagerRebuildSourceV1 {
                     module_name: "Mods.New",
-                    relative_path: "Mods/New.as",
+                    relative_path: added_path,
                     source: b"void Added() {}\n",
                 },
                 ManagerRebuildSourceV1 {
                     module_name: "Edit",
-                    relative_path: "Edit.as",
+                    relative_path: original_path,
                     source: b"void Edited() {}\n",
                 },
             ],
@@ -1081,6 +1091,29 @@ mod tests {
             result.diagnostics[0].severity(),
             CompilerBackendDiagnosticSeverityV1::Warning
         );
+    }
+
+    #[test]
+    fn rebuild_preserves_declared_names_and_uses_current_canonical_filenames() {
+        for (current, original, added) in [
+            ("Dir/Fixture.as", "Dir/Fixture.as", "Mods/Unrelated.as"),
+            ("Edit.AS", "Edit.as", "Mods/New.as"),
+            ("Moved/Edited.as", "Edit.as", "Mods/New.as"),
+        ] {
+            let (result, calls) =
+                fixture_rebuild_with_paths(false, true, false, current, original, added);
+            let result = result.unwrap();
+            assert_eq!(calls, 1);
+            assert_eq!(result.module_names, ["Edit", "Mods.New"]);
+            let identities =
+                crate::compile::base_full_graph_manifest_v1(&result.mini_cache).unwrap();
+            assert!(identities
+                .iter()
+                .any(|entry| entry.module_name == "Edit" && entry.relative_path == current));
+            assert!(identities.iter().any(
+                |entry| entry.module_name == "Mods.New" && entry.relative_path == "Mods/New.as"
+            ));
+        }
     }
 
     #[test]
@@ -1205,6 +1238,7 @@ mod tests {
         root: &Path,
         deny_target_mutation: bool,
     ) -> (ManagerRebuildResultV1, [PathBuf; 3]) {
+        use std::fs::OpenOptions;
         use std::os::windows::fs::OpenOptionsExt as _;
         use windows_sys::Win32::Storage::FileSystem::{
             FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
