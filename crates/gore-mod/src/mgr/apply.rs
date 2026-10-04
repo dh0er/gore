@@ -636,8 +636,8 @@ fn snapshot_raw_payload(
 /// of all winners. `targets` lists every module each entry carries (a multi-module mini names only
 /// one of them in its manifest). An entry survives only when it is the last contributor of every
 /// module it carries and is dropped when a later entry re-targets all of them; a mini that would
-/// lose only some of its modules is refused, because a multi-module mini composes as one unit and
-/// its stale rows for the replaced module would otherwise stay in the ID plan and the tail. The
+/// lose only some of its modules is refused unless its original sources can be reduced and
+/// recompiled; a binary mini's stale rows would otherwise stay in the ID plan and the tail. The
 /// returned sets record winning edits whose target was introduced by an earlier, now-shadowed add,
 /// plus every module such shadowed adds carried;
 /// composition may retry those winners as adds if the effective base does not already contain the
@@ -646,10 +646,12 @@ fn snapshot_raw_payload(
 fn retain_last_script_target_winners(
     scripts: Vec<(String, String, PendingPayload)>,
     targets: Vec<Vec<String>>,
+    source_groups: &mut BTreeMap<ScriptPayloadKey, ScriptSourceGroup>,
 ) -> crate::Result<(
     Vec<(String, String, PendingPayload)>,
     BTreeSet<String>,
     BTreeSet<String>,
+    bool,
 )> {
     debug_assert_eq!(scripts.len(), targets.len());
     let mut last_by_target = BTreeMap::<String, usize>::new();
@@ -667,11 +669,26 @@ fn retain_last_script_target_winners(
         })?;
     let mut prior_add_targets = BTreeSet::new();
     let mut winner_edits_after_add = BTreeSet::new();
-    for (index, (script, entry_targets)) in scripts.into_iter().zip(targets).enumerate() {
+    let mut needs_source_rebuild = false;
+    for (index, (mut script, entry_targets)) in scripts.into_iter().zip(targets).enumerate() {
         let shadowed: Vec<&String> = entry_targets
             .iter()
             .filter(|module| last_by_target.get(*module) != Some(&index))
             .collect();
+        let source_group = source_groups.get_mut(&script_payload_key(&script.2));
+        let shadowed_source_adds = source_group
+            .as_ref()
+            .map(|group| {
+                group
+                    .entries
+                    .iter()
+                    .filter(|source| {
+                        source.op == "add" && last_by_target.get(&source.module) != Some(&index)
+                    })
+                    .map(|source| source.module.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         if shadowed.is_empty() {
             if script.0 == "edit" && prior_add_targets.contains(&script.1) {
                 winner_edits_after_add.insert(script.1.clone());
@@ -681,6 +698,25 @@ fn retain_last_script_target_winners(
             if script.0 == "add" {
                 prior_add_targets.extend(entry_targets);
             }
+        } else if let Some(group) = source_group {
+            group
+                .entries
+                .retain(|source| last_by_target.get(&source.module) == Some(&index));
+            let retained_paths = group
+                .entries
+                .iter()
+                .map(|source| source.source.as_str())
+                .collect::<BTreeSet<_>>();
+            group
+                .source_bytes
+                .retain(|path, _| retained_paths.contains(path.as_str()));
+            let representative = group.entries.first().ok_or_else(|| {
+                ModError::Other("partially winning mini has no winning source module".into())
+            })?;
+            script.0 = representative.op.clone();
+            script.1 = representative.module.clone();
+            winners.push(script);
+            needs_source_rebuild = true;
         } else {
             return Err(ModError::Other(format!(
                 "script mini {} of {:?} carries modules {entry_targets:?}, but later entries re-target {shadowed:?}: a multi-module mini composes as one unit, so disable or reorder one of them",
@@ -688,8 +724,14 @@ fn retain_last_script_target_winners(
                 script.2.entry
             )));
         }
+        prior_add_targets.extend(shadowed_source_adds);
     }
-    Ok((winners, winner_edits_after_add, prior_add_targets))
+    Ok((
+        winners,
+        winner_edits_after_add,
+        prior_add_targets,
+        needs_source_rebuild,
+    ))
 }
 
 fn validate_standalone_script_candidate(
@@ -1751,8 +1793,8 @@ fn apply_loadout_with_recompiler(
                 .filter(|names| names.iter().any(|name| name == module));
             targets.push(carried.unwrap_or_else(|| vec![module.clone()]));
         }
-        let (winning_scripts, winner_edits_after_add, shadowed_add_targets) =
-            retain_last_script_target_winners(scripts, targets)?;
+        let (winning_scripts, winner_edits_after_add, shadowed_add_targets, needs_source_rebuild) =
+            retain_last_script_target_winners(scripts, targets, &mut script_source_groups)?;
         scripts = winning_scripts;
         let (base, pristine_source) =
             match rawfile_sources.remove(&raw_target_identity(&RawTarget::ScriptCache)) {
@@ -1777,7 +1819,7 @@ fn apply_loadout_with_recompiler(
                     .map(|_| key)
             })
             .collect::<BTreeSet<_>>();
-        if !stale_keys.is_empty() {
+        if !stale_keys.is_empty() || needs_source_rebuild {
             let fingerprints =
                 gore_as::manager_rebuild::module_fingerprints(&base).map_err(|error| {
                     ModError::Other(format!("inspect updated script modules: {error}"))
@@ -1895,7 +1937,7 @@ fn apply_loadout_with_recompiler(
             });
             for group in groups {
                 warnings.push(format!(
-                    "{}: script sources were recompiled for the updated game cache",
+                    "{}: script sources were recompiled for the selected game cache",
                     group.mod_name
                 ));
             }
@@ -2661,6 +2703,7 @@ mod tests {
     struct TestScriptRecompiler {
         calls: Vec<String>,
         batches: Vec<Vec<String>>,
+        sources: Vec<Vec<(String, String)>>,
         required_modules: Vec<String>,
         fail: bool,
     }
@@ -2677,6 +2720,17 @@ mod tests {
                 .extend(groups.iter().map(|group| group.mod_id.clone()));
             self.batches
                 .push(groups.iter().map(|group| group.mod_id.clone()).collect());
+            self.sources.push(
+                groups
+                    .iter()
+                    .flat_map(|group| {
+                        group
+                            .entries
+                            .iter()
+                            .map(|source| (group.mod_id.clone(), source.module.clone()))
+                    })
+                    .collect(),
+            );
             if self.fail {
                 return Err(ModError::Other(
                     "compiler diagnostic: unknown symbol".into(),
@@ -2891,6 +2945,91 @@ mod tests {
             gore_as::cache::walk_modules::module_names(&fs::read(game.script_cache()).unwrap())
                 .unwrap();
         assert_eq!(modules, ["Diego", "Milten"]);
+    }
+
+    #[test]
+    fn script_sources_partial_overlap_rebuilds_module_winners_on_current_and_updated_cache() {
+        for updated in [false, true] {
+            for root in ["A", "B"] {
+                let game = FakeGame::new();
+                let original = source_test_cache(&[("A", 1), ("B", 1)], 1);
+                let current = if updated {
+                    source_test_cache(&[("A", 1), ("B", 2)], 2)
+                } else {
+                    original.clone()
+                };
+                fs::write(game.script_cache(), &current).unwrap();
+                let first = add_source_test_group(
+                    &game,
+                    "first",
+                    root,
+                    &original,
+                    "edit",
+                    &[("A", "edit"), ("B", "edit")],
+                );
+                let later = add_source_test_mod(&game, "later", "B", &current, "edit");
+                let mut compiler = TestScriptRecompiler::default();
+                apply_source_test(
+                    &game,
+                    &loadout(&[(&first, true), (&later, true)]),
+                    None,
+                    &mut compiler,
+                )
+                .unwrap();
+                assert_eq!(compiler.batches, [vec![first.clone(), later.clone()]]);
+                assert_eq!(
+                    compiler.sources,
+                    [vec![(first, "A".into()), (later, "B".into())]]
+                );
+                assert_eq!(
+                    gore_as::cache::walk_modules::module_names(
+                        &fs::read(game.script_cache()).unwrap()
+                    )
+                    .unwrap(),
+                    ["A", "B"]
+                );
+                undeploy_all(&game.root).unwrap();
+                assert_eq!(fs::read(game.script_cache()).unwrap(), current);
+            }
+        }
+    }
+
+    #[test]
+    fn script_sources_partial_overlap_preserves_later_binary_edits_of_added_modules() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Vanilla", 1)], 1);
+        fs::write(game.script_cache(), &original).unwrap();
+        let first = add_source_test_group(
+            &game,
+            "first",
+            "B",
+            &original,
+            "add",
+            &[("A", "add"), ("B", "add")],
+        );
+        let later = game.add_script_mod(
+            "later",
+            "later",
+            "edit",
+            "B",
+            &source_test_cache(&[("B", 99)], 1),
+        );
+        let mut compiler = TestScriptRecompiler::default();
+        apply_source_test(
+            &game,
+            &loadout(&[(&first, true), (&later, true)]),
+            None,
+            &mut compiler,
+        )
+        .unwrap();
+        assert_eq!(compiler.sources, [vec![(first, "A".into())]]);
+        assert_eq!(
+            gore_as::cache::walk_modules::module_names(&fs::read(game.script_cache()).unwrap())
+                .unwrap(),
+            ["Vanilla", "A", "B"]
+        );
+        undeploy_all(&game.root).unwrap();
+        assert_eq!(fs::read(game.script_cache()).unwrap(), original);
     }
 
     #[test]
