@@ -11734,7 +11734,9 @@ fn apply_private_edits(
             let Some(path) = raw_typed_path(typed) else {
                 continue;
             };
-            if structured_edit_rewrites(structured, path) {
+            if !matches!(structured, PrivateEdit::InventoryItemCount(_))
+                && structured_edit_rewrites(structured, path)
+            {
                 return Err(CoreError::UnsupportedEdit(format!(
                     "{} (edit {typed_at}) edits something {} (edit {structured_at}) \
                      rewrites as a whole, so one of the two would silently be \
@@ -11824,6 +11826,25 @@ fn apply_private_edits(
     // sequence still behaves exactly as separate writes did — it just stops re-parsing
     // 120 MB per edit when nothing moved.
     let mut root_cache = PayloadRoot::default();
+    if edit_specs
+        .iter()
+        .any(|edit| matches!(edit, PrivateEdit::InventoryItemCount(_)))
+        && edit_specs.iter().any(|edit| raw_typed_path(edit).is_some())
+    {
+        let root = root_cache.structural(&private_payload)?;
+        for count in edit_specs.iter().filter_map(|edit| match edit {
+            PrivateEdit::InventoryItemCount(count) => Some(count),
+            _ => None,
+        }) {
+            for path in edit_specs.iter().filter_map(raw_typed_path) {
+                if inventory_count_rewrites_in_root(count, path, root)? {
+                    return Err(CoreError::UnsupportedEdit(
+                        "raw and structured edits change the same inventory count; save them separately".into(),
+                    ));
+                }
+            }
+        }
+    }
     let case_paths = case_only_set_conflict_paths(&edit_specs);
     if !case_paths.is_empty() {
         let root = root_cache.structural(&private_payload)?;
@@ -12233,6 +12254,86 @@ fn path_targets_npc_health(path: &[properties::PathSeg], id: &str) -> bool {
         });
     }
     false
+}
+
+/// Resolve count-field overlaps from the inspected actor, container and stack.
+fn inventory_count_rewrites_in_root(
+    edit: &PrivateInventoryItemCountEdit,
+    path: &[properties::PathSeg],
+    root: &properties::RootObject,
+) -> Result<bool, CoreError> {
+    let inventory = resolve_inventory_path(root, edit.actor_id.as_deref())
+        .ok_or_else(|| CoreError::Validation("inventory actor not found".into()))?;
+    let inventory_segments = properties::parse_path(&inventory)?;
+    if !path.starts_with(&inventory_segments) && !inventory_segments.starts_with(path) {
+        return Ok(false);
+    }
+    let legacy = edit.actor_id.is_none() && edit.container_type.is_none() && edit.slot_id.is_none();
+    let slot_arrays = if legacy {
+        let mut containers = inventory.clone();
+        containers.extend(["m_Values".into(), "Items".into()]);
+        let containers =
+            properties::resolve(&root.properties, &properties::parse_path(&containers)?)?;
+        let properties::PropertyValue::Array { elements } = &containers.value else {
+            return Err(CoreError::Parse(
+                "inventory containers are not an array".into(),
+            ));
+        };
+        (0..elements.len())
+            .map(|index| {
+                vec![
+                    "m_Values".into(),
+                    "Items".into(),
+                    format!("[{index}]"),
+                    "m_Slots".into(),
+                ]
+            })
+            .collect::<Vec<_>>()
+    } else {
+        vec![container_slots_suffix(
+            root,
+            &inventory,
+            &container_enum_label(edit.container_type.as_deref()),
+        )?]
+    };
+    for suffix in slot_arrays {
+        let mut slots_path = inventory.clone();
+        slots_path.extend(suffix);
+        let slots = properties::resolve(&root.properties, &properties::parse_path(&slots_path)?)?;
+        let properties::PropertyValue::Array { elements: slots } = &slots.value else {
+            return Err(CoreError::Parse("inventory slots are not an array".into()));
+        };
+        let indices = if legacy {
+            slots
+                .iter()
+                .enumerate()
+                .filter_map(|(index, slot)| {
+                    slot_item_definition(slot)
+                        .is_some_and(|item| inventory_edit_matches_item(edit, item))
+                        .then_some(index)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            vec![select_npc_count_slot(slots, edit).map_err(|_| {
+                CoreError::Validation(
+                    "inventory count selector must identify one existing stack".into(),
+                )
+            })?]
+        };
+        for index in indices {
+            let mut count_path = slots_path.clone();
+            count_path.extend([
+                format!("[{index}]"),
+                "m_SlotData".into(),
+                "m_ItemCount".into(),
+            ]);
+            let count_path = properties::parse_path(&count_path)?;
+            if path.starts_with(&count_path) || count_path.starts_with(path) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Whether a raw typed edit at `path` addresses something the structured `edit`
@@ -31863,6 +31964,69 @@ mod tests {
             .iter()
             .map(|slot| slot_item_definition(slot).unwrap_or_default().to_string())
             .collect()
+    }
+
+    #[test]
+    fn inventory_count_raw_guards_resolve_actor_container_and_stable_slot() {
+        let ore = "/Script/Angelscript.ItMi_Orenugget";
+        let apple = "/Script/Angelscript.ItFo_Apple";
+        let other = vec![inv_item_slot(
+            37,
+            INV_OTHER_LABEL,
+            ore,
+            20,
+            &inv_empty_payload_map(),
+        )];
+        let main = vec![
+            inv_item_slot(37, INV_MAIN_LABEL, ore, 3, &inv_empty_payload_map()),
+            inv_item_slot(82, INV_MAIN_LABEL, apple, 1, &inv_empty_payload_map()),
+        ];
+        for actor in [None, Some("NPC-Diego")] {
+            let payload = if let Some(actor) = actor {
+                npc_inventory_private_payload(
+                    actor,
+                    &[(INV_OTHER_LABEL, &other), (INV_MAIN_LABEL, &main)],
+                )
+            } else {
+                typed_inventory_private_payload(&other, &main)
+            };
+            let root = properties::parse_private_root(&payload).unwrap();
+            let inventory = resolve_inventory_path(&root, actor).unwrap();
+            let target = |container: usize, slot: usize, leaf: bool| {
+                let mut path = inventory.clone();
+                path.extend([
+                    "m_Values".into(),
+                    "Items".into(),
+                    format!("[{container}]"),
+                    "m_Slots".into(),
+                    format!("[{slot}]"),
+                    "m_SlotData".into(),
+                ]);
+                if leaf {
+                    path.push("m_ItemCount".into());
+                }
+                properties::parse_path(&path).unwrap()
+            };
+            let mut count = PrivateInventoryItemCountEdit {
+                path: Some(ore.into()),
+                count: 2,
+                actor_id: actor.map(str::to_owned),
+                slot_id: Some(37),
+                container_type: Some("MainContainer".into()),
+                ..Default::default()
+            };
+            assert!(inventory_count_rewrites_in_root(&count, &target(1, 0, true), &root).unwrap());
+            assert!(inventory_count_rewrites_in_root(&count, &target(1, 0, false), &root).unwrap());
+            assert!(!inventory_count_rewrites_in_root(&count, &target(1, 1, true), &root).unwrap());
+            assert!(!inventory_count_rewrites_in_root(&count, &target(0, 0, true), &root).unwrap());
+            count.slot_id = None;
+            count.container_type = None;
+            assert!(inventory_count_rewrites_in_root(&count, &target(1, 0, true), &root).unwrap());
+            assert_eq!(
+                inventory_count_rewrites_in_root(&count, &target(0, 0, true), &root).unwrap(),
+                actor.is_none()
+            );
+        }
     }
 
     #[test]

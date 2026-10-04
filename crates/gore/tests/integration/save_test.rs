@@ -1303,6 +1303,132 @@ fn editor_parity_skills_localize_before_search_and_keep_write_values() {
 }
 
 #[test]
+fn independent_raw_and_structured_inventory_counts_validate_and_apply_together() {
+    let raw_path = json!([
+        "m_GenericData",
+        "{PlayersSavedData}",
+        "m_SavedPlayers",
+        "[0]",
+        "m_Inventory",
+        "m_Values",
+        "Items",
+        "[6]",
+        "m_Slots",
+        "[4]",
+        "m_SlotData",
+        "m_ItemCount"
+    ]);
+    let raw = json!({"path":"private.typed.setValue","value":{"path":raw_path,"value":3}});
+    let letter = json!({"path":"private.inventory.setItemCount","value":{"id":"ItWr_Scroll_Letter_01","count":2}});
+    let glossary =
+        json!({"path":"private.inventory.setItemCount","value":{"id":"ItMs_Glossary","count":2}});
+    for reverse in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let save = home.join("G1R-001.sav");
+        fs::copy(fixture(), &save).unwrap();
+        let original = fs::read(&save).unwrap();
+        let save_arg = save.to_str().unwrap();
+        let mut conflicts = vec![glossary.clone(), raw.clone()];
+        if reverse {
+            conflicts.reverse();
+        }
+        for command in ["plan_edits", "apply_edits", "write_save"] {
+            for dry in [true, false] {
+                let result = gore_save::api::execute(&gore_save::api::Request {
+                    command: command.into(),
+                    payload: json!({"path":save,"edits":conflicts,"dryRun":dry,"backup":false}),
+                });
+                assert!(result.is_err(), "{command}: {result:?}");
+                assert_eq!(fs::read(&save).unwrap(), original);
+                assert!(!home.join("goresave_backups").exists());
+            }
+        }
+        let mut edits = vec![letter.clone(), raw.clone()];
+        if reverse {
+            edits.reverse();
+        }
+        let draft = home.join("counts.json");
+        fs::write(&draft, serde_json::to_vec(&json!({"format":"gore.save.draft.v1",
+            "path":save.canonicalize().unwrap(),"expectedSha1":gore_save::api::file_sha1(&save).unwrap(),"edits":edits})).unwrap()).unwrap();
+        let draft_arg = draft.to_str().unwrap();
+        run(home, &["draft", "validate", draft_arg]);
+        run(home, &["draft", "apply", draft_arg, "--dry-run"]);
+        assert_eq!(fs::read(&save).unwrap(), original);
+        run(home, &["draft", "apply", draft_arg]);
+        for (item, count) in [("ItWr_Scroll_Letter_01", 2), ("ItMs_Glossary", 3)] {
+            assert_eq!(
+                run(
+                    home,
+                    &["inventory", "list", save_arg, "--query", item, "--all"]
+                )["items"][0]["count"],
+                count
+            );
+        }
+        let direct = home.join("direct.sav");
+        fs::copy(fixture(), &direct).unwrap();
+        execute_core(
+            "write_save",
+            json!({"path":direct,"edits":edits,"backup":false}),
+        );
+        for (item, count) in [("ItWr_Scroll_Letter_01", 2), ("ItMs_Glossary", 3)] {
+            assert_eq!(
+                run(
+                    home,
+                    &[
+                        "inventory",
+                        "list",
+                        direct.to_str().unwrap(),
+                        "--query",
+                        item,
+                        "--all"
+                    ]
+                )["items"][0]["count"],
+                count
+            );
+        }
+    }
+}
+
+#[test]
+fn corrupt_optional_glossary_artwork_does_not_block_report_preview_or_publication() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let save = home.join("G1R-001.sav");
+    fs::copy(fixture(), &save).unwrap();
+    let original = fs::read(&save).unwrap();
+    let game = home.join("G1R");
+    let image = game
+        .join("Story/Conversation/images/Glossary/Locations/T_GlossaryImage_AbandonedMine_M.png");
+    fs::create_dir_all(image.parent().unwrap()).unwrap();
+    fs::write(&image, b"not an image").unwrap();
+    let report = home.join("report.html");
+    fs::write(&report, b"previous report").unwrap();
+    let args = [
+        "report",
+        save.to_str().unwrap(),
+        "--out",
+        report.to_str().unwrap(),
+        "--game",
+        game.to_str().unwrap(),
+        "--with-assets",
+    ];
+    let mut preview = args.to_vec();
+    preview.push("--dry-run");
+    run(home, &preview);
+    assert_eq!(fs::read(&report).unwrap(), b"previous report");
+    run(home, &args);
+    let html = fs::read_to_string(&report).unwrap();
+    for section in ["statistics", "inventory", "quests"] {
+        assert!(html.contains(&format!("id=\"{section}\"")));
+    }
+    assert!(!html.contains("src=\"data:image/png"));
+    assert_eq!(fs::read(&image).unwrap(), b"not an image");
+    assert_eq!(fs::read(&save).unwrap(), original);
+    assert!(!home.join("goresave_backups").exists());
+}
+
+#[test]
 fn shared_locale_preferences_trim_codes_and_treat_blanks_as_unset() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();

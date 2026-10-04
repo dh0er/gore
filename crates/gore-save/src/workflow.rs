@@ -263,7 +263,26 @@ pub fn plan_for_save(path: &Path, raw: &[Value]) -> Result<Vec<Vec<usize>>, Core
         })
         .map(crate::parse_private_edit)
         .collect::<Result<Vec<_>, _>>()?;
-    if !inventory_batch && crate::case_only_set_conflict_paths(&set_specs).is_empty() {
+    let inventory_counts_with_raw = if edits
+        .iter()
+        .any(|edit| edit.path == "private.inventory.setItemCount")
+    {
+        // Slot IDs affect ordering, but never rewrite a count field. Their
+        // existing ordinal rule is sufficient without reading the save.
+        edits
+            .iter()
+            .map(typed)
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .flatten()
+            .any(|path| !crate::path_writes_a_slot_id(path))
+    } else {
+        false
+    };
+    if !inventory_batch
+        && !inventory_counts_with_raw
+        && crate::case_only_set_conflict_paths(&set_specs).is_empty()
+    {
         return plan(raw);
     }
     let root =
@@ -464,7 +483,6 @@ fn plan_with_root(
                 | PrivateEdit::ProfileName(_)
                 | PrivateEdit::PlayerAttribute(_)
                 | PrivateEdit::PlayerTransform(_)
-                | PrivateEdit::InventoryItemCount(_)
                 | PrivateEdit::StoryApply(_)
                 | PrivateEdit::NpcRelationship(_)
                 | PrivateEdit::LockSetUnlocked(_)
@@ -481,6 +499,16 @@ fn plan_with_root(
                             },
                             Some(path),
                         ));
+                    }
+                }
+                PrivateEdit::InventoryItemCount(count) => {
+                    let overlaps = if let Some(root) = root {
+                        crate::inventory_count_rewrites_in_root(count, path, root)?
+                    } else {
+                        crate::structured_edit_rewrites(spec, path)
+                    };
+                    if overlaps {
+                        return Err(pending("property", Some(path)));
                     }
                 }
                 PrivateEdit::InventoryAddItem(_) | PrivateEdit::InventoryRemoveItem(_) => {
@@ -1956,6 +1984,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn raw_slot_id_and_count_ordering_does_not_require_count_resolution() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("unavailable.sav");
+        let edits = [
+            json!({"path":"private.typed.setValue","value":{"path":["m_Inventory","m_Containers","[0]","m_Slots","[3]","m_Id"],"value":9}}),
+            json!({"path":"private.inventory.setItemCount","value":{"path":"/Script/Angelscript.ItMi_Orenugget","count":5}}),
+        ];
+        assert_eq!(plan_for_save(&path, &edits).unwrap(), vec![vec![1, 0]]);
+        assert!(!path.exists());
     }
 
     #[test]

@@ -280,12 +280,18 @@ pub(super) fn html(data: &Value, settings: &Value, o: &Options) -> Result<String
                 .iter()
                 .filter(|r| r["available"] == true && r["size"] == "M")
             {
-                let path = Path::new(row["path"].as_str().context("artwork path missing")?)
-                    .canonicalize()?;
+                let Ok(path) =
+                    Path::new(row["path"].as_str().context("artwork path missing")?).canonicalize()
+                else {
+                    continue;
+                };
                 if root.as_ref().is_none_or(|root| !path.starts_with(root)) {
                     bail!("artwork escapes its source");
                 }
-                body.push_str(&format!("<figure><img loading=lazy src=\"{}\" alt=\"{}\"><figcaption>{}</figcaption></figure>",data_image(&path)?,escape(row["name"].as_str().unwrap_or("")),escape(row["name"].as_str().unwrap_or(""))));
+                let Ok(image) = data_image(&path) else {
+                    continue;
+                };
+                body.push_str(&format!("<figure><img loading=lazy src=\"{}\" alt=\"{}\"><figcaption>{}</figcaption></figure>",image,escape(row["name"].as_str().unwrap_or("")),escape(row["name"].as_str().unwrap_or(""))));
             }
         }
         if let Some(manifest) = data["icons"]["manifestPath"].as_str() {
@@ -322,6 +328,53 @@ pub(super) fn html(data: &Value, settings: &Value, o: &Options) -> Result<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unreadable_optional_artwork_keeps_valid_images_and_report_sections() {
+        use image::ImageEncoder;
+        let temp = tempfile::tempdir().unwrap();
+        let bad = temp.path().join("bad.png");
+        fs::write(&bad, b"not an image").unwrap();
+        let valid = temp.path().join("valid.png");
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&[255, 0, 0, 255], 1, 1, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        fs::write(&valid, &png).unwrap();
+        let data = json!({"inventory":{"items":[{"label":"kept","count":3}]},
+            "artwork":{"sourceRoot":temp.path(),"entries":[
+                {"available":true,"size":"M","path":bad,"name":"broken"},
+                {"available":true,"size":"M","path":temp.path().join("missing.png"),"name":"missing"},
+                {"available":true,"size":"M","path":valid,"name":"valid<&>"}
+        ]}});
+        let options = Options {
+            lang: "en".into(),
+            game_lang: "en".into(),
+            with_assets: true,
+            ..Default::default()
+        };
+        let output = html(&data, &json!({}), &options).unwrap();
+        assert!(output.contains("id=\"inventory\""));
+        assert!(output.contains("data:image/png;base64,"));
+        assert!(output.contains("valid&lt;&amp;&gt;"));
+        assert_eq!(output.matches("<figure>").count(), 1);
+        assert_eq!(fs::read(&bad).unwrap(), b"not an image");
+        assert_eq!(fs::read(&valid).unwrap(), png);
+        let outside = tempfile::tempdir().unwrap();
+        let foreign = outside.path().join("foreign.png");
+        fs::write(&foreign, &png).unwrap();
+        let mut escaped = data;
+        escaped["artwork"]["entries"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"available":true,"size":"M","path":foreign,"name":"foreign"}));
+        assert!(
+            html(&escaped, &json!({}), &options)
+                .unwrap_err()
+                .to_string()
+                .contains("artwork escapes its source")
+        );
+    }
+
     #[test]
     fn a_different_game_script_gets_its_own_embedded_face() {
         let o = Options {
