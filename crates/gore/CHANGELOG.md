@@ -24,6 +24,8 @@ uses the matching version section as the GitHub release notes.
   vanilla modules by default in `gore as compile-module`, `gore as compile --mini`
   and `values` builds. `gore mod build` automatically packages the captured
   sources alongside compiled scripts.
+  Retain those sources when compiler outputs or explicit source folders are
+  selected through a junction or directory symlink.
 - Rebuild winning source-backed modules together in `gore mgr apply` after
   pristine cache updates, including dependencies provided by other source-backed
   mods and compatible binary mods, using the packaged standalone compiler.

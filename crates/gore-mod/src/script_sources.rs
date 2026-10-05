@@ -1059,21 +1059,28 @@ pub(crate) fn package_adjacent_script_sources_v1(
     let mut payloads = Files::new();
     let mut source_total = 0u64;
     for (script, mini_path) in scripts.iter().zip(mini_paths) {
-        let sidecar = script_source_provenance_path_v1(mini_path);
+        let selected_root = mini_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        // Output directories are selected authoring locations, so resolve their alias once.
+        // Sidecars and payload paths inside this physical directory still require non-link files.
+        let root = std::fs::canonicalize(selected_root)
+            .map_err(crate::io("resolving compiler source output parent"))?;
+        let mini_name = mini_path
+            .file_name()
+            .ok_or_else(|| invalid("missing compiler output filename"))?;
+        let sidecar = script_source_provenance_path_v1(&root.join(mini_name));
         match std::fs::symlink_metadata(&sidecar) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(crate::io("reading compiler provenance metadata")(error)),
             Ok(_) => {}
         }
-        let root = mini_path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
         let relative = sidecar
             .file_name()
             .ok_or_else(|| invalid("missing compiler provenance name"))?;
         let bytes = crate::read_safe_bundle_file(
-            root,
+            &root,
             Path::new(relative),
             "compiler source provenance",
             MAX_SCRIPT_SOURCES_MANIFEST_BYTES_V1,
@@ -1115,7 +1122,7 @@ pub(crate) fn package_adjacent_script_sources_v1(
             } else {
                 let limit = limit.min(remaining_source_payload_limit(source_total)?);
                 let bytes = crate::read_safe_bundle_file(
-                    root,
+                    &root,
                     Path::new(relative),
                     "compiler source payload",
                     limit,
@@ -1195,6 +1202,9 @@ pub fn package_explicit_script_sources_v1(
     if !path(component_path) || scripts.len() < original_scripts.len() {
         return Err(invalid("invalid explicit source mapping"));
     }
+    // This is the selected spec/source location, not a payload directory inside a bundle.
+    let source_root = std::fs::canonicalize(source_root)
+        .map_err(crate::io("resolving explicit script source root"))?;
     let manifest_path = format!("{component_path}/sources.json");
     let mut combined = match files.get(&manifest_path) {
         Some(bytes) => {
@@ -1245,7 +1255,7 @@ pub fn package_explicit_script_sources_v1(
         } else {
             let limit = limit.min(remaining_source_payload_limit(source_total)?);
             let bytes = crate::read_safe_bundle_file(
-                source_root,
+                &source_root,
                 Path::new(relative),
                 "explicit script source",
                 limit,
@@ -1881,6 +1891,146 @@ mod tests {
         )
         .unwrap();
         assert!(crate::build_bundle_relative_to(&spec, temp.path()).is_err());
+    }
+
+    #[cfg(any(unix, windows))]
+    fn directory_alias(real: &Path, alias: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(real, alias).unwrap();
+        #[cfg(windows)]
+        {
+            // cmd treats forward slashes as switches; rebuild components with native separators.
+            let alias: PathBuf = alias.components().collect();
+            let real: PathBuf = real.components().collect();
+            let result = std::process::Command::new("cmd.exe")
+                .args(["/C", "mklink", "/J"])
+                .arg(&alias)
+                .arg(&real)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn source_packaging_resolves_output_directory_aliases() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("physical-output");
+        let alias = temp.path().join("selected-output");
+        std::fs::create_dir(&real).unwrap();
+        directory_alias(&real, &alias);
+        let mini = alias.join("authored.cache");
+        std::fs::write(&mini, cache(&["New"], 1)).unwrap();
+        write_script_source_provenance_v1(
+            &mini,
+            &cache(&["Vanilla"], 1),
+            vec![input("New", "add", "")],
+        )
+        .unwrap();
+        let spec: crate::BuildSpec = serde_json::from_value(serde_json::json!({
+            "meta": {"name": "Authored"},
+            "scripts": [{"op": "add", "module_name": "New", "mini_cache": "authored.cache"}],
+        }))
+        .unwrap();
+        let physical = crate::build_bundle_relative_to(&spec, &real).unwrap();
+        let redirected = crate::build_bundle_relative_to(&spec, &alias)
+            .expect("selected output-directory aliases retain authored sources");
+        assert_eq!(physical.files, redirected.files);
+        let scripts: Vec<ScriptEntry> =
+            serde_json::from_slice(&redirected.files["scripts/manifest.json"]).unwrap();
+        let manifest =
+            read_script_sources_manifest_v1(&redirected.files["scripts/sources.json"]).unwrap();
+        validate(&manifest, &scripts, &redirected.files).unwrap();
+        assert_eq!(
+            redirected.files[&manifest.entries[0].source],
+            input("New", "add", "").source
+        );
+        // Accept the selected root alias, while still rejecting links inside its source tree.
+        let original_sources = real.join("authored.cache.sources");
+        let relocated = temp.path().join("relocated-sources");
+        std::fs::rename(&original_sources, &relocated).unwrap();
+        directory_alias(&relocated, &original_sources);
+        assert!(crate::build_bundle_relative_to(&spec, &alias).is_err());
+        #[cfg(unix)]
+        std::fs::remove_file(&original_sources).unwrap();
+        #[cfg(windows)]
+        std::fs::remove_dir(&original_sources).unwrap();
+        std::fs::rename(&relocated, &original_sources).unwrap();
+        std::fs::remove_file(script_source_provenance_path_v1(&mini)).unwrap();
+        assert!(!crate::build_bundle_relative_to(&spec, &alias)
+            .unwrap()
+            .files
+            .contains_key("scripts/sources.json"));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn explicit_source_packaging_resolves_selected_directory_aliases() {
+        let (source_files, original, manifest) = fixture();
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("physical-sources");
+        let alias = temp.path().join("selected-sources");
+        std::fs::create_dir(&real).unwrap();
+        directory_alias(&real, &alias);
+        for entry in &manifest.entries {
+            let path = real.join(&entry.source);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, &source_files[&entry.source]).unwrap();
+        }
+        let scripts = vec![ScriptEntry {
+            mini: "rebased/0.cache".into(),
+            ..original[0].clone()
+        }];
+        let original_files = Files::from([(
+            "rebased/0.cache".into(),
+            source_files["scripts/mixed.cache"].clone(),
+        )]);
+        let mut physical = original_files.clone();
+        package_explicit_script_sources_v1(
+            &mut physical,
+            "rebased",
+            &scripts,
+            &original,
+            &real,
+            &manifest,
+        )
+        .unwrap();
+        let mut redirected = original_files;
+        package_explicit_script_sources_v1(
+            &mut redirected,
+            "rebased",
+            &scripts,
+            &original,
+            &alias,
+            &manifest,
+        )
+        .expect("selected explicit source-directory aliases remain supported");
+        assert_eq!(physical, redirected);
+        let rebased = read_script_sources_manifest_v1(&redirected["rebased/sources.json"]).unwrap();
+        validate(&rebased, &scripts, &redirected).unwrap();
+        let source_folder = real.join(Path::new(&manifest.entries[0].source).parent().unwrap());
+        let relocated = temp.path().join("relocated-sources");
+        std::fs::rename(&source_folder, &relocated).unwrap();
+        directory_alias(&relocated, &source_folder);
+        let mut rejected = Files::from([(
+            "rebased/0.cache".into(),
+            source_files["scripts/mixed.cache"].clone(),
+        )]);
+        assert!(package_explicit_script_sources_v1(
+            &mut rejected,
+            "rebased",
+            &scripts,
+            &original,
+            &alias,
+            &manifest
+        )
+        .is_err());
+        assert!(!rejected.contains_key("rebased/sources.json"));
     }
 
     #[test]
