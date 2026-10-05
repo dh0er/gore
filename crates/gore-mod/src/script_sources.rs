@@ -698,6 +698,38 @@ fn open_publication_parent(path: &Path) -> Result<PublicationDirectory> {
     crate::mgr::model::open_directory_chain_nofollow(&path, "compiler publication parent")
 }
 
+fn create_source_directory(
+    parent: &PublicationDirectory,
+    name: &std::ffi::OsStr,
+    label: &str,
+) -> Result<PublicationDirectory> {
+    #[cfg(windows)]
+    return parent.create_child_directory_new(name, label);
+    #[cfg(not(windows))]
+    parent.create_child_directory_new_with_post_create_error(name, label, |error| {
+        crate::ModError::ScriptSourceRecoveryRequired(format!(
+            "cannot retain ownership of newly created directory {}: {error}",
+            parent.path().join(name).display()
+        ))
+    })
+}
+
+fn create_source_file(
+    parent: &PublicationDirectory,
+    name: &std::ffi::OsStr,
+    label: &str,
+) -> Result<(std::fs::File, crate::mgr::model::FileIdentity)> {
+    #[cfg(windows)]
+    return parent.create_child_file_new(name, label);
+    #[cfg(not(windows))]
+    parent.create_child_file_new_with_post_create_error(name, label, |error| {
+        crate::ModError::ScriptSourceRecoveryRequired(format!(
+            "cannot retain ownership of newly created payload {}: {error}",
+            parent.path().join(name).display()
+        ))
+    })
+}
+
 /// Ownership evidence for a file created by a compiler publication. Rollback checks both the
 /// creation identity and exact bytes, so even an identical replacement is never deleted.
 #[derive(Debug)]
@@ -961,12 +993,14 @@ pub fn publish_script_source_provenance_from_bytes_v1(
         files: Vec::new(),
     };
     let result = (|| {
-        let directory = publication.parent.create_child_directory_new(
+        let directory = create_source_directory(
+            &publication.parent,
             std::ffi::OsStr::new(&component),
             "compiler source provenance",
         )?;
         publication.directories.push(directory);
-        let payloads = publication.directories[0].create_child_directory_new(
+        let payloads = create_source_directory(
+            &publication.directories[0],
             std::ffi::OsStr::new("source"),
             "compiler source payloads",
         )?;
@@ -977,8 +1011,7 @@ pub fn publish_script_source_provenance_from_bytes_v1(
                 .file_name()
                 .ok_or_else(|| invalid("missing payload filename"))?;
             let directory = &publication.directories[1];
-            let (file, identity) =
-                directory.create_child_file_new(name, "compiler source payload")?;
+            let (file, identity) = create_source_file(directory, name, "compiler source payload")?;
             publication.files.push(ScriptPublicationFileV1 {
                 path: directory.path().join(name),
                 parent: directory.clone(),
@@ -1326,6 +1359,45 @@ pub fn package_explicit_script_sources_v1(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(windows))]
+    #[test]
+    fn source_creation_binding_failure_requires_recovery_without_touching_a_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = open_publication_parent(root.path()).unwrap();
+        crate::mgr::model::inject_create_child_directory_race(|path| {
+            std::fs::remove_dir(path).unwrap();
+            std::fs::write(path, b"foreign replacement").unwrap();
+        });
+        let error = create_source_directory(
+            &parent,
+            std::ffi::OsStr::new("created"),
+            "compiler source provenance",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::ModError::ScriptSourceRecoveryRequired(_)
+        ));
+        assert_eq!(
+            std::fs::read(root.path().join("created")).unwrap(),
+            b"foreign replacement"
+        );
+        let collision = create_source_directory(
+            &parent,
+            std::ffi::OsStr::new("created"),
+            "compiler source provenance",
+        )
+        .unwrap_err();
+        assert!(!matches!(
+            collision,
+            crate::ModError::ScriptSourceRecoveryRequired(_)
+        ));
+        assert_eq!(
+            std::fs::read(root.path().join("created")).unwrap(),
+            b"foreign replacement"
+        );
+    }
+
     use super::*;
 
     fn cache(names: &[&str], guid: u8) -> Vec<u8> {

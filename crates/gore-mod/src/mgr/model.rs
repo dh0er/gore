@@ -648,7 +648,18 @@ impl SecureDirectory {
         name: &std::ffi::OsStr,
         label: &str,
     ) -> crate::Result<SecureDirectory> {
-        self.try_create_child_directory_new(name, label)?
+        self.create_child_directory_new_with_post_create_error(name, label, |error| error)
+    }
+
+    /// Let publication callers distinguish failure after creating an untracked child from an
+    /// ordinary pre-creation failure or collision. Other users retain the original error policy.
+    pub(crate) fn create_child_directory_new_with_post_create_error(
+        &self,
+        name: &std::ffi::OsStr,
+        label: &str,
+        on_error: impl FnOnce(crate::ModError) -> crate::ModError,
+    ) -> crate::Result<SecureDirectory> {
+        self.try_create_child_directory_new_with_post_create_error(name, label, on_error)?
             .ok_or_else(|| {
                 crate::ModError::Other(format!(
                     "{label} already exists below retained parent {}",
@@ -664,6 +675,15 @@ impl SecureDirectory {
         name: &std::ffi::OsStr,
         label: &str,
     ) -> crate::Result<Option<SecureDirectory>> {
+        self.try_create_child_directory_new_with_post_create_error(name, label, |error| error)
+    }
+
+    fn try_create_child_directory_new_with_post_create_error(
+        &self,
+        name: &std::ffi::OsStr,
+        label: &str,
+        on_error: impl FnOnce(crate::ModError) -> crate::ModError,
+    ) -> crate::Result<Option<SecureDirectory>> {
         validate_plain_component(name, label)?;
         run_create_child_directory_precreate_race_hook(&self.anchor.final_path.join(name));
         match create_child_directory_new(&self.anchor, name) {
@@ -677,7 +697,7 @@ impl SecureDirectory {
             }
         }
         run_create_child_directory_race_hook(&self.anchor.final_path.join(name));
-        match self.open_child(name, label) {
+        let opened = (|| match self.open_child(name, label) {
             Ok(SecureNode::Directory(directory)) => {
                 self.sync_after_mutation(label)?;
                 Ok(Some(directory))
@@ -687,7 +707,8 @@ impl SecureDirectory {
                 file.path().display()
             ))),
             Err(error) => Err(error),
-        }
+        })();
+        opened.map_err(on_error)
     }
 
     /// Create one direct regular child with exclusive create semantics relative to this retained
@@ -698,9 +719,18 @@ impl SecureDirectory {
         name: &std::ffi::OsStr,
         label: &str,
     ) -> crate::Result<(std::fs::File, FileIdentity)> {
+        self.create_child_file_new_with_post_create_error(name, label, |error| error)
+    }
+
+    pub(crate) fn create_child_file_new_with_post_create_error(
+        &self,
+        name: &std::ffi::OsStr,
+        label: &str,
+        on_error: impl FnOnce(crate::ModError) -> crate::ModError,
+    ) -> crate::Result<(std::fs::File, FileIdentity)> {
         validate_plain_component(name, label)?;
         let file = create_child_file_new(&self.anchor, name, label)?;
-        let identity = identity_from_open_file(&file, label)?;
+        let identity = identity_from_open_file(&file, label).map_err(on_error)?;
         Ok((file, identity))
     }
 
