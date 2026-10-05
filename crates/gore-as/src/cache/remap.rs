@@ -258,10 +258,18 @@ impl IdentityBudget {
         total_input_len: usize,
         already_charged: usize,
     ) -> Result<Self, WireError> {
+        Self::for_composed_input_with_max(total_input_len, already_charged, MAX_IDENTITY_BUDGET)
+    }
+
+    fn for_composed_input_with_max(
+        total_input_len: usize,
+        already_charged: usize,
+        max_identity_budget: usize,
+    ) -> Result<Self, WireError> {
         let max = total_input_len
             .checked_mul(4)
             .unwrap_or(usize::MAX)
-            .clamp(MIN_IDENTITY_BUDGET, MAX_IDENTITY_BUDGET);
+            .clamp(MIN_IDENTITY_BUDGET, max_identity_budget);
         let remaining = max
             .checked_sub(already_charged)
             .ok_or(WireError::IdentityBudgetExceeded { max })?;
@@ -1112,6 +1120,18 @@ impl SymTables {
         total_source_bytes: usize,
         already_charged: usize,
     ) -> Result<Self, WireError> {
+        Self::build_with_identity_budget(
+            bytes,
+            fallback,
+            IdentityBudget::for_composed_input(total_source_bytes, already_charged)?,
+        )
+    }
+
+    fn build_with_identity_budget(
+        bytes: &[u8],
+        fallback: Option<&SymTables>,
+        mut identity_budget: IdentityBudget,
+    ) -> Result<Self, WireError> {
         let tail = preflight_tail_tables(bytes)?.tail;
         let mut c = Cursor::at(bytes, tail);
 
@@ -1166,8 +1186,6 @@ impl SymTables {
         // T1 Name (no module/namespace), so a subtype contributes NO namespace field — the only
         // collapsed nested template arguments; nested skeletons and namespaces now travel too.
         let mut memo = HashMap::new();
-        let mut identity_budget =
-            IdentityBudget::for_composed_input(total_source_bytes, already_charged)?;
         for rt in &raw_types {
             let identity = resolve_type_identity(
                 rt.key,
@@ -4069,7 +4087,7 @@ impl EffectiveReferenceBase {
         state: &EffectiveReferenceState,
         mini: &[u8],
     ) -> Result<ReferenceContribution, RemapError> {
-        self.validate_inner(state, mini, false)
+        self.validate_inner(state, mini, false, MAX_IDENTITY_BUDGET)
     }
 
     fn validate_inner(
@@ -4077,6 +4095,7 @@ impl EffectiveReferenceBase {
         state: &EffectiveReferenceState,
         mini: &[u8],
         complete_cache: bool,
+        max_identity_budget: usize,
     ) -> Result<ReferenceContribution, RemapError> {
         if complete_cache {
             let work = preflight_cache_module_work(mini)?;
@@ -4094,112 +4113,135 @@ impl EffectiveReferenceBase {
             preflight_mini_module_work(mini)?;
         }
         let base_syms = &self.base.syms;
-        let total_source_bytes = self
-            .base
-            .source_bytes
-            .checked_add(state.accepted_source_bytes)
-            .and_then(|bytes| bytes.checked_add(mini.len()))
-            .ok_or(WireError::IdentityBudgetExceeded {
-                max: MAX_IDENTITY_BUDGET,
-            })?;
+        let total_source_bytes = if complete_cache {
+            self.base.source_bytes
+        } else {
+            self.base
+                .source_bytes
+                .checked_add(state.accepted_source_bytes)
+                .and_then(|bytes| bytes.checked_add(mini.len()))
+                .ok_or(WireError::IdentityBudgetExceeded {
+                    max: MAX_IDENTITY_BUDGET,
+                })?
+        };
         let already_charged = base_syms
             .identity_bytes
             .checked_add(state.accepted_identity_bytes)
             .ok_or(WireError::IdentityBudgetExceeded {
                 max: MAX_IDENTITY_BUDGET,
             })?;
-        let mini_syms = SymTables::build_with_type_fallback_and_budget(
-            mini,
-            base_syms,
-            total_source_bytes,
-            already_charged,
-        )?;
-        let meta = TailMetadata::build(mini)?;
-        let current_module_authorities = inner_module_names(mini)?;
-        let mut comparison_budget = IdentityComparisonBudget::new(
-            total_source_bytes
-                .saturating_add(already_charged)
-                .saturating_add(self.base.declarations.declarations.bytes),
-        );
-        let current_declarations = collect_declaration_inventory(
-            mini,
-            &mini_syms,
-            Some(base_syms),
-            Some(&self.base.declarations.script_owners),
-            &meta,
-            &mut comparison_budget,
-        )?
-        .declarations;
-        validate_novel_declaration_membership(
-            &meta,
-            &mini_syms,
-            base_syms,
-            &self.base.declarations,
-            &current_declarations,
-            |module| {
-                self.base.module_authorities.contains(module)
-                    || current_module_authorities.contains(module)
-            },
-            |key| !base_syms.type_ident_of_ptr.contains_key(&key),
-            |key| !base_syms.func_ident_of_ptr.contains_key(&key),
-            |key| !base_syms.global_ident_of_ptr.contains_key(&key),
-            &mut comparison_budget,
-        )?;
-        validate_novel_property_membership(
-            &meta,
-            &mini_syms,
-            base_syms,
-            &self.base.declarations,
-            &current_declarations,
-            |row| !self.base_property_keys.contains(&row.key),
-            &mut comparison_budget,
-        )?;
+        // Complete validation is called only with the exact bytes that built this final
+        // authority. Reuse its maps: rebuilding the same identities would charge them twice
+        // against the construction ceiling. Ordinary minis still build and budget their rows.
+        let parsed_mini = if complete_cache {
+            None
+        } else {
+            Some((
+                SymTables::build_with_identity_budget(
+                    mini,
+                    Some(base_syms),
+                    IdentityBudget::for_composed_input_with_max(
+                        total_source_bytes,
+                        already_charged,
+                        max_identity_budget,
+                    )?,
+                )?,
+                TailMetadata::build(mini)?,
+            ))
+        };
+        let (mini_syms, meta) = match &parsed_mini {
+            Some((syms, meta)) => (syms, meta),
+            None => (&self.base.syms, &self.base.meta),
+        };
+        // All rows in a final context already belong to this exact cache. Admission/uniqueness
+        // checks only concern incoming minis; repeating them would rebuild its declaration map.
+        if !complete_cache {
+            let current_module_authorities = inner_module_names(mini)?;
+            let mut comparison_budget = IdentityComparisonBudget::new(
+                total_source_bytes
+                    .saturating_add(already_charged)
+                    .saturating_add(self.base.declarations.declarations.bytes),
+            );
+            let current_declarations = collect_declaration_inventory(
+                mini,
+                &mini_syms,
+                Some(base_syms),
+                Some(&self.base.declarations.script_owners),
+                &meta,
+                &mut comparison_budget,
+            )?
+            .declarations;
+            validate_novel_declaration_membership(
+                &meta,
+                &mini_syms,
+                base_syms,
+                &self.base.declarations,
+                &current_declarations,
+                |module| {
+                    self.base.module_authorities.contains(module)
+                        || current_module_authorities.contains(module)
+                },
+                |key| !base_syms.type_ident_of_ptr.contains_key(&key),
+                |key| !base_syms.func_ident_of_ptr.contains_key(&key),
+                |key| !base_syms.global_ident_of_ptr.contains_key(&key),
+                &mut comparison_budget,
+            )?;
+            validate_novel_property_membership(
+                &meta,
+                &mini_syms,
+                base_syms,
+                &self.base.declarations,
+                &current_declarations,
+                |row| !self.base_property_keys.contains(&row.key),
+                &mut comparison_budget,
+            )?;
 
-        // A retained row may repeat an existing key byte-for-byte (the collision layer proves
-        // that), but it may not register an already-known portable symbol identity under
-        // a second key. Non-colliding duplicate registrations are just as fatal as stale refs.
-        ensure_unique_symbol_identities(
-            0,
-            &base_syms.type_ident_of_ptr,
-            &self.base.identity_summaries.types,
-            &state.accepted_type_identities,
-            &mini_syms.type_ident_of_ptr,
-        )?;
-        ensure_unique_symbol_identities(
-            2,
-            &base_syms.func_ident_of_ptr,
-            &self.base.identity_summaries.functions,
-            &state.accepted_func_identities,
-            &mini_syms.func_ident_of_ptr,
-        )?;
-        ensure_unique_symbol_identities_filtered(
-            4,
-            &base_syms.global_ident_of_ptr,
-            &self.base.identity_summaries.globals,
-            &state.accepted_global_identities,
-            &mini_syms.global_ident_of_ptr,
-            |key| {
-                !mini_syms
-                    .global_is_string_of_ptr
-                    .get(&key)
-                    .copied()
-                    .unwrap_or(false)
-            },
-        )?;
-        ensure_unique_id_pointers(
-            1,
-            &base_syms.typeid_to_ptr,
-            &self.base_type_ids,
-            &state.accepted_type_ids,
-            &mini_syms.typeid_to_ptr,
-        )?;
-        ensure_unique_id_pointers(
-            3,
-            &base_syms.funcid_to_ptr,
-            &self.base_func_ids,
-            &state.accepted_func_ids,
-            &mini_syms.funcid_to_ptr,
-        )?;
+            // A retained row may repeat an existing key byte-for-byte (the collision layer proves
+            // that), but it may not register an already-known portable symbol identity under
+            // a second key. Non-colliding duplicate registrations are just as fatal as stale refs.
+            ensure_unique_symbol_identities(
+                0,
+                &base_syms.type_ident_of_ptr,
+                &self.base.identity_summaries.types,
+                &state.accepted_type_identities,
+                &mini_syms.type_ident_of_ptr,
+            )?;
+            ensure_unique_symbol_identities(
+                2,
+                &base_syms.func_ident_of_ptr,
+                &self.base.identity_summaries.functions,
+                &state.accepted_func_identities,
+                &mini_syms.func_ident_of_ptr,
+            )?;
+            ensure_unique_symbol_identities_filtered(
+                4,
+                &base_syms.global_ident_of_ptr,
+                &self.base.identity_summaries.globals,
+                &state.accepted_global_identities,
+                &mini_syms.global_ident_of_ptr,
+                |key| {
+                    !mini_syms
+                        .global_is_string_of_ptr
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(false)
+                },
+            )?;
+            ensure_unique_id_pointers(
+                1,
+                &base_syms.typeid_to_ptr,
+                &self.base_type_ids,
+                &state.accepted_type_ids,
+                &mini_syms.typeid_to_ptr,
+            )?;
+            ensure_unique_id_pointers(
+                3,
+                &base_syms.funcid_to_ptr,
+                &self.base_func_ids,
+                &state.accepted_func_ids,
+                &mini_syms.funcid_to_ptr,
+            )?;
+        }
 
         let has_type_ptr = |key: i64| {
             key == 0
@@ -4544,6 +4586,18 @@ impl EffectiveReferenceBase {
                 EmbedKind::TypePtr(_) => {}
             }
         }
+        let Some((mini_syms, _)) = parsed_mini else {
+            // A complete cache contributes no incoming state; all rows belong to its authority.
+            return Ok(ReferenceContribution {
+                type_identities: HashMap::new(),
+                func_identities: HashMap::new(),
+                global_identities: HashMap::new(),
+                type_ids: HashMap::new(),
+                func_ids: HashMap::new(),
+                source_bytes: mini.len(),
+                identity_bytes: 0,
+            });
+        };
         let mut persistent_identity_bytes = 0usize;
         for (&key, identity) in &mini_syms.type_ident_of_ptr {
             if !base_syms.type_ident_of_ptr.contains_key(&key)
@@ -4786,7 +4840,12 @@ pub(super) fn validate_complete_cache_references(
 ) -> Result<(), RemapError> {
     let references = EffectiveReferenceBase::build_with_native_authority(cache, native_authority)?;
     references
-        .validate_inner(&EffectiveReferenceState::default(), cache, true)
+        .validate_inner(
+            &EffectiveReferenceState::default(),
+            cache,
+            true,
+            MAX_IDENTITY_BUDGET,
+        )
         .map(|_| ())
 }
 

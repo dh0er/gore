@@ -1181,6 +1181,186 @@ impl GeneratedDefaultsPlan {
         }
     }
 
+    /// Manager sources replace complete modules. Carry only qualified generated records by
+    /// declaration identity; ordinary omissions/additions still require the Manager metadata,
+    /// structure and final composed-reference proofs. The authoring carry policies stay strict.
+    pub(crate) fn apply_manager_source_replacement(
+        &self,
+        remapped_mini: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        let header = CacheHeader::parse(remapped_mini)
+            .map_err(|error| format!("parsing Manager defaults mini: {error}"))?;
+        if header.type_count != 1 || module_count(remapped_mini) != 1 {
+            return Err("Manager defaults carry requires exactly one module".into());
+        }
+        let end = module_region_end(remapped_mini)
+            .map_err(|error| format!("walking Manager defaults mini: {error}"))?;
+        let tail = parse_tail_tables(remapped_mini, end)
+            .map_err(|error| format!("parsing Manager defaults tail: {error}"))?;
+        if tail.end != remapped_mini.len() {
+            return Err("Manager defaults tail does not end at EOF".into());
+        }
+        let bytes = &remapped_mini[CacheHeader::SIZE..end];
+        let regen = parse_entry(bytes, "Manager defaults module")?;
+        if regen.key != self.base.key
+            || regen.name != self.base.name
+            || regen.file != self.base.file
+        {
+            return Err("Manager defaults module identity drift".into());
+        }
+        validate_unique_function_ids(&regen, "Manager defaults regenerated")?;
+        let mut patches = Vec::<(Range<usize>, Vec<u8>)>::new();
+        let mut functions = HashMap::new();
+        for function in &regen.functions {
+            let identity = range_bytes(bytes, function.declaration.clone(), "Manager function")?;
+            if functions.insert(identity, function).is_some() {
+                return Err("duplicate Manager defaults function declaration".into());
+            }
+        }
+        for &index in &self.generated_free_indices {
+            let base = &self.base.functions[index];
+            let identity = range_bytes(
+                &self.base_entry,
+                base.declaration.clone(),
+                "generated wrapper",
+            )?;
+            let regenerated = functions.get(&identity).ok_or_else(|| {
+                format!(
+                    "Manager defaults replacement omits generated wrapper {}::{}",
+                    base.namespace, base.name
+                )
+            })?;
+            self.compare_generated_free_function(bytes, base, regenerated, index)?;
+            patches.push((
+                regenerated.raw.clone(),
+                range_bytes(&self.base_entry, base.raw.clone(), "generated wrapper body")?.to_vec(),
+            ));
+        }
+        let mut classes = HashMap::new();
+        for class in &regen.classes {
+            if classes
+                .insert((class.namespace.as_str(), class.name.as_str()), class)
+                .is_some()
+            {
+                return Err("duplicate Manager defaults class declaration".into());
+            }
+        }
+        for base in &self.base.classes {
+            let carries_methods = base
+                .methods
+                .iter()
+                .any(|method| method.name.starts_with("__"));
+            if !carries_methods && base.behaviors.is_empty() {
+                continue;
+            }
+            let regenerated = classes
+                .get(&(base.namespace.as_str(), base.name.as_str()))
+                .ok_or_else(|| {
+                    format!(
+                        "Manager defaults replacement omits generated-bearing class {}::{}",
+                        base.namespace, base.name
+                    )
+                })?;
+            self.validate_carry_class(bytes, base, regenerated)?;
+            if carries_methods {
+                let count = i32::try_from(base.methods.len())
+                    .map_err(|_| "Manager defaults method count exceeds i32".to_string())?;
+                let mut restored = count.to_le_bytes().to_vec();
+                let mut ordinary = regenerated.methods.iter();
+                for method in &base.methods {
+                    let (source, range) = if method.name.starts_with("__") {
+                        (self.base_entry.as_slice(), method.raw.clone())
+                    } else {
+                        let regenerated_method = ordinary.next().ok_or_else(|| {
+                            "Manager defaults missing ordinary method".to_string()
+                        })?;
+                        (bytes, regenerated_method.raw.clone())
+                    };
+                    restored.extend_from_slice(&range_bytes(
+                        source,
+                        range,
+                        "Manager defaults method body",
+                    )?);
+                }
+                if ordinary.next().is_some() {
+                    return Err("Manager defaults left unconsumed ordinary methods".into());
+                }
+                restored.extend_from_slice(&range_bytes(
+                    &self.base_entry,
+                    base.method_table.clone(),
+                    "Manager defaults method table",
+                )?);
+                patches.push((
+                    regenerated.methods_count_pos..regenerated.method_table.end,
+                    restored,
+                ));
+            }
+            if !base.behaviors.is_empty() {
+                patches.push((
+                    regenerated.behaviors_block.clone(),
+                    range_bytes(
+                        &self.base_entry,
+                        base.behaviors_block.clone(),
+                        "Manager defaults behaviors",
+                    )?
+                    .to_vec(),
+                ));
+            }
+        }
+        patches.sort_by_key(|(range, _)| range.start);
+        let mut capacity = remapped_mini.len();
+        let mut previous = 0;
+        for (range, replacement) in &patches {
+            if range.start < previous || range.end > bytes.len() || range.start > range.end {
+                return Err("Manager defaults carry has overlapping or invalid ranges".into());
+            }
+            previous = range.end;
+            capacity = capacity
+                .checked_sub(range.len())
+                .and_then(|value| value.checked_add(replacement.len()))
+                .ok_or_else(|| "Manager defaults output size overflow".to_string())?;
+        }
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(capacity)
+            .map_err(|error| format!("reserving Manager defaults output: {error}"))?;
+        output.extend_from_slice(&remapped_mini[..CacheHeader::SIZE]);
+        let mut cursor = 0;
+        for (range, replacement) in patches {
+            output.extend_from_slice(&bytes[cursor..range.start]);
+            output.extend_from_slice(&replacement);
+            cursor = range.end;
+        }
+        output.extend_from_slice(&bytes[cursor..]);
+        output.extend_from_slice(&remapped_mini[end..]);
+        let output_end = module_region_end(&output)
+            .map_err(|error| format!("walking Manager defaults output: {error}"))?;
+        let carried = parse_entry(
+            &output[CacheHeader::SIZE..output_end],
+            "Manager defaults output",
+        )?;
+        validate_unique_function_ids(&carried, "Manager defaults carried")?;
+        validate_function_ids_against_outside(
+            &carried,
+            &self.outside_function_ids,
+            "Manager defaults carried",
+        )?;
+        // These checks also reject omitted native/generated records and changed survivor layout.
+        ExistingFunctionMetadataPlan {
+            module_name: self.module_name.clone(),
+            base_entry: self.base_entry.clone(),
+            base: self.base.clone(),
+        }
+        .apply_manager_source_replacement(&output)?;
+        ExistingModuleStructurePlan {
+            module_name: self.module_name.clone(),
+            base_entry: self.base_entry.clone(),
+            base: self.base.clone(),
+        }
+        .verify_manager_source_replacement(&output)?;
+        Ok(output)
+    }
+
     fn apply_strict(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
         let mini_header = CacheHeader::parse(remapped_mini)
             .map_err(|error| format!("parsing remapped defaults mini header: {error}"))?;
@@ -1932,108 +2112,118 @@ impl GeneratedDefaultsPlan {
                     base_class.namespace, base_class.name, regen_class.namespace, regen_class.name
                 ));
             }
-            compare_range(
-                &self.base_entry,
-                &base_class.prefix,
-                regen_bytes,
-                &regen_class.prefix,
-                &format!("{} class flags/properties", base_class.name),
-            )?;
-            compare_range(
-                &self.base_entry,
-                &base_class.derived_and_shadow,
-                regen_bytes,
-                &regen_class.derived_and_shadow,
-                &format!("{} DerivedFrom/ShadowType", base_class.name),
-            )?;
-            compare_functions(
-                &self.base_entry,
-                &base_class.constructors,
-                regen_bytes,
-                &regen_class.constructors,
-                &format!("{} constructors", base_class.name),
-            )?;
-            compare_range(
-                &self.base_entry,
-                &base_class.factory_and_behavior_refs,
-                regen_bytes,
-                &regen_class.factory_and_behavior_refs,
-                &format!("{} factory/behavior refs", base_class.name),
-            )?;
-            compare_functions(
-                &self.base_entry,
-                &base_class.behaviors,
-                regen_bytes,
-                &regen_class.behaviors,
-                &format!("{} behavior functions", base_class.name),
-            )?;
-            compare_range(
-                &self.base_entry,
-                &base_class.behavior_types,
-                regen_bytes,
-                &regen_class.behavior_types,
-                &format!("{} behavior types", base_class.name),
-            )?;
-            compare_range(
-                &self.base_entry,
-                &base_class.preprocessor_tail,
-                regen_bytes,
-                &regen_class.preprocessor_tail,
-                &format!("{} class metadata", base_class.name),
-            )?;
-            validate_method_table(regen_class, "regenerated")?;
+            self.validate_carry_class(regen_bytes, base_class, regen_class)?;
+        }
+        Ok(())
+    }
 
-            if let Some(method) = regen_class
-                .methods
-                .iter()
-                .find(|method| method.name.starts_with("__"))
-            {
-                return Err(format!(
-                    "regenerated class {} unexpectedly authored/generated {}; refusing to \
-                     overwrite it with stale defaults",
-                    regen_class.name, method.name
-                ));
-            }
-            let base_non_generated = base_class
-                .methods
-                .iter()
-                .filter(|method| !method.name.starts_with("__"))
-                .collect::<Vec<_>>();
-            if base_non_generated.len() != regen_class.methods.len() {
-                return Err(format!(
-                    "generated-default method count drift in {}: base has {} non-generated, \
-                     regenerated has {}",
-                    base_class.name,
-                    base_non_generated.len(),
-                    regen_class.methods.len()
-                ));
-            }
-            for (index, (base_method, regen_method)) in base_non_generated
-                .iter()
-                .zip(&regen_class.methods)
-                .enumerate()
-            {
-                compare_function(
-                    &self.base_entry,
-                    base_method,
-                    regen_bytes,
-                    regen_method,
-                    &format!("{} method {index}", base_class.name),
-                )?;
-            }
-            if !base_class
-                .methods
-                .iter()
-                .any(|method| method.name.starts_with("__"))
-            {
-                compare_range(
-                    &self.base_entry,
-                    &base_class.method_table,
-                    regen_bytes,
-                    &regen_class.method_table,
-                    &format!("{} MethodTable", base_class.name),
-                )?;
-            }
+    fn validate_carry_class(
+        &self,
+        regen_bytes: &[u8],
+        base_class: &ClassRecord,
+        regen_class: &ClassRecord,
+    ) -> Result<(), String> {
+        compare_range(
+            &self.base_entry,
+            &base_class.prefix,
+            regen_bytes,
+            &regen_class.prefix,
+            &format!("{} class flags/properties", base_class.name),
+        )?;
+        compare_range(
+            &self.base_entry,
+            &base_class.derived_and_shadow,
+            regen_bytes,
+            &regen_class.derived_and_shadow,
+            &format!("{} DerivedFrom/ShadowType", base_class.name),
+        )?;
+        compare_functions(
+            &self.base_entry,
+            &base_class.constructors,
+            regen_bytes,
+            &regen_class.constructors,
+            &format!("{} constructors", base_class.name),
+        )?;
+        compare_range(
+            &self.base_entry,
+            &base_class.factory_and_behavior_refs,
+            regen_bytes,
+            &regen_class.factory_and_behavior_refs,
+            &format!("{} factory/behavior refs", base_class.name),
+        )?;
+        compare_functions(
+            &self.base_entry,
+            &base_class.behaviors,
+            regen_bytes,
+            &regen_class.behaviors,
+            &format!("{} behavior functions", base_class.name),
+        )?;
+        compare_range(
+            &self.base_entry,
+            &base_class.behavior_types,
+            regen_bytes,
+            &regen_class.behavior_types,
+            &format!("{} behavior types", base_class.name),
+        )?;
+        compare_range(
+            &self.base_entry,
+            &base_class.preprocessor_tail,
+            regen_bytes,
+            &regen_class.preprocessor_tail,
+            &format!("{} class metadata", base_class.name),
+        )?;
+        validate_method_table(regen_class, "regenerated")?;
+
+        if let Some(method) = regen_class
+            .methods
+            .iter()
+            .find(|method| method.name.starts_with("__"))
+        {
+            return Err(format!(
+                "regenerated class {} unexpectedly authored/generated {}; refusing to \
+             overwrite it with stale defaults",
+                regen_class.name, method.name
+            ));
+        }
+        let base_non_generated = base_class
+            .methods
+            .iter()
+            .filter(|method| !method.name.starts_with("__"))
+            .collect::<Vec<_>>();
+        if base_non_generated.len() != regen_class.methods.len() {
+            return Err(format!(
+                "generated-default method count drift in {}: base has {} non-generated, \
+             regenerated has {}",
+                base_class.name,
+                base_non_generated.len(),
+                regen_class.methods.len()
+            ));
+        }
+        for (index, (base_method, regen_method)) in base_non_generated
+            .iter()
+            .zip(&regen_class.methods)
+            .enumerate()
+        {
+            compare_function(
+                &self.base_entry,
+                base_method,
+                regen_bytes,
+                regen_method,
+                &format!("{} method {index}", base_class.name),
+            )?;
+        }
+        if !base_class
+            .methods
+            .iter()
+            .any(|method| method.name.starts_with("__"))
+        {
+            compare_range(
+                &self.base_entry,
+                &base_class.method_table,
+                regen_bytes,
+                &regen_class.method_table,
+                &format!("{} MethodTable", base_class.name),
+            )?;
         }
         Ok(())
     }
@@ -3631,6 +3821,7 @@ mod tests {
             0x2222,
         );
         let out = plan.apply(&regen).unwrap();
+        assert_eq!(plan.apply_manager_source_replacement(&regen).unwrap(), out);
         let parse = |bytes: &[u8], context| {
             let end = module_region_end(bytes).unwrap();
             parse_entry(&bytes[CacheHeader::SIZE..end], context).unwrap()
@@ -3756,6 +3947,10 @@ mod tests {
             2,
         );
         let carried = plan.apply(&regen).unwrap();
+        assert_eq!(
+            plan.apply_manager_source_replacement(&regen).unwrap(),
+            carried
+        );
         let parse = |bytes: &[u8], context| {
             let end = module_region_end(bytes).unwrap();
             parse_entry(&bytes[CacheHeader::SIZE..end], context).unwrap()
@@ -4574,6 +4769,10 @@ mod tests {
         let plan = prepare(&base).unwrap();
         assert_eq!(plan.generated_count(), 1);
         let carried = plan.apply(&regen).unwrap();
+        assert_eq!(
+            plan.apply_manager_source_replacement(&regen).unwrap(),
+            carried
+        );
 
         let carried_end = module_region_end(&carried).unwrap();
         let carried_entry = parse_entry(&carried[CacheHeader::SIZE..carried_end], "test").unwrap();
@@ -4698,6 +4897,10 @@ mod tests {
         let plan = prepare(&base).unwrap();
         assert_eq!(plan.generated_free_indices, HashSet::from([1]));
         let carried = plan.apply(&regen).unwrap();
+        assert_eq!(
+            plan.apply_manager_source_replacement(&regen).unwrap(),
+            carried
+        );
 
         let parse = |bytes: &[u8], context| {
             let end = module_region_end(bytes).unwrap();
@@ -4821,6 +5024,10 @@ mod tests {
         );
         let plan = prepare(&base).unwrap();
         let carried = plan.apply(&regen).unwrap();
+        assert_eq!(
+            plan.apply_manager_source_replacement(&regen).unwrap(),
+            carried
+        );
         let base_end = module_region_end(&base).unwrap();
         let out_end = module_region_end(&carried).unwrap();
         let base_entry = parse_entry(&base[CacheHeader::SIZE..base_end], "behavior base").unwrap();
@@ -4868,6 +5075,10 @@ mod tests {
             .apply(&changed_layout)
             .unwrap_err()
             .contains("flags/properties"));
+        assert!(plan
+            .apply_manager_source_replacement(&changed_layout)
+            .unwrap_err()
+            .contains("flags/properties"));
 
         let changed_namespace = cache(
             &[class_record(
@@ -4896,6 +5107,10 @@ mod tests {
             .apply(&changed_namespace)
             .unwrap_err()
             .contains("class identity/order drift"));
+        assert!(plan
+            .apply_manager_source_replacement(&changed_namespace)
+            .unwrap_err()
+            .contains("omits generated-bearing class"));
 
         let changed_traits = cache(
             &[class_record(
@@ -4924,6 +5139,10 @@ mod tests {
             .apply(&changed_traits)
             .unwrap_err()
             .contains("declaration/signature drift"));
+        assert!(plan
+            .apply_manager_source_replacement(&changed_traits)
+            .unwrap_err()
+            .contains("declaration/signature drift"));
 
         let mut changed_ufunction = regen_cache();
         let changed_end = module_region_end(&changed_ufunction).unwrap();
@@ -4946,10 +5165,18 @@ mod tests {
             .apply(&changed_ufunction)
             .unwrap_err()
             .contains("UFUNCTION metadata drift"));
+        assert!(plan
+            .apply_manager_source_replacement(&changed_ufunction)
+            .unwrap_err()
+            .contains("UFUNCTION metadata drift"));
 
         let authored_defaults = base_cache();
         assert!(plan
             .apply(&authored_defaults)
+            .unwrap_err()
+            .contains("unexpectedly authored/generated __InitDefaults"));
+        assert!(plan
+            .apply_manager_source_replacement(&authored_defaults)
             .unwrap_err()
             .contains("unexpectedly authored/generated __InitDefaults"));
 
@@ -4978,6 +5205,10 @@ mod tests {
         );
         assert!(plan
             .apply(&invalid_table)
+            .unwrap_err()
+            .contains("invalid local method 99"));
+        assert!(plan
+            .apply_manager_source_replacement(&invalid_table)
             .unwrap_err()
             .contains("invalid local method 99"));
     }

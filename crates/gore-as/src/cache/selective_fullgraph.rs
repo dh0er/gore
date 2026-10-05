@@ -735,13 +735,14 @@ fn compose_manager_changes_atomically(
                 source,
             }
         })?;
-        // The shared mini already owns all admitted new rows. A strict default carry operates
-        // on this module's records only; its restored Shipping references resolve in pristine.
+        // The shared mini already owns all admitted new rows. Manager carry preserves that
+        // admitted tail; an ordinary strict carry still operates on module records alone.
         if let SelectiveFullGraphChange::Edit { preservation, .. } = change {
-            if preservation
-                .generated_defaults
-                .as_ref()
-                .is_some_and(|carry| !carry.allows_new_symbols())
+            if !preservation.manager_source_replacement
+                && preservation
+                    .generated_defaults
+                    .as_ref()
+                    .is_some_and(|carry| !carry.allows_new_symbols())
             {
                 let end = super::walk_modules::module_region_end(&one).map_err(|source| {
                     SelectiveFullGraphError::Extract {
@@ -823,7 +824,11 @@ fn preserve_change_mini(
                 mini = preservation_gate(module_name, "pre-carry function metadata", normalized)?
                     .unwrap_or(mini);
             }
-            let carried = carry.apply(&mini);
+            let carried = if preservation.manager_source_replacement {
+                carry.apply_manager_source_replacement(&mini)
+            } else {
+                carry.apply(&mini)
+            };
             mini = preservation_gate(module_name, "generated defaults", carried)?.unwrap_or(mini);
         }
         if let Some(metadata) = &preservation.metadata {

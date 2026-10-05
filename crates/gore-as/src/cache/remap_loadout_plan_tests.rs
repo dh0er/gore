@@ -2497,3 +2497,205 @@ fn manager_receipts_canonicalize_new_function_ids_independently_of_compiler_ids(
         "new declarations receive stable identity-based runtime IDs"
     );
 }
+
+#[test]
+fn manager_rebuild_plain_omissions_preserve_generated_defaults() {
+    use crate::cache::splice::SequentialMiniGuard;
+    let plain = class_record("Host");
+    let methods = sia("Host").len() + sia("").len() + 8;
+    let mut with_default = plain[..methods].to_vec();
+    with_default.extend_from_slice(&1i32.to_le_bytes());
+    with_default.extend_from_slice(&function_record_with_code(
+        "__InitDefaults",
+        &[],
+        0x0500_1900,
+        &[10],
+    ));
+    with_default.extend_from_slice(&1i32.to_le_bytes());
+    with_default.extend_from_slice(&0i32.to_le_bytes());
+    with_default.extend_from_slice(&plain[methods + 8..]);
+    let consume = function_record_with_code("Consume", &[], 0x0500_1800, &[10]);
+    let changed = function_record_with_code("Consume", &[], 0x0500_1800, &[77, 10]);
+    let unused = function_record_with_code("NewOfficialUnused", &[], 0x0500_2000, &[10]);
+    let mut plain_official = class_record("NewOfficialClass");
+    let flags = sia("NewOfficialClass").len() + sia("").len();
+    plain_official[flags..flags + 4].copy_from_slice(&(1u32 << 22).to_le_bytes());
+    for omission in ["none", "function", "class", "global", "enum"] {
+        let mut functions = vec![consume.clone()];
+        if omission == "function" || omission == "none" {
+            functions.push(unused.clone());
+        }
+        let mut classes = vec![with_default.clone()];
+        if omission == "class" {
+            classes.push(plain_official.clone());
+        }
+        let globals = if omission == "global" {
+            vec![module_global_record("NewOfficialGlobal")]
+        } else {
+            vec![]
+        };
+        let mut base = cache_with_module_globals(
+            "Consumer",
+            &functions,
+            &classes,
+            &globals,
+            TailRows::default(),
+        );
+        if omission == "enum" {
+            let offset = CacheHeader::SIZE
+                + fstring("Consumer").len()
+                + sia("Consumer").len()
+                + 4
+                + functions.iter().map(Vec::len).sum::<usize>()
+                + 4
+                + classes.iter().map(Vec::len).sum::<usize>();
+            let mut enum_record = 1i32.to_le_bytes().to_vec();
+            enum_record.extend(sia("NewOfficialEnum"));
+            enum_record.extend(sia(""));
+            enum_record.extend(1i32.to_le_bytes());
+            enum_record.extend(sia("Value"));
+            enum_record.extend(1i32.to_le_bytes()); // values count
+            enum_record.extend(1i32.to_le_bytes()); // Value
+            base.splice(offset..offset + 4, enum_record);
+        }
+        SequentialMiniGuard::new(&base).unwrap();
+        let mut functions = vec![changed.clone()];
+        if omission == "none" {
+            functions.push(unused.clone());
+        }
+        let regen = cache(
+            "Consumer",
+            &functions,
+            &[plain.clone()],
+            TailRows::default(),
+        );
+        SequentialMiniGuard::new(&regen).unwrap();
+        let source = if omission == "none" {
+            b"class Host {}\nvoid Consume() {}\nvoid NewOfficialUnused() {}\n".as_slice()
+        } else {
+            b"class Host {}\nvoid Consume() {}\n".as_slice()
+        };
+        let result = crate::manager_rebuild::rebuild_source_fixture_for_test(
+            &base,
+            &regen,
+            &[crate::manager_rebuild::ManagerRebuildSourceV1 {
+                module_name: "Consumer",
+                relative_path: "Consumer.as",
+                source,
+            }],
+        )
+        .unwrap_or_else(|error| panic!("omission={omission}: {error:?}"));
+        let mut result = result;
+        let mini = result.mini_cache.clone();
+        let cache = result
+            .take_composed_cache()
+            .unwrap()
+            .into_bytes_for_base(&base, &mini)
+            .unwrap();
+        let modules = crate::cache::model::parse_modules(&cache).unwrap();
+        assert_eq!(modules[0].classes.len(), 1);
+        assert_eq!(modules[0].classes[0].methods[0].name, "__InitDefaults");
+        assert_eq!(modules[0].classes[0].methods[0].bytecode, [10]);
+        assert_eq!(modules[0].functions[0].bytecode, [77, 10]);
+        assert_eq!(
+            modules[0].functions.len(),
+            if omission == "none" { 2 } else { 1 }
+        );
+        validate_complete_cache_references(&cache, None).unwrap();
+    }
+}
+
+#[test]
+fn complete_cache_reuses_admitted_identities_under_capped_budget() {
+    use crate::cache::splice::SequentialMiniGuard;
+    const CAP: usize = 128 * 1024;
+    let rows = || {
+        let mut rows = TailRows::default();
+        for index in 0..20 {
+            let ptr = 0x10000 + index as i64;
+            let name = format!("Unused{index:02}_{}", "x".repeat(1024));
+            let module = if index % 2 == 0 { "Edited" } else { "" };
+            rows.funcs.push(function_tail_row(ptr, &name, module, &[]));
+            rows.func_ids.push(id_row(0x1000 + index, ptr));
+        }
+        rows
+    };
+    let base = cache(
+        "Edited",
+        &[function_record("Keep", &[], 0x0500_1800)],
+        &[],
+        rows(),
+    );
+    let sparse = cache(
+        "Edited",
+        &[function_record_with_code(
+            "Keep",
+            &[],
+            0x0500_1800,
+            &[10, 10],
+        )],
+        &[],
+        TailRows::default(),
+    );
+    let single = SymTables::build_with_identity_budget(
+        &base,
+        None,
+        IdentityBudget::for_composed_input_with_max(base.len(), 0, CAP).unwrap(),
+    )
+    .unwrap();
+    assert!(single.identity_bytes <= 4 * base.len());
+    assert!(single.identity_bytes < CAP);
+    assert!(2 * single.identity_bytes > CAP);
+    let context = EffectiveReferenceBase::build(&base).unwrap();
+    context
+        .validate_inner(&EffectiveReferenceState::default(), &sparse, false, CAP)
+        .expect("a genuinely sparse mini fits beside the admitted original identities");
+    let final_bytes = SequentialMiniGuard::new(&base)
+        .unwrap()
+        .compose_upsert(&base, &sparse)
+        .unwrap();
+    let final_context = EffectiveReferenceBase::build(&final_bytes).unwrap();
+    assert_eq!(
+        final_context.base.syms.identity_bytes,
+        single.identity_bytes
+    );
+    assert_eq!(final_context.base.meta.funcs.len(), 20);
+    assert_eq!(final_context.base.meta.func_ids.len(), 20);
+    final_context
+        .validate_inner(&EffectiveReferenceState::default(), &final_bytes, true, CAP)
+        .expect("exact final validation must reuse the already admitted identity maps");
+    // The same bytes as an incoming mini really do require a second map: retain this refusal.
+    assert!(matches!(
+        final_context.validate_inner(
+            &EffectiveReferenceState::default(),
+            &final_bytes,
+            false,
+            CAP
+        ),
+        Err(RemapError::Wire(WireError::IdentityBudgetExceeded {
+            max: CAP
+        }))
+    ));
+    // Reusing admitted maps must still walk executable references and reject missing IDs.
+    let dangling = cache(
+        "Edited",
+        &[function_record_with_code(
+            "Keep",
+            &[],
+            0x0500_1800,
+            &[9, 0x7fff, 10],
+        )],
+        &[],
+        rows(),
+    );
+    let dangling_context = EffectiveReferenceBase::build(&dangling).unwrap();
+    assert!(matches!(
+        dangling_context.validate_inner(&EffectiveReferenceState::default(), &dangling, true, CAP),
+        Err(RemapError::UnresolvedEffectiveReference {
+            kind: "function id",
+            key: 0x7fff,
+            ..
+        })
+    ));
+    println!("PASS capped final reuse; ordinary duplicate-map admission still refuses; dangling CALL still refuses");
+}

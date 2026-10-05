@@ -15,12 +15,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Accept validated recompiles when a game update already contains the mod's
   script edit or identical addition.
 - Allow complete authored sources to replace harmless declarations introduced
-  by vanilla updates, including an unused enum in a newly official module.
+  by vanilla updates, including unused declarations in modules whose generated
+  defaults must be carried from the current game cache.
   Keep native, reflection and generated-default metadata checks and reject
   replacements that leave retained script or default references dangling.
 - Replace dependent source modules atomically after updates and remove obsolete
   declaration entries only when the final cache has no remaining references.
   Publish the exact validated result through Apply without restoring stale entries.
+- Reuse the final cache's admitted symbol tables during reference validation so
+  large valid source rebuilds are not charged twice against the identity limit.
 - Name affected mods and modules and require confirmation when an edited
   vanilla module changed or was removed, or a new mod module now collides with
   a game module. Cancel leaves the installation unchanged; confirmation covers
