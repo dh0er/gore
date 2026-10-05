@@ -1831,6 +1831,115 @@ fn selective_fullgraph_wakes_strict_consumer_by_inner_provider_identity() {
 }
 
 #[test]
+fn manager_source_replacement_rejects_dangling_retained_type_function_and_global_refs() {
+    use crate::cache::generated_defaults::{
+        ExistingFunctionMetadataPlan, ExistingModuleStructurePlan,
+    };
+    use crate::cache::selective_fullgraph::{
+        compose_manager_source_full_graph, SelectiveFullGraphChange,
+        SelectiveFullGraphEditPreservation, SelectiveFullGraphError,
+    };
+    use crate::cache::splice::{splice_case_a, SequentialMiniGuard};
+    const PROVIDER: &str = "Official.Provider";
+    const TYPE_PTR: i64 = 0x7310;
+    const TYPE_ID: i32 = 0x0800_7310;
+    const FUNCTION_PTR: i64 = 0x7420;
+    const FUNCTION_ID: i32 = 0x1742;
+    const GLOBAL_PTR: i64 = 0x7530;
+    for kind in ["type", "function", "global"] {
+        let mut plain_class = class_record("OfficialType");
+        let flags = sia("OfficialType").len() + sia("").len();
+        plain_class[flags..flags + 4].copy_from_slice(&(1u32 << 22).to_le_bytes());
+        let provider = cache_with_module_globals(
+            PROVIDER,
+            &[function_record("OfficialFunction", &[], 0x0500_1742)],
+            &[plain_class],
+            &[module_global_record("OfficialGlobal")],
+            TailRows {
+                types: if kind == "type" {
+                    vec![type_row(TYPE_PTR, "OfficialType", PROVIDER)]
+                } else {
+                    vec![]
+                },
+                type_ids: if kind == "type" {
+                    vec![id_row(TYPE_ID, TYPE_PTR)]
+                } else {
+                    vec![]
+                },
+                funcs: if kind == "function" {
+                    vec![function_tail_row(
+                        FUNCTION_PTR,
+                        "OfficialFunction",
+                        PROVIDER,
+                        &[],
+                    )]
+                } else {
+                    vec![]
+                },
+                func_ids: if kind == "function" {
+                    vec![id_row(FUNCTION_ID, FUNCTION_PTR)]
+                } else {
+                    vec![]
+                },
+                globals: if kind == "global" {
+                    vec![nonstring_global_row(GLOBAL_PTR, "OfficialGlobal", PROVIDER)]
+                } else {
+                    vec![]
+                },
+                ..TailRows::default()
+            },
+        );
+        let code = match kind {
+            "type" => vec![76, TYPE_ID, 10],               // TYPEID
+            "function" => vec![9, FUNCTION_ID, 10],        // CALL
+            "global" => vec![1, GLOBAL_PTR as i32, 0, 10], // PshGPtr
+            _ => unreachable!(),
+        };
+        let keep = cache(
+            "Keep",
+            &[function_record_with_code(
+                "KeepUsingProvider",
+                &[],
+                0x0500_1800,
+                &code,
+            )],
+            &[],
+            TailRows::default(),
+        );
+        let pristine = splice_case_a(&provider, &keep).unwrap();
+        // Establish that each retained reference is valid before replacing its provider.
+        SequentialMiniGuard::new(&pristine).unwrap();
+        let replacement = cache(PROVIDER, &[], &[], TailRows::default());
+        // Compiler output may regenerate unrelated modules. Selective publication must keep the
+        // original consumer's bytes and reject removal of what they reference.
+        let regenerated_keep = cache("Keep", &[], &[], TailRows::default());
+        let full_graph = splice_case_a(&replacement, &regenerated_keep).unwrap();
+        let preservation = SelectiveFullGraphEditPreservation::new(
+            Some(ExistingFunctionMetadataPlan::prepare(&pristine, PROVIDER).unwrap()),
+            Some(ExistingModuleStructurePlan::prepare(&pristine, PROVIDER).unwrap()),
+            None,
+            None,
+        )
+        .for_manager_source_replacement();
+        let error = compose_manager_source_full_graph(
+            &pristine,
+            &[],
+            &full_graph,
+            vec![SelectiveFullGraphChange::edit(PROVIDER, preservation)],
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, SelectiveFullGraphError::Compose { .. }),
+            "{kind}: {error}"
+        );
+        assert!(
+            error.to_string().contains("final module output has no"),
+            "{kind}: {error}"
+        );
+    }
+}
+
+#[test]
 fn selective_fullgraph_retains_qualified_native_property_after_an_earlier_add() {
     use crate::cache::selective_fullgraph::{
         compose_selective_full_graph_with_native_authority, SelectiveFullGraphChange,

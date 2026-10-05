@@ -39,6 +39,7 @@ pub(crate) struct SelectiveFullGraphEditPreservation {
     structure: Option<ExistingModuleStructurePlan>,
     generated_defaults: Option<GeneratedDefaultsPlan>,
     default_targets: Option<ExistingDefaultTargetPlan>,
+    manager_source_replacement: bool,
 }
 
 impl SelectiveFullGraphEditPreservation {
@@ -53,7 +54,15 @@ impl SelectiveFullGraphEditPreservation {
             structure,
             generated_defaults,
             default_targets,
+            manager_source_replacement: false,
         }
+    }
+
+    /// Used only by the private Manager complete-source compiler policy. Ordinary authoring
+    /// retains every existing declaration; Manager additionally proves safe plain omissions.
+    pub(crate) fn for_manager_source_replacement(mut self) -> Self {
+        self.manager_source_replacement = true;
+        self
     }
 }
 
@@ -395,7 +404,8 @@ pub(super) fn compose_selective_full_graph_with_native_authority(
 }
 
 /// A complete Manager source can compile identically when an update already contains the mod.
-/// Keep every preservation/remap/native gate, accepting that validated redundant edit.
+/// Keep remap/native/default and surviving metadata gates, accepting validated redundant edits
+/// and safe plain declaration omissions from complete authored sources.
 pub(crate) fn compose_manager_source_full_graph(
     pristine: &[u8],
     binds: &[u8],
@@ -604,7 +614,11 @@ fn attempt_change(
             mini = preservation_gate(module_name, "generated defaults", carried)?.unwrap_or(mini);
         }
         if let Some(metadata) = &preservation.metadata {
-            let restored = metadata.apply(&mini);
+            let restored = if preservation.manager_source_replacement {
+                metadata.apply_manager_source_replacement(&mini)
+            } else {
+                metadata.apply(&mini)
+            };
             mini = preservation_gate(module_name, "existing function metadata", restored)?
                 .unwrap_or(mini);
         }
@@ -612,7 +626,11 @@ fn attempt_change(
             preservation_gate(
                 module_name,
                 "existing module structure",
-                structure.verify(&mini),
+                if preservation.manager_source_replacement {
+                    structure.verify_manager_source_replacement(&mini)
+                } else {
+                    structure.verify(&mini)
+                },
             )?;
         }
     }

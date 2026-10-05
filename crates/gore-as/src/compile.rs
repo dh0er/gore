@@ -2298,7 +2298,8 @@ enum FullGraphResultPolicyV1 {
 }
 
 /// Manager recompiles complete authored modules, which may already match updated vanilla.
-/// Original native authority, selective preservation and closing audits remain mandatory.
+/// Original native authority, selective metadata/default/reference preservation and closing
+/// audits remain mandatory. Only this private policy admits safe plain declaration omissions.
 pub(crate) fn compile_manager_sources_v1<A>(
     opts: &FullGraphCompileOptsV1,
     graph: Option<&crate::cache::manager_binary_graph::ManagerBinaryGraphV1>,
@@ -4076,15 +4077,22 @@ fn prepare_full_graph_request_v1(
                 }),
             )
             .map_err(CompileError::Other)?;
+            let preservation =
+                crate::cache::selective_fullgraph::SelectiveFullGraphEditPreservation::new(
+                    metadata,
+                    structure,
+                    generated_defaults,
+                    default_targets,
+                );
+            let preservation = if result_policy == FullGraphResultPolicyV1::ManagerSourceRebuild {
+                preservation.for_manager_source_replacement()
+            } else {
+                preservation
+            };
             selective_changes.push(
                 crate::cache::selective_fullgraph::SelectiveFullGraphChange::edit(
                     module_name.clone(),
-                    crate::cache::selective_fullgraph::SelectiveFullGraphEditPreservation::new(
-                        metadata,
-                        structure,
-                        generated_defaults,
-                        default_targets,
-                    ),
+                    preservation,
                 ),
             );
         }
@@ -13953,6 +13961,47 @@ mod tests {
             create_raced_destination: None,
             calls,
         }
+    }
+
+    #[test]
+    fn authoring_full_graph_still_rejects_plain_enum_removal() {
+        let root = unique_test_root("full-graph-enum-removal-authoring");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let mut opts = full_graph_opts(&root);
+        let ranges = crate::cache::walk_modules::module_ranges(&opts.base_cache).unwrap();
+        let (_, start, _) = ranges.iter().find(|(name, _, _)| name == "EditMe").unwrap();
+        let enum_count = start + 2 * ("EditMe".len() + 5) + 8;
+        let mut enum_record = 1i32.to_le_bytes().to_vec();
+        enum_record.extend(sia("OfficialEnum"));
+        enum_record.extend(sia(""));
+        enum_record.extend_from_slice(&1i32.to_le_bytes());
+        enum_record.extend(sia("OfficialValue"));
+        enum_record.extend_from_slice(&1i32.to_le_bytes());
+        enum_record.extend_from_slice(&1i32.to_le_bytes());
+        opts.base_cache
+            .splice(enum_count..enum_count + 4, enum_record);
+        let base = opts.base_cache.clone();
+        let mut raw = cache_with_empty_modules(&[
+            ("Keep", "Keep.as"),
+            ("EditMe", "EditMe.as"),
+            ("DeleteMe", "DeleteMe.as"),
+            ("Added", "Added.as"),
+        ]);
+        raw[..16].fill(0xa5);
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut runner = full_graph_test_runner(&root, raw, calls.clone());
+        let report = compile_full_graph_standalone_v1(&opts, &mut runner, || Ok(()));
+        assert_eq!(calls.get(), 1);
+        let FullGraphCompileOutcomeV1::Failed(error) = report.outcome else {
+            panic!("public authoring must preserve existing enum declarations");
+        };
+        assert!(
+            error.to_string().contains("module enums count shrank"),
+            "{error}"
+        );
+        assert!(!opts.output_path.exists());
+        assert_eq!(opts.base_cache, base);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

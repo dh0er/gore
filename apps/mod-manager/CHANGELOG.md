@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   load order. Preserve binary winners in the rebuilt result.
 - Accept validated recompiles when a game update already contains the mod's
   script edit or identical addition.
+- Allow complete authored sources to replace harmless declarations introduced
+  by vanilla updates, including an unused enum in a newly official module.
+  Keep native, reflection and generated-default metadata checks and reject
+  replacements that leave retained script or default references dangling.
 - Name affected mods and modules and require confirmation when an edited
   vanilla module changed or was removed, or a new mod module now collides with
   a game module. Cancel leaves the installation unchanged; confirmation covers

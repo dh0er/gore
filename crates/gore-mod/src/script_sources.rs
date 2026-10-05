@@ -656,6 +656,9 @@ impl PublicationDirectory {
 }
 
 fn open_publication_parent(path: &Path) -> Result<PublicationDirectory> {
+    // Resolve caller-selected directory aliases once, then pin the physical parent chain.
+    let path =
+        std::fs::canonicalize(path).map_err(crate::io("resolving compiler publication parent"))?;
     #[cfg(windows)]
     {
         let mut current = PathBuf::new();
@@ -680,7 +683,7 @@ fn open_publication_parent(path: &Path) -> Result<PublicationDirectory> {
         directory.ok_or_else(|| invalid("publication parent has no absolute root"))
     }
     #[cfg(not(windows))]
-    crate::mgr::model::open_directory_chain_nofollow(path, "compiler publication parent")
+    crate::mgr::model::open_directory_chain_nofollow(&path, "compiler publication parent")
 }
 
 /// Ownership evidence for a file created by a compiler publication. Rollback checks both the
@@ -696,6 +699,10 @@ pub struct ScriptPublicationFileV1 {
 }
 
 impl ScriptPublicationFileV1 {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// The caller must pass the retained creation handle, never a file reopened by pathname.
     pub fn from_created_file(path: PathBuf, file: std::fs::File, bytes: &[u8]) -> Result<Self> {
         let identity = crate::mgr::model::identity_from_open_file(&file, "compiler publication")?;
@@ -904,8 +911,12 @@ pub fn publish_script_source_provenance_from_bytes_v1(
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
+    let parent = std::fs::canonicalize(parent)
+        .map_err(crate::io("resolving compiler source output parent"))?;
+    let mini_path = parent.join(mini_name);
+    preflight_script_source_provenance_v1(&mini_path)?;
     let mini = crate::read_safe_bundle_file(
-        parent,
+        &parent,
         Path::new(mini_name),
         "compiled source mini",
         crate::MAX_SCRIPT_MINI_BYTES,
@@ -932,9 +943,7 @@ pub fn publish_script_source_provenance_from_bytes_v1(
     let mut files = Files::from([(mini_name.into(), mini)]);
     let manifest =
         package_script_sources_v1(&mut files, &component, &entries, base_cache, authored)?;
-    let parent = open_publication_parent(
-        &std::path::absolute(parent).map_err(crate::io("resolving source publication parent"))?,
-    )?;
+    let parent = open_publication_parent(&parent)?;
     let mut publication = ScriptSourcePublicationV1 {
         parent,
         directories: Vec::new(),
@@ -1393,6 +1402,37 @@ mod tests {
         )
         .unwrap();
         (mini, publication)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn source_publication_resolves_directory_junctions_and_retains_physical_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let real = root.path().join("real-output");
+        let alias = root.path().join("output-junction");
+        std::fs::create_dir(&real).unwrap();
+        let junction = std::process::Command::new("cmd.exe")
+            .args(["/C", "mklink", "/J"])
+            .arg(&alias)
+            .arg(&real)
+            .output()
+            .unwrap();
+        assert!(
+            junction.status.success(),
+            "{}",
+            String::from_utf8_lossy(&junction.stderr)
+        );
+        let (mini, publication) = owned_source_fixture(&alias);
+        assert!(real.join("authored.cache.sources.json").is_file());
+        // The selected alias can disappear; cleanup still owns the resolved output tree.
+        std::fs::remove_dir(&alias).unwrap();
+        publication.rollback().unwrap();
+        assert!(!real.join("authored.cache.sources.json").exists());
+        assert!(!real.join("authored.cache.sources").exists());
+        assert_eq!(
+            std::fs::read(real.join(mini.file_name().unwrap())).unwrap(),
+            cache(&["New"], 1)
+        );
     }
 
     #[cfg(windows)]

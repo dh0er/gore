@@ -2892,7 +2892,7 @@ fn publish_full_graph_mini(
         .collect::<Result<Vec<_>>>()?;
     let output = publish_cli_mini_noclobber(&destination, &mini)?;
     let sources = match gore_mod::script_sources::publish_script_source_provenance_from_bytes_v1(
-        &destination, &mini, base_cache, sources,
+        output.path(), &mini, base_cache, sources,
     ) {
         Ok(sources) => sources,
         Err(error) => return fail_after_mini_publication_error(
@@ -2971,6 +2971,11 @@ fn publish_cli_mini_noclobber(
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let resolved_parent = std::fs::canonicalize(parent)
+        .with_context(|| format!("resolving compiler output parent {}", parent.display()))?;
+    let parent = resolved_parent.as_path();
+    let resolved_out = parent.join(out.file_name().context("compiler output has no filename")?);
+    let out = resolved_out.as_path();
     let mut staging = tempfile::NamedTempFile::new_in(parent)?;
     staging.write_all(mini)?;
     staging.as_file().sync_all()?;
@@ -3028,7 +3033,7 @@ fn publish_compile_module_outputs(
     // Game compilation uses the same no-clobber ownership contract as standalone compilation.
     let output = publish_cli_mini_noclobber(out, mini)?;
     let sources = match gore_mod::script_sources::publish_script_source_provenance_from_bytes_v1(
-        out, mini, base, sources,
+        output.path(), mini, base, sources,
     ) {
         Ok(sources) => sources,
         Err(error) => {
@@ -7322,6 +7327,43 @@ mod default_cli_tests {
         );
         assert!(!out.exists());
         assert!(!gore_mod::script_sources::script_source_provenance_path_v1(&out).exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn compile_module_publication_resolves_junction_parents_before_pinning() {
+        for receipt_failure in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let real = root.path().join("real-output");
+            let alias = root.path().join("output-junction");
+            std::fs::create_dir(&real).unwrap();
+            let junction = std::process::Command::new("cmd.exe")
+                .args(["/C", "mklink", "/J"])
+                .arg(&alias).arg(&real).output().unwrap();
+            assert!(junction.status.success(), "{}", String::from_utf8_lossy(&junction.stderr));
+            let out = alias.join("authored.cache");
+            let result = publish_compile_module_outputs(
+                &out, &publication_cache("Authored"), &publication_cache("Vanilla"),
+                publication_source(),
+                || if receipt_failure { bail!("synthetic receipt failure") } else { Ok(()) },
+            );
+            if receipt_failure {
+                let error = result.unwrap_err();
+                assert!(error.to_string().contains("GENERATION_RECEIPT_PUBLICATION_FAILED_OUTPUT_REMOVED"), "{error:#}");
+                assert!(!real.join("authored.cache").exists());
+                assert!(!real.join("authored.cache.sources.json").exists());
+                assert!(!real.join("authored.cache.sources").exists());
+                publish_compile_module_outputs(
+                    &out, &publication_cache("Authored"), &publication_cache("Vanilla"),
+                    publication_source(), || Ok(()),
+                ).unwrap();
+            } else {
+                result.expect("ordinary junction destinations must remain supported");
+            }
+            assert!(real.join("authored.cache").is_file());
+            assert!(real.join("authored.cache.sources.json").is_file());
+            assert!(real.join("authored.cache.sources/source").is_dir());
+        }
     }
 
     const VALID: &str = r#"{

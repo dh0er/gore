@@ -927,6 +927,105 @@ mod tests {
         bytes[hash_offset..hash_offset + 8].copy_from_slice(&42i64.to_le_bytes());
     }
 
+    #[test]
+    fn rebuild_replaces_newly_official_module_with_an_unreferenced_enum() {
+        struct CollisionRunner {
+            path: PathBuf,
+            output: Vec<u8>,
+            calls: usize,
+        }
+        impl StandaloneCompilerRunnerV1 for CollisionRunner {
+            fn run_regen(
+                &mut self,
+                _: StandaloneCompilerInputsV1<'_>,
+            ) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1> {
+                panic!("Manager must use standalone FullGraph");
+            }
+
+            fn run_full_graph(
+                &mut self,
+                inputs: StandaloneFullGraphCompilerInputsV1<'_>,
+            ) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1> {
+                self.calls += 1;
+                assert_eq!(inputs.changes.len(), 1);
+                assert_eq!(
+                    std::fs::read(inputs.source_tree.join("Mods/New.as")).unwrap(),
+                    b"// original mod addition\n"
+                );
+                std::fs::write(&self.path, &self.output).unwrap();
+                let path = self.path.clone();
+                Ok(StandaloneCompilerOutputV1::with_cleanup_and_diagnostics(
+                    self.path.clone(),
+                    Vec::new(),
+                    move || std::fs::remove_file(path).map_err(|error| error.to_string()),
+                ))
+            }
+        }
+        fn sia(value: &str) -> Vec<u8> {
+            if value.is_empty() {
+                return 0i32.to_le_bytes().to_vec();
+            }
+            let mut bytes = (value.len() as i32).to_le_bytes().to_vec();
+            bytes.extend_from_slice(value.as_bytes());
+            bytes.push(0);
+            bytes
+        }
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let temporary = root.path().join("temporary");
+        std::fs::create_dir(&game).unwrap();
+        std::fs::create_dir(&temporary).unwrap();
+        let mut updated = cache(&[("Keep", "Keep.as"), ("Mods.New", "Mods/New.as")]);
+        let ranges = module_ranges(&updated).unwrap();
+        let (_, start, _) = ranges
+            .iter()
+            .find(|(name, _, _)| name == "Mods.New")
+            .unwrap();
+        let enum_count = start + 2 * ("Mods.New".len() + 5) + 8;
+        let mut official_enum = 1i32.to_le_bytes().to_vec();
+        official_enum.extend(sia("OfficialEnum"));
+        official_enum.extend(sia(""));
+        official_enum.extend_from_slice(&1i32.to_le_bytes());
+        official_enum.extend(sia("OfficialValue"));
+        official_enum.extend_from_slice(&1i32.to_le_bytes());
+        official_enum.extend_from_slice(&1i32.to_le_bytes());
+        updated.splice(enum_count..enum_count + 4, official_enum);
+        module_fingerprints(&updated).unwrap();
+
+        let workspace = RebuildWorkspaceV1::create(&temporary).unwrap();
+        let workspace_path = workspace.root.clone();
+        let mut runner = CollisionRunner {
+            path: workspace.root.join("runner.cache"),
+            output: cache(&[("Keep", "Keep.as"), ("Mods.New", "Mods/New.as")]),
+            calls: 0,
+        };
+        runner.output[..16].fill(0x76);
+        let result = compile_sources_with_runner(
+            &game,
+            &updated,
+            binds(),
+            &[ManagerRebuildSourceV1 {
+                module_name: "Mods.New",
+                relative_path: "Mods/New.as",
+                source: b"// original mod addition\n",
+            }],
+            &workspace,
+            &mut runner,
+            || Ok(()),
+        );
+        let rebuilt = finish_cleanup(workspace, result)
+            .expect("a complete mod addition may replace a harmless newly official declaration");
+        assert_eq!(runner.calls, 1);
+        assert_eq!(rebuilt.module_names, ["Mods.New"]);
+        let mut guard = SequentialMiniGuard::new_with_binds(&updated, &binds()).unwrap();
+        let composed = guard.compose_upsert(&updated, &rebuilt.mini_cache).unwrap();
+        let expected = cache(&[("Keep", "Keep.as"), ("Mods.New", "Mods/New.as")]);
+        assert_eq!(composed, expected);
+        assert!(!workspace_path.exists());
+        assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(&game).unwrap().count(), 0);
+    }
+
     fn binds() -> Vec<u8> {
         let mut bytes = 1u32.to_le_bytes().to_vec();
         fn string(bytes: &mut Vec<u8>, value: &str) {
