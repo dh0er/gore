@@ -1350,7 +1350,7 @@ fn capture_compile_source(path: &Path) -> Result<Vec<u8>, String> {
 fn publish_compiled_sources(
     opts: &CompileOpts,
     output: &gore_as::compile::CompileOutput,
-) -> Result<(), String> {
+) -> Result<(), SourcePublicationFailure> {
     let mini = gore_as::generation_receipt::read_compile_output_bytes_v1(output)
         .map_err(|error| error.to_string())?;
     let modules =
@@ -1379,7 +1379,7 @@ fn publish_compiled_sources(
             source: source.clone(),
         }],
     )
-    .map_err(|error| error.to_string())
+    .map_err(SourcePublicationFailure::from)
 }
 
 fn finish_compile_report_in_staging(
@@ -1410,8 +1410,8 @@ fn finish_compile_report_in_staging(
         );
     if retain_staging {
         if let CompileModuleReportOutcome::Compiled(output) = &mut report.outcome {
-            if let Err(message) = publish_compiled_sources(opts, output) {
-                let failure = discard_after_source_publication_failure(output, message);
+            if let Err(failure) = publish_compiled_sources(opts, output) {
+                let failure = discard_after_source_publication_failure(output, failure);
                 output_rejection = Some(failure.message);
                 let mut response =
                     report_response_with_policy(report, output_rejection, standalone_selected);
@@ -1429,25 +1429,49 @@ fn finish_compile_report_in_staging(
     report_response_with_policy(report, output_rejection, standalone_selected)
 }
 
+#[derive(Debug)]
 struct SourcePublicationFailure {
     message: String,
     recovery_required: bool,
 }
 
+impl From<String> for SourcePublicationFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            recovery_required: false,
+        }
+    }
+}
+
+impl From<gore_mod::ModError> for SourcePublicationFailure {
+    fn from(error: gore_mod::ModError) -> Self {
+        Self {
+            recovery_required: matches!(
+                &error,
+                gore_mod::ModError::ScriptSourceRecoveryRequired(_)
+            ),
+            message: error.to_string(),
+        }
+    }
+}
+
 fn discard_after_source_publication_failure(
     output: &mut gore_as::compile::CompileOutput,
-    message: String,
+    failure: SourcePublicationFailure,
 ) -> SourcePublicationFailure {
     let cleanup = output.neutralize_retained_artifact().err();
-    // Read the publisher's recovery status before the wire message is truncated. A source
-    // rollback failure still needs recovery even when the mini was successfully neutralized.
-    let recovery_required =
-        message.contains("SCRIPT_SOURCE_RECOVERY_REQUIRED") || cleanup.is_some();
+    // Keep the publisher's typed recovery status independently of paths and bounded wire text.
+    // A source rollback failure needs recovery even when the mini was neutralized successfully.
+    let recovery_required = failure.recovery_required || cleanup.is_some();
     let cleanup = cleanup
         .map(|error| format!("; discarding compiled output failed: {error}"))
         .unwrap_or_default();
     SourcePublicationFailure {
-        message: format!("retaining original script source failed: {message}{cleanup}"),
+        message: format!(
+            "retaining original script source failed: {}{cleanup}",
+            failure.message
+        ),
         recovery_required,
     }
 }
@@ -2507,17 +2531,20 @@ mod tests {
             if changed_output_path {
                 output.mini_path = foreign.clone();
             }
-            let message = if publisher_recovery {
-                // Recovery status must survive even if a long IO message hides its marker
-                // beyond the bounded text returned to Studio.
-                format!(
-                    "{}; SCRIPT_SOURCE_RECOVERY_REQUIRED: source payload was retained",
+            let error = if publisher_recovery {
+                // Typed recovery status must survive the bounded text returned to Studio.
+                gore_mod::ModError::ScriptSourceRecoveryRequired(format!(
+                    "{}; source payload was retained",
                     "publication IO failure ".repeat(MAX_ERROR_MESSAGE_BYTES)
-                )
+                ))
             } else {
-                "source publication failed before creating any payload".to_owned()
+                // A workspace name containing the display marker is an ordinary IO failure.
+                gore_mod::ModError::Io(
+                    "source publication collision in /SCRIPT_SOURCE_RECOVERY_REQUIRED/work"
+                        .to_owned(),
+                )
             };
-            let failure = discard_after_source_publication_failure(&mut output, message);
+            let failure = discard_after_source_publication_failure(&mut output, error.into());
             assert_eq!(failure.recovery_required, expected_recovery);
             assert_eq!(
                 failure

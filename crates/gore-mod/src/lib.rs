@@ -52,6 +52,8 @@ const MAX_PORTABLE_MOD_NAME_BYTES: usize = 198;
 // ── Errors ───────────────────────────────────────────────────────────────────
 #[derive(Debug, thiserror::Error)]
 pub enum ModError {
+    #[error("SCRIPT_SOURCE_RECOVERY_REQUIRED: {0}")]
+    ScriptSourceRecoveryRequired(String),
     #[error("script update confirmation required")]
     ScriptRebuildConfirmationRequired(crate::mgr::script_rebuild::ScriptRebuildConfirmation),
     #[error("io: {0}")]

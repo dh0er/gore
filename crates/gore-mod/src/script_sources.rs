@@ -621,8 +621,15 @@ impl PublicationDirectory {
         }
         // SAFETY: successful FILE_CREATE returned one new owned handle, transferred to File.
         let file = unsafe { std::fs::File::from_raw_handle(handle) };
-        let identity = crate::mgr::model::identity_from_open_file(&file, "created source directory")
-            .map_err(|error| invalid(format!("SCRIPT_SOURCE_RECOVERY_REQUIRED: cannot retain ownership of newly created directory {}: {error}", self.path.join(name).display())))?;
+        let identity =
+            crate::mgr::model::identity_from_open_file(&file, "created source directory").map_err(
+                |error| {
+                    crate::ModError::ScriptSourceRecoveryRequired(format!(
+                        "cannot retain ownership of newly created directory {}: {error}",
+                        self.path.join(name).display()
+                    ))
+                },
+            )?;
         let mut parents = self.parents.clone();
         parents.push(self.file.clone());
         Ok(Self {
@@ -650,7 +657,12 @@ impl PublicationDirectory {
             .open(self.path.join(name))
             .map_err(crate::io("creating compiler source payload"))?;
         let identity = crate::mgr::model::identity_from_open_file(&file, "compiler source payload")
-            .map_err(|error| invalid(format!("SCRIPT_SOURCE_RECOVERY_REQUIRED: cannot retain ownership of newly created payload {}: {error}", self.path.join(name).display())))?;
+            .map_err(|error| {
+                crate::ModError::ScriptSourceRecoveryRequired(format!(
+                    "cannot retain ownership of newly created payload {}: {error}",
+                    self.path.join(name).display()
+                ))
+            })?;
         Ok((file, identity))
     }
 }
@@ -775,10 +787,9 @@ impl ScriptSourcePublicationV1 {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(invalid(format!(
-                "SCRIPT_SOURCE_RECOVERY_REQUIRED: {}",
-                errors.join("; ")
-            )))
+            Err(crate::ModError::ScriptSourceRecoveryRequired(
+                errors.join("; "),
+            ))
         }
     }
 }
@@ -1041,7 +1052,9 @@ pub fn publish_script_source_provenance_from_bytes_v1(
     if let Err(error) = result {
         return match publication.rollback() {
             Ok(()) => Err(error),
-            Err(cleanup) => Err(invalid(format!("{error}; {cleanup}"))),
+            Err(cleanup) => Err(crate::ModError::ScriptSourceRecoveryRequired(format!(
+                "{error}; {cleanup}"
+            ))),
         };
     }
     Ok(publication)

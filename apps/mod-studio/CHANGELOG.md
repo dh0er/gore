@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Preserve compiler workspaces and expose output recovery when retaining authored
   sources cannot finish or the compiled output cannot be safely discarded.
+  Recovery status is independent of workspace names and error-message length.
 - Retain exact, complete original `.as` inputs, including empty modules, by
   default in the script compiler, with fingerprints of replaced vanilla modules. Automatically
   include these sources alongside compiled scripts when building bundles.
