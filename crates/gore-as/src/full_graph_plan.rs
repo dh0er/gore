@@ -193,27 +193,9 @@ fn plan_inventory_with_missing(
         ))
     });
     let mut base_by_name = BTreeMap::new();
-    let mut base_by_path = BTreeMap::<String, (String, String, String)>::new();
     for (module_name, relative_path) in base {
-        let folded_name = fold(&module_name);
-        let folded_path = fold(&relative_path);
-        if base_by_path
-            .insert(
-                folded_path,
-                (
-                    folded_name.clone(),
-                    module_name.clone(),
-                    relative_path.clone(),
-                ),
-            )
-            .is_some()
-        {
-            return Err(FullGraphSourcePlanErrorV1::BaseCache(
-                "base cache contains case-colliding module relative paths".into(),
-            ));
-        }
         if base_by_name
-            .insert(folded_name, (module_name, relative_path))
+            .insert(fold(&module_name), (module_name, relative_path))
             .is_some()
         {
             return Err(FullGraphSourcePlanErrorV1::BaseCache(
@@ -227,18 +209,6 @@ fn plan_inventory_with_missing(
     let mut final_manifest = Vec::with_capacity(sources.len());
     let mut changes = Vec::with_capacity(sources.len().saturating_add(base_by_name.len()));
     for source in sources {
-        if let Some((folded_base_name, base_module, base_path)) =
-            base_by_path.get(&fold(&source.relative_path))
-        {
-            if *folded_base_name != fold(&source.module_name) {
-                return Err(FullGraphSourcePlanErrorV1::RelativePathCollisionWithBase {
-                    source_module: source.module_name,
-                    source_path: source.relative_path,
-                    base_module: base_module.clone(),
-                    base_path: base_path.clone(),
-                });
-            }
-        }
         if !seen_names.insert(fold(&source.module_name))
             || !seen_paths.insert(fold(&source.relative_path))
         {
@@ -654,15 +624,6 @@ pub enum FullGraphSourcePlanErrorV1 {
         base_module: String,
         base_path: String,
     },
-    #[error(
-        "source module {source_module:?} targets relative path {source_path:?}, which collides with base module {base_module:?} at {base_path:?}"
-    )]
-    RelativePathCollisionWithBase {
-        source_module: String,
-        source_path: String,
-        base_module: String,
-        base_path: String,
-    },
     #[error("reading full-graph source tree: {0}")]
     Io(String),
 }
@@ -676,14 +637,6 @@ mod tests {
             module_name: module_name_from_relative_path_v1(path).unwrap(),
             relative_path: path.into(),
             bytes: bytes.into(),
-        }
-    }
-
-    fn named_source(module_name: &str, relative_path: &str, bytes: &[u8]) -> AuthoredSourceV1 {
-        AuthoredSourceV1 {
-            module_name: module_name.to_owned(),
-            relative_path: relative_path.to_owned(),
-            bytes: bytes.to_vec(),
         }
     }
 
@@ -767,21 +720,6 @@ mod tests {
         let too_many = (0..=MAX_SELECTIVE_FULLGRAPH_CHANGES).map(|i| source(&format!("M{i}.as"), b"change")).collect();
         assert!(matches!(plan_inventory_with_missing(vec![], too_many, true, |_| Ok(false)),
             Err(FullGraphSourcePlanErrorV1::TooManySourceModules { actual: 257, max: 256 })));
-    }
-
-    #[test]
-    fn sparse_retained_base_rejects_relative_path_collision_with_base_module() {
-        let error = plan_inventory_with_missing(
-            vec![("Official.Module".into(), "Path/Collide.as".into())],
-            vec![named_source("Mod.Module", "Path/Collide.as", b"int x;")],
-            true,
-            |_| Ok(false),
-        )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            FullGraphSourcePlanErrorV1::RelativePathCollisionWithBase { .. }
-        ));
     }
 
     #[test]
