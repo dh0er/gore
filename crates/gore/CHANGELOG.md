@@ -5,6 +5,11 @@ uses the matching version section as the GitHub release notes.
 
 ## [Unreleased]
 
+- Roll back compiler minis together with their captured source manifest and payloads
+  when receipt publication or receipt-directory creation fails. Preserve substituted
+  outputs and user-added files, and report recovery requirements when cleanup cannot
+  complete safely. Mini publication uses no-clobber semantics for every backend.
+
 - Add 142 `gore save` commands covering the Save Editor: saves, profiles,
   recovery, backups, actors, attributes, skills, inventories, positions, world
   time, progression, factions, locks and merchant stock/timing.

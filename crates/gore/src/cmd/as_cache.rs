@@ -2678,9 +2678,13 @@ fn compile_full_graph_command(
             return Err(anyhow::Error::new(error)).context("compiling the complete source graph");
         }
     };
-    let used_backend = used_backend.context(
-        "full-graph compiler succeeded without identifying the backend that produced the cache",
-    )?;
+    let used_backend = match used_backend {
+        Some(backend) => backend,
+        None => return fail_after_full_graph_side_output_error(
+            &artifact, "COMPILE", None,
+            "full-graph compiler succeeded without identifying its backend".into(),
+        ),
+    };
 
     // The mini is part of this command's product: derive it before the receipt and before any
     // success line, and neutralize the already published complete cache when it cannot be
@@ -2713,14 +2717,15 @@ fn compile_full_graph_command(
         let authority = receipt_authority
             .as_ref()
             .expect("receipt availability was checked before compilation");
-        let backend =
-            gore_as::generation_receipt::ReceiptBackendSelectionV1::from_compile_selection(
-                requested_mode,
-                used_backend,
-                fallback_reason.as_ref(),
-            )
-            .map_err(anyhow::Error::msg)
-            .context("sealing the full-graph backend selection")?;
+        let backend = match gore_as::generation_receipt::ReceiptBackendSelectionV1::from_compile_selection(
+            requested_mode, used_backend, fallback_reason.as_ref(),
+        ) {
+            Ok(backend) => backend,
+            Err(error) => return fail_after_full_graph_side_output_error(
+                &artifact, "GENERATION_RECEIPT", published_mini,
+                format!("sealing the full-graph backend selection: {error}"),
+            ),
+        };
         let receipt =
             match gore_as::generation_receipt_v2::GenerationReceiptV2::build_for_full_graph_artifact(
                 authority,
@@ -2734,7 +2739,7 @@ fn compile_full_graph_command(
                     return fail_after_full_graph_side_output_error(
                         &artifact,
                         "GENERATION_RECEIPT",
-                        published_mini.as_ref(),
+                        published_mini,
                         format!("building {}: {error}", receipt_path.display()),
                     );
                 }
@@ -2745,8 +2750,12 @@ fn compile_full_graph_command(
             return fail_after_full_graph_side_output_error(
                 &artifact,
                 "GENERATION_RECEIPT",
-                published_mini.as_ref(),
-                format!("publishing {}: {error}", receipt_path.display()),
+                published_mini,
+                if matches!(error, gore_as::generation_receipt::GenerationReceiptError::PublicationUncertain { .. }) {
+                    format!("GENERATION_RECEIPT_RECOVERY_REQUIRED: publishing {}: {error}; the receipt destination may already exist and needs inspection", receipt_path.display())
+                } else {
+                    format!("publishing {}: {error}", receipt_path.display())
+                },
             );
         }
         println!("generation receipt -> {}", receipt_path.display());
@@ -2775,20 +2784,22 @@ fn compile_full_graph_command(
     Ok(())
 }
 
-/// A published multi-module mini-cache retained through its exact creation handle, so a later
-/// failure of this command can neutralize the bytes it wrote without trusting the path again.
+/// The mini and source graph remain owned until every side output has been published.
 struct PublishedMini {
     path: PathBuf,
-    file: std::fs::File,
+    output: gore_mod::script_sources::ScriptPublicationFileV1,
+    sources: gore_mod::script_sources::ScriptSourcePublicationV1,
     report: String,
 }
 
 impl PublishedMini {
-    /// Reduce the written mini to zero bytes through the retained handle. A zero-byte file at the
-    /// destination is never a usable mini-cache and is reported for removal before a retry.
-    fn neutralize(&self) -> std::io::Result<()> {
-        self.file.set_len(0)?;
-        self.file.sync_all()
+    fn rollback(self) -> Result<()> {
+        let sources = self.sources.rollback();
+        let output = self.output.rollback();
+        match (sources, output) {
+            (Ok(()), Ok(())) => Ok(()),
+            (sources, output) => bail!("source cleanup: {sources:?}; mini cleanup: {output:?}"),
+        }
     }
 }
 
@@ -2858,22 +2869,6 @@ fn publish_full_graph_mini(
         .map_err(anyhow::Error::new)
         .context("multi-module mini-cache path layout changed during compilation")?;
     validate_auxiliary_output_path(&destination, game, "multi-module mini-cache")?;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&destination)
-        .with_context(|| format!("creating {}", mini_path.display()))?;
-    if let Err(error) = std::io::Write::write_all(&mut file, &mini).and_then(|()| file.sync_all()) {
-        // Never leave a truncated artifact behind that could be mistaken for a usable mini-cache.
-        // Neutralize through the exact handle just created: the path may already point at a
-        // different file when another process can write to the destination directory.
-        let cleanup = file
-            .set_len(0)
-            .and_then(|()| file.sync_all())
-            .map(|()| "; the partial file was reduced to zero bytes and must be removed before retrying".to_owned())
-            .unwrap_or_else(|neutralize| format!("; neutralizing the partial file failed too: {neutralize}"));
-        bail!("writing {}: {error}{cleanup}", mini_path.display());
-    }
     let has_edit = authored
         .iter()
         .any(|(_, op)| *op == FullGraphCompileOperationV1::Edit);
@@ -2895,15 +2890,15 @@ fn publish_full_graph_mini(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    if let Err(error) = gore_mod::script_sources::write_script_source_provenance_from_bytes_v1(
-        &destination,
-        &mini,
-        base_cache,
-        sources,
+    let output = publish_cli_mini_noclobber(&destination, &mini)?;
+    let sources = match gore_mod::script_sources::publish_script_source_provenance_from_bytes_v1(
+        &destination, &mini, base_cache, sources,
     ) {
-        let cleanup = file.set_len(0).and_then(|()| file.sync_all());
-        bail!("publishing mini source provenance failed: {error}; neutralizing mini output: {cleanup:?}");
-    }
+        Ok(sources) => sources,
+        Err(error) => return fail_after_mini_publication_error(
+            output, None, "SCRIPT_SOURCE", anyhow::Error::new(error),
+        ),
+    };
     // Name an edited shipped module in the spec entry when there is one: deploy requires an
     // `edit` mini to carry at least one module that exists in the cache.
     let spec_module = authored
@@ -2934,44 +2929,127 @@ fn publish_full_graph_mini(
     );
     Ok(PublishedMini {
         path: mini_path.to_path_buf(),
-        file,
+        output,
+        sources,
         report,
     })
 }
 
-/// A side output of the full-graph command (mini-cache, receipt) could not be produced after the
-/// complete cache was already published. The command's product is all-or-nothing: reduce the
-/// retained cache to zero bytes so the next run is not blocked by a no-clobber destination that
-/// looks like a usable result, and neutralize an already published mini-cache through its retained
-/// handle so it cannot describe the neutralized cache.
+/// A side output failed after the complete cache was published. Always neutralize the exact
+/// retained cache, and remove the owned mini/source graph; any cleanup failure needs recovery.
 fn fail_after_full_graph_side_output_error<T>(
     artifact: &gore_as::compile::FullGraphCompileArtifactV1,
     label: &str,
-    published_mini: Option<&PublishedMini>,
+    published_mini: Option<PublishedMini>,
     primary: String,
 ) -> Result<T> {
     let mini_cleanup = published_mini
-        .map(|mini| match mini.neutralize() {
-            Ok(()) => format!(
-                "; the published mini-cache at {} was reduced to zero bytes and must be removed before retrying",
-                mini.path.display()
-            ),
-            Err(error) => format!(
-                "; neutralizing the published mini-cache at {} failed too: {error}",
-                mini.path.display()
-            ),
+        .map(|mini| {
+            let path = mini.path.clone();
+            mini.rollback()
+                .with_context(|| format!("cleaning mini/source publication at {}", path.display()))
         })
-        .unwrap_or_default();
-    match artifact.neutralize() {
-        Ok(()) => bail!(
-            "{label}_PUBLICATION_FAILED_OUTPUT_NEUTRALIZED: {primary}; the exact retained cache at {} was reduced to zero bytes and must be removed before retrying{mini_cleanup}",
-            artifact.path().display()
-        ),
-        Err(cleanup) => bail!(
-            "{label}_RECOVERY_REQUIRED: {primary}; failed to neutralize the retained cache at {}: {cleanup}{mini_cleanup}",
-            artifact.path().display()
-        ),
+        .transpose();
+    let cache_cleanup = artifact.neutralize();
+    if mini_cleanup.is_err() || cache_cleanup.is_err() || primary.contains("RECOVERY_REQUIRED") {
+        bail!("{label}_RECOVERY_REQUIRED: {primary}; retained-cache neutralization: {cache_cleanup:?}; mini/source cleanup: {mini_cleanup:?}; inspect remaining outputs before retrying");
     }
+    bail!(
+        "{label}_PUBLICATION_FAILED_OUTPUT_NEUTRALIZED: {primary}; the exact retained cache at {} was reduced to zero bytes and must be removed before retrying; owned mini/source outputs were removed",
+        artifact.path().display()
+    );
+}
+
+/// Publish a synced mini without clobbering an existing output, retaining its creation handle
+/// and parent chain before it becomes visible. Reuse the durable CLI cache publication primitive.
+fn publish_cli_mini_noclobber(
+    out: &Path,
+    mini: &[u8],
+) -> Result<gore_mod::script_sources::ScriptPublicationFileV1> {
+    let parent = out
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let mut staging = tempfile::NamedTempFile::new_in(parent)?;
+    staging.write_all(mini)?;
+    staging.as_file().sync_all()?;
+    let output = gore_mod::script_sources::ScriptPublicationFileV1::from_created_file(
+        out.to_path_buf(),
+        staging.as_file().try_clone()?,
+        mini,
+    )?;
+    #[cfg(windows)]
+    publish_default_temp_noclobber(staging, out, parent)
+        .with_context(|| format!("publishing compiler output {}", out.display()))?;
+    #[cfg(not(windows))]
+    {
+        staging
+            .persist_noclobber(out)
+            .with_context(|| format!("publishing compiler output {}", out.display()))?;
+        if let Err(error) = sync_default_output_parent(parent) {
+            return fail_after_mini_publication_error(output, None, "COMPILER_OUTPUT", error);
+        }
+    }
+    Ok(output)
+}
+
+fn fail_after_mini_publication_error<T>(
+    output: gore_mod::script_sources::ScriptPublicationFileV1,
+    sources: Option<gore_mod::script_sources::ScriptSourcePublicationV1>,
+    label: &str,
+    primary: anyhow::Error,
+) -> Result<T> {
+    let source_cleanup = sources.map(|sources| sources.rollback()).transpose();
+    let output_cleanup = output.rollback();
+    let uncertain_receipt = matches!(
+        primary.downcast_ref::<gore_as::generation_receipt::GenerationReceiptError>(),
+        Some(gore_as::generation_receipt::GenerationReceiptError::PublicationUncertain { .. })
+    );
+    if source_cleanup.is_err()
+        || output_cleanup.is_err()
+        || primary.to_string().contains("RECOVERY_REQUIRED")
+        || uncertain_receipt
+    {
+        bail!("{label}_RECOVERY_REQUIRED: {primary:#}; compiler output cleanup: {output_cleanup:?}; source cleanup: {source_cleanup:?}; inspect remaining outputs and the receipt destination before retrying");
+    }
+    bail!("{label}_PUBLICATION_FAILED_OUTPUT_REMOVED: {primary:#}; removed the owned compiler output and source publication so a retry is not blocked");
+}
+
+/// Finish the compile-module product before reporting success. Kept independent of compilation
+/// so publication failures can be exercised with synthetic caches and no installation access.
+fn publish_compile_module_outputs(
+    out: &Path,
+    mini: &[u8],
+    base: &[u8],
+    sources: Vec<gore_mod::script_sources::ScriptSourceInputV1>,
+    finish: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    // Game compilation uses the same no-clobber ownership contract as standalone compilation.
+    let output = publish_cli_mini_noclobber(out, mini)?;
+    let sources = match gore_mod::script_sources::publish_script_source_provenance_from_bytes_v1(
+        out, mini, base, sources,
+    ) {
+        Ok(sources) => sources,
+        Err(error) => {
+            return fail_after_mini_publication_error(
+                output,
+                None,
+                "SCRIPT_SOURCE",
+                anyhow::Error::new(error),
+            )
+        }
+    };
+    // Include receipt parent creation and every later publication exit in the transaction.
+    if let Err(error) = finish() {
+        return fail_after_mini_publication_error(
+            output,
+            Some(sources),
+            "GENERATION_RECEIPT",
+            error,
+        );
+    }
+    Ok(())
 }
 
 fn absolute_cli_path(path: PathBuf, label: &'static str) -> Result<PathBuf> {
@@ -4244,26 +4322,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let compiled_relative_path = mini_modules.iter()
                 .find(|module| module.module_name == compiled.module_name)
                 .context("compiled module missing its canonical source path")?.relative_path.clone();
-            if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("creating {}", parent.display()))?;
-            }
-            if generation_receipt.is_some()
-                || used_backend == gore_as::compile::CompilerBackendNameV1::Standalone
-            {
-                gore_as::generation_receipt::publish_generation_output_v1(&out, &mini)
-                    .map_err(anyhow::Error::msg)
-                    .with_context(|| {
-                        format!(
-                            "atomically publishing no-clobber compiler output {}",
-                            out.display()
-                        )
-                    })?;
-            } else {
-                std::fs::write(&out, &mini)
-                    .with_context(|| format!("writing {}", out.display()))?;
-            }
-            if let Err(error) = gore_mod::script_sources::write_script_source_provenance_from_bytes_v1(
+            publish_compile_module_outputs(
                 &out,
                 &mini,
                 &base_override,
@@ -4274,41 +4333,22 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     mini: String::new(),
                     source: source_bytes.clone(),
                 }],
-            ) {
-                let cleanup = gore_as::generation_receipt::rollback_generation_output_v1(&out, &mini);
-                bail!("SCRIPT_SOURCE_PUBLICATION_FAILED: {error}; compiler output cleanup: {cleanup:?}");
-            }
-            if let (Some(path), Some(receipt)) = (
-                compiler.generation_receipt.as_ref(),
-                generation_receipt.as_ref(),
-            ) {
-                if let Some(parent) = path
-                    .parent()
-                    .filter(|parent| !parent.as_os_str().is_empty())
-                {
-                    std::fs::create_dir_all(parent)
-                        .with_context(|| format!("creating {}", parent.display()))?;
-                }
-                if let Err(error) =
-                    gore_as::generation_receipt::publish_generation_receipt_v1(path, receipt)
-                {
-                    match gore_as::generation_receipt::rollback_generation_output_v1(&out, &mini) {
-                        Ok(()) => bail!(
-                            "GENERATION_RECEIPT_PUBLICATION_FAILED_OUTPUT_REMOVED: publishing {}: \
-                             {error}; removed the no-clobber output {} so no unqualified artifact \
-                             remains",
-                            path.display(),
-                            out.display()
-                        ),
-                        Err(cleanup) => bail!(
-                            "GENERATION_RECEIPT_RECOVERY_REQUIRED: publishing {}: {error}; failed \
-                             to remove the now-unqualified output {}: {cleanup}",
-                            path.display(),
-                            out.display()
-                        ),
+                || {
+                    if let (Some(path), Some(receipt)) = (
+                        compiler.generation_receipt.as_ref(),
+                        generation_receipt.as_ref(),
+                    ) {
+                        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+                            std::fs::create_dir_all(parent)
+                                .with_context(|| format!("creating {}", parent.display()))?;
+                        }
+                        gore_as::generation_receipt::publish_generation_receipt_v1(path, receipt)
+                            .map_err(anyhow::Error::new)
+                            .with_context(|| format!("publishing {}", path.display()))?;
                     }
-                }
-            }
+                    Ok(())
+                },
+            )?;
             // Strict standalone has no install guard to carry these no-delete handles for it.
             // Release the target only after retained-output validation and both output/receipt
             // publication steps have finished; every early return drops this wrapper as well.
@@ -7082,6 +7122,206 @@ mod default_cli_tests {
             .to_string();
         assert!(error.contains("pristine script cache"), "got: {error}");
         assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    fn publication_cache(module: &str) -> Vec<u8> {
+        fn string(value: &str, fstring: bool) -> Vec<u8> {
+            let mut bytes = (value.len() as i32 + i32::from(fstring))
+                .to_le_bytes()
+                .to_vec();
+            if !value.is_empty() || fstring {
+                bytes.extend_from_slice(value.as_bytes());
+                bytes.push(0);
+            }
+            bytes
+        }
+        let mut bytes = vec![1; 16];
+        bytes.extend_from_slice(&gore_as::cache::header::CACHE_MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend(string(module, true));
+        bytes.extend(string(module, false));
+        bytes.extend_from_slice(&[0; 32]);
+        bytes.extend(string("", false));
+        bytes.extend_from_slice(&[0; 8]);
+        bytes.extend(string(&format!("{module}.as"), false));
+        bytes.extend_from_slice(&[0; 4]);
+        bytes.extend(vec![0; 4 * gore_as::cache::tables::N_TABLES]);
+        bytes
+    }
+
+    fn publication_source() -> Vec<gore_mod::script_sources::ScriptSourceInputV1> {
+        vec![gore_mod::script_sources::ScriptSourceInputV1 {
+            module: "Authored".into(),
+            op: "add".into(),
+            relative_path: "Authored.as".into(),
+            mini: String::new(),
+            source: b"// original authored source\r\n".to_vec(),
+        }]
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn compile_module_receipt_failure_cleans_complete_publication_for_retry() {
+        for parent_failure in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let out = root.path().join("authored.cache");
+            let mini = publication_cache("Authored");
+            let base = publication_cache("Vanilla");
+            let blocked = root.path().join("blocked");
+            std::fs::write(&blocked, b"user output").unwrap();
+            let receipt = if parent_failure {
+                blocked.join("receipt.json")
+            } else {
+                blocked.clone()
+            };
+            let error =
+                publish_compile_module_outputs(&out, &mini, &base, publication_source(), || {
+                    std::fs::create_dir_all(receipt.parent().unwrap())?;
+                    // Receipt and output publication share this atomic no-clobber publisher.
+                    gore_as::generation_receipt::publish_generation_output_v1(
+                        &receipt,
+                        b"synthetic receipt",
+                    )?;
+                    Ok(())
+                })
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("GENERATION_RECEIPT_PUBLICATION_FAILED_OUTPUT_REMOVED"),
+                "{error:#}"
+            );
+            assert!(!out.exists(), "mini remains after receipt failure");
+            assert!(
+                !gore_mod::script_sources::script_source_provenance_path_v1(&out).exists(),
+                "source manifest remains after receipt failure"
+            );
+            assert!(
+                !root.path().join("authored.cache.sources").exists(),
+                "source payloads remain after receipt failure"
+            );
+            assert_eq!(std::fs::read(&blocked).unwrap(), b"user output");
+            gore_mod::script_sources::preflight_script_source_provenance_v1(&out).unwrap();
+            publish_compile_module_outputs(&out, &mini, &base, publication_source(), || Ok(()))
+                .unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn compile_module_rollback_preserves_substituted_outputs_and_reports_recovery() {
+        for replace_mini in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let out = root.path().join("authored.cache");
+            let mini = publication_cache("Authored");
+            let sidecar = gore_mod::script_sources::script_source_provenance_path_v1(&out);
+            let target = if replace_mini {
+                out.clone()
+            } else {
+                sidecar.clone()
+            };
+            let mut user_bytes = Vec::new();
+            let error = publish_compile_module_outputs(
+                &out,
+                &mini,
+                &publication_cache("Vanilla"),
+                publication_source(),
+                || {
+                    user_bytes = std::fs::read(&target)?;
+                    std::fs::rename(&target, root.path().join("original-owned-output"))?;
+                    // Same bytes, different ownership: a byte comparison alone cannot authorize deletion.
+                    std::fs::write(&target, &user_bytes)?;
+                    bail!("synthetic failure after source publication");
+                },
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("GENERATION_RECEIPT_RECOVERY_REQUIRED"),
+                "{error:#}"
+            );
+            assert_eq!(std::fs::read(&target).unwrap(), user_bytes);
+            assert!(!root.path().join("authored.cache.sources").exists());
+            if replace_mini {
+                assert!(!sidecar.exists());
+            } else {
+                assert!(!out.exists());
+            }
+        }
+    }
+
+    #[test]
+    fn compile_module_publication_never_clobbers_existing_mini_or_source_outputs() {
+        for existing_mini in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let out = root.path().join("authored.cache");
+            let user = if existing_mini {
+                out.clone()
+            } else {
+                gore_mod::script_sources::script_source_provenance_path_v1(&out)
+            };
+            std::fs::write(&user, b"user output").unwrap();
+            let error = publish_compile_module_outputs(
+                &out,
+                &publication_cache("Authored"),
+                &publication_cache("Vanilla"),
+                publication_source(),
+                || panic!("failed publication must never reach receipt success"),
+            )
+            .unwrap_err();
+            assert_eq!(std::fs::read(&user).unwrap(), b"user output");
+            #[cfg(windows)]
+            if !existing_mini {
+                assert!(
+                    error
+                        .to_string()
+                        .contains("SCRIPT_SOURCE_PUBLICATION_FAILED_OUTPUT_REMOVED"),
+                    "{error:#}"
+                );
+                assert!(!out.exists());
+            }
+            #[cfg(not(windows))]
+            if !existing_mini {
+                assert!(
+                    error
+                        .to_string()
+                        .contains("SCRIPT_SOURCE_RECOVERY_REQUIRED"),
+                    "{error:#}"
+                );
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn compile_module_partial_cleanup_preserves_user_children_and_reports_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let out = root.path().join("authored.cache");
+        let user = root.path().join("authored.cache.sources/user.txt");
+        let error = publish_compile_module_outputs(
+            &out,
+            &publication_cache("Authored"),
+            &publication_cache("Vanilla"),
+            publication_source(),
+            || {
+                std::fs::write(&user, b"user source directory addition")?;
+                bail!("synthetic receipt failure");
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("GENERATION_RECEIPT_RECOVERY_REQUIRED"),
+            "{error:#}"
+        );
+        assert_eq!(
+            std::fs::read(user).unwrap(),
+            b"user source directory addition"
+        );
+        assert!(!out.exists());
+        assert!(!gore_mod::script_sources::script_source_provenance_path_v1(&out).exists());
     }
 
     const VALID: &str = r#"{

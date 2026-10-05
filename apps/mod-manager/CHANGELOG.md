@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   changes. Compile winning modules together, including dependencies provided
   by other source-backed mods and compatible binary mods, following the selected
   load order. Preserve binary winners in the rebuilt result.
+- Accept validated recompiles when a game update already contains the mod's
+  script edit or identical addition.
 - Name affected mods and modules and require confirmation when an edited
   vanilla module changed or was removed, or a new mod module now collides with
   a game module. Cancel leaves the installation unchanged; confirmation covers

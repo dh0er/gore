@@ -2293,13 +2293,15 @@ where
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FullGraphResultPolicyV1 {
     SelectivePublication,
+    ManagerSourceRebuild,
     CompleteQualification,
 }
 
-/// Manager retains original native authority while compiling a guarded binary-provider graph.
-pub(crate) fn compile_manager_binary_graph_sources_v1<A>(
+/// Manager recompiles complete authored modules, which may already match updated vanilla.
+/// Original native authority, selective preservation and closing audits remain mandatory.
+pub(crate) fn compile_manager_sources_v1<A>(
     opts: &FullGraphCompileOptsV1,
-    graph: &crate::cache::manager_binary_graph::ManagerBinaryGraphV1,
+    graph: Option<&crate::cache::manager_binary_graph::ManagerBinaryGraphV1>,
     standalone: &mut dyn StandaloneCompilerRunnerV1,
     closing_audit: A,
 ) -> FullGraphCompileReportV1
@@ -2310,12 +2312,12 @@ where
         opts,
         &crate::diagnostics::DiagnosticsOptions::default(),
         CompilerBackendModeV1::Standalone,
-        FullGraphResultPolicyV1::SelectivePublication,
+        FullGraphResultPolicyV1::ManagerSourceRebuild,
         Some(standalone),
         None,
         closing_audit,
         None,
-        Some(graph),
+        graph,
     )
 }
 
@@ -2376,6 +2378,15 @@ where
     let standalone_backend_diagnostics = std::cell::RefCell::new(Vec::new());
 
     let mut result = (|| -> Result<(Vec<u8>, PreparedFullGraphRequestV1), CompileError> {
+        if result_policy == FullGraphResultPolicyV1::ManagerSourceRebuild
+            && (mode != CompilerBackendModeV1::Standalone
+                || guard.borrow().is_some()
+                || target.borrow().is_some())
+        {
+            return Err(CompileError::Other(
+                "Manager source rebuild requires strict read-only standalone authority".into(),
+            ));
+        }
         if let Some(graph) = manager_graph {
             if mode != CompilerBackendModeV1::Standalone
                 || target.borrow().is_some()
@@ -2402,7 +2413,8 @@ where
             _ => {}
         }
         match result_policy {
-            FullGraphResultPolicyV1::SelectivePublication => {
+            FullGraphResultPolicyV1::SelectivePublication
+            | FullGraphResultPolicyV1::ManagerSourceRebuild => {
                 crate::cache::selective_fullgraph::validate_selective_full_graph_change_count(
                     opts.changes.len(),
                 )
@@ -2658,10 +2670,16 @@ where
         let bytes = selected_result.map_err(|failure| CompileError::Other(failure.to_string()))?;
         let publication_bytes = match result_policy {
             FullGraphResultPolicyV1::CompleteQualification => bytes,
-            FullGraphResultPolicyV1::SelectivePublication => {
+            FullGraphResultPolicyV1::SelectivePublication
+            | FullGraphResultPolicyV1::ManagerSourceRebuild => {
                 let selective_changes = std::mem::take(&mut prepared.selective_changes);
                 let selective = match manager_graph {
                     Some(graph) => graph.compose_sources(&bytes, selective_changes),
+                    None if result_policy == FullGraphResultPolicyV1::ManagerSourceRebuild => {
+                        crate::cache::selective_fullgraph::compose_manager_source_full_graph(
+                            &opts.base_cache, &opts.binds_cache, &bytes, selective_changes,
+                        )
+                    }
                     None => crate::cache::selective_fullgraph::compose_selective_full_graph(
                         &opts.base_cache, &opts.binds_cache, &bytes, selective_changes,
                     ),
@@ -3998,7 +4016,7 @@ fn prepare_full_graph_request_v1(
             .then_with(|| left.relative_path.cmp(&right.relative_path))
     });
 
-    let selective_changes = if result_policy == FullGraphResultPolicyV1::SelectivePublication {
+    let selective_changes = if result_policy != FullGraphResultPolicyV1::CompleteQualification {
         let mut selective_changes = Vec::with_capacity(prepared_edits.len() + prepared_adds.len());
         for (base_index, (_, source)) in &prepared_edits {
             let module_name = &base_manifest[*base_index].module_name;
@@ -13935,6 +13953,35 @@ mod tests {
             create_raced_destination: None,
             calls,
         }
+    }
+
+    #[test]
+    fn authoring_full_graph_still_rejects_an_ineffective_edit() {
+        let root = unique_test_root("full-graph-ineffective-authoring-edit");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let opts = full_graph_opts(&root);
+        let mut raw = cache_with_empty_modules(&[
+            ("Keep", "Keep.as"),
+            ("EditMe", "EditMe.as"),
+            ("DeleteMe", "DeleteMe.as"),
+            ("Added", "Added.as"),
+        ]);
+        raw[..16].fill(0xa5);
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut runner = full_graph_test_runner(&root, raw, calls.clone());
+        let audits = std::cell::Cell::new(0);
+        let report = compile_full_graph_standalone_v1(&opts, &mut runner, || {
+            audits.set(audits.get() + 1);
+            Ok(())
+        });
+        assert_eq!(calls.get(), 1);
+        assert_eq!(audits.get(), 1);
+        let FullGraphCompileOutcomeV1::Failed(error) = report.outcome else {
+            panic!("ordinary authoring must still prove an effective edit");
+        };
+        assert!(error.to_string().contains("byte-identical"), "{error}");
+        assert!(!opts.output_path.exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

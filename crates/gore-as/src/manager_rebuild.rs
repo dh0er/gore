@@ -19,10 +19,9 @@ use crate::cache::remap::{remap_module_to_base_with_options_and_binds, RemapOpti
 use crate::cache::semantic_observer::observe_whole_cache_semantics_v1;
 use crate::cache::splice::{extract_modules, SequentialMiniGuard};
 use crate::compile::{
-    compile_full_graph_standalone_v1, compile_manager_binary_graph_sources_v1,
-    resolved_path_is_within_v1, FullGraphCompileOptsV1, FullGraphCompileOutcomeV1,
-    FullGraphPublicationDispositionV1, ProjectCompilerClosingAuditDisposition,
-    StandaloneCompilerRunnerV1,
+    compile_manager_sources_v1, resolved_path_is_within_v1, FullGraphCompileOptsV1,
+    FullGraphCompileOutcomeV1, FullGraphPublicationDispositionV1,
+    ProjectCompilerClosingAuditDisposition, StandaloneCompilerRunnerV1,
 };
 use crate::compiler_backend::{CompilerBackendDiagnosticV1, CompilerBackendNameV1};
 use crate::compiler_target::{
@@ -550,10 +549,7 @@ where
         binds_cache: binds,
     };
     let audit = || closing_audit().map_err(|error| error.to_string());
-    let report = match graph {
-        Some(graph) => compile_manager_binary_graph_sources_v1(&opts, graph, runner, audit),
-        None => compile_full_graph_standalone_v1(&opts, runner, audit),
-    };
+    let report = compile_manager_sources_v1(&opts, graph, runner, audit);
     let diagnostics = report.backend_diagnostics().to_vec();
     let recovery_required = report.recovery_required();
     let valid_evidence = report.backend_name() == Some(CompilerBackendNameV1::Standalone)
@@ -1595,10 +1591,135 @@ mod tests {
     }
 
     #[test]
-    fn backend_ignored_edit_is_refused_without_force() {
+    fn rebuild_accepts_an_edit_already_present_in_updated_vanilla() {
         let (result, calls) = fixture_rebuild(false, true, true);
         assert_eq!(calls, 1);
-        assert!(result.unwrap_err().detail().contains("byte-identical"));
+        let result = result.expect("updated vanilla can already contain the authored edit");
+        assert_eq!(result.module_names, ["Edit", "Mods.New"]);
+    }
+
+    #[test]
+    fn rebuild_accepts_identical_now_vanilla_additions_and_retains_binary_winners() {
+        struct IdenticalRunner {
+            path: PathBuf,
+            output: Vec<u8>,
+            calls: usize,
+        }
+        impl StandaloneCompilerRunnerV1 for IdenticalRunner {
+            fn run_regen(
+                &mut self,
+                _: StandaloneCompilerInputsV1<'_>,
+            ) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1> {
+                panic!("Manager must compile the graph");
+            }
+            fn run_full_graph(
+                &mut self,
+                inputs: StandaloneFullGraphCompilerInputsV1<'_>,
+            ) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1> {
+                self.calls += 1;
+                assert_eq!(inputs.changes.len(), 2);
+                for change in inputs.changes {
+                    assert_eq!(
+                        std::fs::read(inputs.source_tree.join(&change.relative_path)).unwrap(),
+                        b""
+                    );
+                }
+                std::fs::write(&self.path, &self.output).unwrap();
+                let path = self.path.clone();
+                Ok(StandaloneCompilerOutputV1::with_cleanup_and_diagnostics(
+                    self.path.clone(),
+                    Vec::new(),
+                    move || std::fs::remove_file(path).map_err(|error| error.to_string()),
+                ))
+            }
+        }
+        for with_binary in [false, true] {
+            for audit_passes in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let game = root.path().join("game");
+                let temporary = root.path().join("temporary");
+                std::fs::create_dir(&game).unwrap();
+                std::fs::create_dir(&temporary).unwrap();
+                let base = cache(&[
+                    ("Keep", "Keep.as"),
+                    ("Edit", "Edit.as"),
+                    ("Mods.New", "Mods/New.as"),
+                ]);
+                let binary = cache(&[("Provider", "Provider.as")]);
+                let graph = with_binary.then(|| {
+                    build_manager_binary_graph_v1(&base, &binds(), 1, |_| {
+                        Ok(binary_provider(&binary))
+                    })
+                    .unwrap()
+                });
+                let expected = graph
+                    .as_ref()
+                    .map_or(base.as_slice(), ManagerBinaryGraphV1::cache);
+                let mut output = expected.to_vec();
+                output[..16].fill(0x76);
+                let workspace = RebuildWorkspaceV1::create(&temporary).unwrap();
+                let mut runner = IdenticalRunner {
+                    path: workspace.root.join("runner.cache"),
+                    output,
+                    calls: 0,
+                };
+                let result = compile_sources_with_binary_graph_and_runner(
+                    &game,
+                    &base,
+                    binds(),
+                    &[
+                        ManagerRebuildSourceV1 {
+                            module_name: "Edit",
+                            relative_path: "Old/Edit.as",
+                            source: b"",
+                        },
+                        ManagerRebuildSourceV1 {
+                            module_name: "Mods.New",
+                            relative_path: "Old/New.as",
+                            source: b"",
+                        },
+                    ],
+                    &workspace,
+                    &mut runner,
+                    || {
+                        if audit_passes {
+                            Ok(())
+                        } else {
+                            Err(ManagerRebuildErrorV1::new(
+                                ManagerRebuildErrorKindV1::Audit,
+                                "fixture target drift",
+                            ))
+                        }
+                    },
+                    graph.as_ref(),
+                );
+                let result = finish_cleanup(workspace, result);
+                assert_eq!(runner.calls, 1);
+                if audit_passes {
+                    let result = result.unwrap();
+                    let mut guard = SequentialMiniGuard::new_with_binds(&base, &binds()).unwrap();
+                    assert_eq!(
+                        guard.compose_upsert(&base, &result.mini_cache).unwrap(),
+                        expected
+                    );
+                    assert_eq!(
+                        result.module_names,
+                        if with_binary {
+                            vec!["Edit", "Mods.New", "Provider"]
+                        } else {
+                            vec!["Edit", "Mods.New"]
+                        }
+                    );
+                } else {
+                    assert!(result
+                        .unwrap_err()
+                        .detail()
+                        .contains("fixture target drift"));
+                }
+                assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
+                assert_eq!(std::fs::read_dir(&game).unwrap().count(), 0);
+            }
+        }
     }
 
     #[test]

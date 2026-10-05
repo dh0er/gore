@@ -479,6 +479,386 @@ pub fn preflight_script_source_provenance_v1(mini_path: &Path) -> Result<()> {
     Ok(())
 }
 
+// Directory publication needs WRITE sharing on Windows for child renames. DELETE remains
+// denied on every ancestor, so a parent cannot be substituted while a publication is retained.
+#[cfg(windows)]
+#[derive(Debug, Clone)]
+struct PublicationDirectory {
+    path: PathBuf,
+    file: std::sync::Arc<std::fs::File>,
+    parents: Vec<std::sync::Arc<std::fs::File>>,
+    identity: crate::mgr::model::FileIdentity,
+}
+
+#[cfg(not(windows))]
+type PublicationDirectory = crate::mgr::model::SecureDirectory;
+
+#[cfg(windows)]
+impl PublicationDirectory {
+    fn open(path: PathBuf, parents: Vec<std::sync::Arc<std::fs::File>>) -> Result<Self> {
+        use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&path)
+            .map_err(crate::io("pinning compiler publication directory"))?;
+        let metadata = file
+            .metadata()
+            .map_err(crate::io("checking compiler publication directory"))?;
+        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(invalid(format!(
+                "publication parent must be a non-reparse directory: {}",
+                path.display()
+            )));
+        }
+        let identity = crate::mgr::model::identity_from_open_file(&file, "publication directory")?;
+        Ok(Self {
+            path,
+            file: std::sync::Arc::new(file),
+            parents,
+            identity,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+    fn identity(&self) -> crate::mgr::model::FileIdentity {
+        self.identity
+    }
+
+    fn create_child_directory_new(&self, name: &std::ffi::OsStr, _: &str) -> Result<Self> {
+        use std::os::windows::ffi::OsStrExt as _;
+        use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _};
+        use windows_sys::Win32::Foundation::{RtlNtStatusToDosError, GENERIC_READ, HANDLE};
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+        use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
+
+        #[repr(C)]
+        struct UnicodeString {
+            length: u16,
+            maximum_length: u16,
+            buffer: *mut u16,
+        }
+        #[repr(C)]
+        struct ObjectAttributes {
+            length: u32,
+            root: HANDLE,
+            name: *mut UnicodeString,
+            attributes: u32,
+            security: *mut std::ffi::c_void,
+            security_qos: *mut std::ffi::c_void,
+        }
+        #[link(name = "ntdll")]
+        unsafe extern "system" {
+            fn NtCreateFile(
+                handle: *mut HANDLE,
+                access: u32,
+                attributes: *mut ObjectAttributes,
+                status: *mut IO_STATUS_BLOCK,
+                allocation_size: *const i64,
+                file_attributes: u32,
+                share: u32,
+                disposition: u32,
+                options: u32,
+                ea: *const std::ffi::c_void,
+                ea_length: u32,
+            ) -> i32;
+        }
+        if Path::new(name).components().count() != 1
+            || !matches!(
+                Path::new(name).components().next(),
+                Some(std::path::Component::Normal(_))
+            )
+        {
+            return Err(invalid("source directory name must be a plain child"));
+        }
+        let mut wide: Vec<u16> = name.encode_wide().collect();
+        if wide.contains(&0) || wide.len() > u16::MAX as usize / 2 {
+            return Err(invalid("invalid source directory name"));
+        }
+        let mut unicode = UnicodeString {
+            length: (wide.len() * 2) as u16,
+            maximum_length: (wide.len() * 2) as u16,
+            buffer: wide.as_mut_ptr(),
+        };
+        let mut attributes = ObjectAttributes {
+            length: std::mem::size_of::<ObjectAttributes>() as u32,
+            root: self.file.as_raw_handle(),
+            name: &mut unicode,
+            attributes: 0x40,
+            security: std::ptr::null_mut(),
+            security_qos: std::ptr::null_mut(),
+        };
+        let mut handle: HANDLE = std::ptr::null_mut();
+        let mut io_status = IO_STATUS_BLOCK::default();
+        // FILE_CREATE (2) returns the creation handle atomically, relative to the pinned parent.
+        // DIRECTORY_FILE | SYNCHRONOUS_IO_NONALERT | OPEN_REPARSE_POINT never follows a replacement.
+        let status = unsafe {
+            NtCreateFile(
+                &mut handle,
+                GENERIC_READ | 0x00100000,
+                &mut attributes,
+                &mut io_status,
+                std::ptr::null(),
+                0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                2,
+                0x1 | 0x20 | 0x00200000,
+                std::ptr::null(),
+                0,
+            )
+        };
+        if status < 0 {
+            return Err(crate::io("creating owned source directory")(
+                std::io::Error::from_raw_os_error(unsafe { RtlNtStatusToDosError(status) } as i32),
+            ));
+        }
+        // SAFETY: successful FILE_CREATE returned one new owned handle, transferred to File.
+        let file = unsafe { std::fs::File::from_raw_handle(handle) };
+        let identity = crate::mgr::model::identity_from_open_file(&file, "created source directory")
+            .map_err(|error| invalid(format!("SCRIPT_SOURCE_RECOVERY_REQUIRED: cannot retain ownership of newly created directory {}: {error}", self.path.join(name).display())))?;
+        let mut parents = self.parents.clone();
+        parents.push(self.file.clone());
+        Ok(Self {
+            path: self.path.join(name),
+            file: std::sync::Arc::new(file),
+            parents,
+            identity,
+        })
+    }
+
+    fn create_child_file_new(
+        &self,
+        name: &std::ffi::OsStr,
+        _: &str,
+    ) -> Result<(std::fs::File, crate::mgr::model::FileIdentity)> {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+        };
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(self.path.join(name))
+            .map_err(crate::io("creating compiler source payload"))?;
+        let identity = crate::mgr::model::identity_from_open_file(&file, "compiler source payload")
+            .map_err(|error| invalid(format!("SCRIPT_SOURCE_RECOVERY_REQUIRED: cannot retain ownership of newly created payload {}: {error}", self.path.join(name).display())))?;
+        Ok((file, identity))
+    }
+}
+
+fn open_publication_parent(path: &Path) -> Result<PublicationDirectory> {
+    #[cfg(windows)]
+    {
+        let mut current = PathBuf::new();
+        let mut parents = Vec::new();
+        let mut directory = None;
+        for component in path.components() {
+            match component {
+                std::path::Component::Prefix(_) => {
+                    current.push(component);
+                    continue;
+                }
+                std::path::Component::RootDir | std::path::Component::Normal(_) => {
+                    current.push(component)
+                }
+                std::path::Component::CurDir => continue,
+                _ => return Err(invalid("publication parent contains non-plain traversal")),
+            }
+            let opened = PublicationDirectory::open(current.clone(), parents.clone())?;
+            parents.push(opened.file.clone());
+            directory = Some(opened);
+        }
+        directory.ok_or_else(|| invalid("publication parent has no absolute root"))
+    }
+    #[cfg(not(windows))]
+    crate::mgr::model::open_directory_chain_nofollow(path, "compiler publication parent")
+}
+
+/// Ownership evidence for a file created by a compiler publication. Rollback checks both the
+/// creation identity and exact bytes, so even an identical replacement is never deleted.
+#[derive(Debug)]
+pub struct ScriptPublicationFileV1 {
+    path: PathBuf,
+    parent: PublicationDirectory,
+    file: std::fs::File,
+    identity: crate::mgr::model::FileIdentity,
+    byte_len: u64,
+    sha256: [u8; 32],
+}
+
+impl ScriptPublicationFileV1 {
+    /// The caller must pass the retained creation handle, never a file reopened by pathname.
+    pub fn from_created_file(path: PathBuf, file: std::fs::File, bytes: &[u8]) -> Result<Self> {
+        let identity = crate::mgr::model::identity_from_open_file(&file, "compiler publication")?;
+        let path =
+            std::path::absolute(&path).map_err(crate::io("resolving compiler publication"))?;
+        let parent = open_publication_parent(
+            path.parent()
+                .ok_or_else(|| invalid("publication has no parent"))?,
+        )?;
+        let path = parent.path().join(
+            path.file_name()
+                .ok_or_else(|| invalid("publication has no filename"))?,
+        );
+        Ok(Self {
+            path,
+            parent,
+            file,
+            identity,
+            byte_len: bytes.len() as u64,
+            sha256: Sha256::digest(bytes).into(),
+        })
+    }
+
+    pub fn rollback(self) -> Result<()> {
+        let Self {
+            path,
+            parent,
+            file,
+            identity,
+            byte_len,
+            sha256,
+        } = self;
+        // Close our writable creation handle before opening with exclusive delete authority.
+        // The remembered identity still distinguishes a replacement during that transition.
+        drop(file);
+        let result = remove_publication_node(&path, identity, Some((byte_len, sha256)));
+        drop(parent);
+        result
+    }
+}
+
+/// Retained source publication, committed by dropping it on success. Cleanup is explicit and
+/// non-recursive: only files created by this publication and its now-empty directories are owned.
+#[derive(Debug)]
+pub struct ScriptSourcePublicationV1 {
+    parent: PublicationDirectory,
+    directories: Vec<PublicationDirectory>,
+    files: Vec<ScriptPublicationFileV1>,
+}
+
+impl ScriptSourcePublicationV1 {
+    pub fn rollback(mut self) -> Result<()> {
+        let mut errors = Vec::new();
+        for file in self.files.drain(..).rev() {
+            let path = file.path.clone();
+            if let Err(error) = file.rollback() {
+                errors.push(format!("{}: {error}", path.display()));
+            }
+        }
+        while let Some(directory) = self.directories.pop() {
+            let path = directory.path().to_path_buf();
+            let identity = directory.identity();
+            drop(directory);
+            if let Err(error) = remove_publication_node(&path, identity, None) {
+                errors.push(format!("{}: {error}", path.display()));
+            }
+        }
+        // Keep the complete parent chain pinned until every deletion has finished.
+        let _parent = self.parent;
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(invalid(format!(
+                "SCRIPT_SOURCE_RECOVERY_REQUIRED: {}",
+                errors.join("; ")
+            )))
+        }
+    }
+}
+
+#[cfg(windows)]
+fn remove_publication_node(
+    path: &Path,
+    identity: crate::mgr::model::FileIdentity,
+    expected: Option<(u64, [u8; 32])>,
+) -> Result<()> {
+    use std::io::Read as _;
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::GENERIC_READ;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfo, SetFileInformationByHandle, DELETE, FILE_ATTRIBUTE_REPARSE_POINT,
+        FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_SHARE_READ,
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .access_mode(GENERIC_READ | DELETE)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .map_err(crate::io("opening owned publication for rollback"))?;
+    let metadata = file
+        .metadata()
+        .map_err(crate::io("checking owned publication"))?;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || metadata.is_file() != expected.is_some()
+        || crate::mgr::model::identity_from_open_file(&file, "publication rollback")? != identity
+    {
+        return Err(invalid(format!(
+            "refusing to remove substituted publication at {}",
+            path.display()
+        )));
+    }
+    if let Some((byte_len, sha256)) = expected {
+        if metadata.len() != byte_len {
+            return Err(invalid("published file length changed before rollback"));
+        }
+        let mut bytes = Vec::new();
+        (&file)
+            .take(byte_len + 1)
+            .read_to_end(&mut bytes)
+            .map_err(crate::io("checking publication rollback bytes"))?;
+        if bytes.len() as u64 != byte_len || <[u8; 32]>::from(Sha256::digest(&bytes)) != sha256 {
+            return Err(invalid("published file bytes changed before rollback"));
+        }
+    }
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    let removed = unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            std::ptr::from_ref(&disposition).cast(),
+            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    };
+    if removed == 0 {
+        return Err(crate::io("deleting owned publication by handle")(
+            std::io::Error::last_os_error(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn remove_publication_node(
+    path: &Path,
+    _: crate::mgr::model::FileIdentity,
+    _: Option<(u64, [u8; 32])>,
+) -> Result<()> {
+    // Identity-check followed by unlink would still race another directory writer. Match the
+    // receipt publisher's fail-closed policy on platforms without handle-bound deletion.
+    Err(invalid(format!(
+        "exact handle-bound publication rollback is unavailable on this platform: {}",
+        path.display()
+    )))
+}
+
+#[cfg(test)]
+thread_local! {
+    static SOURCE_MANIFEST_PUBLICATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> = std::cell::RefCell::new(None);
+}
+
 /// Capture one freshly compiled mini, including every authored module it carries, and publish
 /// provenance adjacent to it. Callers retain the source bytes and pin their hash for compilation.
 /// Publication never overwrites a previous source directory or manifest.
@@ -501,8 +881,19 @@ pub fn write_script_source_provenance_from_bytes_v1(
     mini_path: &Path,
     compiled_mini: &[u8],
     base_cache: &[u8],
-    mut authored: Vec<ScriptSourceInputV1>,
+    authored: Vec<ScriptSourceInputV1>,
 ) -> Result<()> {
+    publish_script_source_provenance_from_bytes_v1(mini_path, compiled_mini, base_cache, authored)
+        .map(drop)
+}
+
+/// Publish provenance and retain ownership through any later receipt-publication step.
+pub fn publish_script_source_provenance_from_bytes_v1(
+    mini_path: &Path,
+    compiled_mini: &[u8],
+    base_cache: &[u8],
+    mut authored: Vec<ScriptSourceInputV1>,
+) -> Result<ScriptSourcePublicationV1> {
     preflight_script_source_provenance_v1(mini_path)?;
     let mini_name = mini_path
         .file_name()
@@ -541,43 +932,110 @@ pub fn write_script_source_provenance_from_bytes_v1(
     let mut files = Files::from([(mini_name.into(), mini)]);
     let manifest =
         package_script_sources_v1(&mut files, &component, &entries, base_cache, authored)?;
-    let directory = parent.join(&component);
-    std::fs::create_dir(&directory).map_err(crate::io("creating compiler source provenance"))?;
+    let parent = open_publication_parent(
+        &std::path::absolute(parent).map_err(crate::io("resolving source publication parent"))?,
+    )?;
+    let mut publication = ScriptSourcePublicationV1 {
+        parent,
+        directories: Vec::new(),
+        files: Vec::new(),
+    };
     let result = (|| {
-        std::fs::create_dir(directory.join("source"))
-            .map_err(crate::io("creating compiler source payloads"))?;
+        let directory = publication.parent.create_child_directory_new(
+            std::ffi::OsStr::new(&component),
+            "compiler source provenance",
+        )?;
+        publication.directories.push(directory);
+        let payloads = publication.directories[0].create_child_directory_new(
+            std::ffi::OsStr::new("source"),
+            "compiler source payloads",
+        )?;
+        publication.directories.push(payloads);
         for entry in &manifest.entries {
             let bytes = &files[&entry.source];
-            use std::io::Write;
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(parent.join(&entry.source))
-                .map_err(crate::io("publishing compiler source payload"))?;
-            file.write_all(bytes)
-                .map_err(crate::io("writing compiler source payload"))?;
-            file.sync_all()
-                .map_err(crate::io("syncing compiler source payload"))?;
+            let name = Path::new(&entry.source)
+                .file_name()
+                .ok_or_else(|| invalid("missing payload filename"))?;
+            let directory = &publication.directories[1];
+            let (file, identity) =
+                directory.create_child_file_new(name, "compiler source payload")?;
+            publication.files.push(ScriptPublicationFileV1 {
+                path: directory.path().join(name),
+                parent: directory.clone(),
+                file,
+                identity,
+                byte_len: bytes.len() as u64,
+                sha256: Sha256::digest(bytes).into(),
+            });
+            use std::io::Write as _;
+            let owned = publication.files.last_mut().unwrap();
+            let written = owned
+                .file
+                .write_all(bytes)
+                .and_then(|()| owned.file.sync_all());
+            if let Err(error) = written {
+                if let Ok(metadata) = owned.file.metadata() {
+                    if let Ok(length) = usize::try_from(metadata.len()) {
+                        if length <= bytes.len() {
+                            owned.byte_len = metadata.len();
+                            owned.sha256 = Sha256::digest(&bytes[..length]).into();
+                        }
+                    }
+                }
+                return Err(crate::io("writing or syncing compiler source payload")(
+                    error,
+                ));
+            }
         }
-        use std::io::Write;
-        let mut staging = tempfile::NamedTempFile::new_in(parent)
+        use std::io::Write as _;
+        let bytes = manifest.to_json()?;
+        let mut staging = tempfile::NamedTempFile::new_in(publication.parent.path())
             .map_err(crate::io("staging compiler source manifest"))?;
         staging
-            .write_all(&manifest.to_json()?)
+            .write_all(&bytes)
             .map_err(crate::io("writing compiler source manifest"))?;
         staging
             .as_file()
             .sync_all()
             .map_err(crate::io("syncing compiler source manifest"))?;
-        staging
-            .persist_noclobber(script_source_provenance_path_v1(mini_path))
-            .map_err(crate::io("publishing compiler source manifest"))?;
+        let path = publication
+            .parent
+            .path()
+            .join(format!("{mini_name}.sources.json"));
+        // Retain the creation identity before publishing, including persist's uncertain exits.
+        let owned = ScriptPublicationFileV1::from_created_file(
+            path.clone(),
+            staging
+                .as_file()
+                .try_clone()
+                .map_err(crate::io("retaining compiler source manifest"))?,
+            &bytes,
+        )?;
+        #[cfg(test)]
+        SOURCE_MANIFEST_PUBLICATION_HOOK.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook(&path);
+            }
+        });
+        match staging.persist_noclobber(&path) {
+            Ok(_) => publication.files.push(owned),
+            Err(error) => {
+                // A collision belongs to the existing user. Only the files we created below the
+                // owned source directories participate in this rollback.
+                return Err(crate::io("publishing compiler source manifest")(
+                    error.error,
+                ));
+            }
+        }
         Ok(())
     })();
-    if result.is_err() {
-        let _ = std::fs::remove_dir_all(directory);
+    if let Err(error) = result {
+        return match publication.rollback() {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(invalid(format!("{error}; {cleanup}"))),
+        };
     }
-    result
+    Ok(publication)
 }
 
 /// Add compile-time sidecars associated with supplied minis to the newly packaged component.
@@ -921,6 +1379,141 @@ mod tests {
             }
             Ok(bytes.clone())
         })
+    }
+
+    fn owned_source_fixture(root: &Path) -> (PathBuf, ScriptSourcePublicationV1) {
+        let mini = root.join("authored.cache");
+        let bytes = cache(&["New"], 1);
+        std::fs::write(&mini, &bytes).unwrap();
+        let publication = publish_script_source_provenance_from_bytes_v1(
+            &mini,
+            &bytes,
+            &cache(&["Vanilla"], 1),
+            vec![input("New", "add", "")],
+        )
+        .unwrap();
+        (mini, publication)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn source_publication_rollback_removes_owned_graph_and_allows_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let (mini, publication) = owned_source_fixture(root.path());
+        publication.rollback().unwrap();
+        preflight_script_source_provenance_v1(&mini).unwrap();
+        assert_eq!(std::fs::read(&mini).unwrap(), cache(&["New"], 1));
+        let (_, retry) = owned_source_fixture(root.path());
+        retry.rollback().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn source_publication_rollback_preserves_substituted_and_modified_files() {
+        for substitute in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let (mini, mut publication) = owned_source_fixture(root.path());
+            let owned = publication.files.pop().unwrap(); // adjacent manifest
+            let bytes = std::fs::read(&owned.path).unwrap();
+            // Release the creation handle as rollback itself does. The recorded ownership must
+            // remain sufficient to refuse even an identical replacement during that transition.
+            let ScriptPublicationFileV1 {
+                path,
+                parent,
+                file,
+                identity,
+                byte_len,
+                sha256,
+            } = owned;
+            drop(file);
+            if substitute {
+                std::fs::rename(&path, root.path().join("original-manifest")).unwrap();
+                std::fs::write(&path, &bytes).unwrap();
+            } else {
+                std::fs::write(&path, b"user changed this manifest").unwrap();
+            }
+            let file = std::fs::File::open(&path).unwrap();
+            publication.files.push(ScriptPublicationFileV1 {
+                path: path.clone(),
+                parent,
+                file,
+                identity,
+                byte_len,
+                sha256,
+            });
+            let expected = std::fs::read(&path).unwrap();
+            let error = publication.rollback().unwrap_err().to_string();
+            assert!(error.contains("RECOVERY_REQUIRED"), "{error}");
+            assert_eq!(std::fs::read(&path).unwrap(), expected);
+            assert!(mini.exists());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn source_publication_rollback_preserves_unowned_directory_children() {
+        let root = tempfile::tempdir().unwrap();
+        let (_, publication) = owned_source_fixture(root.path());
+        let user = root.path().join("authored.cache.sources/user.txt");
+        std::fs::write(&user, b"user file").unwrap();
+        let error = publication.rollback().unwrap_err().to_string();
+        assert!(error.contains("RECOVERY_REQUIRED"), "{error}");
+        assert_eq!(std::fs::read(&user).unwrap(), b"user file");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn source_publication_manifest_collision_removes_only_owned_payloads() {
+        let root = tempfile::tempdir().unwrap();
+        let mini = root.path().join("authored.cache");
+        let bytes = cache(&["New"], 1);
+        std::fs::write(&mini, &bytes).unwrap();
+        SOURCE_MANIFEST_PUBLICATION_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(|path| {
+                std::fs::write(path, b"racing user manifest").unwrap();
+            }));
+        });
+        let error = publish_script_source_provenance_from_bytes_v1(
+            &mini,
+            &bytes,
+            &cache(&["Vanilla"], 1),
+            vec![input("New", "add", "")],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("publishing compiler source manifest"),
+            "{error}"
+        );
+        assert!(!error.contains("RECOVERY_REQUIRED"), "{error}");
+        assert_eq!(
+            std::fs::read(script_source_provenance_path_v1(&mini)).unwrap(),
+            b"racing user manifest"
+        );
+        assert!(!root.path().join("authored.cache.sources").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn source_publication_pins_every_parent_against_substitution() {
+        let root = tempfile::tempdir().unwrap();
+        let (_, publication) = owned_source_fixture(root.path());
+        let sources = root.path().join("authored.cache.sources");
+        assert!(std::fs::rename(&sources, root.path().join("substituted")).is_err());
+        publication.rollback().unwrap();
+        assert!(!sources.exists());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn source_publication_rollback_fails_closed_without_handle_deletion() {
+        let root = tempfile::tempdir().unwrap();
+        let (mini, publication) = owned_source_fixture(root.path());
+        let manifest = script_source_provenance_path_v1(&mini);
+        let expected = std::fs::read(&manifest).unwrap();
+        let error = publication.rollback().unwrap_err().to_string();
+        assert!(error.contains("RECOVERY_REQUIRED"), "{error}");
+        assert_eq!(std::fs::read(manifest).unwrap(), expected);
     }
 
     #[test]

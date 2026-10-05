@@ -391,7 +391,19 @@ pub(super) fn compose_selective_full_graph_with_native_authority(
     if !native_authority.matches_pristine(pristine) {
         return Err(SelectiveFullGraphError::NativeAuthorityMismatch);
     }
-    compose_selected_full_graph(pristine, full_graph, changes, native_authority)
+    compose_selected_full_graph(pristine, full_graph, changes, native_authority, true)
+}
+
+/// A complete Manager source can compile identically when an update already contains the mod.
+/// Keep every preservation/remap/native gate, accepting that validated redundant edit.
+pub(crate) fn compose_manager_source_full_graph(
+    pristine: &[u8],
+    binds: &[u8],
+    full_graph: &[u8],
+    changes: Vec<SelectiveFullGraphChange>,
+) -> Result<SelectiveFullGraphOutput, SelectiveFullGraphError> {
+    let native_authority = PristineNativeApiAuthority::from_pristine(pristine, binds);
+    compose_selected_full_graph(pristine, full_graph, changes, &native_authority, false)
 }
 
 // Only the opaque manager graph proof may call this without original-cache byte equality.
@@ -401,7 +413,13 @@ pub(super) fn compose_manager_binary_graph_sources(
     full_graph: &[u8],
     changes: Vec<SelectiveFullGraphChange>,
 ) -> Result<SelectiveFullGraphOutput, SelectiveFullGraphError> {
-    compose_selected_full_graph(graph.cache(), full_graph, changes, graph.native_authority())
+    compose_selected_full_graph(
+        graph.cache(),
+        full_graph,
+        changes,
+        graph.native_authority(),
+        false,
+    )
 }
 
 fn compose_selected_full_graph(
@@ -409,6 +427,7 @@ fn compose_selected_full_graph(
     full_graph: &[u8],
     mut changes: Vec<SelectiveFullGraphChange>,
     native_authority: &PristineNativeApiAuthority,
+    require_effective_edit: bool,
 ) -> Result<SelectiveFullGraphOutput, SelectiveFullGraphError> {
     validate_standalone_script_cache(pristine).map_err(|source| {
         SelectiveFullGraphError::InvalidCache {
@@ -494,6 +513,7 @@ fn compose_selected_full_graph(
                 &dependency_index,
                 &change.change,
                 native_authority,
+                require_effective_edit,
             )
         },
     );
@@ -537,6 +557,7 @@ fn attempt_change(
     dependency_index: &RemapDependencyIndex,
     change: &SelectiveFullGraphChange,
     native_authority: &PristineNativeApiAuthority,
+    require_effective_edit: bool,
 ) -> Result<Vec<u8>, AttemptFailure<SelectiveFullGraphRemapFailure, SelectiveFullGraphError>> {
     let module_name = change.module_name();
     // Extract on demand. Every extracted mini owns the complete global tail-table set, so retaining
@@ -627,7 +648,7 @@ fn attempt_change(
             )?;
         }
     }
-    if matches!(change, SelectiveFullGraphChange::Edit { .. }) {
+    if require_effective_edit && matches!(change, SelectiveFullGraphChange::Edit { .. }) {
         let before = exact_module_entry(running, module_name).map_err(|reason| {
             AttemptFailure::Fatal(SelectiveFullGraphError::EffectiveEditProof {
                 module_name: module_name.to_owned(),
