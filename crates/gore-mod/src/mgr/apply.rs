@@ -154,6 +154,7 @@ struct ScriptSourceGroup {
 
 struct ScriptRecompileOutput {
     mini: Vec<u8>,
+    composed: Option<gore_as::manager_rebuild::ManagerRebuiltCacheV1>,
     authority: Option<gore_as::manager_rebuild::ManagerRebuildResultV1>,
 }
 
@@ -252,9 +253,11 @@ impl ScriptRecompiler for ProductScriptRecompiler {
             .map_err(|error| {
                 ModError::Other(format!("cannot rebuild loadout script sources: {error}"))
             })?;
+        let composed = result.take_composed_cache();
         let mini = result.take_mini_cache();
         Ok(ScriptRecompileOutput {
             mini,
+            composed,
             authority: Some(result),
         })
     }
@@ -1800,6 +1803,7 @@ fn apply_loadout_with_recompiler(
     // scripts → fold add/edit onto the script-cache base (rawfile override or pristine cache).
     if !scripts.is_empty() {
         let mut rebuilt_minis = BTreeMap::new();
+        let mut rebuilt_complete = None;
         if let Some((op, module, _)) = scripts
             .iter()
             .find(|(op, _, _)| op != "add" && op != "edit")
@@ -2040,6 +2044,15 @@ fn apply_loadout_with_recompiler(
                     "rebuilt mini does not match its reviewed modules and game cache".into(),
                 ));
             }
+            if let Some(composed) = result.composed {
+                let cache = composed
+                    .into_bytes_for_base(&base, &result.mini)
+                    .map_err(|error| {
+                        ModError::Other(format!("validate rebuilt script receipt: {error}"))
+                    })?;
+                ensure_generated_fits(cache.len(), limits, &budget)?;
+                rebuilt_complete = Some(cache);
+            }
             if let Some(authority) = result.authority {
                 script_rebuild_authorities.push(authority);
             }
@@ -2062,143 +2075,153 @@ fn apply_loadout_with_recompiler(
                 ));
             }
         }
-        // Authenticate the actual selected base, including any raw replacement, once. Reuse this
-        // exact evidence across all passes so a changed or unknown base gains no native authority.
-        let binds = crate::qualified_native_binds_for_base(&gp.script_cache, &base);
-        // Pass 1 inventories the complete loadout while retaining only one source mini at a time.
-        // Canonical assignments therefore depend on the portable-identity union, never mod order.
-        let mut loadout_builder = match binds.as_deref() {
-            Some(binds) => {
-                gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new_with_binds(&base, binds)
-            }
-            None => gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new(&base),
-        }
-        .map_err(|e| ModError::Other(format!("prepare script composition: {e}")))?;
-        for (_, module, mini_payload) in &scripts {
-            let mini = read_script_mini_payload(
-                mini_payload,
-                &rebuilt_minis,
-                &script_source_groups,
-                "script mini-cache payloads",
-                limits.max_mini_bytes,
-                &mut budget.mini_bytes,
-                limits.max_mini_total_bytes,
-            )?;
-            loadout_builder
-                .inspect(&mini)
-                .map_err(|e| ModError::Other(format!("inspect script mini {module}: {e}")))?;
-        }
-        let loadout_plan = loadout_builder
-            .finish()
-            .map_err(|e| ModError::Other(format!("finish script ID plan: {e}")))?;
-
-        // Pass 2 rereads the SHA-bound source minis and immediately seals each canonical result on
-        // private disk. Separate phase budgets preserve the existing 4-GiB logical source envelope
-        // while bounding the additional I/O and temporary footprint to the same amount.
-        let mut rewrite_source_bytes = 0u64;
-        let mut canonical_output_bytes = 0u64;
-        let mut canonical_minis = Vec::new();
-        canonical_minis
-            .try_reserve_exact(scripts.len())
-            .map_err(|error| {
-                ModError::Other(format!(
-                    "cannot reserve canonical script mini candidates: {error}"
-                ))
-            })?;
-        for (_, module, mini_payload) in &scripts {
-            let mini = read_script_mini_payload(
-                mini_payload,
-                &rebuilt_minis,
-                &script_source_groups,
-                "script mini-cache canonicalization",
-                limits.max_mini_bytes,
-                &mut rewrite_source_bytes,
-                limits.max_mini_total_bytes,
-            )?;
-            let canonical = gore_as::cache::splice::remap_module_to_base_with_loadout_plan(
-                &mini,
-                &base,
-                &loadout_plan,
-            )
-            .map_err(|e| ModError::Other(format!("canonicalize script mini {module}: {e}")))?;
-            canonical_minis.push(crate::seal_script_mini(
-                canonical,
-                limits.max_mini_bytes,
-                &mut canonical_output_bytes,
-                limits.max_mini_total_bytes,
-            )?);
-        }
-        drop(loadout_plan);
-
-        // Pass 3 builds the guard only after the plan's large base context is gone. Reopen, verify,
-        // and compose each tempfile in loadout order; consuming it cleans disk incrementally.
-        let mut merge_guard = gore_as::cache::splice::SequentialMiniGuard::new_with_binds(
-            &base,
-            binds.as_deref().unwrap_or(&[]),
-        )
-        .map_err(|e| ModError::Other(format!("prepare script composition: {e}")))?;
-        let mut acc = base;
-        let mut canonical_read_bytes = 0u64;
-        for ((op, module, payload), sealed) in scripts.iter().zip(canonical_minis) {
-            let mini = crate::read_sealed_script_mini(
-                &sealed,
-                limits.max_mini_bytes,
-                &mut canonical_read_bytes,
-                limits.max_mini_total_bytes,
-            )?;
-            // Every multi-module entry must name one of its carried modules, whatever its op;
-            // an edit additionally needs an existing target, checked in its arm, which knows
-            // about targets an earlier shadowed add introduced.
-            if gore_as::cache::walk_modules::module_count(&mini) > 1 {
-                crate::require_multi_module_carried_target(&mini, op, module)?;
-            }
-            // Reviewed source modules may include both additions and replacements after an
-            // update. The rebuilt union has exact validated coverage; use upsert for every
-            // carried module, including removed vanilla targets and new official collisions.
-            acc = if rebuilt_minis.contains_key(&script_payload_key(payload)) {
-                merge_guard
-                    .compose_upsert(&acc, &mini)
-                    .map_err(|e| ModError::Other(format!("compose rebuilt script sources: {e}")))?
-            } else {
-                match op.as_str() {
-                    "add" => merge_guard
-                        .compose_add(&acc, &mini)
-                        .map_err(|e| ModError::Other(format!("splice {module}: {e}")))?,
-                    // A multi-module mini edits and adds its modules as one unit. A module that an
-                    // earlier, now-shadowed add introduced satisfies the edit-target requirement the
-                    // same way a single-module edit may retry as an add after a shadowed add.
-                    "edit" if gore_as::cache::walk_modules::module_count(&mini) > 1 => {
-                        let carried =
-                            gore_as::cache::walk_modules::module_names(&mini).map_err(|e| {
-                                ModError::Other(format!(
-                                    "reading script mini modules for {module}: {e}"
-                                ))
-                            })?;
-                        if !carried
-                            .iter()
-                            .any(|name| shadowed_add_targets.contains(name))
-                        {
-                            crate::require_multi_module_edit_target(&acc, &mini, module)?;
-                        }
-                        merge_guard
-                            .compose_upsert(&acc, &mini)
-                            .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?
-                    }
-                    "edit" if winner_edits_after_add.contains(module) => merge_guard
-                        .compose_edit_or_add(&acc, &mini, module)
-                        .map_err(|e| ModError::Other(format!("replace or splice {module}: {e}")))?,
-                    "edit" => merge_guard
-                        .compose_edit(&acc, &mini, module)
-                        .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?,
-                    other => {
-                        return Err(ModError::Other(format!(
-                            "invalid script op {other:?} for module {module:?}"
-                        )));
-                    }
+        let acc = if let Some(cache) = rebuilt_complete {
+            // The product compiler already admitted all exact winning binary/source modules and
+            // proved their selective result against this SHA-bound pristine base. Re-merging its
+            // mini would restore obsolete pristine tail rows. Publish the receipted bytes once.
+            cache
+        } else {
+            // Authenticate the actual selected base, including any raw replacement, once. Reuse this
+            // exact evidence across all passes so a changed or unknown base gains no native authority.
+            let binds = crate::qualified_native_binds_for_base(&gp.script_cache, &base);
+            // Pass 1 inventories the complete loadout while retaining only one source mini at a time.
+            // Canonical assignments therefore depend on the portable-identity union, never mod order.
+            let mut loadout_builder = match binds.as_deref() {
+                Some(binds) => {
+                    gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new_with_binds(&base, binds)
                 }
-            };
-            ensure_generated_fits(acc.len(), limits, &budget)?;
-        }
+                None => gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new(&base),
+            }
+            .map_err(|e| ModError::Other(format!("prepare script composition: {e}")))?;
+            for (_, module, mini_payload) in &scripts {
+                let mini = read_script_mini_payload(
+                    mini_payload,
+                    &rebuilt_minis,
+                    &script_source_groups,
+                    "script mini-cache payloads",
+                    limits.max_mini_bytes,
+                    &mut budget.mini_bytes,
+                    limits.max_mini_total_bytes,
+                )?;
+                loadout_builder
+                    .inspect(&mini)
+                    .map_err(|e| ModError::Other(format!("inspect script mini {module}: {e}")))?;
+            }
+            let loadout_plan = loadout_builder
+                .finish()
+                .map_err(|e| ModError::Other(format!("finish script ID plan: {e}")))?;
+
+            // Pass 2 rereads the SHA-bound source minis and immediately seals each canonical result on
+            // private disk. Separate phase budgets preserve the existing 4-GiB logical source envelope
+            // while bounding the additional I/O and temporary footprint to the same amount.
+            let mut rewrite_source_bytes = 0u64;
+            let mut canonical_output_bytes = 0u64;
+            let mut canonical_minis = Vec::new();
+            canonical_minis
+                .try_reserve_exact(scripts.len())
+                .map_err(|error| {
+                    ModError::Other(format!(
+                        "cannot reserve canonical script mini candidates: {error}"
+                    ))
+                })?;
+            for (_, module, mini_payload) in &scripts {
+                let mini = read_script_mini_payload(
+                    mini_payload,
+                    &rebuilt_minis,
+                    &script_source_groups,
+                    "script mini-cache canonicalization",
+                    limits.max_mini_bytes,
+                    &mut rewrite_source_bytes,
+                    limits.max_mini_total_bytes,
+                )?;
+                let canonical = gore_as::cache::splice::remap_module_to_base_with_loadout_plan(
+                    &mini,
+                    &base,
+                    &loadout_plan,
+                )
+                .map_err(|e| ModError::Other(format!("canonicalize script mini {module}: {e}")))?;
+                canonical_minis.push(crate::seal_script_mini(
+                    canonical,
+                    limits.max_mini_bytes,
+                    &mut canonical_output_bytes,
+                    limits.max_mini_total_bytes,
+                )?);
+            }
+            drop(loadout_plan);
+
+            // Pass 3 builds the guard only after the plan's large base context is gone. Reopen, verify,
+            // and compose each tempfile in loadout order; consuming it cleans disk incrementally.
+            let mut merge_guard = gore_as::cache::splice::SequentialMiniGuard::new_with_binds(
+                &base,
+                binds.as_deref().unwrap_or(&[]),
+            )
+            .map_err(|e| ModError::Other(format!("prepare script composition: {e}")))?;
+            let mut acc = base;
+            let mut canonical_read_bytes = 0u64;
+            for ((op, module, payload), sealed) in scripts.iter().zip(canonical_minis) {
+                let mini = crate::read_sealed_script_mini(
+                    &sealed,
+                    limits.max_mini_bytes,
+                    &mut canonical_read_bytes,
+                    limits.max_mini_total_bytes,
+                )?;
+                // Every multi-module entry must name one of its carried modules, whatever its op;
+                // an edit additionally needs an existing target, checked in its arm, which knows
+                // about targets an earlier shadowed add introduced.
+                if gore_as::cache::walk_modules::module_count(&mini) > 1 {
+                    crate::require_multi_module_carried_target(&mini, op, module)?;
+                }
+                // Reviewed source modules may include both additions and replacements after an
+                // update. The rebuilt union has exact validated coverage; use upsert for every
+                // carried module, including removed vanilla targets and new official collisions.
+                acc = if rebuilt_minis.contains_key(&script_payload_key(payload)) {
+                    merge_guard.compose_upsert(&acc, &mini).map_err(|e| {
+                        ModError::Other(format!("compose rebuilt script sources: {e}"))
+                    })?
+                } else {
+                    match op.as_str() {
+                        "add" => merge_guard
+                            .compose_add(&acc, &mini)
+                            .map_err(|e| ModError::Other(format!("splice {module}: {e}")))?,
+                        // A multi-module mini edits and adds its modules as one unit. A module that an
+                        // earlier, now-shadowed add introduced satisfies the edit-target requirement the
+                        // same way a single-module edit may retry as an add after a shadowed add.
+                        "edit" if gore_as::cache::walk_modules::module_count(&mini) > 1 => {
+                            let carried = gore_as::cache::walk_modules::module_names(&mini)
+                                .map_err(|e| {
+                                    ModError::Other(format!(
+                                        "reading script mini modules for {module}: {e}"
+                                    ))
+                                })?;
+                            if !carried
+                                .iter()
+                                .any(|name| shadowed_add_targets.contains(name))
+                            {
+                                crate::require_multi_module_edit_target(&acc, &mini, module)?;
+                            }
+                            merge_guard
+                                .compose_upsert(&acc, &mini)
+                                .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?
+                        }
+                        "edit" if winner_edits_after_add.contains(module) => merge_guard
+                            .compose_edit_or_add(&acc, &mini, module)
+                            .map_err(|e| {
+                                ModError::Other(format!("replace or splice {module}: {e}"))
+                            })?,
+                        "edit" => merge_guard
+                            .compose_edit(&acc, &mini, module)
+                            .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?,
+                        other => {
+                            return Err(ModError::Other(format!(
+                                "invalid script op {other:?} for module {module:?}"
+                            )));
+                        }
+                    }
+                };
+                ensure_generated_fits(acc.len(), limits, &budget)?;
+            }
+            acc
+        };
         stage_generated_output(&mut plan, gp.script_cache.clone(), acc, limits, &mut budget)?;
     }
 
@@ -3037,6 +3060,7 @@ mod tests {
             }
             Ok(ScriptRecompileOutput {
                 mini,
+                composed: None,
                 authority: None,
             })
         }

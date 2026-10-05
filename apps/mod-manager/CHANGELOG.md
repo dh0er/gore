@@ -18,6 +18,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   by vanilla updates, including an unused enum in a newly official module.
   Keep native, reflection and generated-default metadata checks and reject
   replacements that leave retained script or default references dangling.
+- Replace dependent source modules atomically after updates and remove obsolete
+  declaration entries only when the final cache has no remaining references.
+  Publish the exact validated result through Apply without restoring stale entries.
 - Name affected mods and modules and require confirmation when an edited
   vanilla module changed or was removed, or a new mod module now collides with
   a game module. Cancel leaves the installation unchanged; confirmation covers

@@ -4069,7 +4069,30 @@ impl EffectiveReferenceBase {
         state: &EffectiveReferenceState,
         mini: &[u8],
     ) -> Result<ReferenceContribution, RemapError> {
-        preflight_mini_module_work(mini)?;
+        self.validate_inner(state, mini, false)
+    }
+
+    fn validate_inner(
+        &self,
+        state: &EffectiveReferenceState,
+        mini: &[u8],
+        complete_cache: bool,
+    ) -> Result<ReferenceContribution, RemapError> {
+        if complete_cache {
+            let work = preflight_cache_module_work(mini)?;
+            if work.max_function_bytecode_dwords
+                > super::splice::MAX_MINI_FUNCTION_BYTECODE_DWORDS as usize
+            {
+                return Err(WireError::BadLen {
+                    pos: 0,
+                    len: work.max_function_bytecode_dwords as i64,
+                    field: "complete-cache function bytecode dwords",
+                }
+                .into());
+            }
+        } else {
+            preflight_mini_module_work(mini)?;
+        }
         let base_syms = &self.base.syms;
         let total_source_bytes = self
             .base
@@ -4362,7 +4385,7 @@ impl EffectiveReferenceBase {
             }
         }
 
-        let spans = collect_module_spans(mini)?;
+        let spans = collect_module_spans_preflighted(mini)?;
         for span in &spans.code {
             let code: Vec<i32> = (0..span.count)
                 .map(|index| {
@@ -4615,9 +4638,156 @@ impl EffectiveReferenceBase {
         })
     }
 
+    /// Only complete Manager edits can authorize an omission. Original orphans, native rows,
+    /// string literals, template rows, and all unrelated declarations retain their authority.
+    /// The caller MUST validate every reference against the pruned final graph before publishing.
+    pub(super) fn prune_manager_source_declarations(
+        &self,
+        bytes: &[u8],
+        replaceable: &HashSet<String>,
+    ) -> Result<Vec<u8>, RemapError> {
+        preflight_cache_module_work(bytes)?;
+        let syms = SymTables::build(bytes)?;
+        let meta = TailMetadata::build(bytes)?;
+        let mut budget = IdentityComparisonBudget::new(
+            bytes
+                .len()
+                .saturating_add(syms.identity_bytes)
+                .saturating_add(self.base.declarations.declarations.bytes),
+        );
+        let declarations =
+            collect_declaration_inventory(bytes, &syms, None, None, &meta, &mut budget)?
+                .declarations;
+        let mut removed: [HashSet<i64>; super::tables::N_TABLES] =
+            std::array::from_fn(|_| HashSet::new());
+        for row in &meta.types {
+            let descriptor = type_declaration_descriptor(row);
+            if descriptor.kind == TypeDeclarationKind::ScriptLeaf
+                && replaceable.contains(&row.module)
+                && self.base.syms.type_ident_of_ptr.contains_key(&row.key)
+                && match_declaration_identities(
+                    &[&self.base.declarations.declarations],
+                    &descriptor.identity,
+                    DeclarationSetKind::Type,
+                    &mut budget,
+                )? == FunctionDeclarationMatch::Unique
+                && match_declaration_identities(
+                    &[&declarations],
+                    &descriptor.identity,
+                    DeclarationSetKind::Type,
+                    &mut budget,
+                )? == FunctionDeclarationMatch::Missing
+            {
+                removed[0].insert(row.key);
+            }
+        }
+        for row in &meta.funcs {
+            let owner_module = if row.is_method {
+                meta.type_row(row.owner_dep.1)
+                    .map(|owner| owner.module.as_str())
+            } else {
+                Some(row.module.as_str())
+            };
+            if !owner_module.is_some_and(|module| replaceable.contains(module))
+                || self.base.declarations.orphan_functions.contains(&row.key)
+                || !self.base.syms.func_ident_of_ptr.contains_key(&row.key)
+                || is_native_function_row(row, &meta, &self.base.declarations)
+            {
+                continue;
+            }
+            if let Some(identity) = syms.func_ident_of_ptr.get(&row.key) {
+                if match_function_declarations(&[&declarations], identity, &mut budget)?
+                    == FunctionDeclarationMatch::Missing
+                {
+                    removed[2].insert(row.key);
+                }
+            }
+        }
+        for row in &meta.globals {
+            let identity = DeclarationIdentity {
+                module: row.module.clone(),
+                namespace: row.namespace.clone(),
+                name: row.name.clone(),
+            };
+            if !row.is_string
+                && replaceable.contains(&row.module)
+                && self.base.syms.global_ident_of_ptr.contains_key(&row.key)
+                && match_declaration_identities(
+                    &[&self.base.declarations.declarations],
+                    &identity,
+                    DeclarationSetKind::Global,
+                    &mut budget,
+                )? == FunctionDeclarationMatch::Unique
+                && match_declaration_identities(
+                    &[&declarations],
+                    &identity,
+                    DeclarationSetKind::Global,
+                    &mut budget,
+                )? == FunctionDeclarationMatch::Missing
+            {
+                removed[4].insert(row.key);
+            }
+        }
+        for row in &meta.type_ids {
+            if removed[0].contains(&row.ptr) {
+                removed[1].insert(row.id as i64);
+            }
+        }
+        for row in &meta.func_ids {
+            if removed[2].contains(&row.ptr) {
+                removed[3].insert(row.id as i64);
+            }
+        }
+        for row in &meta.properties {
+            if removed[1].contains(&(row.old_type_id as i64)) {
+                removed[6].insert(row.key);
+            }
+        }
+        let tail = module_region_end(bytes)?;
+        let tables = super::tables::parse_tail_tables(bytes, tail)?;
+        let mut out = Vec::with_capacity(bytes.len());
+        out.extend_from_slice(&bytes[..tail]);
+        for (index, table) in tables.tables.iter().enumerate() {
+            if removed[index].is_empty() {
+                out.extend_from_slice(&bytes[table.entries_start - 4..table.entries_end]);
+                continue;
+            }
+            let count = table
+                .keys
+                .iter()
+                .filter(|key| !removed[index].contains(key))
+                .count();
+            out.extend_from_slice(&(count as u32).to_le_bytes());
+            for (row, key) in table.keys.iter().enumerate() {
+                if !removed[index].contains(key) {
+                    let start = table.entry_starts[row];
+                    let end = table
+                        .entry_starts
+                        .get(row + 1)
+                        .copied()
+                        .unwrap_or(table.entries_end);
+                    out.extend_from_slice(&bytes[start..end]);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     pub(super) fn validate_composed_declarations(&self, bytes: &[u8]) -> Result<(), RemapError> {
         validate_composed_module_records_with_pristine(bytes, Some(&self.base.declarations))
     }
+}
+
+/// Construct reference authority exclusively from these exact final bytes. Kept private to
+/// composition so no caller can accidentally validate against a different, unpruned universe.
+pub(super) fn validate_complete_cache_references(
+    cache: &[u8],
+    native_authority: Option<&PristineNativeApiAuthority>,
+) -> Result<(), RemapError> {
+    let references = EffectiveReferenceBase::build_with_native_authority(cache, native_authority)?;
+    references
+        .validate_inner(&EffectiveReferenceState::default(), cache, true)
+        .map(|_| ())
 }
 
 impl EffectiveReferenceState {
@@ -6010,6 +6180,11 @@ pub(super) fn validate_composed_module_records(bytes: &[u8]) -> Result<(), Remap
 /// unit, so its modules share one span set; `module`/`inner_module` name the last module read.
 fn collect_module_spans(mini: &[u8]) -> Result<ModuleSpans, WireError> {
     preflight_mini_module_work(mini)?;
+    collect_module_spans_preflighted(mini)
+}
+
+/// Caller has performed either the mini or complete-cache work preflight.
+fn collect_module_spans_preflighted(mini: &[u8]) -> Result<ModuleSpans, WireError> {
     let mut c = Cursor::at(mini, CacheHeader::SIZE);
     let count = super::walk_modules::module_count(mini) as usize;
     c.ensure_minimum_remaining(count, 60, "Modules")?;
@@ -10130,6 +10305,20 @@ pub(super) fn remap_module_to_base_with_loadout_plan(
         analyzed,
         true,
     )
+}
+
+/// Normalize the complete selected Manager mini before preservation and final publication.
+/// Retain the original native authority even when the base contains admitted binary providers.
+pub(super) fn canonicalize_manager_source_mini(
+    mini: &[u8],
+    base: &[u8],
+    native_authority: &PristineNativeApiAuthority,
+) -> Result<Vec<u8>, RemapError> {
+    let mut builder = LoadoutScriptIdPlanBuilder::new_with_config_and_native_authority(
+        base, PRODUCTION_LOADOUT_PLAN_LIMITS, PRODUCTION_ALLOCATION_DOMAINS, Some(native_authority))?;
+    builder.inspect(mini)?;
+    let plan = builder.finish()?;
+    remap_module_to_base_with_loadout_plan(mini, base, &plan).map(|(bytes, _)| bytes)
 }
 
 fn remap_module_allow_new(

@@ -15,11 +15,12 @@ use super::generated_defaults::{
     ExistingFunctionMetadataPlan, ExistingModuleStructurePlan, GeneratedDefaultsPlan,
 };
 use super::remap::{
-    remap_module_with_native_authority, PristineNativeApiAuthority, RemapDependencyIndex,
-    RemapError, RemapOptions,
+    canonicalize_manager_source_mini, remap_module_with_native_authority,
+    PristineNativeApiAuthority, RemapDependencyIndex, RemapError, RemapOptions,
 };
 use super::splice::{
-    extract_module, validate_standalone_script_cache, SequentialMiniGuard, SpliceError,
+    checked_composed_capacity, extract_module, extract_modules, validate_standalone_script_cache,
+    SequentialMiniGuard, SpliceError,
 };
 use super::walk_modules::{module_names, module_ranges};
 
@@ -495,6 +496,14 @@ fn compose_selected_full_graph(
         }
     }
     changes.sort_by(|left, right| left.module_name().cmp(right.module_name()));
+    if !require_effective_edit {
+        return compose_manager_changes_atomically(
+            pristine,
+            full_graph,
+            &changes,
+            native_authority,
+        );
+    }
 
     let requested_modules = changes
         .iter()
@@ -603,37 +612,7 @@ fn attempt_change(
         }
     })?;
 
-    if let SelectiveFullGraphChange::Edit { preservation, .. } = change {
-        if let Some(carry) = &preservation.generated_defaults {
-            if let Some(metadata) = &preservation.metadata {
-                let normalized = metadata.apply_present(&mini);
-                mini = preservation_gate(module_name, "pre-carry function metadata", normalized)?
-                    .unwrap_or(mini);
-            }
-            let carried = carry.apply(&mini);
-            mini = preservation_gate(module_name, "generated defaults", carried)?.unwrap_or(mini);
-        }
-        if let Some(metadata) = &preservation.metadata {
-            let restored = if preservation.manager_source_replacement {
-                metadata.apply_manager_source_replacement(&mini)
-            } else {
-                metadata.apply(&mini)
-            };
-            mini = preservation_gate(module_name, "existing function metadata", restored)?
-                .unwrap_or(mini);
-        }
-        if let Some(structure) = &preservation.structure {
-            preservation_gate(
-                module_name,
-                "existing module structure",
-                if preservation.manager_source_replacement {
-                    structure.verify_manager_source_replacement(&mini)
-                } else {
-                    structure.verify(&mini)
-                },
-            )?;
-        }
-    }
+    mini = preserve_change_mini(mini, change)?;
 
     // A persistent guard rooted at `pristine` intentionally does not grant authority to a prior
     // mini. Constructing script authority from the exact running state turns a successfully
@@ -688,6 +667,188 @@ fn attempt_change(
         }
     }
     Ok(updated)
+}
+
+/// One shared remap namespace and one publication unit allow complete source replacements to
+/// remove both a declaration and its users without validating a transient, half-edited graph.
+fn compose_manager_changes_atomically(
+    pristine: &[u8],
+    full_graph: &[u8],
+    changes: &[SelectiveFullGraphChange],
+    native_authority: &PristineNativeApiAuthority,
+) -> Result<SelectiveFullGraphOutput, SelectiveFullGraphError> {
+    if changes.is_empty() {
+        return Ok(SelectiveFullGraphOutput {
+            cache: pristine.to_vec(),
+            applied_modules: vec![],
+        });
+    }
+    let names: Vec<&str> = changes
+        .iter()
+        .map(SelectiveFullGraphChange::module_name)
+        .collect();
+    let context = names[0].to_owned();
+    let extracted =
+        extract_modules(full_graph, &names).map_err(|source| SelectiveFullGraphError::Extract {
+            module_name: context.clone(),
+            source,
+        })?;
+    let (mini, _) = remap_module_with_native_authority(
+        &extracted,
+        pristine,
+        RemapOptions {
+            allow_new_symbols: true,
+        },
+        Some(native_authority),
+    )
+    .map_err(|error| SelectiveFullGraphError::NoProgress {
+        remaining: changes.len(),
+        summary: error.to_string(),
+        failures: vec![SelectiveFullGraphRemapFailure {
+            module_name: context.clone(),
+            error,
+        }],
+    })?;
+    drop(extracted);
+    // Apply normally canonicalizes runtime IDs across the winning union. This path publishes a
+    // receipted full cache, so finish the same canonicalization before sealing that result.
+    let mini =
+        canonicalize_manager_source_mini(&mini, pristine, native_authority).map_err(|error| {
+            SelectiveFullGraphError::Compose {
+                module_name: context.clone(),
+                source: SpliceError::LoadoutPlan(error),
+            }
+        })?;
+    let tail = super::walk_modules::module_region_end(&mini).map_err(|source| {
+        SelectiveFullGraphError::Extract {
+            module_name: context.clone(),
+            source: SpliceError::Wire(source),
+        }
+    })?;
+    let mut preserved = mini[..super::header::CacheHeader::SIZE].to_vec();
+    let mut replaceable = HashSet::new();
+    for change in changes {
+        let module_name = change.module_name();
+        let mut one = extract_module(&mini, module_name).map_err(|source| {
+            SelectiveFullGraphError::Extract {
+                module_name: module_name.to_owned(),
+                source,
+            }
+        })?;
+        // The shared mini already owns all admitted new rows. A strict default carry operates
+        // on this module's records only; its restored Shipping references resolve in pristine.
+        if let SelectiveFullGraphChange::Edit { preservation, .. } = change {
+            if preservation
+                .generated_defaults
+                .as_ref()
+                .is_some_and(|carry| !carry.allows_new_symbols())
+            {
+                let end = super::walk_modules::module_region_end(&one).map_err(|source| {
+                    SelectiveFullGraphError::Extract {
+                        module_name: module_name.to_owned(),
+                        source: SpliceError::Wire(source),
+                    }
+                })?;
+                one.truncate(end);
+                one.extend_from_slice(&[0; 28]);
+            }
+            if preservation.manager_source_replacement {
+                replaceable.insert(module_name.to_owned());
+            }
+        }
+        one = preserve_change_mini(one, change).map_err(|failure| match failure {
+            AttemptFailure::Fatal(error) => error,
+            AttemptFailure::Deferred { .. } => unreachable!("preservation has no retryable stages"),
+        })?;
+        let entry = exact_module_entry(&one, module_name).map_err(|reason| {
+            SelectiveFullGraphError::Preservation {
+                module_name: module_name.to_owned(),
+                stage: "atomic module assembly",
+                reason,
+            }
+        })?;
+        checked_composed_capacity(&[preserved.len(), entry.len(), mini.len() - tail]).map_err(
+            |source| SelectiveFullGraphError::Compose {
+                module_name: context.clone(),
+                source,
+            },
+        )?;
+        preserved.extend_from_slice(entry);
+    }
+    preserved.extend_from_slice(&mini[tail..]);
+    drop(mini);
+    let guard = SequentialMiniGuard::new_with_native_authority(pristine, Some(native_authority))
+        .map_err(|source| SelectiveFullGraphError::Compose {
+            module_name: context.clone(),
+            source,
+        })?;
+    let cache = guard
+        .compose_manager_source_upsert(pristine, &preserved, &replaceable, native_authority)
+        .map_err(|source| SelectiveFullGraphError::Compose {
+            module_name: context.clone(),
+            source,
+        })?;
+    for change in changes {
+        if let SelectiveFullGraphChange::Edit { preservation, .. } = change {
+            if let Some(targets) = &preservation.default_targets {
+                preservation_gate::<_, SelectiveFullGraphRemapFailure>(
+                    change.module_name(),
+                    "existing default targets in composed cache",
+                    targets.verify(&cache),
+                )
+                .map_err(|failure| match failure {
+                    AttemptFailure::Fatal(error) => error,
+                    AttemptFailure::Deferred { .. } => {
+                        unreachable!("preservation has no retryable stages")
+                    }
+                })?;
+            }
+        }
+    }
+    Ok(SelectiveFullGraphOutput {
+        cache,
+        applied_modules: names.into_iter().map(str::to_owned).collect(),
+    })
+}
+
+fn preserve_change_mini(
+    mut mini: Vec<u8>,
+    change: &SelectiveFullGraphChange,
+) -> Result<Vec<u8>, AttemptFailure<SelectiveFullGraphRemapFailure, SelectiveFullGraphError>> {
+    let module_name = change.module_name();
+    if let SelectiveFullGraphChange::Edit { preservation, .. } = change {
+        if let Some(carry) = &preservation.generated_defaults {
+            if let Some(metadata) = &preservation.metadata {
+                let normalized = metadata.apply_present(&mini);
+                mini = preservation_gate(module_name, "pre-carry function metadata", normalized)?
+                    .unwrap_or(mini);
+            }
+            let carried = carry.apply(&mini);
+            mini = preservation_gate(module_name, "generated defaults", carried)?.unwrap_or(mini);
+        }
+        if let Some(metadata) = &preservation.metadata {
+            let restored = if preservation.manager_source_replacement {
+                metadata.apply_manager_source_replacement(&mini)
+            } else {
+                metadata.apply(&mini)
+            };
+            mini = preservation_gate(module_name, "existing function metadata", restored)?
+                .unwrap_or(mini);
+        }
+        if let Some(structure) = &preservation.structure {
+            preservation_gate(
+                module_name,
+                "existing module structure",
+                if preservation.manager_source_replacement {
+                    structure.verify_manager_source_replacement(&mini)
+                } else {
+                    structure.verify(&mini)
+                },
+            )?;
+        }
+    }
+
+    Ok(mini)
 }
 
 fn exact_module_entry<'a>(cache: &'a [u8], module_name: &str) -> Result<&'a [u8], String> {

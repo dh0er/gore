@@ -4,7 +4,8 @@
 //! guard, launches the game, emits vanilla sources, or selects another base on the caller's behalf.
 //! Complete authored modules are sparse overlays. Compatible binary winners are admitted against
 //! pristine and retained in the compiler graph, with the original native declaration authority.
-//! FullGraph preservation and reference validation produce one atomic source/binary mini.
+//! FullGraph preservation and reference validation produce an exact composed cache plus a
+//! coverage mini. Apply publishes the receipted full bytes so obsolete rows stay removed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -17,7 +18,9 @@ use sha2::{Digest, Sha256};
 use crate::cache::manager_binary_graph::{build_manager_binary_graph_v1, ManagerBinaryGraphV1};
 use crate::cache::remap::{remap_module_to_base_with_options_and_binds, RemapOptions};
 use crate::cache::semantic_observer::observe_whole_cache_semantics_v1;
-use crate::cache::splice::{extract_modules, SequentialMiniGuard};
+use crate::cache::splice::extract_modules;
+#[cfg(test)]
+use crate::cache::splice::SequentialMiniGuard;
 use crate::compile::{
     compile_manager_sources_v1, resolved_path_is_within_v1, FullGraphCompileOptsV1,
     FullGraphCompileOutcomeV1, FullGraphPublicationDispositionV1,
@@ -123,12 +126,47 @@ impl ManagerRebuildErrorV1 {
     }
 }
 
-/// Only authored modules, remapped as one multi-module composition unit onto the selected base.
+/// Winning authored/binary modules as a coverage mini, with a sealed complete-cache receipt.
 #[derive(Debug)]
 pub struct ManagerRebuildOutputV1 {
     pub mini_cache: Vec<u8>,
     pub module_names: Vec<String>,
     pub diagnostics: Vec<CompilerBackendDiagnosticV1>,
+    composed: Option<ManagerRebuiltCacheV1>,
+}
+
+impl ManagerRebuildOutputV1 {
+    pub fn take_composed_cache(&mut self) -> Option<ManagerRebuiltCacheV1> {
+        self.composed.take()
+    }
+}
+
+/// A private-construction receipt for the selectively composed, reference-closed result.
+/// Mini composition cannot represent deleted pristine tail rows; consume these exact final
+/// bytes only with their original pristine base and their matching coverage mini.
+#[derive(Debug)]
+pub struct ManagerRebuiltCacheV1 {
+    base_sha256: [u8; 32],
+    mini_sha256: [u8; 32],
+    cache_sha256: [u8; 32],
+    cache: Vec<u8>,
+}
+
+impl ManagerRebuiltCacheV1 {
+    pub fn into_bytes_for_base(
+        self,
+        base: &[u8],
+        mini: &[u8],
+    ) -> Result<Vec<u8>, ManagerRebuildErrorV1> {
+        if self.base_sha256 != <[u8; 32]>::from(Sha256::digest(base))
+            || self.mini_sha256 != <[u8; 32]>::from(Sha256::digest(mini))
+            || self.cache_sha256 != <[u8; 32]>::from(Sha256::digest(&self.cache))
+        {
+            return Err(ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::InvalidInput,
+                "composed source-cache receipt does not match the pristine base, coverage mini, or final bytes"));
+        }
+        Ok(self.cache)
+    }
 }
 
 /// Holds the authenticated EXE/Shipping/Binds handles and directory pins through caller review.
@@ -176,6 +214,11 @@ impl ManagerRebuildResultV1 {
     /// `release_after_audit` still audits the target and may return an output with empty mini bytes.
     pub fn take_mini_cache(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.output.mini_cache)
+    }
+
+    /// Move the already qualified complete result while keeping target pins through commit.
+    pub fn take_composed_cache(&mut self) -> Option<ManagerRebuiltCacheV1> {
+        self.output.take_composed_cache()
     }
 
     pub fn audit_target(&mut self) -> Result<(), ManagerRebuildErrorV1> {
@@ -472,6 +515,66 @@ fn validate_sources(sources: &[ManagerRebuildSourceV1<'_>]) -> Result<(), Manage
 }
 
 #[cfg(test)]
+pub(crate) fn rebuild_source_fixture_for_test(
+    base: &[u8],
+    regen: &[u8],
+    sources: &[ManagerRebuildSourceV1<'_>],
+) -> Result<ManagerRebuildOutputV1, ManagerRebuildErrorV1> {
+    struct Runner {
+        path: PathBuf,
+        bytes: Vec<u8>,
+    }
+    impl StandaloneCompilerRunnerV1 for Runner {
+        fn run_regen(
+            &mut self,
+            _: crate::compile::StandaloneCompilerInputsV1<'_>,
+        ) -> Result<
+            crate::compile::StandaloneCompilerOutputV1,
+            crate::compiler_backend::CompilerBackendFailureV1,
+        > {
+            panic!("Manager source fixtures require FullGraph");
+        }
+        fn run_full_graph(
+            &mut self,
+            _: crate::compile::StandaloneFullGraphCompilerInputsV1<'_>,
+        ) -> Result<
+            crate::compile::StandaloneCompilerOutputV1,
+            crate::compiler_backend::CompilerBackendFailureV1,
+        > {
+            std::fs::write(&self.path, &self.bytes).unwrap();
+            let path = self.path.clone();
+            Ok(
+                crate::compile::StandaloneCompilerOutputV1::with_cleanup_and_diagnostics(
+                    self.path.clone(),
+                    vec![],
+                    move || std::fs::remove_file(path).map_err(|error| error.to_string()),
+                ),
+            )
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let game = root.path().join("game");
+    let temporary = root.path().join("temporary");
+    std::fs::create_dir(&game).unwrap();
+    std::fs::create_dir(&temporary).unwrap();
+    let workspace = RebuildWorkspaceV1::create(&temporary).unwrap();
+    let mut runner = Runner {
+        path: workspace.root.join("runner.cache"),
+        bytes: regen.to_vec(),
+    };
+    let result = compile_sources_with_runner(
+        &game,
+        base,
+        tests::binds(),
+        sources,
+        &workspace,
+        &mut runner,
+        || Ok(()),
+    );
+    finish_cleanup(workspace, result)
+}
+
+#[cfg(test)]
 fn compile_sources_with_runner<A>(
     game: &Path,
     base: &[u8],
@@ -594,18 +697,19 @@ where
                 .map_err(|error| {
                     ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::Compiler, error)
                 })?;
-                // Validate the exact mini as Manager will compose it, including cross-module refs.
-                let mut guard = SequentialMiniGuard::new_with_binds(base, &opts.binds_cache)
-                    .map_err(|error| {
-                        ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::Compiler, error)
-                    })?;
-                guard.compose_upsert(base, &mini_cache).map_err(|error| {
-                    ManagerRebuildErrorV1::new(ManagerRebuildErrorKindV1::Compiler, error)
-                })?;
+                // `rebuilt` is the exact selectively composed result from the private
+                // Manager compiler policy. Preserve its pruning across the Apply boundary.
+                let composed = ManagerRebuiltCacheV1 {
+                    base_sha256: Sha256::digest(base).into(),
+                    mini_sha256: Sha256::digest(&mini_cache).into(),
+                    cache_sha256: Sha256::digest(&rebuilt).into(),
+                    cache: rebuilt,
+                };
                 Ok(ManagerRebuildOutputV1 {
                     mini_cache,
                     module_names,
                     diagnostics: diagnostics.clone(),
+                    composed: Some(composed),
                 })
             })();
             let neutralized = artifact.neutralize();
@@ -1026,7 +1130,7 @@ mod tests {
         assert_eq!(std::fs::read_dir(&game).unwrap().count(), 0);
     }
 
-    fn binds() -> Vec<u8> {
+    pub(super) fn binds() -> Vec<u8> {
         let mut bytes = 1u32.to_le_bytes().to_vec();
         fn string(bytes: &mut Vec<u8>, value: &str) {
             bytes.extend_from_slice(&((value.len() + 1) as u32).to_le_bytes());
@@ -1536,6 +1640,35 @@ mod tests {
     }
 
     #[test]
+    fn composed_source_receipt_binds_base_mini_and_final_bytes() {
+        for changed in ["none", "base", "mini", "result"] {
+            let mut result = fixture_rebuild(false, true, false).0.unwrap();
+            let mut base = cache(&[("Keep", "Keep.as"), ("Edit", "Edit.as")]);
+            let mut mini = result.mini_cache;
+            let mut proof = result.composed.take().unwrap();
+            match changed {
+                "base" => base[0] ^= 1,
+                "mini" => mini[0] ^= 1,
+                "result" => proof.cache[0] ^= 1,
+                _ => {}
+            }
+            let bytes = proof.into_bytes_for_base(&base, &mini);
+            if changed == "none" {
+                let expected = SequentialMiniGuard::new(&base)
+                    .unwrap()
+                    .compose_upsert(&base, &mini)
+                    .unwrap();
+                assert_eq!(bytes.unwrap(), expected);
+            } else {
+                assert_eq!(
+                    bytes.unwrap_err().kind(),
+                    ManagerRebuildErrorKindV1::InvalidInput
+                );
+            }
+        }
+    }
+
+    #[test]
     fn rebuild_preserves_declared_names_and_uses_current_canonical_filenames() {
         for (current, original, added) in [
             ("Dir/Fixture.as", "Dir/Fixture.as", "Mods/Unrelated.as"),
@@ -1907,6 +2040,7 @@ mod tests {
                 mini_cache: mini.clone(),
                 module_names: vec!["Added".into()],
                 diagnostics: vec![diagnostic(CompilerBackendDiagnosticSeverityV1::Warning)],
+                composed: None,
             },
             target: pins,
             audit,
@@ -1980,6 +2114,7 @@ mod tests {
                 mini_cache: Vec::new(),
                 module_names: vec!["Edit".into()],
                 diagnostics: vec![diagnostic(CompilerBackendDiagnosticSeverityV1::Warning)],
+                composed: None,
             },
             target,
             audit,

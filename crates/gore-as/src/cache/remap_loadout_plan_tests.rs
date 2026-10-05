@@ -1932,10 +1932,7 @@ fn manager_source_replacement_rejects_dangling_retained_type_function_and_global
             matches!(error, SelectiveFullGraphError::Compose { .. }),
             "{kind}: {error}"
         );
-        assert!(
-            error.to_string().contains("final module output has no"),
-            "{kind}: {error}"
-        );
+        assert!(error.to_string().contains("unresolved"), "{kind}: {error}");
     }
 }
 
@@ -2125,5 +2122,378 @@ fn real_shipping_builds_complete_semantic_property_and_function_id_indexes() {
         context.module_function_ids.len(),
         context.occupied_module_function_ids.len(),
         "Shipping module Function.Id values must be globally unique"
+    );
+    drop(context);
+    validate_complete_cache_references(&bytes, None)
+        .expect("the real Shipping reference graph remains closed after Manager composition");
+}
+
+fn assert_manager_joint_source_replacements(provider_name: &str, consumer_name: &str) {
+    use crate::cache::generated_defaults::{
+        ExistingFunctionMetadataPlan, ExistingModuleStructurePlan,
+    };
+    use crate::cache::selective_fullgraph::{
+        compose_manager_source_full_graph, SelectiveFullGraphChange,
+        SelectiveFullGraphEditPreservation,
+    };
+    use crate::cache::splice::{splice_case_a, SequentialMiniGuard};
+    const PTR: i64 = 0x7420;
+    const ID: i32 = 0x1742;
+    const TYPE_PTR: i64 = 0x7310;
+    const TYPE_ID: i32 = 0x0800_7310;
+    const GLOBAL_PTR: i64 = 0x7530;
+    for kind in ["function", "type", "global"] {
+        let mut plain_class = class_record("OfficialType");
+        let flags = sia("OfficialType").len() + sia("").len();
+        plain_class[flags..flags + 4].copy_from_slice(&(1u32 << 22).to_le_bytes());
+        let provider = cache_with_module_globals(
+            provider_name,
+            &[function_record("OfficialFunction", &[], 0x0500_1742)],
+            &[plain_class],
+            &[module_global_record("OfficialGlobal")],
+            TailRows {
+                types: if kind == "type" {
+                    vec![type_row(TYPE_PTR, "OfficialType", provider_name)]
+                } else {
+                    vec![]
+                },
+                type_ids: if kind == "type" {
+                    vec![id_row(TYPE_ID, TYPE_PTR)]
+                } else {
+                    vec![]
+                },
+                funcs: if kind == "function" {
+                    vec![function_tail_row(
+                        PTR,
+                        "OfficialFunction",
+                        provider_name,
+                        &[],
+                    )]
+                } else {
+                    vec![]
+                },
+                func_ids: if kind == "function" {
+                    vec![id_row(ID, PTR)]
+                } else {
+                    vec![]
+                },
+                globals: if kind == "global" {
+                    vec![nonstring_global_row(
+                        GLOBAL_PTR,
+                        "OfficialGlobal",
+                        provider_name,
+                    )]
+                } else {
+                    vec![]
+                },
+                ..TailRows::default()
+            },
+        );
+        let code = match kind {
+            "function" => vec![9, ID, 10],
+            "type" => vec![76, TYPE_ID, 10],
+            "global" => vec![1, GLOBAL_PTR as i32, 0, 10],
+            _ => unreachable!(),
+        };
+        let consumer = cache(
+            consumer_name,
+            &[function_record_with_code(
+                "Consume",
+                &[],
+                0x0500_1800,
+                &code,
+            )],
+            &[],
+            TailRows::default(),
+        );
+        let keep = cache(
+            "Keep",
+            &[function_record_with_code(
+                "Untouched",
+                &[],
+                0x0500_1900,
+                &[10],
+            )],
+            &[],
+            TailRows::default(),
+        );
+        let pristine = splice_case_a(&splice_case_a(&provider, &consumer).unwrap(), &keep).unwrap();
+        SequentialMiniGuard::new(&pristine).unwrap();
+        let replaced_provider = cache(provider_name, &[], &[], TailRows::default());
+        let replaced_consumer = cache(
+            consumer_name,
+            &[function_record_with_code(
+                "Consume",
+                &[],
+                0x0500_1800,
+                &[10],
+            )],
+            &[],
+            TailRows::default(),
+        );
+        let expected = splice_case_a(
+            &splice_case_a(&replaced_provider, &replaced_consumer).unwrap(),
+            &keep,
+        )
+        .unwrap();
+        // Compiler runtime IDs drift even when a declaration survives. Receipted publication
+        // must retain the pristine assignment, as the ordinary loadout path already does.
+        let replaced_consumer = cache(
+            consumer_name,
+            &[function_record_with_code(
+                "Consume",
+                &[],
+                0x0500_2222,
+                &[10],
+            )],
+            &[],
+            TailRows::default(),
+        );
+        // The compiler may regenerate unrelated modules, but publication must retain their bytes.
+        let regenerated_keep = cache("Keep", &[], &[], TailRows::default());
+        let full_graph = splice_case_a(
+            &splice_case_a(&replaced_provider, &replaced_consumer).unwrap(),
+            &regenerated_keep,
+        )
+        .unwrap();
+        SequentialMiniGuard::new(&full_graph).unwrap();
+        let changes = [provider_name, consumer_name]
+            .into_iter()
+            .map(|name| {
+                SelectiveFullGraphChange::edit(
+                    name,
+                    SelectiveFullGraphEditPreservation::new(
+                        Some(ExistingFunctionMetadataPlan::prepare(&pristine, name).unwrap()),
+                        Some(ExistingModuleStructurePlan::prepare(&pristine, name).unwrap()),
+                        None,
+                        None,
+                    )
+                    .for_manager_source_replacement(),
+                )
+            })
+            .collect();
+        let result = compose_manager_source_full_graph(&pristine, &[], &full_graph, changes)
+            .unwrap_or_else(|error| panic!("{kind}: {error}"));
+        assert_eq!(
+            result.cache, expected,
+            "{kind}: prune obsolete rows and retain unrelated bytes"
+        );
+        let provider_path = format!("{provider_name}.as");
+        let consumer_path = format!("{consumer_name}.as");
+        let mut compiled = crate::manager_rebuild::rebuild_source_fixture_for_test(
+            &pristine,
+            &full_graph,
+            &[
+                crate::manager_rebuild::ManagerRebuildSourceV1 {
+                    module_name: provider_name,
+                    relative_path: &provider_path,
+                    source: b"",
+                },
+                crate::manager_rebuild::ManagerRebuildSourceV1 {
+                    module_name: consumer_name,
+                    relative_path: &consumer_path,
+                    source: b"void Consume() {}\n",
+                },
+            ],
+        )
+        .unwrap_or_else(|error| panic!("{kind}: full Manager bridge: {error}"));
+        // Re-merging a mini cannot encode removal. The sealed complete result must survive the
+        // compiler-to-Apply handoff without restoring the original obsolete reference rows.
+        assert!(SequentialMiniGuard::new(&pristine)
+            .unwrap()
+            .compose_upsert(&pristine, &compiled.mini_cache)
+            .is_err());
+        let proof = compiled.take_composed_cache().unwrap();
+        assert_eq!(
+            proof
+                .into_bytes_for_base(&pristine, &compiled.mini_cache)
+                .unwrap(),
+            expected,
+            "{kind}: Manager publication receipt"
+        );
+    }
+}
+
+#[test]
+fn manager_joint_source_replacements_provider_first() {
+    assert_manager_joint_source_replacements("A.Provider", "Z.Consumer");
+}
+
+#[test]
+fn manager_joint_source_replacements_caller_first() {
+    assert_manager_joint_source_replacements("Z.Provider", "A.Consumer");
+}
+
+#[test]
+fn manager_source_pruning_rejects_a_retained_factory_reference() {
+    use crate::cache::generated_defaults::{
+        ExistingFunctionMetadataPlan, ExistingModuleStructurePlan,
+    };
+    use crate::cache::selective_fullgraph::{
+        compose_manager_source_full_graph, SelectiveFullGraphChange,
+        SelectiveFullGraphEditPreservation,
+    };
+    use crate::cache::splice::splice_case_a;
+    let provider = cache(
+        "Provider",
+        &[function_record("OfficialFunction", &[], 0x0500_1742)],
+        &[],
+        TailRows {
+            funcs: vec![function_tail_row(
+                0x7420,
+                "OfficialFunction",
+                "Provider",
+                &[],
+            )],
+            func_ids: vec![id_row(0x1742, 0x7420)],
+            ..TailRows::default()
+        },
+    );
+    let keep = cache(
+        "Keep",
+        &[],
+        &[class_record_with_factory_ref("Retained", 0x1742)],
+        TailRows::default(),
+    );
+    let base = splice_case_a(&provider, &keep).unwrap();
+    let removed = cache("Provider", &[], &[], TailRows::default());
+    let regen = splice_case_a(&removed, &cache("Keep", &[], &[], TailRows::default())).unwrap();
+    let plan = SelectiveFullGraphEditPreservation::new(
+        Some(ExistingFunctionMetadataPlan::prepare(&base, "Provider").unwrap()),
+        Some(ExistingModuleStructurePlan::prepare(&base, "Provider").unwrap()),
+        None,
+        None,
+    )
+    .for_manager_source_replacement();
+    let error = compose_manager_source_full_graph(
+        &base,
+        &[],
+        &regen,
+        vec![SelectiveFullGraphChange::edit("Provider", plan)],
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("embedded function id"),
+        "{error}"
+    );
+}
+
+#[test]
+fn manager_atomic_sources_carry_generated_defaults_with_a_new_external_provider() {
+    use crate::cache::generated_defaults::{
+        ExistingFunctionMetadataPlan, ExistingModuleStructurePlan, GeneratedDefaultsPlan,
+    };
+    use crate::cache::selective_fullgraph::{
+        compose_manager_source_full_graph, SelectiveFullGraphChange,
+        SelectiveFullGraphEditPreservation,
+    };
+    use crate::cache::splice::splice_case_a;
+    let plain = class_record("Host");
+    let methods = sia("Host").len() + sia("").len() + 8;
+    let mut with_default = plain[..methods].to_vec();
+    with_default.extend_from_slice(&1i32.to_le_bytes());
+    with_default.extend_from_slice(&function_record_with_code(
+        "__InitDefaults",
+        &[],
+        0x0500_1900,
+        &[10],
+    ));
+    with_default.extend_from_slice(&1i32.to_le_bytes());
+    with_default.extend_from_slice(&0i32.to_le_bytes());
+    with_default.extend_from_slice(&plain[methods + 8..]);
+    let base = cache(
+        "Consumer",
+        &[function_record_with_code(
+            "Consume",
+            &[],
+            0x0500_1800,
+            &[10],
+        )],
+        &[with_default],
+        TailRows::default(),
+    );
+    let consumer = cache(
+        "Consumer",
+        &[function_record_with_code(
+            "Consume",
+            &[],
+            0x0500_1800,
+            &[9, 0x1742, 10],
+        )],
+        &[plain],
+        TailRows::default(),
+    );
+    let provider = cache(
+        "Provider",
+        &[function_record("Provide", &[], 0x0500_2000)],
+        &[],
+        TailRows {
+            funcs: vec![function_tail_row(0x7420, "Provide", "Provider", &[])],
+            func_ids: vec![id_row(0x1742, 0x7420)],
+            ..TailRows::default()
+        },
+    );
+    let regen = splice_case_a(&consumer, &provider).unwrap();
+    let modules = crate::cache::model::parse_modules(&base).unwrap();
+    let carry = GeneratedDefaultsPlan::prepare(&base, &modules, "Consumer")
+        .unwrap()
+        .unwrap();
+    assert!(!carry.allows_new_symbols());
+    let plan = SelectiveFullGraphEditPreservation::new(
+        Some(ExistingFunctionMetadataPlan::prepare(&base, "Consumer").unwrap()),
+        Some(ExistingModuleStructurePlan::prepare(&base, "Consumer").unwrap()),
+        Some(carry),
+        None,
+    )
+    .for_manager_source_replacement();
+    let result = compose_manager_source_full_graph(
+        &base,
+        &[],
+        &regen,
+        vec![
+            SelectiveFullGraphChange::edit("Consumer", plan),
+            SelectiveFullGraphChange::add("Provider"),
+        ],
+    )
+    .unwrap();
+    let modules = crate::cache::model::parse_modules(&result.cache).unwrap();
+    assert_eq!(modules[0].classes[0].methods[0].name, "__InitDefaults");
+    assert_eq!(modules[0].classes[0].methods[0].bytecode, [10]);
+    validate_complete_cache_references(&result.cache, None).unwrap();
+}
+
+#[test]
+fn manager_receipts_canonicalize_new_function_ids_independently_of_compiler_ids() {
+    use crate::cache::splice::splice_case_a;
+    let base = empty_base();
+    let mut results = Vec::new();
+    for id in [0x0500_1111, 0x0500_2222] {
+        let added = cache(
+            "Provider",
+            &[function_record_with_code("Provide", &[], id, &[10])],
+            &[],
+            TailRows::default(),
+        );
+        let regen = splice_case_a(&base, &added).unwrap();
+        let mut compiled = crate::manager_rebuild::rebuild_source_fixture_for_test(
+            &base,
+            &regen,
+            &[crate::manager_rebuild::ManagerRebuildSourceV1 {
+                module_name: "Provider",
+                relative_path: "Provider.as",
+                source: b"void Provide() {}\n",
+            }],
+        )
+        .unwrap();
+        let proof = compiled.take_composed_cache().unwrap();
+        results.push(
+            proof
+                .into_bytes_for_base(&base, &compiled.mini_cache)
+                .unwrap(),
+        );
+    }
+    assert_eq!(
+        results[0], results[1],
+        "new declarations receive stable identity-based runtime IDs"
     );
 }
