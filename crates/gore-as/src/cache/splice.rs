@@ -44,7 +44,7 @@ const MAX_SEQUENTIAL_COMPOSED_SCAN_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 // function and the complete mini well below the Manager's 1-GiB archive ceiling so worst-case input
 // cannot create a second near-GiB allocation. The shipped cache is ~124 MiB in total; prepared
 // one-module minis are orders of magnitude smaller.
-const MAX_MINI_FUNCTION_BYTECODE_DWORDS: u64 = 4 * 1024 * 1024;
+pub(super) const MAX_MINI_FUNCTION_BYTECODE_DWORDS: u64 = 4 * 1024 * 1024;
 const MAX_MINI_TOTAL_BYTECODE_DWORDS: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Error)]
@@ -338,7 +338,7 @@ fn checked_usage_add(
     Ok(actual)
 }
 
-fn checked_composed_capacity(parts: &[usize]) -> Result<usize, SpliceError> {
+pub(super) fn checked_composed_capacity(parts: &[usize]) -> Result<usize, SpliceError> {
     let actual = parts
         .iter()
         .try_fold(0usize, |sum, &part| sum.checked_add(part))
@@ -770,6 +770,44 @@ impl SequentialMiniGuard {
         Ok(composed)
     }
 
+    /// Private complete-source publication. Stage the entire shared mini first, prune only
+    /// obsolete declarations of authorized replacement modules, then prove the FINAL graph.
+    pub(super) fn compose_manager_source_upsert(
+        self,
+        running: &[u8],
+        mini: &[u8],
+        replaceable: &HashSet<String>,
+        native_authority: &super::remap::PristineNativeApiAuthority,
+    ) -> Result<Vec<u8>, SpliceError> {
+        self.require_running_state(running)?;
+        let prospective = checked_composed_capacity(&[running.len(), mini.len()])?;
+        let scan_bytes = (prospective as u64).saturating_mul(4);
+        checked_usage_add(
+            self.usage.composed_scan_bytes,
+            scan_bytes,
+            "composed validation scan bytes",
+            MAX_SEQUENTIAL_COMPOSED_SCAN_BYTES,
+        )?;
+        let (prepared, _) = self.stage(mini)?;
+        // This intermediate value is never exposed; declaration membership needs all selected
+        // replacements and pruning before it can be checked.
+        let composed = upsert_modules_inner(running, &prepared, false)?;
+        let composed = self
+            .base
+            .reference_context
+            .prune_manager_source_declarations(&composed, replaceable)
+            .map_err(SpliceError::ComposedModule)?;
+        self.base
+            .reference_context
+            .validate_composed_declarations(&composed)
+            .map_err(SpliceError::ComposedModule)?;
+        // Use only FINAL tables as reference authority: the pristine guard's retained maps must
+        // not mask a CALL, embedded default/factory reference, or tail dependency we removed.
+        super::remap::validate_complete_cache_references(&composed, Some(native_authority))
+            .map_err(SpliceError::ComposedModule)?;
+        Ok(composed)
+    }
+
     fn require_running_state(&self, running: &[u8]) -> Result<(), SpliceError> {
         if !self.composition_state_valid
             || <[u8; 32]>::from(Sha256::digest(running)) != self.expected_running_sha256
@@ -1175,6 +1213,10 @@ pub fn extract_modules(cache: &[u8], target_names: &[&str]) -> Result<Vec<u8>, S
 /// This is a low-level composition primitive. Publishing callers must use
 /// [`SequentialMiniGuard::compose_upsert`].
 pub fn upsert_modules(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
+    upsert_modules_inner(base, mini, true)
+}
+
+fn upsert_modules_inner(base: &[u8], mini: &[u8], validate: bool) -> Result<Vec<u8>, SpliceError> {
     let mini_n = nonempty_module_count(mini)?;
     let base_tail = module_region_end(base)?;
     let mini_tail = module_region_end(mini)?;
@@ -1230,7 +1272,11 @@ pub fn upsert_modules(base: &[u8], mini: &[u8]) -> Result<Vec<u8>, SpliceError> 
     }
     debug_assert!(replacements.len() == mini_n as usize);
     append_merged_tables(&mut out, base, &base_tt, mini, &mini_tt);
-    finish_composition(out)
+    if validate {
+        finish_composition(out)
+    } else {
+        Ok(out)
+    }
 }
 
 /// Rewrite an extracted (regen-tables) 1-module mini's bytecode refs to the VANILLA `base`'s

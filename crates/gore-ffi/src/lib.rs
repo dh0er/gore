@@ -1833,12 +1833,24 @@ fn mgr_analyze(payload: Value) -> Value {
     json!({"ok": true, "conflicts": serde_json::to_value(&conflicts).unwrap_or(Value::Null)})
 }
 
-/// `{game_root, library_dir?, loadout_path?}` → `{ok, report:ApplyReport}` — paired Store overrides;
+/// `{game_root, library_dir?, loadout_path?, script_rebuild_confirmation?}` → `{ok, report:ApplyReport}` — paired Store overrides;
 /// realize the enabled
 /// loadout into one manager deployment. A studio deploy in the way maps to STUDIO_DEPLOY_ACTIVE.
 fn mgr_apply(payload: Value) -> Value {
     let Some(game_root) = payload.get("game_root").and_then(Value::as_str) else {
         return err("BAD_REQUEST", "missing 'game_root'");
+    };
+    // Validate before opening the Store, which can reconcile the loadout on disk.
+    // Explicit null and non-string values must never silently become no approval.
+    let script_rebuild_confirmation = match payload.get("script_rebuild_confirmation") {
+        None => None,
+        Some(Value::String(token)) if !token.trim().is_empty() => Some(token.clone()),
+        Some(_) => {
+            return err(
+                "BAD_REQUEST",
+                "'script_rebuild_confirmation' must be a non-empty string when supplied",
+            )
+        }
     };
     let (lib, lo_path) = match mgr_store_paths_or_error(&payload) {
         Ok(paths) => paths,
@@ -1848,19 +1860,32 @@ fn mgr_apply(payload: Value) -> Value {
         Ok(store) => store,
         Err(e) => return err("APPLY_FAILED", e.to_string()),
     };
-    match store.apply(std::path::Path::new(game_root)) {
+    let options = gore_mod::mgr::apply::ApplyOptions {
+        script_rebuild_confirmation,
+    };
+    match store.apply_with_options(std::path::Path::new(game_root), &options) {
         Ok(report) => {
             json!({"ok": true, "report": serde_json::to_value(&report).unwrap_or(Value::Null)})
         }
-        Err(e) => {
-            let msg = e.to_string();
-            // The apply engine signals a blocking studio deployment as `STUDIO_DEPLOY_ACTIVE:<name>`;
-            // surface it as its own code carrying just the mod name so the UI can prompt accordingly.
-            match msg.strip_prefix("STUDIO_DEPLOY_ACTIVE:") {
-                Some(name) => err("STUDIO_DEPLOY_ACTIVE", name.to_string()),
-                None => err("APPLY_FAILED", msg),
-            }
-        }
+        Err(e) => mgr_apply_error(e),
+    }
+}
+
+fn mgr_apply_error(error: gore_mod::ModError) -> Value {
+    if let gore_mod::ModError::ScriptRebuildConfirmationRequired(ref confirmation) = error {
+        // Preserve Native's entire typed warning set and exact token. The generic
+        // 8-KiB diagnostic-details helper would silently drop larger selections.
+        return json!({"ok": false, "error": {
+            "code": "SCRIPT_REBUILD_CONFIRMATION_REQUIRED",
+            "message": error.to_string(),
+            "details": confirmation,
+        }});
+    }
+    let msg = error.to_string();
+    // The apply engine signals a blocking studio deployment as `STUDIO_DEPLOY_ACTIVE:<name>`.
+    match msg.strip_prefix("STUDIO_DEPLOY_ACTIVE:") {
+        Some(name) => err("STUDIO_DEPLOY_ACTIVE", name.to_string()),
+        None => err("APPLY_FAILED", msg),
     }
 }
 
@@ -3886,6 +3911,60 @@ mod tests {
         assert!(!wire.contains("sha256"));
         assert!(!wire.contains("fingerprint"));
         assert!(!wire.contains("mutation.lock"));
+    }
+
+    #[test]
+    fn mgr_apply_script_confirmation_details_preserve_the_entire_native_selection() {
+        let warnings: Vec<Value> = (0..80)
+            .map(|index| {
+                json!({
+                    "mod_id": format!("dialog-{index}"), "mod_name": "Diego Dialog",
+                    "module": format!("NPC/Diego{index}"), "reason": "vanilla_module_changed",
+                    "original_sha256": "a".repeat(64),
+                    "current_sha256": if index == 0 { Value::Null } else { json!("b".repeat(64)) },
+                })
+            })
+            .collect();
+        let details = json!({"token": "exact-token", "warnings": warnings});
+        assert!(serde_json::to_vec(&details).unwrap().len() > MAX_ERROR_DETAILS_BYTES);
+        let error = gore_mod::ModError::ScriptRebuildConfirmationRequired(
+            serde_json::from_value(details.clone()).unwrap(),
+        );
+        let response = mgr_apply_error(error);
+        assert_eq!(response["ok"], false);
+        assert_eq!(
+            response["error"]["code"],
+            "SCRIPT_REBUILD_CONFIRMATION_REQUIRED"
+        );
+        assert_eq!(response["error"]["details"], details);
+    }
+
+    #[test]
+    fn mgr_apply_rejects_malformed_confirmation_before_opening_the_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        for token in [
+            Value::Null,
+            json!(true),
+            json!(7),
+            json!([]),
+            json!({}),
+            json!(""),
+            json!("  "),
+        ] {
+            let response = mgr_call(
+                "mgr_apply",
+                json!({
+                    "game_root": tmp.path().join("game"),
+                    "library_dir": lib, "loadout_path": lo,
+                    "script_rebuild_confirmation": token,
+                }),
+            );
+            assert_eq!(response["error"]["code"], "BAD_REQUEST", "{response}");
+            assert!(!lib.exists());
+            assert!(!lo.exists());
+        }
     }
 
     #[test]

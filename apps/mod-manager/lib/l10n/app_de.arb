@@ -221,5 +221,12 @@
   "minimize": "Minimieren",
   "restore": "Wiederherstellen",
   "maximize": "Maximieren",
-  "close": "Schließen"
+  "close": "Schließen",
+  "scriptUpdateConfirmationTitle": "Script-Änderungen nach Spielupdate prüfen",
+  "scriptUpdateConfirmationBody": "Das Spielupdate betrifft Script-Module, die auch diese Mods liefern oder bearbeiten. Ein Neubau aus den mitgelieferten Mod-Quellen kann Spielkorrekturen überschreiben oder veraltete Spiellogik wiederherstellen. Fahre nur fort, wenn du dieses Risiko akzeptierst.",
+  "scriptUpdateConfirmationAction": "Neu bauen und anwenden",
+  "scriptUpdateConfirmationModule": "{modName}: {module}",
+  "scriptUpdateModuleChanged": "Das Originalmodul des Spiels wurde verändert.",
+  "scriptUpdateModuleMissing": "Das Originalmodul ist im Spiel nicht mehr vorhanden.",
+  "scriptUpdateModuleNowExists": "Das Spiel enthält inzwischen ein Modul mit dem gleichen Namen wie das neue Modul dieser Mod."
 }

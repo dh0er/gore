@@ -5,6 +5,13 @@ uses the matching version section as the GitHub release notes.
 
 ## [Unreleased]
 
+- Roll back compiler minis together with their captured source manifest and payloads
+  when receipt publication or receipt-directory creation fails. Preserve substituted
+  outputs and user-added files, and report recovery requirements when cleanup cannot
+  complete safely. Mini publication uses no-clobber semantics for every backend.
+  Resolve junction/symlink output parents before pinning and publishing to their
+  physical directory so ordinary redirected output locations remain supported.
+
 - Add 142 `gore save` commands covering the Save Editor: saves, profiles,
   recovery, backups, actors, attributes, skills, inventories, positions, world
   time, progression, factions, locks and merchant stock/timing.
@@ -13,6 +20,29 @@ uses the matching version section as the GitHub release notes.
 - Expose the native save protocol and complete CLI surface through MCP.
   Add shared catalogs, ten-language presentation, screenshots, verified game
   images and standalone HTML reports using the Editor's display preferences.
+- Retain exact, complete original `.as` inputs and fingerprints of replaced
+  vanilla modules by default in `gore as compile-module`, `gore as compile --mini`
+  and `values` builds. `gore mod build` automatically packages the captured
+  sources alongside compiled scripts.
+  Retain those sources when compiler outputs or explicit source folders are
+  selected through a junction or directory symlink.
+- Rebuild winning source-backed modules together in `gore mgr apply` after
+  pristine cache updates, including dependencies provided by other source-backed
+  mods and compatible binary mods, using the packaged standalone compiler.
+  Preserve binary winners in the rebuilt result.
+- List affected mods and modules and require confirmation when edited vanilla
+  modules changed or were removed, or new mod modules now collide with game
+  modules. Use the `[y/N]` prompt or pass the exact reviewed token with
+  `--script-update-confirmation <TOKEN>`; changes to the cache, loadout or sources
+  require fresh confirmation, as do changes to binary provider payloads.
+  Declining leaves the installation unchanged.
+  MCP exposes the same optional token; installation consent remains required.
+  MCP retains the complete bounded Manager Apply warning selection and exact token,
+  including the largest permitted source-module sets.
+- Rebuilds use complete authored modules without merging updated vanilla logic.
+  Binary-only script mods still need an author rebuild after cache updates.
+  Rebuilds require a compatible compiler profile and native bindings;
+  confirmation does not bypass compiler errors.
 
 ## [0.4.0] - 2026-09-29
 

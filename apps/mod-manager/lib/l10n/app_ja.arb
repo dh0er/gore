@@ -221,5 +221,12 @@
   "minimize": "最小化",
   "restore": "元のサイズに戻す",
   "maximize": "最大化",
-  "close": "閉じる"
+  "close": "閉じる",
+  "scriptUpdateConfirmationTitle": "ゲーム更新後のスクリプト変更を確認",
+  "scriptUpdateConfirmationBody": "ゲーム更新が、これらのModも提供または変更するスクリプトモジュールに影響しています。同梱のModソースから再コンパイルすると、ゲームの修正を上書きしたり、古いゲームロジックを復元したりする可能性があります。このリスクを了承した場合のみ続行してください。",
+  "scriptUpdateConfirmationAction": "再コンパイルして適用",
+  "scriptUpdateConfirmationModule": "{modName}: {module}",
+  "scriptUpdateModuleChanged": "ゲームの元のモジュールが変更されています。",
+  "scriptUpdateModuleMissing": "ゲームの元のモジュールは存在しなくなりました。",
+  "scriptUpdateModuleNowExists": "ゲームに、このModの新しいモジュールと同じ名前のモジュールが追加されています。"
 }

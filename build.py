@@ -152,6 +152,9 @@ PROJECTS: dict[str, dict] = {
         "exe": "gore_manager.exe",  # CMake BINARY_NAME
         "core_crate": "gore-ffi",  # shares the mod-studio FFI crate
         "core_dll": "gore_ffi",  # dll gore_ffi.dll (cargo underscores it)
+        # Source rebuilds use the same sealed compiler/catalog/profile bundle
+        # as Studio and CLI, staged for both portable and installer releases.
+        "standalone_compiler_bundle": True,
         # The runner, plugins, and native core use MSVC's dynamic release CRT.
         # Keep this Manager-only until the other products receive their own
         # release qualification. Packaging resolves these files from the exact
@@ -2145,6 +2148,10 @@ def build_project(project: str, release: bool, dry: bool) -> None:
     # (see discard_line_ending_only_churn).
     discard_line_ending_only_churn(project)
     stage_core_dll(project, release=release)
+    # Local build/run needs the same compiler bytes whose catalog the core embeds.
+    _stage_standalone_compiler_bundle(
+        project, flutter_build_dir(project, release), dry=dry
+    )
 
 
 def runnable_exe(project: str, release: bool) -> Path:

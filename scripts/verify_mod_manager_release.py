@@ -18,6 +18,11 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+import build as gore_build  # noqa: E402
+from scripts import standalone_compiler_bundle as compiler_bundle  # noqa: E402
+
+
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 AMD64 = 0x8664
 
@@ -56,6 +61,15 @@ REQUIRED_DATA_FILES = {
     "data/flutter_assets/FontManifest.json",
     "data/flutter_assets/NativeAssetsManifest.json",
     "data/flutter_assets/NOTICES.Z",
+}
+REQUIRED_COMPILER_FILES = {
+    f"compiler/{name}"
+    for name in (
+        compiler_bundle.BUNDLE_DESCRIPTOR,
+        compiler_bundle.CATALOG_FILE,
+        compiler_bundle.SIDECAR_FILE,
+        *compiler_bundle.REQUIRED_NOTICES,
+    )
 }
 
 APP_METADATA = {
@@ -370,9 +384,114 @@ def _check_root_files(
     for canonical, raw_name in sorted(files.items()):
         if "/" not in canonical and canonical not in allowed_names:
             problems.append(f"{label}: unexpected root file {raw_name}")
-        elif "/" in canonical and canonical.endswith((".exe", ".dll")):
+        elif (
+            "/" in canonical
+            and canonical.endswith((".exe", ".dll"))
+            and canonical != f"compiler/{compiler_bundle.SIDECAR_FILE}"
+        ):
             problems.append(f"{label}: nested PE payload is forbidden: {raw_name}")
     return problems
+
+
+def _compiler_contract(root: Path, payload: Path, label: str) -> list[str]:
+    """Reverify sealed compiler bytes against the catalog used to link the host.
+
+    Check the prepared build catalog before invoking either executable verifier.
+    A package cannot authorize a replacement sidecar by changing its manifest.
+    """
+    try:
+        expected_catalog = compiler_bundle._read_regular_no_follow(
+            root / "target" / "standalone-compiler-product-bundle"
+            / compiler_bundle.EMBEDDED_CATALOG_FILE,
+            compiler_bundle.MAX_CATALOG_BYTES,
+            "prepared standalone compiler catalog",
+        )
+        compiler = payload / "compiler"
+        catalog = compiler_bundle._read_regular_no_follow(
+            compiler / compiler_bundle.CATALOG_FILE,
+            compiler_bundle.MAX_CATALOG_BYTES,
+            "packaged standalone compiler catalog",
+        )
+        descriptor_bytes = compiler_bundle._read_regular_no_follow(
+            compiler / compiler_bundle.BUNDLE_DESCRIPTOR,
+            compiler_bundle.MAX_DESCRIPTOR_BYTES,
+            "packaged standalone compiler manifest",
+        )
+        descriptor = compiler_bundle._parse_json(
+            descriptor_bytes,
+            "packaged standalone compiler manifest",
+            compiler_bundle.MAX_DESCRIPTOR_BYTES,
+        )
+        if (
+            catalog != expected_catalog
+            or compiler_bundle._canonical_pretty(descriptor.get("catalog"))
+            != expected_catalog
+        ):
+            raise compiler_bundle.BundleError(
+                "packaged compiler catalog differs from the prepared host build"
+            )
+        host = compiler_bundle._read_regular_no_follow(
+            payload / "gore_ffi.dll", 1024 * 1024 * 1024, "Manager native compiler host"
+        )
+        reported = {
+            match.group(1).decode("ascii").casefold()
+            for match in re.finditer(
+                rb"GORE_AS_EMBEDDED_COMPILER_CATALOG_SHA256=([0-9a-fA-F]{64})", host
+            )
+        }
+        digest = hashlib.sha256(expected_catalog).hexdigest()
+        if reported != {digest}:
+            raise compiler_bundle.BundleError(
+                "Manager native host does not report exactly the prepared compiler catalog SHA-256"
+            )
+        verified = compiler_bundle.verify_staged_bundle(
+            compiler,
+            sidecar_verifier=(
+                compiler_bundle.verify_sidecar
+                if os.environ.get("GORE_SIGN") == "1"
+                else compiler_bundle._verify_unsigned_sidecar
+            ),
+            qualified_profile_verifier=gore_build._qualified_profile_verifier(dry=False),
+        )
+        if verified.catalog_bytes != expected_catalog:
+            raise compiler_bundle.BundleError(
+                "verified compiler catalog differs from the prepared host build"
+            )
+    except (compiler_bundle.BundleError, OSError) as error:
+        return [f"{label}: standalone compiler verification failed: {error}"]
+    return []
+
+
+def _zip_compiler_contract(
+    root: Path, package: zipfile.ZipFile, by_name: Mapping[str, zipfile.ZipInfo]
+) -> list[str]:
+    label = "portable zip"
+    members = [
+        info for canonical, info in by_name.items()
+        if canonical.startswith("compiler/") or canonical == "gore_ffi.dll"
+    ]
+    if len(members) > compiler_bundle.MAX_PACKAGE_FILES:
+        return [f"{label}: standalone compiler file count exceeds its limit"]
+    if sum(info.file_size for info in members) > compiler_bundle.MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+        return [f"{label}: standalone compiler payload exceeds its byte limit"]
+    try:
+        with tempfile.TemporaryDirectory(prefix="gore-manager-compiler-") as temp_name:
+            payload = Path(temp_name).resolve()
+            for info in members:
+                if info.filename != "gore_ffi.dll" and not info.filename.startswith("compiler/"):
+                    return [f"{label}: wrong compiler path casing: {info.filename}"]
+                destination = payload / Path(info.filename)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with package.open(info) as source, destination.open("xb") as target:
+                    byte_len = 0
+                    while chunk := source.read(1024 * 1024):
+                        byte_len += len(chunk)
+                        if byte_len > info.file_size:
+                            raise ContractError("compiler ZIP entry exceeds its declared size")
+                        target.write(chunk)
+            return _compiler_contract(root, payload, label)
+    except (ContractError, OSError, RuntimeError, zipfile.BadZipFile) as error:
+        return [f"{label}: cannot inspect standalone compiler payload: {error}"]
 
 
 def _read_version_info(path: Path) -> dict[str, str]:
@@ -483,6 +602,7 @@ def _zip_contract(
             problems.extend(name_problems)
             problems.extend(_check_required_paths(files, PORTABLE_ROOT_FILES, label))
             problems.extend(_check_required_paths(files, REQUIRED_DATA_FILES, label))
+            problems.extend(_check_required_paths(files, REQUIRED_COMPILER_FILES, label))
             problems.extend(_check_root_files(files, PORTABLE_ROOT_FILES, label))
 
             by_name: dict[str, zipfile.ZipInfo] = {}
@@ -505,7 +625,7 @@ def _zip_contract(
                 if canonical.rsplit("/", 1)[-1] in forbidden:
                     problems.append(f"{label}: updater payload is forbidden: {raw_name}")
 
-            for required in sorted(PORTABLE_ROOT_FILES | REQUIRED_DATA_FILES):
+            for required in sorted(PORTABLE_ROOT_FILES | REQUIRED_DATA_FILES | REQUIRED_COMPILER_FILES):
                 info = by_name.get(required.casefold())
                 if info is not None and info.file_size == 0:
                     problems.append(f"{label}: required file is empty: {required}")
@@ -552,6 +672,10 @@ def _zip_contract(
                             "ProductVersion": version,
                         }
                         problems.extend(_check_metadata(info, expected, f"{label} app"))
+            # Unsafe/duplicate paths, links and encrypted entries are rejected
+            # above before any extraction or compiler executable verification.
+            if not problems:
+                problems.extend(_zip_compiler_contract(root, package, by_name))
     except (OSError, zipfile.BadZipFile) as error:
         problems.append(f"{label}: cannot open {archive}: {error}")
     return problems
@@ -734,8 +858,9 @@ def _installer_contract(
     files, problems = _filesystem_entries(release, label)
     problems.extend(_check_required_paths(files, INSTALLER_SOURCE_ROOT_FILES, label))
     problems.extend(_check_required_paths(files, REQUIRED_DATA_FILES, label))
+    problems.extend(_check_required_paths(files, REQUIRED_COMPILER_FILES, label))
     problems.extend(_check_root_files(files, INSTALLER_SOURCE_ROOT_FILES, label))
-    for required in sorted(INSTALLER_SOURCE_ROOT_FILES | REQUIRED_DATA_FILES):
+    for required in sorted(INSTALLER_SOURCE_ROOT_FILES | REQUIRED_DATA_FILES | REQUIRED_COMPILER_FILES):
         raw_name = files.get(required.casefold())
         if raw_name is not None:
             try:
@@ -757,6 +882,9 @@ def _installer_contract(
                 )
         except (ContractError, OSError) as error:
             problems.append(f"{label}: invalid PE {pe_name}: {error}")
+
+    if not problems:
+        problems.extend(_compiler_contract(root, release, label))
 
     app = release / "gore_manager.exe"
     if app.is_file():

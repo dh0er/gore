@@ -419,6 +419,12 @@ class InstallerSigningTest(unittest.TestCase):
             mock.patch.object(gore_build, "dist_dir", return_value=self.dist),
             mock.patch.object(gore_build, "_sign_and_stage_app_local_runtime"),
             mock.patch.object(
+                gore_build, "_standalone_compiler_signing_exclusions",
+                return_value=(gore_build.standalone_compiler_bundle.SIDECAR_FILE,),
+            ),
+            mock.patch.object(gore_build, "_verify_staged_product_host_catalogs"),
+            mock.patch.object(gore_build, "_verify_staged_standalone_compiler_bundle"),
+            mock.patch.object(
                 gore_build, "_signing_config", return_value=signing_config
             ) as signing_config_reader,
             mock.patch.object(

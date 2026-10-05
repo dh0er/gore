@@ -8,6 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Rebuild source-backed script mods during Apply after the pristine game cache
+  changes. Compile winning modules together, including dependencies provided
+  by other source-backed mods and compatible binary mods, following the selected
+  load order. Preserve binary winners in the rebuilt result.
+- Accept validated recompiles when a game update already contains the mod's
+  script edit or identical addition.
+- Allow complete authored sources to replace harmless declarations introduced
+  by vanilla updates, including unused declarations in modules whose generated
+  defaults must be carried from the current game cache.
+  Keep native, reflection and generated-default metadata checks and reject
+  replacements that leave retained script or default references dangling.
+- Replace dependent source modules atomically after updates and remove obsolete
+  declaration entries only when the final cache has no remaining references.
+  Publish the exact validated result through Apply without restoring stale entries.
+- Reuse the final cache's admitted symbol tables during reference validation so
+  large valid source rebuilds are not charged twice against the identity limit.
+- Name affected mods and modules and require confirmation when an edited
+  vanilla module changed or was removed, or a new mod module now collides with
+  a game module. Cancel leaves the installation unchanged; confirmation covers
+  only the reviewed cache, loadout, sources and binary provider payloads.
+- Validate source-backed library display names against the bundle import rules
+  before preparing update warnings, preserving bounded complete confirmation data.
+- Include the standalone AngelScript compiler in portable and installer builds
+  for source rebuilds.
+- Rebuilds use complete authored modules without merging game-update fixes into
+  mod sources. Binary-only script mods still need an author rebuild after cache
+  updates. Rebuilds require a compatible compiler profile and native bindings;
+  confirmation does not bypass compiler errors.
+
 ## [0.2.0] - 2026-08-20
 
 - Start the game from the Manager.

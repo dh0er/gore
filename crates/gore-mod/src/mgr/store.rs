@@ -270,6 +270,19 @@ impl StoreSnapshot {
         )
     }
 
+    pub fn apply_with_options(
+        &self,
+        game_root: &Path,
+        options: &super::apply::ApplyOptions,
+    ) -> crate::Result<super::apply::ApplyReport> {
+        super::apply::apply_loadout_after_store_snapshot_with_options(
+            game_root,
+            self.library.path(),
+            &self.loadout,
+            options,
+        )
+    }
+
     pub fn status(&self, game_root: &Path) -> crate::Result<super::status::ManagerStatus> {
         super::status::status(game_root, self.library.path(), &self.loadout)
     }

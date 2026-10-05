@@ -972,13 +972,38 @@ fn compile_report_with_available_product_package(
             ),
         );
     }
+    let authored_source = match capture_compile_source(Path::new(&payload.as_path)) {
+        Ok(bytes) => bytes,
+        Err(message) => {
+            let failure = preflight_failure("COMPILE_SOURCE_CAPTURE_FAILED", message);
+            let response = match guard.take() {
+                Some(guard) => release_guard_after_preflight_failure(
+                    guard,
+                    failure,
+                    "source capture failed before compilation",
+                ),
+                None => failure,
+            };
+            return attach_backend_evidence(
+                response,
+                backend_evidence_with_package(
+                    requested,
+                    None,
+                    false,
+                    false,
+                    Some(authority.identity()),
+                    runner_unavailable.or(skipped_game_fallback),
+                ),
+            );
+        }
+    };
     let opts = CompileOpts {
         game_dir: game_dir.clone(),
         op: payload.op,
         module_name: payload.module_name,
         rel_path: payload.rel_path,
         as_path: PathBuf::from(payload.as_path),
-        source_override: None,
+        source_override: Some(authored_source),
         work_dir: staging.path().to_path_buf(),
         allow_new_symbols: payload.allow_new_symbols,
         base_override: Some(base_override),
@@ -1079,7 +1104,7 @@ fn compile_report_with_available_product_package(
     report.finish_while_target_pinned(|report| {
         finish_while_target_pinned(strict_target, || {
             attach_backend_evidence(
-                finish_compile_report_in_staging(report, staging, true),
+                finish_compile_report_in_staging(report, staging, true, &opts),
                 evidence,
             )
         })
@@ -1266,13 +1291,23 @@ fn compile_report_v1_payload_recording_attempt(
             );
         }
     };
+    let authored_source = match capture_compile_source(Path::new(&payload.as_path)) {
+        Ok(bytes) => bytes,
+        Err(message) => {
+            return release_guard_after_preflight_failure(
+                guard,
+                preflight_failure("COMPILE_SOURCE_CAPTURE_FAILED", message),
+                "source capture failed before compilation",
+            )
+        }
+    };
     let opts = CompileOpts {
         game_dir,
         op: payload.op,
         module_name: payload.module_name,
         rel_path: payload.rel_path,
         as_path: PathBuf::from(payload.as_path),
-        source_override: None,
+        source_override: Some(authored_source),
         work_dir: staging.path().to_path_buf(),
         allow_new_symbols: payload.allow_new_symbols,
         base_override: Some(base_override),
@@ -1295,13 +1330,63 @@ fn compile_report_v1_payload_recording_attempt(
         guard,
     );
     *game_attempted = report.game_attempted();
-    finish_compile_report_in_staging(report, staging, false)
+    finish_compile_report_in_staging(report, staging, false, &opts)
+}
+
+fn capture_compile_source(path: &Path) -> Result<Vec<u8>, String> {
+    let bytes = crate::authoring_source_io::read_authored_source_no_follow(
+        path,
+        gore_mod::script_sources::MAX_SCRIPT_SOURCE_BYTES_V1,
+    )
+    .map_err(|error| format!("reading bounded original compiler source: {error:?}"))?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| "original compiler source is not UTF-8".to_owned())?;
+    if text.contains('\0') {
+        return Err("original compiler source contains NUL".into());
+    }
+    Ok(bytes)
+}
+
+fn publish_compiled_sources(
+    opts: &CompileOpts,
+    output: &gore_as::compile::CompileOutput,
+) -> Result<(), SourcePublicationFailure> {
+    let mini = gore_as::generation_receipt::read_compile_output_bytes_v1(output)
+        .map_err(|error| error.to_string())?;
+    let modules =
+        gore_as::compile::base_full_graph_manifest_v1(&mini).map_err(|error| error.to_string())?;
+    let module = modules
+        .iter()
+        .find(|module| module.module_name == output.module_name)
+        .ok_or_else(|| "compiled module has no canonical source identity".to_owned())?;
+    let base = opts
+        .base_override
+        .as_deref()
+        .ok_or_else(|| "compiled module has no retained pristine base".to_owned())?;
+    let source = opts
+        .source_override
+        .as_ref()
+        .ok_or_else(|| "compiled module has no retained original source".to_owned())?;
+    gore_mod::script_sources::write_script_source_provenance_from_bytes_v1(
+        &output.mini_path,
+        &mini,
+        base,
+        vec![gore_mod::script_sources::ScriptSourceInputV1 {
+            module: output.module_name.clone(),
+            op: opts.op.clone(),
+            relative_path: module.relative_path.clone(),
+            mini: String::new(),
+            source: source.clone(),
+        }],
+    )
+    .map_err(SourcePublicationFailure::from)
 }
 
 fn finish_compile_report_in_staging(
-    report: CompileModuleReport,
+    mut report: CompileModuleReport,
     staging: OwnedCompileStaging,
     allow_standalone_install_untouched: bool,
+    opts: &CompileOpts,
 ) -> Value {
     let standalone_selected = allow_standalone_install_untouched
         && report.backend_name() == Some(CompilerBackendNameV1::Standalone);
@@ -1310,7 +1395,7 @@ fn finish_compile_report_in_staging(
     } else {
         diagnostics_rejection(report.diagnostics())
     };
-    let output_rejection = match &report.outcome {
+    let mut output_rejection = match &report.outcome {
         CompileModuleReportOutcome::Compiled(output) => {
             anchor_owned_compiled_mini(&staging, output).err()
         }
@@ -1324,12 +1409,79 @@ fn finish_compile_report_in_staging(
             standalone_selected,
         );
     if retain_staging {
+        if let CompileModuleReportOutcome::Compiled(output) = &mut report.outcome {
+            if let Err(failure) = publish_compiled_sources(opts, output) {
+                let failure = discard_after_source_publication_failure(output, failure);
+                output_rejection = Some(failure.message);
+                let mut response =
+                    report_response_with_policy(report, output_rejection, standalone_selected);
+                if failure.recovery_required {
+                    mark_output_recovery_required(&mut response);
+                }
+                return response;
+            }
+        }
         // The response's mini_path remains usable after this call. Failed/recovery-required
         // attempts never cause native recursive deletion through caller-controlled paths.
         let _retained = staging.retain();
         debug_assert!(output_rejection.is_none());
     }
     report_response_with_policy(report, output_rejection, standalone_selected)
+}
+
+#[derive(Debug)]
+struct SourcePublicationFailure {
+    message: String,
+    recovery_required: bool,
+}
+
+impl From<String> for SourcePublicationFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            recovery_required: false,
+        }
+    }
+}
+
+impl From<gore_mod::ModError> for SourcePublicationFailure {
+    fn from(error: gore_mod::ModError) -> Self {
+        Self {
+            recovery_required: matches!(
+                &error,
+                gore_mod::ModError::ScriptSourceRecoveryRequired(_)
+            ),
+            message: error.to_string(),
+        }
+    }
+}
+
+fn discard_after_source_publication_failure(
+    output: &mut gore_as::compile::CompileOutput,
+    failure: SourcePublicationFailure,
+) -> SourcePublicationFailure {
+    let cleanup = output.neutralize_retained_artifact().err();
+    // Keep the publisher's typed recovery status independently of paths and bounded wire text.
+    // A source rollback failure needs recovery even when the mini was neutralized successfully.
+    let recovery_required = failure.recovery_required || cleanup.is_some();
+    let cleanup = cleanup
+        .map(|error| format!("; discarding compiled output failed: {error}"))
+        .unwrap_or_default();
+    SourcePublicationFailure {
+        message: format!(
+            "retaining original script source failed: {}{cleanup}",
+            failure.message
+        ),
+        recovery_required,
+    }
+}
+
+fn mark_output_recovery_required(response: &mut Value) {
+    let fields = response
+        .as_object_mut()
+        .expect("compile report responses are JSON objects");
+    fields.insert("recovery_required".to_owned(), Value::Bool(true));
+    fields.insert("output_recovery_required".to_owned(), Value::Bool(true));
 }
 
 pub(super) fn install_state_v1_raw(input: &str) -> Value {
@@ -1665,10 +1817,7 @@ pub(super) fn report_response_with_policy(
         }
     };
     if output_recovery_required {
-        response
-            .as_object_mut()
-            .expect("compile report responses are JSON objects")
-            .insert("output_recovery_required".to_owned(), Value::Bool(true));
+        mark_output_recovery_required(&mut response);
     }
     response
 }
@@ -1983,6 +2132,29 @@ mod tests {
     use gore_as::compile::{InstallCompileArtifact, InstallCompileInspectionIssue};
     use std::fs;
 
+    #[test]
+    fn compiler_source_capture_allows_empty_modules_and_preserves_file_guards() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("Empty.as");
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(capture_compile_source(&path).unwrap(), b"");
+        let alias = root.path().join("Alias.as");
+        std::fs::hard_link(&path, &alias).unwrap();
+        assert!(capture_compile_source(&path)
+            .unwrap_err()
+            .contains("Unsafe"));
+        std::fs::remove_file(&alias).unwrap();
+        for (bytes, message) in [(b"\xff".as_slice(), "not UTF-8"), (b"\0".as_slice(), "NUL")] {
+            std::fs::write(&path, bytes).unwrap();
+            assert!(capture_compile_source(&path).unwrap_err().contains(message));
+        }
+        std::fs::write(
+            &path,
+            vec![b' '; gore_mod::script_sources::MAX_SCRIPT_SOURCE_BYTES_V1 as usize + 1],
+        )
+        .unwrap();
+        assert!(capture_compile_source(&path).unwrap_err().contains("Limit"));
+    }
     #[test]
     fn response_is_finished_before_the_qualified_target_pin_is_dropped() {
         struct DropWitness(std::sync::Arc<std::sync::atomic::AtomicBool>);
@@ -2336,6 +2508,87 @@ mod tests {
             b"do not delete"
         );
         fs::remove_dir_all(staging_path).unwrap();
+    }
+
+    #[test]
+    fn source_publication_failures_keep_exact_recovery_status_and_artifacts() {
+        for (publisher_recovery, changed_output_path, expected_recovery) in [
+            (false, false, false),
+            (true, false, true),
+            (false, true, true),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let mini = root.path().join("module.cache");
+            let foreign = root.path().join("foreign.cache");
+            fs::write(&mini, b"retained compiler output").unwrap();
+            fs::write(&foreign, b"user-owned output").unwrap();
+            let retained_probe = fs::File::open(&mini).unwrap();
+            let mut output = gore_as::compile::CompileOutput::bind_existing(
+                mini.clone(),
+                "GoreMods.Probe".to_owned(),
+            )
+            .unwrap();
+            if changed_output_path {
+                output.mini_path = foreign.clone();
+            }
+            let error = if publisher_recovery {
+                // Typed recovery status must survive the bounded text returned to Studio.
+                gore_mod::ModError::ScriptSourceRecoveryRequired(format!(
+                    "{}; source payload was retained",
+                    "publication IO failure ".repeat(MAX_ERROR_MESSAGE_BYTES)
+                ))
+            } else {
+                // A workspace name containing the display marker is an ordinary IO failure.
+                gore_mod::ModError::Io(
+                    "source publication collision in /SCRIPT_SOURCE_RECOVERY_REQUIRED/work"
+                        .to_owned(),
+                )
+            };
+            let failure = discard_after_source_publication_failure(&mut output, error.into());
+            assert_eq!(failure.recovery_required, expected_recovery);
+            assert_eq!(
+                failure
+                    .message
+                    .contains("discarding compiled output failed"),
+                changed_output_path
+            );
+            assert_eq!(
+                retained_probe.metadata().unwrap().len(),
+                if changed_output_path {
+                    b"retained compiler output".len() as u64
+                } else {
+                    0
+                }
+            );
+            assert_eq!(fs::read(&foreign).unwrap(), b"user-owned output");
+
+            let mut response = compiled_response(
+                output,
+                InstallRestoreDisposition::RestoredExact,
+                None,
+                Some(failure.message),
+                None,
+                "restored_exact",
+                false,
+                false,
+            );
+            if failure.recovery_required {
+                mark_output_recovery_required(&mut response);
+            }
+            assert_eq!(response["outcome"], "failed");
+            assert_eq!(response["compile_error"]["code"], "COMPILE_OUTPUT_UNSAFE");
+            assert_eq!(response["recovery_required"], expected_recovery);
+            assert_eq!(
+                response.get("output_recovery_required"),
+                expected_recovery.then_some(&Value::Bool(true))
+            );
+            assert!(response["mini_path"].is_null());
+            assert!(response["module"].is_null());
+            assert!(
+                response["compile_error"]["message"].as_str().unwrap().len()
+                    <= MAX_ERROR_MESSAGE_BYTES
+            );
+        }
     }
 
     #[test]
@@ -2956,5 +3209,68 @@ mod tests {
         );
         assert_eq!(response["outcome"], "compiled");
         assert_eq!(response["install_restore"], "not_started");
+    }
+
+    #[test]
+    fn studio_publishes_retained_source_instead_of_reopening_the_authors_changed_file() {
+        fn string(value: &str, fstring: bool) -> Vec<u8> {
+            let mut bytes = (value.len() as i32 + i32::from(fstring))
+                .to_le_bytes()
+                .to_vec();
+            if !value.is_empty() || fstring {
+                bytes.extend_from_slice(value.as_bytes());
+                bytes.push(0);
+            }
+            bytes
+        }
+        let mut cache = vec![3; 16];
+        cache.extend_from_slice(&gore_as::cache::header::CACHE_MAGIC.to_le_bytes());
+        cache.extend_from_slice(&1u32.to_le_bytes());
+        cache.extend(string("Vanilla", true));
+        cache.extend(string("Vanilla", false));
+        cache.extend_from_slice(&[0; 32]);
+        cache.extend(string("", false));
+        cache.extend_from_slice(&[0; 8]);
+        cache.extend(string("Vanilla.as", false));
+        cache.extend_from_slice(&[0; 4]);
+        cache.extend(vec![0; 4 * gore_as::cache::tables::N_TABLES]);
+
+        let temp = tempfile::tempdir().unwrap();
+        let source_path = temp.path().join("author.as");
+        let original = b"// original author text, comments, spacing\r\n";
+        std::fs::write(&source_path, original).unwrap();
+        let retained = capture_compile_source(&source_path).unwrap();
+        std::fs::write(&source_path, b"// modified while compiler runs").unwrap();
+        let mini_path = temp.path().join("module.cache");
+        std::fs::write(&mini_path, &cache).unwrap();
+        let output =
+            gore_as::compile::CompileOutput::bind_existing(mini_path.clone(), "Vanilla".into())
+                .unwrap();
+        let opts = CompileOpts {
+            game_dir: temp.path().into(),
+            op: "edit".into(),
+            module_name: "Vanilla".into(),
+            rel_path: "Vanilla.as".into(),
+            as_path: source_path,
+            source_override: Some(retained),
+            work_dir: temp.path().into(),
+            allow_new_symbols: true,
+            base_override: Some(cache),
+            binds_override: None,
+        };
+        publish_compiled_sources(&opts, &output).unwrap();
+        let manifest = gore_mod::script_sources::read_script_sources_manifest_v1(
+            &std::fs::read(gore_mod::script_sources::script_source_provenance_path_v1(
+                &mini_path,
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(temp.path().join(&manifest.entries[0].source)).unwrap(),
+            original
+        );
+        assert!(manifest.entries[0].original_module.is_some());
+        assert!(publish_compiled_sources(&opts, &output).is_err());
     }
 }

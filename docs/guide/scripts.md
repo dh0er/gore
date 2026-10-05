@@ -689,9 +689,16 @@ The remapped mini-cache is bound to the exact target cache GUID. Apply checks
 that binding again and validates every executable reference and retained symbol
 dependency against the effective base-plus-mini tables before it creates a game
 backup, deploy record, or mutation lock. A mini built for an older game cache is
-therefore refused rather than spliced. After a game update, compile or remap the
-module again against the new pristine `PrecompiledScript_Shipping.Cache`; do not
-reuse the previous mini-cache or copy its old GUID. Supported equivalent
+therefore refused rather than spliced. New GORE-authored minis retain the exact
+complete module sources beside the compiler output, and bundle packaging includes
+them automatically. Mod Manager can recompile source-backed minis against the
+updated pristine cache during Apply. It asks for confirmation when a vanilla
+module edited by the mod changed or disappeared; confirmation permits using the
+mod's complete source, without merging the update's changes into it. See
+[source-backed Manager updates](mod-manager.md#apply).
+For binary-only packages, compile or remap the module again against the new
+pristine `PrecompiledScript_Shipping.Cache`; do not reuse the previous mini-cache
+or copy its old GUID. Supported equivalent
 generations reuse the authenticated native API evidence described above while
 still targeting the new cache. A membership refusal on a known compatible
 generation needs a toolkit correction, not `--force`, even if a generic error

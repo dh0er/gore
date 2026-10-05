@@ -221,5 +221,12 @@
   "minimize": "Réduire",
   "restore": "Restaurer",
   "maximize": "Agrandir",
-  "close": "Fermer"
+  "close": "Fermer",
+  "scriptUpdateConfirmationTitle": "Vérifier les scripts après la mise à jour du jeu",
+  "scriptUpdateConfirmationBody": "La mise à jour du jeu affecte des modules de scripts également fournis ou modifiés par ces mods. Recompiler leurs sources incluses peut écraser des corrections du jeu ou rétablir une ancienne logique. Continuez uniquement si vous acceptez ce risque.",
+  "scriptUpdateConfirmationAction": "Recompiler et appliquer",
+  "scriptUpdateConfirmationModule": "{modName} : {module}",
+  "scriptUpdateModuleChanged": "Le module original du jeu a changé.",
+  "scriptUpdateModuleMissing": "Le module original ne fait plus partie du jeu.",
+  "scriptUpdateModuleNowExists": "Le jeu contient désormais un module portant le même nom que le nouveau module de ce mod."
 }

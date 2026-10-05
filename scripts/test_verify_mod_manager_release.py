@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 import stat
 import struct
@@ -56,7 +58,7 @@ def _inno_installer_metadata(name: str) -> dict[str, str]:
 
 
 class _ReleaseFixture:
-    def __init__(self) -> None:
+    def __init__(self, *, real_profiles: bool = False) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.release = (
@@ -76,6 +78,67 @@ class _ReleaseFixture:
             path = self.release / Path(name)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(name.encode())
+
+        bundle = verifier.compiler_bundle
+        with zipfile.ZipFile(
+            ROOT / "crates" / "gore-as" / "assets" / bundle.QUALIFIED_PROFILES_ARCHIVE_FILE
+        ) as archive:
+            manifest = json.loads(archive.read(bundle.QUALIFIED_PROFILES_MANIFEST_FILE))
+            if real_profiles:
+                self.compiler_payloads = {
+                    name: archive.read(name)
+                    for name in archive.namelist()
+                    if name.startswith("profiles/") or name in bundle.REQUIRED_NOTICES
+                }
+            else:
+                self.compiler_payloads = {name: name.encode() for name in bundle.REQUIRED_NOTICES}
+        sidecar = _pe(marker=b"standalone compiler")
+        catalog = {
+            "schema": bundle.CATALOG_SCHEMA,
+            "schema_version": bundle.CATALOG_SCHEMA_VERSION,
+            "sidecar": {
+                "relative_path": bundle.SIDECAR_FILE,
+                "byte_len": len(sidecar),
+                "sha256": hashlib.sha256(sidecar).hexdigest(),
+                "protocol": manifest["qualification_reference"]["protocol"],
+                "compatibility_id": manifest["qualification_reference"]["compatibility_id"],
+                "static_system_only": True,
+            },
+            "qualification_reference": manifest["qualification_reference"],
+            "profiles": manifest["profiles"],
+        }
+        self.compiler_catalog = bundle._canonical_pretty(catalog)
+        descriptor = {
+            "schema": bundle.PRODUCT_BUNDLE_SCHEMA,
+            "schema_version": bundle.PRODUCT_BUNDLE_SCHEMA_VERSION,
+            "immutable": True,
+            "catalog": catalog,
+            "notices": {
+                name: {
+                    "byte_len": len(self.compiler_payloads[name]),
+                    "sha256": hashlib.sha256(self.compiler_payloads[name]).hexdigest(),
+                }
+                for name in bundle.REQUIRED_NOTICES
+            },
+        }
+        self.compiler_payloads.update({
+            bundle.SIDECAR_FILE: sidecar,
+            bundle.CATALOG_FILE: self.compiler_catalog,
+            bundle.BUNDLE_DESCRIPTOR: bundle._canonical_pretty(descriptor),
+        })
+        for name, payload in self.compiler_payloads.items():
+            path = self.release / "compiler" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+        prepared_catalog = (
+            self.root / "target" / "standalone-compiler-product-bundle" / bundle.EMBEDDED_CATALOG_FILE
+        )
+        prepared_catalog.parent.mkdir(parents=True)
+        prepared_catalog.write_bytes(self.compiler_catalog)
+        marker = b"GORE_AS_EMBEDDED_COMPILER_CATALOG_SHA256=" + hashlib.sha256(
+            self.compiler_catalog
+        ).hexdigest().encode("ascii")
+        (self.release / "gore_ffi.dll").write_bytes(_pe(marker=marker))
 
         (self.root / "LICENSE").write_text("MIT\n", encoding="utf-8")
         source_notices = (ROOT / "about.hbs").read_text(encoding="utf-8")
@@ -155,7 +218,7 @@ Source: "..\\..\\..\\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreve
         entries.append(("data/flutter_assets/", None))
         for name in sorted(verifier.PORTABLE_ROOT_FILES):
             if name in verifier.BASE_PE_FILES:
-                payload = _pe(marker=name.encode())
+                payload = (self.release / name).read_bytes()
             elif name in ("LICENSE", "THIRD_PARTY_LICENSES.md"):
                 payload = (self.root / name).read_bytes()
             else:
@@ -163,6 +226,8 @@ Source: "..\\..\\..\\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreve
             entries.append((name, payload))
         for name in sorted(verifier.REQUIRED_DATA_FILES):
             entries.append((name, name.encode()))
+        for name, payload in sorted(self.compiler_payloads.items()):
+            entries.append((f"compiler/{name}", payload))
         return entries
 
     def _write_portable(self, entries: list[tuple[str, bytes | None]]) -> None:
@@ -185,6 +250,17 @@ class ModManagerReleaseContractTest(unittest.TestCase):
     def fixture(self) -> _ReleaseFixture:
         fixture = _ReleaseFixture()
         self.addCleanup(fixture.close)
+        # These tests isolate the Windows artifact/recipe contract. The compiler
+        # seal checks below run the real bundle verifier with qualified profiles.
+        typed = mock.patch.object(verifier.gore_build, "_qualified_profile_verifier")
+        typed.start()
+        self.addCleanup(typed.stop)
+        compiler = mock.patch.object(
+            verifier.compiler_bundle, "verify_staged_bundle",
+            return_value=SimpleNamespace(catalog_bytes=fixture.compiler_catalog),
+        )
+        compiler.start()
+        self.addCleanup(compiler.stop)
         return fixture
 
     def assert_problem(self, problems: list[str], text: str) -> None:
@@ -210,6 +286,19 @@ class ModManagerReleaseContractTest(unittest.TestCase):
                     slice(None), [item for item in entries if item[0] != "gore_ffi.dll"]
                 ),
                 "missing gore_ffi.dll",
+            ),
+            (
+                "missing compiler",
+                lambda entries: entries.__setitem__(
+                    slice(None),
+                    [item for item in entries if not item[0].startswith("compiler/")],
+                ),
+                "missing compiler/catalog.json",
+            ),
+            (
+                "unexpected compiler executable",
+                lambda entries: entries.append(("compiler/other.exe", _pe())),
+                "nested PE payload is forbidden",
             ),
             (
                 "updater",
@@ -241,7 +330,7 @@ class ModManagerReleaseContractTest(unittest.TestCase):
         )
         for label, mutate, expected in mutations:
             with self.subTest(label=label):
-                fixture = _ReleaseFixture()
+                fixture = self.fixture()
                 try:
                     fixture.mutate_portable(mutate)
                     problems = verifier.verify_release(
@@ -593,6 +682,155 @@ class ModManagerReleaseContractTest(unittest.TestCase):
             ),
             [],
         )
+
+
+class ModManagerCompilerReleaseContractTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.fixture = _ReleaseFixture(real_profiles=True)
+        self.addCleanup(self.fixture.close)
+        self.bundle = verifier.compiler_bundle
+        # The release gate uses the production seal/profile verifier. Mock only
+        # native executable calls; the checked-in qualification proofs stay real.
+        self.typed = mock.Mock(
+            side_effect=lambda root, _sha256: self.bundle._qualified_profile_tree_summary(root)
+        )
+        for target, name, kwargs in (
+            (verifier.gore_build, "_qualified_profile_verifier", {"return_value": self.typed}),
+            (self.bundle, "_verify_unsigned_sidecar", {}),
+            (self.bundle, "verify_sidecar", {}),
+            (self.bundle, "_verify_pinned_production_capabilities", {}),
+        ):
+            patch = mock.patch.object(target, name, **kwargs)
+            call = patch.start()
+            self.addCleanup(patch.stop)
+            if name == "verify_sidecar":
+                self.signed = call
+            elif name == "_verify_unsigned_sidecar":
+                self.unsigned = call
+            elif name == "_verify_pinned_production_capabilities":
+                self.capabilities = call
+        env = mock.patch.dict(verifier.os.environ, {}, clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+
+    def verify(self) -> list[str]:
+        return verifier.verify_release(
+            self.fixture.root, VERSION, version_info_reader=self.fixture.metadata
+        )
+
+    def assert_problem(self, problems: list[str], text: str) -> None:
+        self.assertTrue(any(text in problem for problem in problems), problems)
+
+    def test_qualified_compiler_passes_both_unsigned_and_signed_release_gates(self) -> None:
+        self.assertEqual(self.verify(), [])
+        self.assertEqual(self.unsigned.call_count, 2)
+        self.signed.assert_not_called()
+        self.assertEqual(self.typed.call_count, 4)
+        self.unsigned.reset_mock()
+        self.typed.reset_mock()
+        with mock.patch.dict(verifier.os.environ, {"GORE_SIGN": "1"}):
+            self.assertEqual(self.verify(), [])
+        self.assertEqual(self.signed.call_count, 2)
+        self.assertEqual(self.typed.call_count, 4)
+        self.unsigned.assert_not_called()
+
+    def test_compiler_payload_seals_reject_tampering_in_both_release_shapes(self) -> None:
+        for relative in (
+            self.bundle.SIDECAR_FILE,
+            self.bundle.REQUIRED_NOTICES[0],
+            next(name for name in self.fixture.compiler_payloads if name.endswith("compiler-profile.json")),
+            next(name for name in self.fixture.compiler_payloads if name.endswith("semantic-parity.json")),
+        ):
+            with self.subTest(payload=relative):
+                path = self.fixture.release / "compiler" / relative
+                original = path.read_bytes()
+                path.write_bytes(b"tampered")
+                self.fixture.mutate_portable(
+                    lambda entries: entries.__setitem__(
+                        slice(None),
+                        [(name, b"tampered" if name == f"compiler/{relative}" else payload)
+                         for name, payload in entries],
+                    )
+                )
+                problems = self.verify()
+                self.assert_problem(problems, "portable zip: standalone compiler verification failed")
+                self.assert_problem(problems, "installer source: standalone compiler verification failed")
+                self.assert_problem(problems, "length/SHA-256")
+                path.write_bytes(original)
+                self.fixture.mutate_portable(lambda _entries: None)
+
+    def test_missing_profile_and_unknown_compiler_file_are_rejected(self) -> None:
+        profile = next(name for name in self.fixture.compiler_payloads if name.endswith("compiler-profile.json"))
+        path = self.fixture.release / "compiler" / profile
+        original = path.read_bytes()
+        path.unlink()
+        self.fixture.mutate_portable(
+            lambda entries: entries.__setitem__(
+                slice(None), [entry for entry in entries if entry[0] != f"compiler/{profile}"]
+            )
+        )
+        problems = self.verify()
+        self.assert_problem(problems, "portable zip: standalone compiler verification failed")
+        self.assert_problem(problems, "installer source: standalone compiler verification failed")
+        path.write_bytes(original)
+        self.fixture.mutate_portable(lambda entries: entries.append(("compiler/unknown.txt", b"unknown")))
+        (self.fixture.release / "compiler/unknown.txt").write_bytes(b"unknown")
+        problems = self.verify()
+        self.assert_problem(problems, "unknown=['unknown.txt']")
+
+    def test_package_cannot_authorize_new_sidecar_by_changing_its_catalog(self) -> None:
+        descriptor_path = self.fixture.release / "compiler" / self.bundle.BUNDLE_DESCRIPTOR
+        descriptor = json.loads(descriptor_path.read_bytes())
+        descriptor["catalog"]["sidecar"]["sha256"] = "00" * 32
+        changed = self.bundle._canonical_pretty(descriptor)
+        descriptor_path.write_bytes(changed)
+        self.fixture.mutate_portable(
+            lambda entries: entries.__setitem__(
+                slice(None),
+                [(name, changed if name == f"compiler/{self.bundle.BUNDLE_DESCRIPTOR}" else payload)
+                 for name, payload in entries],
+            )
+        )
+        self.assert_problem(self.verify(), "compiler catalog differs from the prepared host build")
+        self.capabilities.assert_not_called()
+        self.typed.assert_not_called()
+
+    def test_missing_prepared_catalog_or_unmatched_host_fails_before_execution(self) -> None:
+        prepared = (self.fixture.root / "target/standalone-compiler-product-bundle"
+                    / self.bundle.EMBEDDED_CATALOG_FILE)
+        prepared.unlink()
+        self.assert_problem(self.verify(), "prepared standalone compiler catalog")
+        prepared.write_bytes(self.fixture.compiler_catalog)
+        (self.fixture.release / "gore_ffi.dll").write_bytes(_pe(marker=b"unrelated host"))
+        self.fixture.mutate_portable(lambda _entries: None)
+        self.assert_problem(self.verify(), "host does not report exactly the prepared compiler catalog")
+        self.capabilities.assert_not_called()
+        self.typed.assert_not_called()
+
+    def test_sidecar_signature_and_typed_profile_failures_propagate(self) -> None:
+        with mock.patch.dict(verifier.os.environ, {"GORE_SIGN": "1"}):
+            self.signed.side_effect = self.bundle.BundleError("invalid Authenticode signature")
+            self.assert_problem(self.verify(), "invalid Authenticode signature")
+        self.signed.side_effect = None
+        self.typed.side_effect = self.bundle.BundleError("typed profile rejected")
+        self.assert_problem(self.verify(), "typed profile rejected")
+
+    def test_portable_compiler_bounds_reject_before_extraction(self) -> None:
+        package = mock.Mock()
+        with mock.patch.object(self.bundle, "MAX_PACKAGE_FILES", 1):
+            problems = verifier._zip_compiler_contract(
+                self.fixture.root, package,
+                {"compiler/a": zipfile.ZipInfo("compiler/a"),
+                 "compiler/b": zipfile.ZipInfo("compiler/b")},
+            )
+        self.assert_problem(problems, "file count exceeds its limit")
+        info = zipfile.ZipInfo("compiler/oversized")
+        info.file_size = self.bundle.MAX_ARCHIVE_UNCOMPRESSED_BYTES + 1
+        problems = verifier._zip_compiler_contract(
+            self.fixture.root, package, {"compiler/oversized": info}
+        )
+        self.assert_problem(problems, "payload exceeds its byte limit")
+        package.open.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -752,6 +752,34 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get close => 'Fechar';
+
+  @override
+  String get scriptUpdateConfirmationTitle =>
+      'Rever scripts após a atualização do jogo';
+
+  @override
+  String get scriptUpdateConfirmationBody =>
+      'A atualização do jogo afeta módulos de scripts também fornecidos ou alterados por estes mods. Recompilar a partir do código incluído pode substituir correções do jogo ou restaurar lógica antiga. Continue apenas se aceitar este risco.';
+
+  @override
+  String get scriptUpdateConfirmationAction => 'Recompilar e aplicar';
+
+  @override
+  String scriptUpdateConfirmationModule(String modName, String module) {
+    return '$modName: $module';
+  }
+
+  @override
+  String get scriptUpdateModuleChanged =>
+      'O módulo original do jogo foi alterado.';
+
+  @override
+  String get scriptUpdateModuleMissing =>
+      'O módulo original já não está presente no jogo.';
+
+  @override
+  String get scriptUpdateModuleNowExists =>
+      'O jogo inclui agora um módulo com o mesmo nome que o novo módulo deste mod.';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -1502,4 +1530,32 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get close => 'Fechar';
+
+  @override
+  String get scriptUpdateConfirmationTitle =>
+      'Revisar scripts após a atualização do jogo';
+
+  @override
+  String get scriptUpdateConfirmationBody =>
+      'A atualização do jogo afeta módulos de scripts também fornecidos ou alterados por estes mods. Recompilar a partir do código incluído pode sobrescrever correções do jogo ou restaurar lógica antiga. Continue somente se aceitar esse risco.';
+
+  @override
+  String get scriptUpdateConfirmationAction => 'Recompilar e aplicar';
+
+  @override
+  String scriptUpdateConfirmationModule(String modName, String module) {
+    return '$modName: $module';
+  }
+
+  @override
+  String get scriptUpdateModuleChanged =>
+      'O módulo original do jogo foi alterado.';
+
+  @override
+  String get scriptUpdateModuleMissing =>
+      'O módulo original não está mais presente no jogo.';
+
+  @override
+  String get scriptUpdateModuleNowExists =>
+      'O jogo agora inclui um módulo com o mesmo nome que o novo módulo deste mod.';
 }

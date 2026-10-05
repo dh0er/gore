@@ -93,6 +93,89 @@ declared format, or rebuild from the source spec; do not hand-edit the format
 number. The version inside `voice/manifest.json` is an independent
 voice-payload contract.
 
+### Script sources for game updates
+
+New authored minis produced by `gore as compile-module`, `gore as compile --mini`,
+the `values` build path, or Mod Studio's general script compiler retain the
+exact complete UTF-8 `.as` inputs passed
+to the compiler. The compiler writes `<mini filename>.sources.json` beside the
+mini and its payloads under `<mini filename>.sources/source/`. `gore mod build`
+and the shared library packager pick these up automatically. Keep these files
+beside the mini until packaging; choose a fresh output path or remove the
+previous generated output before compiling again. This publication never
+overwrites existing source provenance.
+
+The built script component contains `sources.json` and `source/*.as` alongside
+`manifest.json` and the compiled minis. The source manifest has an independent,
+closed schema version; `ScriptEntry` and the outer bundle format stay the same:
+
+```json
+{
+  "schema_version": 1,
+  "base_cache_guid": "0123456789abcdef0123456789abcdef",
+  "base_cache_sha256": "<64 lowercase hex characters>",
+  "entries": [{
+    "module": "Story.Dialog.Diego",
+    "op": "edit",
+    "relative_path": "Story/Dialog/Diego.as",
+    "source": "scripts/source/0.as",
+    "source_sha256": "<64 lowercase hex characters>",
+    "mini": "scripts/0_Story_Dialog_Diego.cache",
+    "mini_sha256": "<64 lowercase hex characters>",
+    "original_module": {
+      "algorithm": "gore-as-semantic-module-v1",
+      "sha256": "<64 lowercase hex characters>"
+    }
+  }]
+}
+```
+
+The GUID is the cache header's 16 bytes in serialized byte order, encoded as
+lowercase hex. SHA-256 binds the entire original base cache and each exact
+source/mini payload. A replaced Vanilla module also records the existing
+semantic observer's normalized module digest. Runtime reference IDs are
+resolved to their identities, so renumbering IDs is not compared as raw module
+bytes. This digest covers the complete module record, including its code hash
+and source filename; a metadata-only game update may therefore conservatively
+report a changed original module.
+
+Each source names its actual operation against the original base: `add` has
+`original_module: null`, while `edit` requires the fingerprint. A multi-module
+mini may include both operations even though its root manifest entry is `edit`.
+The root source operation must match that owning manifest entry.
+All authored modules carried by one source-bearing mini must be included,
+with their canonical compiler paths, because that mini is an atomic patch.
+Different minis in one component may have different operations.
+
+Existing binary-only minis and bundles without `sources.json` remain valid
+inputs; they cannot be rebuilt from original source. A component may contain
+both complete source-bearing groups and existing binary-only groups. Missing
+original source is never filled by decompiling a mini and presenting that
+reconstruction as the author's input. Invalid or partial provenance is an
+error, rather than silently becoming a binary-only mod.
+
+For externally compiled authored minis, `gore mod build` also accepts a
+top-level `script_sources` object in the spec, using the schema above. Its
+`mini` must exactly match a `scripts[].mini_cache` input. Its source paths are
+portable relative paths resolved against the spec's directory. The packager
+validates hashes and complete mini coverage, then rewrites payload references
+to their final bundle paths. Supply this only for minis without captured
+adjacent provenance. The shared API is
+`gore_mod::script_sources::package_explicit_script_sources_v1`.
+
+Readers reject unknown fields/schema versions, unsafe or colliding paths,
+unsupported fingerprint algorithms, mismatched GUIDs or hashes, and incomplete
+source groups. Each script component is limited to 256 source entries, 16 MiB
+for the JSON manifest, 16 MiB per `.as` file, and 64 MiB of total source payloads.
+Manager also enforces the shared 256-entry/64-MiB source budget across the
+enabled loadout, including installs that can use their existing compiled minis
+on the current game version. These limits match the native sparse-overlay
+compiler's fixed 256-change boundary and ensure that accepted sources fit the
+rebuild envelope after a game update.
+Successfully compiling against a newer cache does not merge updated Vanilla
+logic into an old authored module; that remains a separate compatibility
+warning and authoring decision.
+
 ## Validate a built bundle before installing it
 
 `inspect` is the canonical read-only check for a built GORE bundle. It accepts

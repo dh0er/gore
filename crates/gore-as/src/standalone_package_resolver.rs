@@ -253,6 +253,40 @@ impl AvailableProductStandaloneCompilerPackageV1 {
         )
     }
 
+    /// Only Manager's guarded-composition proof can select a derived compile base. The
+    /// resolver's original Shipping/Binds identity remains the authority for native declarations.
+    pub(crate) fn sidecar_runner_for_manager_graph(
+        &self,
+        graph: &crate::cache::manager_binary_graph::ManagerBinaryGraphV1,
+        graph_path: &Path,
+        scratch_root: PathBuf,
+    ) -> Result<
+        crate::standalone_sidecar::StandaloneSidecarRunnerV1,
+        crate::compiler_backend::CompilerBackendFailureV1,
+    > {
+        if !graph.matches_pristine(
+            self.target_inputs.shipping_cache(),
+            self.target_inputs.binds_cache(),
+        ) {
+            return Err(crate::compiler_backend::CompilerBackendFailureV1::new(
+                crate::compiler_backend::CompilerBackendFailureKindV1::Preflight,
+                "Manager graph differs from authenticated pristine Shipping/Binds",
+            ));
+        }
+        let config = self
+            .sidecar_config(scratch_root)
+            .with_product_target_inputs(
+                graph.cache(),
+                self.target_inputs.binds_cache(),
+                graph_path,
+                self.target_inputs.binds_cache_path(),
+            );
+        crate::standalone_sidecar::StandaloneSidecarRunnerV1::new_product(
+            config,
+            self.profile_package(),
+        )
+    }
+
     /// Transfer the exact EXE/Shipping/Binds proof to the compile transaction without dropping the
     /// package handles or the non-forgeable authority needed by Receipt V2 afterwards.
     pub fn into_execution_parts(

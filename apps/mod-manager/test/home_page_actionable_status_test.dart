@@ -16,6 +16,7 @@ import 'package:gore_manager/home_page.dart';
 import 'package:gore_manager/l10n/app_localizations.dart';
 import 'package:gore_manager/status/domain/status_notifier.dart';
 import 'package:path/path.dart' as p;
+import 'support/script_update_fixture.dart';
 
 const _exeA = 'C:/games/a/G1R/Binaries/Win64/G1R-Win64-Shipping.exe';
 const _exeB = 'C:/games/b/G1R/Binaries/Win64/G1R-Win64-Shipping.exe';
@@ -65,6 +66,7 @@ class _HomeCore implements GoreCoreFfiService {
   Map<String, Object?> status;
   List<String> applyWarnings;
   Map<String, Object?> preflight;
+  Map<String, Object?>? applyRefusal;
   Completer<Map<String, Object?>>? pendingStatus;
   final calls = <({String command, Map<String, Object?> payload})>[];
 
@@ -110,6 +112,10 @@ class _HomeCore implements GoreCoreFfiService {
       case 'mgr_preflight_v1':
         return preflight;
       case 'mgr_apply':
+        if (applyRefusal != null &&
+            !payload.containsKey('script_rebuild_confirmation')) {
+          return applyRefusal!;
+        }
         return {
           'ok': true,
           'report': {
@@ -143,6 +149,7 @@ Widget _home(
   String? gamePath = _exeA,
   TextScaler textScaler = TextScaler.noScaling,
   NavigatorObserver? navigatorObserver,
+  Locale locale = const Locale('en'),
 }) {
   return ProviderScope(
     overrides: [
@@ -151,6 +158,7 @@ Widget _home(
       sharedConfigProvider.overrideWithValue(_config(gamePath)),
     ],
     child: MaterialApp(
+      locale: locale,
       localizationsDelegates: const [
         AppLocalizations.delegate,
         GlobalMaterialLocalizations.delegate,
@@ -171,6 +179,138 @@ Widget _home(
 }
 
 void main() {
+  for (final confirm in [false, true]) {
+    testWidgets(
+      'script update dialog holds Apply busy and ${confirm ? 'confirms exact token' : 'cancels without a second write'}',
+      (tester) async {
+        final core = _HomeCore({'state': 'game_updated', 'drifted': <String>[]})
+          ..applyRefusal = scriptUpdateRefusal()
+          ..applyWarnings = ['Recompiled NPC/Diego'];
+        await tester.pumpWidget(_home(core));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('apply-loadout-action')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 350));
+        expect(
+          find.byKey(const ValueKey('script-rebuild-confirmation-dialog')),
+          findsOneWidget,
+        );
+        expect(find.text('Diego Dialog: NPC/Diego'), findsOneWidget);
+        expect(find.text('Old Quest: Quests/OldQuest'), findsOneWidget);
+        expect(find.textContaining('overwrite game fixes'), findsOneWidget);
+        expect(
+          find.text('The original game module is no longer present.'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('exact-update-token'), findsNothing);
+        final container = ProviderScope.containerOf(
+          tester.element(find.byType(HomePage)),
+        );
+        expect(container.read(statusProvider).busy, isTrue);
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.byKey(const ValueKey('apply-loadout-action')),
+              )
+              .onPressed,
+          isNull,
+        );
+        await container
+            .read(statusProvider.notifier)
+            .apply(gameRootFromExe(_exeA)!);
+        await container
+            .read(statusProvider.notifier)
+            .undeployAll(gameRootFromExe(_exeA)!);
+        expect(
+          core.calls.where((call) => call.command == 'mgr_apply'),
+          hasLength(1),
+        );
+        expect(
+          core.calls.where((call) => call.command == 'mgr_undeploy_all'),
+          isEmpty,
+        );
+        await tester.tap(
+          find.byKey(
+            ValueKey(
+              confirm ? 'script-rebuild-confirm' : 'script-rebuild-cancel',
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final applies = core.calls
+            .where((call) => call.command == 'mgr_apply')
+            .toList();
+        expect(applies, hasLength(confirm ? 2 : 1));
+        if (confirm) {
+          expect(applies.last.payload, {
+            'game_root': gameRootFromExe(_exeA),
+            'script_rebuild_confirmation': 'exact-update-token',
+          });
+          expect(container.read(statusProvider).lastReport!.warnings, [
+            'Recompiled NPC/Diego',
+          ]);
+        } else {
+          expect(container.read(statusProvider).lastReport, isNull);
+          expect(container.read(statusProvider).error, isNull);
+        }
+        expect(container.read(statusProvider).busy, isFalse);
+      },
+    );
+  }
+
+  testWidgets(
+    'script update confirmation cannot apply to a stale installation',
+    (tester) async {
+      final core = _HomeCore({'state': 'game_updated', 'drifted': <String>[]})
+        ..applyRefusal = scriptUpdateRefusal();
+      await tester.pumpWidget(_home(core));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('apply-loadout-action')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(HomePage)),
+      );
+      container.read(gameExePathProvider.notifier).set(_exeB);
+      await tester.pump();
+      expect(container.read(statusProvider).busy, isTrue);
+      await tester.tap(find.byKey(const ValueKey('script-rebuild-confirm')));
+      await tester.pumpAndSettle();
+      expect(
+        core.calls.where((call) => call.command == 'mgr_apply'),
+        hasLength(1),
+      );
+      expect(container.read(statusProvider).statusRoot, gameRootFromExe(_exeB));
+      expect(container.read(statusProvider).busy, isFalse);
+    },
+  );
+
+  testWidgets(
+    'German script update confirmation names modules and explains lost fixes',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1100, 700));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final core = _HomeCore({'state': 'game_updated', 'drifted': <String>[]})
+        ..applyRefusal = scriptUpdateRefusal();
+      await tester.pumpWidget(_home(core, locale: const Locale('de')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('apply-loadout-action')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(
+        find.text('Script-Änderungen nach Spielupdate prüfen'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Spielkorrekturen überschreiben'),
+        findsOneWidget,
+      );
+      expect(find.text('Diego Dialog: NPC/Diego'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('script-rebuild-cancel')));
+      await tester.pumpAndSettle();
+    },
+  );
+
   testWidgets(
     'status trigger is one live region, keyboard opens it, and focus returns',
     (tester) async {
