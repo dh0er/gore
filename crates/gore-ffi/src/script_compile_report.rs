@@ -1411,15 +1411,14 @@ fn finish_compile_report_in_staging(
     if retain_staging {
         if let CompileModuleReportOutcome::Compiled(output) = &mut report.outcome {
             if let Err(message) = publish_compiled_sources(opts, output) {
-                let cleanup = output
-                    .neutralize_retained_artifact()
-                    .err()
-                    .map(|error| format!("; discarding compiled output failed: {error}"))
-                    .unwrap_or_default();
-                output_rejection = Some(format!(
-                    "retaining original script source failed: {message}{cleanup}"
-                ));
-                return report_response_with_policy(report, output_rejection, standalone_selected);
+                let failure = discard_after_source_publication_failure(output, message);
+                output_rejection = Some(failure.message);
+                let mut response =
+                    report_response_with_policy(report, output_rejection, standalone_selected);
+                if failure.recovery_required {
+                    mark_output_recovery_required(&mut response);
+                }
+                return response;
             }
         }
         // The response's mini_path remains usable after this call. Failed/recovery-required
@@ -1428,6 +1427,37 @@ fn finish_compile_report_in_staging(
         debug_assert!(output_rejection.is_none());
     }
     report_response_with_policy(report, output_rejection, standalone_selected)
+}
+
+struct SourcePublicationFailure {
+    message: String,
+    recovery_required: bool,
+}
+
+fn discard_after_source_publication_failure(
+    output: &mut gore_as::compile::CompileOutput,
+    message: String,
+) -> SourcePublicationFailure {
+    let cleanup = output.neutralize_retained_artifact().err();
+    // Read the publisher's recovery status before the wire message is truncated. A source
+    // rollback failure still needs recovery even when the mini was successfully neutralized.
+    let recovery_required =
+        message.contains("SCRIPT_SOURCE_RECOVERY_REQUIRED") || cleanup.is_some();
+    let cleanup = cleanup
+        .map(|error| format!("; discarding compiled output failed: {error}"))
+        .unwrap_or_default();
+    SourcePublicationFailure {
+        message: format!("retaining original script source failed: {message}{cleanup}"),
+        recovery_required,
+    }
+}
+
+fn mark_output_recovery_required(response: &mut Value) {
+    let fields = response
+        .as_object_mut()
+        .expect("compile report responses are JSON objects");
+    fields.insert("recovery_required".to_owned(), Value::Bool(true));
+    fields.insert("output_recovery_required".to_owned(), Value::Bool(true));
 }
 
 pub(super) fn install_state_v1_raw(input: &str) -> Value {
@@ -1763,10 +1793,7 @@ pub(super) fn report_response_with_policy(
         }
     };
     if output_recovery_required {
-        response
-            .as_object_mut()
-            .expect("compile report responses are JSON objects")
-            .insert("output_recovery_required".to_owned(), Value::Bool(true));
+        mark_output_recovery_required(&mut response);
     }
     response
 }
@@ -2457,6 +2484,84 @@ mod tests {
             b"do not delete"
         );
         fs::remove_dir_all(staging_path).unwrap();
+    }
+
+    #[test]
+    fn source_publication_failures_keep_exact_recovery_status_and_artifacts() {
+        for (publisher_recovery, changed_output_path, expected_recovery) in [
+            (false, false, false),
+            (true, false, true),
+            (false, true, true),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let mini = root.path().join("module.cache");
+            let foreign = root.path().join("foreign.cache");
+            fs::write(&mini, b"retained compiler output").unwrap();
+            fs::write(&foreign, b"user-owned output").unwrap();
+            let retained_probe = fs::File::open(&mini).unwrap();
+            let mut output = gore_as::compile::CompileOutput::bind_existing(
+                mini.clone(),
+                "GoreMods.Probe".to_owned(),
+            )
+            .unwrap();
+            if changed_output_path {
+                output.mini_path = foreign.clone();
+            }
+            let message = if publisher_recovery {
+                // Recovery status must survive even if a long IO message hides its marker
+                // beyond the bounded text returned to Studio.
+                format!(
+                    "{}; SCRIPT_SOURCE_RECOVERY_REQUIRED: source payload was retained",
+                    "publication IO failure ".repeat(MAX_ERROR_MESSAGE_BYTES)
+                )
+            } else {
+                "source publication failed before creating any payload".to_owned()
+            };
+            let failure = discard_after_source_publication_failure(&mut output, message);
+            assert_eq!(failure.recovery_required, expected_recovery);
+            assert_eq!(
+                failure
+                    .message
+                    .contains("discarding compiled output failed"),
+                changed_output_path
+            );
+            assert_eq!(
+                retained_probe.metadata().unwrap().len(),
+                if changed_output_path {
+                    b"retained compiler output".len() as u64
+                } else {
+                    0
+                }
+            );
+            assert_eq!(fs::read(&foreign).unwrap(), b"user-owned output");
+
+            let mut response = compiled_response(
+                output,
+                InstallRestoreDisposition::RestoredExact,
+                None,
+                Some(failure.message),
+                None,
+                "restored_exact",
+                false,
+                false,
+            );
+            if failure.recovery_required {
+                mark_output_recovery_required(&mut response);
+            }
+            assert_eq!(response["outcome"], "failed");
+            assert_eq!(response["compile_error"]["code"], "COMPILE_OUTPUT_UNSAFE");
+            assert_eq!(response["recovery_required"], expected_recovery);
+            assert_eq!(
+                response.get("output_recovery_required"),
+                expected_recovery.then_some(&Value::Bool(true))
+            );
+            assert!(response["mini_path"].is_null());
+            assert!(response["module"].is_null());
+            assert!(
+                response["compile_error"]["message"].as_str().unwrap().len()
+                    <= MAX_ERROR_MESSAGE_BYTES
+            );
+        }
     }
 
     #[test]
