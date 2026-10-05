@@ -37,6 +37,8 @@ uses the matching version section as the GitHub release notes.
   require fresh confirmation, as do changes to binary provider payloads.
   Declining leaves the installation unchanged.
   MCP exposes the same optional token; installation consent remains required.
+  MCP retains the complete bounded Manager Apply warning selection and exact token,
+  including the largest permitted source-module sets.
 - Rebuilds use complete authored modules without merging updated vanilla logic.
   Binary-only script mods still need an author rebuild after cache updates.
   Rebuilds require a compatible compiler profile and native bindings;

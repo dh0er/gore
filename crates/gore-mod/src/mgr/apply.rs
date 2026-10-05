@@ -485,6 +485,15 @@ fn load_script_source_groups(
     else {
         return Ok(Vec::new());
     };
+    // Source bundles use the same bounded display name as the bundle importer. Sidecars can
+    // be edited after import, so revalidate before repeating the name in update warnings.
+    if !crate::is_safe_mod_name(&meta.name) {
+        return Err(ModError::Other(format!(
+            "invalid source-backed mod metadata name for {:?}: expected a safe mod name of at most {} UTF-8 bytes",
+            meta.id,
+            crate::MAX_PORTABLE_MOD_NAME_BYTES
+        )));
+    }
     charge_bytes(
         "manager manifests",
         &mut budget.manifest_bytes,
@@ -3118,6 +3127,55 @@ mod tests {
         );
         undeploy_all(&game.root).unwrap();
         assert_eq!(fs::read(game.script_cache()).unwrap(), updated);
+    }
+
+    #[test]
+    fn script_sources_validate_edited_display_names_before_warning_or_compilation() {
+        for length in [
+            crate::MAX_PORTABLE_MOD_NAME_BYTES,
+            199,
+            8192,
+            2 * 1024 * 1024,
+        ] {
+            let game = FakeGame::new();
+            let original = source_test_cache(&[("Diego", 1)], 1);
+            let updated = source_test_cache(&[("Diego", 2)], 2);
+            fs::write(game.script_cache(), &updated).unwrap();
+            let id = add_source_test_mod(&game, "diego", "Diego", &original, "edit");
+            let meta_path = game.lib.join(&id).join(super::super::model::META_FILE);
+            let mut meta: serde_json::Value =
+                serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+            meta["name"] = serde_json::json!("n".repeat(length));
+            let metadata = serde_json::to_vec(&meta).unwrap();
+            fs::write(&meta_path, &metadata).unwrap();
+            let mini_path = game.lib.join(&id).join("scripts/0_mod.cache");
+            let mini = fs::read(&mini_path).unwrap();
+            let mut compiler = TestScriptRecompiler::default();
+            let error = apply_source_test(&game, &loadout(&[(&id, true)]), None, &mut compiler)
+                .unwrap_err();
+            if length == crate::MAX_PORTABLE_MOD_NAME_BYTES {
+                let ModError::ScriptRebuildConfirmationRequired(confirmation) = error else {
+                    panic!("maximum valid imported name must remain confirmable");
+                };
+                assert_eq!(confirmation.warnings.len(), 1);
+                assert_eq!(confirmation.warnings[0].mod_name, "n".repeat(length));
+                assert_eq!(confirmation.token.len(), 64);
+            } else {
+                let message = error.to_string();
+                assert!(message.contains("invalid source-backed mod metadata name"));
+                assert!(message.contains("198 UTF-8 bytes"));
+                assert!(message.len() < 1024);
+            }
+            assert!(compiler.calls.is_empty());
+            assert_eq!(fs::read(game.script_cache()).unwrap(), updated);
+            assert_eq!(fs::read(meta_path).unwrap(), metadata);
+            assert_eq!(fs::read(mini_path).unwrap(), mini);
+            assert!(!game
+                .script_cache()
+                .with_extension("Cache.gore-bak")
+                .exists());
+            assert!(!game.root.join("gore-mod.deployed.json").exists());
+        }
     }
 
     #[test]

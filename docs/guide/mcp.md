@@ -408,6 +408,10 @@ Two more flags tune behaviour rather than permissions:
 | `--timeout-secs <SECS>` | `0` | Override every per-command wall-clock cap. `0` keeps the built-in ones (60 s / 300 s / 1800 s, and 2700 s for `as compile`). |
 | `--max-output-kib <KIB>` | `256` | Cap on captured stdout per command. Truncated output says so. `0` keeps the default, as it does above. |
 
+Manager Apply uses a separate bounded stderr capture for its script-update warnings
+and exact confirmation token. Review the affected mods and modules before passing
+that token as `script_update_confirmation`; installation consent is still required.
+
 ## The tools
 
 Twenty CLI-backed tools mirror the CLI's command families and safe aliases. Namespace tools take a

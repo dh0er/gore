@@ -28,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   vanilla module changed or was removed, or a new mod module now collides with
   a game module. Cancel leaves the installation unchanged; confirmation covers
   only the reviewed cache, loadout, sources and binary provider payloads.
+- Validate source-backed library display names against the bundle import rules
+  before preparing update warnings, preserving bounded complete confirmation data.
 - Include the standalone AngelScript compiler in portable and installer builds
   for source rebuilds.
 - Rebuilds use complete authored modules without merging game-update fixes into

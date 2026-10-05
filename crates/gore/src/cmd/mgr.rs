@@ -823,6 +823,50 @@ mod tests {
     }
 
     #[test]
+    fn complete_maximum_script_warning_dialog_fits_the_mcp_apply_budget() {
+        let token = "f".repeat(64);
+        let warnings = (0..256)
+            .map(|index| {
+                serde_json::json!({
+                    "mod_id": "i".repeat(198),
+                    "mod_name": "n".repeat(198),
+                    "module": format!("Module{index:03}{}", "m".repeat(4096 - 9)),
+                    "reason": "added_module_now_exists",
+                    "original_sha256": "0".repeat(64),
+                    "current_sha256": "a".repeat(64),
+                })
+            })
+            .collect::<Vec<_>>();
+        let confirmation: gore_mod::mgr::script_rebuild::ScriptRebuildConfirmation =
+            serde_json::from_value(serde_json::json!({
+                "token": token,
+                "warnings": warnings,
+            }))
+            .unwrap();
+        let mut output = Vec::new();
+        let result = apply_with_script_confirmation(
+            |_| {
+                Err(gore_mod::ModError::ScriptRebuildConfirmationRequired(
+                    confirmation.clone(),
+                ))
+            },
+            None,
+            &mut std::io::Cursor::new(""),
+            &mut output,
+        );
+        assert!(result.is_err());
+        assert!(output.len() > gore_mcp::server::DEFAULT_MAX_STDOUT_BYTES);
+        assert!(output.len() <= gore_mcp::exec::MAX_MANAGER_APPLY_STDERR_BYTES);
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(
+            output.matches("the game now contains a module").count(),
+            256
+        );
+        assert!(output.contains("Module255"));
+        assert!(output.contains(&format!("Exact confirmation token: {token}")));
+    }
+
+    #[test]
     fn script_update_approval_retries_with_exact_native_token_and_reports_warnings() {
         let mut tokens = Vec::new();
         let mut output = Vec::new();
