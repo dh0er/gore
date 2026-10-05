@@ -1334,7 +1334,7 @@ fn compile_report_v1_payload_recording_attempt(
 }
 
 fn capture_compile_source(path: &Path) -> Result<Vec<u8>, String> {
-    let bytes = crate::authoring_source_io::read_source_no_follow(
+    let bytes = crate::authoring_source_io::read_authored_source_no_follow(
         path,
         gore_mod::script_sources::MAX_SCRIPT_SOURCE_BYTES_V1,
     )
@@ -2081,6 +2081,29 @@ mod tests {
     use gore_as::compile::{InstallCompileArtifact, InstallCompileInspectionIssue};
     use std::fs;
 
+    #[test]
+    fn compiler_source_capture_allows_empty_modules_and_preserves_file_guards() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("Empty.as");
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(capture_compile_source(&path).unwrap(), b"");
+        let alias = root.path().join("Alias.as");
+        std::fs::hard_link(&path, &alias).unwrap();
+        assert!(capture_compile_source(&path)
+            .unwrap_err()
+            .contains("Unsafe"));
+        std::fs::remove_file(&alias).unwrap();
+        for (bytes, message) in [(b"\xff".as_slice(), "not UTF-8"), (b"\0".as_slice(), "NUL")] {
+            std::fs::write(&path, bytes).unwrap();
+            assert!(capture_compile_source(&path).unwrap_err().contains(message));
+        }
+        std::fs::write(
+            &path,
+            vec![b' '; gore_mod::script_sources::MAX_SCRIPT_SOURCE_BYTES_V1 as usize + 1],
+        )
+        .unwrap();
+        assert!(capture_compile_source(&path).unwrap_err().contains("Limit"));
+    }
     #[test]
     fn response_is_finished_before_the_qualified_target_pin_is_dropped() {
         struct DropWitness(std::sync::Arc<std::sync::atomic::AtomicBool>);

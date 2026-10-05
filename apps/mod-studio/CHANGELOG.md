@@ -8,8 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Retain exact, complete original `.as` inputs by default in the script
-  compiler, with fingerprints of replaced vanilla modules. Automatically
+- Retain exact, complete original `.as` inputs, including empty modules, by
+  default in the script compiler, with fingerprints of replaced vanilla modules. Automatically
   include these sources alongside compiled scripts when building bundles.
 - Let Manager rebuild source-backed script bundles against an updated pristine
   cache with its packaged standalone compiler. Rebuilds require compatible
