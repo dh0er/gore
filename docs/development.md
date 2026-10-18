@@ -1,6 +1,6 @@
 # Building GORE
 
-How to build the CLI, the three Windows GUI apps, and how the repository is
+How to build the CLI, the Windows GUI apps, the Linux Save Editor, and how the repository is
 laid out.
 
 This page is for people working *on* GORE. If you only want to use it, you need
@@ -8,10 +8,11 @@ nothing from here — start with [Getting started](guide/getting-started.md).
 
 ## Requirements
 
-- Windows 10 or newer.
+- Windows 10 or newer for Windows products and release packaging.
+- Linux x64 for Save Editor source builds; install Flutter's Linux desktop dependencies (`clang`, `cmake`, `ninja-build`, `pkg-config`, `libgtk-3-dev`, and `libstdc++-12-dev`).
 - Rust toolchain (stable).
-- Flutter with Windows desktop support — only for the GUI apps.
-- Visual Studio 2022 with "Desktop development with C++".
+- Flutter with Windows desktop support for Windows apps, or Linux desktop support for Save Editor.
+- Visual Studio 2022 with "Desktop development with C++" for Windows builds.
 - Python 3 — drives `build.py` and `test.py`.
 
 The local development setup used for this repository is Flutter 3.44.0,
@@ -83,6 +84,12 @@ directory) plus the mod-studio and mod-manager `analyze` + `test` steps.
 
 Per-project build and run details live in each component's own README, e.g.
 [`apps/save-editor/README.md`](../apps/save-editor/README.md).
+
+On Linux, only Save Editor currently has a desktop runner. From the repository
+root, use `python build.py gore-save-editor run --debug`, or build its native
+core with `cargo build -p gore-save` and run `flutter run -d linux` from
+`apps/save-editor/`. Linux release packaging and the other GUI apps remain
+Windows-only.
 
 ## Release quality gates
 

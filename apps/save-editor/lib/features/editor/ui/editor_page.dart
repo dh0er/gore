@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/ui/about_dialog.dart';
 import 'package:goresave/features/app/ui/appearance_settings.dart';
@@ -294,6 +295,21 @@ class _SaveSidebar extends StatelessWidget {
             isLoading: state.isLoading,
             profileWritesBlocked: state.deletedSaveRecovery != null,
           ),
+          if (state.selectedPath != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  key: const ValueKey('transfer-progress-button'),
+                  icon: const Icon(Icons.drive_file_move_outlined),
+                  label: const Text('Transfer progress'),
+                  onPressed: state.isLoading || state.hasUnsavedEdits
+                      ? null
+                      : () => _chooseProgressTransferSource(context, notifier),
+                ),
+              ),
+            ),
           if (state.otherSavesSelected)
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
@@ -380,6 +396,327 @@ class _SaveSidebar extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+Future<void> _chooseProgressTransferSource(
+  BuildContext context,
+  EditorNotifier notifier,
+) async {
+  final destinationPath = notifier.selectedPath;
+  if (destinationPath == null) return;
+  final file = await openFile(
+    acceptedTypeGroups: [
+      XTypeGroup(label: 'Gothic save', extensions: const ['sav']),
+    ],
+  );
+  if (file == null || !context.mounted) return;
+  await showDialog<void>(
+    context: context,
+    builder: (_) => _TransferProgressDialog(
+      sourcePath: file.path,
+      destinationPath: destinationPath,
+      notifier: notifier,
+    ),
+  );
+}
+
+class _TransferProgressDialog extends StatefulWidget {
+  const _TransferProgressDialog({
+    required this.sourcePath,
+    required this.destinationPath,
+    required this.notifier,
+  });
+
+  final String sourcePath;
+  final String destinationPath;
+  final EditorNotifier notifier;
+
+  @override
+  State<_TransferProgressDialog> createState() =>
+      _TransferProgressDialogState();
+}
+
+class _TransferProgressDialogState extends State<_TransferProgressDialog> {
+  bool _items = true;
+  bool _skills = true;
+  bool _stats = true;
+  bool _working = false;
+  bool _finished = false;
+  bool _succeeded = false;
+  String? _resultMessage;
+  TransferProgress? _transferProgress;
+  Timer? _progressTimer;
+  Duration _stageElapsed = Duration.zero;
+  final Stopwatch _transferStopwatch = Stopwatch();
+
+  @override
+  void dispose() {
+    _progressTimer?.cancel();
+    super.dispose();
+  }
+
+  void _updateProgress(TransferProgress progress) {
+    setState(() {
+      _transferProgress = progress;
+      _stageElapsed = Duration.zero;
+    });
+  }
+
+  void _startProgressClock() {
+    _transferStopwatch
+      ..reset()
+      ..start();
+    _progressTimer?.cancel();
+    _progressTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() => _stageElapsed += const Duration(seconds: 1));
+    });
+  }
+
+  String _formatEstimate(Duration duration) {
+    final seconds = (duration.inSeconds + 0.5).floor();
+    if (seconds < 1) return 'less than a second';
+    final minutes = seconds ~/ 60;
+    final remainingSeconds = seconds % 60;
+    if (minutes == 0) return '$seconds sec';
+    if (remainingSeconds == 0) return '$minutes min';
+    return '$minutes min $remainingSeconds sec';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return AlertDialog(
+      title: const Text('Transfer character progress'),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Copy the Hero\'s items, skills, and attributes from an older '
+              'save into the selected save. Quests, time, location, and NPC '
+              'progress stay as they are in the destination. Items are added '
+              'to carried inventory; skills and attributes are copied where '
+              'both saves support them.',
+            ),
+            const SizedBox(height: 12),
+            _TransferSavePath(label: 'From', path: widget.sourcePath),
+            const SizedBox(height: 8),
+            _TransferSavePath(label: 'To', path: widget.destinationPath),
+            const SizedBox(height: 8),
+            if (_working) ...[
+              LinearProgressIndicator(
+                value:
+                    _transferProgress == null ||
+                        _transferProgress!.totalWrites < 2
+                    ? null
+                    : _transferProgress!.completedWrites /
+                          _transferProgress!.totalWrites,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _transferProgress?.stage ?? 'Starting transfer...',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              if (_transferProgress case final progress?
+                  when !progress.writePlanReady &&
+                      progress.completedReads == progress.totalReads) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Checking changes for conflicts and arranging them into safe write steps. The destination save is not being written yet.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+              if (_transferProgress != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Reads ${_transferProgress!.completedReads}/${_transferProgress!.totalReads}'
+                  '${_transferProgress!.totalWrites == 0 ? '' : ' · Writes ${_transferProgress!.completedWrites}/${_transferProgress!.totalWrites}'}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _transferEtaLabel(_transferProgress!),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Stage elapsed: ${_formatEstimate(_stageElapsed)} · Total: ${_formatEstimate(_transferStopwatch.elapsed)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+              const SizedBox(height: 8),
+            ],
+            if (_finished) ...[
+              const SizedBox(height: 8),
+              Text(
+                _resultMessage ??
+                    (_succeeded ? 'Transfer completed.' : 'Transfer failed.'),
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: _succeeded
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.error,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${_succeeded ? 'Completed' : 'Failed'} in ${_formatEstimate(_transferStopwatch.elapsed)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(l10n.tabInventory),
+              value: _items,
+              onChanged: _working
+                  ? null
+                  : (value) => setState(() => _items = value ?? false),
+            ),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(l10n.heroGroupSkills),
+              value: _skills,
+              onChanged: _working
+                  ? null
+                  : (value) => setState(() => _skills = value ?? false),
+            ),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(l10n.tabAttribute),
+              value: _stats,
+              onChanged: _working
+                  ? null
+                  : (value) => setState(() => _stats = value ?? false),
+            ),
+          ],
+        ),
+      ),
+      actions: _finished
+          ? [
+              FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Done'),
+              ),
+            ]
+          : [
+              TextButton(
+                onPressed: _working ? null : () => Navigator.pop(context),
+                child: Text(l10n.cancel),
+              ),
+              FilledButton.icon(
+                icon: _working
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.drive_file_move_outlined),
+                label: Text(l10n.confirm),
+                onPressed: _working || (!_items && !_skills && !_stats)
+                    ? null
+                    : () async {
+                        setState(() {
+                          _working = true;
+                          _transferProgress = null;
+                        });
+                        _stageElapsed = Duration.zero;
+                        _startProgressClock();
+                        final succeeded = await widget.notifier
+                            .transferHeroProgress(
+                              sourcePath: widget.sourcePath,
+                              targetPath: widget.destinationPath,
+                              onProgress: (progress) {
+                                if (!context.mounted) return;
+                                _updateProgress(progress);
+                              },
+                              items: _items,
+                              skills: _skills,
+                              stats: _stats,
+                            );
+                        _progressTimer?.cancel();
+                        _transferStopwatch.stop();
+                        if (!context.mounted) return;
+                        setState(() {
+                          _working = false;
+                          _finished = true;
+                          _succeeded = succeeded;
+                          _resultMessage = succeeded
+                              ? widget.notifier.lastWriteMessage ??
+                                    'Transfer completed.'
+                              : widget.notifier.errorMessage ??
+                                    'Transfer failed.';
+                        });
+                      },
+              ),
+            ],
+    );
+  }
+
+  String _transferEtaLabel(TransferProgress progress) {
+    final estimate = progress.estimatedRemaining;
+    if (estimate == null) {
+      final readEstimate = progress.estimatedReadRemaining;
+      if (!progress.writePlanReady) {
+        if (progress.completedReads == progress.totalReads) {
+          return 'Calculating save plan...';
+        }
+        if (readEstimate != null) {
+          return 'Reads about ${_formatEstimate(_remainingAfterElapsed(readEstimate))} remaining; write estimate follows';
+        }
+      }
+      if (progress.writePlanReady &&
+          progress.completedWrites < progress.totalWrites) {
+        return 'Write ${progress.completedWrites + 1}/${progress.totalWrites} · ETA unavailable (no prior write sample)';
+      }
+      return 'Estimating remaining time...';
+    }
+    if (_stageElapsed > estimate && estimate > Duration.zero) {
+      return 'Taking longer than estimated';
+    }
+    return 'About ${_formatEstimate(_remainingAfterElapsed(estimate))} remaining';
+  }
+
+  Duration _remainingAfterElapsed(Duration estimate) {
+    final remaining = estimate - _stageElapsed;
+    return remaining.isNegative ? Duration.zero : remaining;
+  }
+}
+
+class _TransferSavePath extends StatelessWidget {
+  const _TransferSavePath({required this.label, required this.path});
+
+  final String label;
+  final String path;
+
+  @override
+  Widget build(BuildContext context) {
+    final normalizedPath = path.replaceAll('\\', '/');
+    final fileName = normalizedPath.split('/').last;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 40,
+          child: Text(label, style: Theme.of(context).textTheme.labelLarge),
+        ),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
+              Text(
+                path,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

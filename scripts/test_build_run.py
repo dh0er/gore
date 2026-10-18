@@ -32,6 +32,7 @@ class RunBuildTest(unittest.TestCase):
 
             with (
                 mock.patch.object(gore_build, 'ROOT', root),
+                mock.patch.object(gore_build.sys, 'platform', 'win32'),
                 mock.patch.object(gore_build, 'build_project', side_effect=build),
                 mock.patch.object(gore_build.subprocess, 'Popen', side_effect=launch),
                 mock.patch.object(sys, 'argv', ['build.py', 'gore-save-editor', 'build', '--debug', '--run']),
@@ -70,6 +71,7 @@ class RunBuildTest(unittest.TestCase):
 
                 with (
                     mock.patch.object(gore_build, 'ROOT', root),
+                    mock.patch.object(gore_build.sys, 'platform', 'win32'),
                     mock.patch.object(gore_build, 'run', side_effect=compile_step),
                     mock.patch.object(gore_build, 'discard_line_ending_only_churn'),
                     mock.patch.object(gore_build, 'resolve_git_sha', return_value='test-sha'),
@@ -77,6 +79,54 @@ class RunBuildTest(unittest.TestCase):
                 ):
                     gore_build.run_project('gore-save-editor', release=False)
                     process.assert_called_once()
+
+    def test_linux_save_editor_uses_linux_bundle_and_shared_library_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (
+                mock.patch.object(gore_build, 'ROOT', root),
+                mock.patch.object(gore_build.sys, 'platform', 'linux'),
+            ):
+                self.assertEqual(
+                    gore_build.flutter_build_dir('gore-save-editor', release=False),
+                    root / 'apps/save-editor/build/linux/x64/debug/bundle',
+                )
+                self.assertEqual(
+                    gore_build.runnable_exe('gore-save-editor', release=False),
+                    root / 'apps/save-editor/build/linux/x64/debug/bundle/goresave',
+                )
+                self.assertEqual(
+                    gore_build.core_library_filename('gore-save-editor'),
+                    'libgore_save.so',
+                )
+
+    def test_linux_build_builds_runner_and_stages_shared_library(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = root / 'apps/save-editor/build/linux/x64/debug/bundle'
+            native_library = root / 'target/debug/libgore_save.so'
+            commands = []
+
+            def build_step(label, args, **kwargs):
+                commands.append(args)
+                if args[0] == gore_build.CARGO:
+                    native_library.parent.mkdir(parents=True, exist_ok=True)
+                    native_library.write_bytes(b'linux core')
+                elif args[0] == gore_build.FLUTTER:
+                    bundle.mkdir(parents=True, exist_ok=True)
+
+            with (
+                mock.patch.object(gore_build, 'ROOT', root),
+                mock.patch.object(gore_build.sys, 'platform', 'linux'),
+                mock.patch.object(gore_build, 'run', side_effect=build_step),
+                mock.patch.object(gore_build, 'discard_line_ending_only_churn'),
+                mock.patch.object(gore_build, 'resolve_git_sha', return_value='test-sha'),
+            ):
+                gore_build.build_project('gore-save-editor', release=False, dry=False)
+
+            self.assertEqual(commands[0][1:4], ['build', '-p', 'gore-save'])
+            self.assertEqual(commands[1][1:4], ['build', 'linux', '--debug'])
+            self.assertEqual((bundle / 'libgore_save.so').read_bytes(), b'linux core')
 
 
 if __name__ == '__main__':

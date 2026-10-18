@@ -140,8 +140,7 @@ where
         return items.iter().map(job).collect();
     }
     let stride = items.len().div_ceil(workers);
-    let mut results: Vec<Option<Result<Vec<u8>, CoreError>>> =
-        items.iter().map(|_| None).collect();
+    let mut results: Vec<Option<Result<Vec<u8>, CoreError>>> = items.iter().map(|_| None).collect();
     std::thread::scope(|scope| {
         let job = &job;
         for (inputs, slots) in items.chunks(stride).zip(results.chunks_mut(stride)) {
@@ -228,11 +227,20 @@ mod tests {
         let backend = KrakenBackend::default();
         let good = backend.compress(&[7u8; 4096], 6).unwrap();
         let chunks = vec![
-            CodecDecodeChunk { input: &good, expected_size: 4096 },
+            CodecDecodeChunk {
+                input: &good,
+                expected_size: 4096,
+            },
             // Two different-length garbage chunks: whichever error wins is
             // identifiable, so a race would show up as a flaky expected_size.
-            CodecDecodeChunk { input: b"not-a-kraken-stream", expected_size: 4096 },
-            CodecDecodeChunk { input: b"also-not-a-stream", expected_size: 8192 },
+            CodecDecodeChunk {
+                input: b"not-a-kraken-stream",
+                expected_size: 4096,
+            },
+            CodecDecodeChunk {
+                input: b"also-not-a-stream",
+                expected_size: 8192,
+            },
         ];
         let error = backend.decompress_many(&chunks).unwrap_err().to_string();
         let serial = backend

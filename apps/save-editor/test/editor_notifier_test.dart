@@ -3410,7 +3410,11 @@ void main() {
       final notifier = EditorNotifier(core, saveDir: r'C:	mp\saves');
       await notifier.inspect(r'C:	mp\saves\G1R-001.sav');
 
-      Map<String, Object?> entry(String character, String name, bool present) => {
+      Map<String, Object?> entry(
+        String character,
+        String name,
+        bool present,
+      ) => {
         'path': 'private.knowledge.setEntry',
         'value': {'character': character, 'entry': name, 'present': present},
       };
@@ -7017,7 +7021,294 @@ void main() {
     expect(notifier.state.hasInvalidEdits, isFalse);
     expect(notifier.state.hasUnsavedEdits, isFalse);
   });
+
+  test(
+    'Hero progress transfer reads source and writes selected destination',
+    () async {
+      const sourcePath = r'C:\archive\Old.sav';
+      const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+      const attributePath = [
+        'm_GenericData',
+        'AttributesByGlobalId',
+        '{Hero}',
+        'AttributeSetsByClass',
+        '{AttributeSet_Hero}',
+        'Attributes',
+        '{Health}',
+        'CurrentValue',
+      ];
+      final core = _ProgressTransferCoreService(
+        savePath: destinationPath,
+        typedByPath: {
+          sourcePath: _typedTransferPage(attributePath, '70', 70.0),
+          destinationPath: _typedTransferPage(attributePath, '25', 25.0),
+        },
+        skillsByPath: {
+          sourcePath: _transferSkills('Learned'),
+          destinationPath: _transferSkills('Untrained'),
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(destinationPath);
+      final transferProgress = <TransferProgress>[];
+
+      expect(
+        await notifier.transferHeroProgress(
+          sourcePath: sourcePath,
+          onProgress: transferProgress.add,
+          items: false,
+        ),
+        isTrue,
+      );
+
+      final searches = core.requests.where(
+        (request) => request.command == 'search_typed_properties',
+      );
+      expect(searches.map((request) => request.payload['path']), [
+        sourcePath,
+        destinationPath,
+      ]);
+      expect(searches.map((request) => request.payload['includeNodes']), [
+        null,
+        null,
+      ]);
+      final writes = core.requests.where(
+        (request) => request.command == 'write_save',
+      );
+      expect(writes, hasLength(1));
+      expect(writes.single.payload['path'], destinationPath);
+      final edits = (writes.single.payload['edits'] as List).cast<Map>();
+      expect(
+        edits.map((edit) => edit['path']),
+        containsAll(['private.typed.setValue', 'private.skills.set']),
+      );
+      expect(
+        transferProgress.map((progress) => progress.stage),
+        containsAll([
+          'Reading source attributes...',
+          'Reading destination attributes...',
+          'Reading source skills...',
+          'Reading destination skills...',
+          'Preparing 2 changes...',
+          'Planning safe save steps...',
+          'Saving destination...',
+        ]),
+      );
+      final afterFirstRead = transferProgress.firstWhere(
+        (progress) => progress.completedReads == 1,
+      );
+      expect(afterFirstRead.totalReads, 4);
+      expect(afterFirstRead.writePlanReady, isFalse);
+      expect(afterFirstRead.estimatedRemaining, isNull);
+      final completedWrite = transferProgress.last;
+      expect(completedWrite.completedWrites, 1);
+      expect(completedWrite.totalWrites, 1);
+      expect(completedWrite.writePlanReady, isTrue);
+      expect(
+        core.requests.where((request) => request.command == 'write_save'),
+        everyElement(
+          predicate<_RecordedRequest>(
+            (request) => request.payload['path'] != sourcePath,
+          ),
+        ),
+      );
+    },
+  );
+
+  test('Hero progress transfer rejects a changed destination', () async {
+    const sourcePath = r'C:\archive\Old.sav';
+    const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+    const originallySelectedPath = r'C:\tmp\saves\G1R-002.sav';
+    final core = _ProgressTransferCoreService(savePath: destinationPath);
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(destinationPath);
+
+    expect(
+      await notifier.transferHeroProgress(
+        sourcePath: sourcePath,
+        targetPath: originallySelectedPath,
+      ),
+      isFalse,
+    );
+    expect(notifier.state.error, contains('destination changed'));
+    expect(
+      core.requests.where((request) => request.command == 'write_save'),
+      isEmpty,
+    );
+  });
+
+  test(
+    'Hero item transfer adds source items to destination inventory',
+    () async {
+      const sourcePath = r'C:\archive\Old.sav';
+      const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+      final core = _ProgressTransferCoreService(
+        savePath: destinationPath,
+        inventoryByPath: {
+          sourcePath: {
+            'items': [
+              {
+                'id': 'ItFo_Apple',
+                'path': '/Script/Angelscript.ItFo_Apple',
+                'count': 3,
+                'containerType': 'MainContainer',
+              },
+            ],
+          },
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(destinationPath);
+
+      expect(
+        await notifier.transferHeroProgress(
+          sourcePath: sourcePath,
+          skills: false,
+          stats: false,
+        ),
+        isTrue,
+      );
+
+      final write = core.requests.singleWhere(
+        (request) => request.command == 'write_save',
+      );
+      expect(write.payload['path'], destinationPath);
+      expect((write.payload['edits'] as List).single, {
+        'path': 'private.inventory.addItem',
+        'value': {'path': '/Script/Angelscript.ItFo_Apple', 'count': 3},
+      });
+    },
+  );
+
+  test('Hero item transfer includes equipment and pouch items', () async {
+    const sourcePath = r'C:\archive\Old.sav';
+    const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+    final core = _ProgressTransferCoreService(
+      savePath: destinationPath,
+      inventoryByPath: {
+        sourcePath: {
+          'items': [
+            {
+              'id': 'ItMw_Sword',
+              'path': '/Script/Angelscript.ItMw_Sword',
+              'count': 1,
+              'containerType': 'MeleeSlot',
+            },
+            {
+              'id': 'ItFo_Apple',
+              'path': '/Script/Angelscript.ItFo_Apple',
+              'count': 2,
+              'containerType': 'Pouch',
+            },
+          ],
+        },
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(destinationPath);
+
+    expect(
+      await notifier.transferHeroProgress(
+        sourcePath: sourcePath,
+        skills: false,
+        stats: false,
+      ),
+      isTrue,
+    );
+
+    final write = core.requests.singleWhere(
+      (request) => request.command == 'write_save',
+    );
+    expect(write.payload['edits'], [
+      {
+        'path': 'private.inventory.addItem',
+        'value': {'path': '/Script/Angelscript.ItMw_Sword', 'count': 1},
+      },
+      {
+        'path': 'private.inventory.addItem',
+        'value': {'path': '/Script/Angelscript.ItFo_Apple', 'count': 2},
+      },
+    ]);
+  });
+
+  test('Hero item transfer treats an absent stack count as one', () async {
+    const sourcePath = r'C:\archive\Old.sav';
+    const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+    final core = _ProgressTransferCoreService(
+      savePath: destinationPath,
+      inventoryByPath: {
+        sourcePath: {
+          'items': [
+            {
+              'id': 'ItMw_Sword',
+              'path': '/Script/Angelscript.ItMw_Sword',
+              'count': null,
+              'containerType': 'MainContainer',
+            },
+          ],
+        },
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(destinationPath);
+
+    expect(
+      await notifier.transferHeroProgress(
+        sourcePath: sourcePath,
+        skills: false,
+        stats: false,
+      ),
+      isTrue,
+    );
+
+    final write = core.requests.singleWhere(
+      (request) => request.command == 'write_save',
+    );
+    expect((write.payload['edits'] as List).single, {
+      'path': 'private.inventory.addItem',
+      'value': {'path': '/Script/Angelscript.ItMw_Sword', 'count': 1},
+    });
+  });
 }
+
+Map<String, Object?> _typedTransferPage(
+  List<String> path,
+  String value,
+  double editValue,
+) => {
+  'offset': 0,
+  'limit': 1000,
+  'total': 1,
+  'results': [
+    {
+      'path': path,
+      'display': 'Health CurrentValue',
+      'type': 'FloatProperty',
+      'value': value,
+      'editable': true,
+      'editValue': editValue,
+    },
+  ],
+};
+
+Map<String, Object?> _transferSkills(String current) => {
+  'found': true,
+  'skills': [
+    {
+      'base': 'GE_Skill_Sneak',
+      'label': 'Sneak',
+      'category': 'Thieving',
+      'kind': 'binary',
+      'learned': current == 'Learned',
+      'current': current,
+      'hasUntrained': true,
+      'options': [
+        {'value': 'Untrained'},
+        {'value': 'Learned'},
+      ],
+    },
+  ],
+};
 
 class _MemoryEditorSettingsStore implements EditorSettingsStore {
   _MemoryEditorSettingsStore([EditorSettings? settings])
@@ -7374,6 +7665,79 @@ class _RecordingCoreService implements GoresaveCoreService {
           'error': {'message': 'Unhandled command $command'},
         };
     }
+  }
+}
+
+class _ProgressTransferCoreService extends _RecordingCoreService {
+  _ProgressTransferCoreService({
+    required this.savePath,
+    this.typedByPath = const {},
+    this.skillsByPath = const {},
+    this.inventoryByPath = const {},
+  });
+
+  final String savePath;
+  final Map<String, Map<String, Object?>> typedByPath;
+  final Map<String, Map<String, Object?>> skillsByPath;
+  final Map<String, Map<String, Object?>> inventoryByPath;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'search_typed_properties') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data':
+            typedByPath[payload['path']] ??
+            {'offset': 0, 'limit': 1000, 'total': 0, 'results': []},
+      };
+    }
+    if (command == 'private.skills.list') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': skillsByPath[payload['path']] ?? {'found': true, 'skills': []},
+      };
+    }
+    if (command == 'private.inventory.list') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': inventoryByPath[payload['path']] ?? {'items': []},
+      };
+    }
+    if (command == 'plan_edits') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      final edits = payload['edits'] as List;
+      return {
+        'ok': true,
+        'data': {
+          'groups': [List<int>.generate(edits.length, (index) => index)],
+          'sidecars': [{}],
+        },
+      };
+    }
+    if (command == 'write_save') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {'backupPath': '$savePath.bak.1'},
+      };
+    }
+    return super.execute(command, payload: payload);
   }
 }
 
