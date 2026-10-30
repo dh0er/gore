@@ -12380,12 +12380,17 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
             (path_has_name(path, "MemorizedEvents") && path_has_key(path, skills::HERO))
                 || path_is_a_quest_current_state(path)
         }
-        // Restores Health to MaxHealth and strips memory events, death tags and
-        // the corpse entry. A peer health edit would otherwise be overwritten.
+        // Restores Health to MaxHealth and strips memory events, death tags,
+        // the corpse entry and the removed-from-world listing. A peer health
+        // edit would otherwise be overwritten.
+        // It also splices the removed-from-world set, so any raw edit in that set
+        // is refused, as for the lock set: set elements have no stable key, and
+        // a raw add could put the NPC straight back.
         PrivateEdit::NpcRevive(revive) => {
             path_targets_npc_health(path, &revive.id)
                 || path_has_name(path, "MemorizedEvents")
                 || path_enters_map_entry(path, "LooseTagsByGlobalId", &revive.id)
+                || path_has_name(path, npc::REMOVED_FROM_WORLD_SET)
                 || match segment_after_name(path, "m_SavedInventories") {
                     None => false,
                     Some(Some(properties::PathSeg::MapKey(key))) => {
@@ -13187,7 +13192,8 @@ fn parse_private_typed_container_edit(
 
 /// Parse a `private.npc.revive` edit: `value = { id: String }`. Revive strips the
 /// authoritative State.Dead loose tags (the native death gate), clears the NPC's
-/// defeat/kill memory events, removes its corpse, and restores HP to MaxHealth.
+/// defeat/kill memory events, removes its corpse, puts a cleaned-up corpse back
+/// into the world, and restores HP to MaxHealth.
 fn parse_private_npc_revive_edit(edit: &Edit) -> Result<PrivateNpcReviveEdit, CoreError> {
     let value = edit.value.as_object().ok_or_else(|| {
         CoreError::InvalidRequest("private.npc.revive value must be an object".to_string())
@@ -27432,6 +27438,37 @@ mod tests {
         ])
         .unwrap();
         assert!(!structured_edit_rewrites(&add_for(None), &attribute));
+    }
+
+    #[test]
+    fn revive_claims_the_removed_from_world_set() {
+        // Revive takes the NPC off GlobalIDsRemovedFromWorld; a raw edit in that
+        // set in the same write could put it back while the write reports success.
+        let revive = PrivateEdit::NpcRevive(PrivateNpcReviveEdit {
+            id: "Biter-1".to_string(),
+        });
+        let set_path = |tail: &[&str]| {
+            let mut segs = vec![
+                "m_GenericData".to_string(),
+                "{CharacterStates}".to_string(),
+                "NPCCharacters".to_string(),
+                npc::REMOVED_FROM_WORLD_SET.to_string(),
+            ];
+            segs.extend(tail.iter().map(|s| s.to_string()));
+            properties::parse_path(&segs).unwrap()
+        };
+        assert!(structured_edit_rewrites(&revive, &set_path(&[])));
+        assert!(structured_edit_rewrites(&revive, &set_path(&["[3]"])));
+
+        let other_npc_health = properties::parse_path(&[
+            "m_GenericData".to_string(),
+            "{CharacterStates}".to_string(),
+            "AttributesByGlobalId".to_string(),
+            "{Biter-2}".to_string(),
+            "Health".to_string(),
+        ])
+        .unwrap();
+        assert!(!structured_edit_rewrites(&revive, &other_npc_health));
     }
 
     #[test]

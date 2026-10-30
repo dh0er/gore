@@ -4303,11 +4303,13 @@ bool structuredEditRewrites(
       return (_pathHasName(typedPath, 'MemorizedEvents') &&
               _pathHasKey(typedPath, 'Hero')) ||
           _pathIsAQuestCurrentState(typedPath);
-    // Strips memory events, death tags and the corpse entry.
+    // Strips memory events, death tags, the corpse entry and the
+    // removed-from-world listing.
     case 'private.npc.revive':
       return _pathHasName(typedPath, 'MemorizedEvents') ||
           _pathHasName(typedPath, 'LooseTagsByGlobalId') ||
-          _pathHasName(typedPath, 'm_SavedInventories');
+          _pathHasName(typedPath, 'm_SavedInventories') ||
+          _pathHasName(typedPath, 'GlobalIDsRemovedFromWorld');
     // Insert or update ONE character's knowledge entry. Another character's
     // entry is a different map value, and every applier re-resolves its target
     // by key, so the two do not collide.
