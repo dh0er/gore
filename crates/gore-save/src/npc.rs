@@ -110,23 +110,14 @@ impl PersonalRelationship {
 /// NPC is dead iff its entry carries [`DEAD_TAG_STATE`] / `State.Dead`.
 const LOOSE_TAGS_MAP: &str = "LooseTagsByGlobalId";
 
-/// The authoritative on-load "this NPC is dead" marker: a killed NPC's
-/// `LooseTagsByGlobalId[<id>]` GameplayTagContainer contains exactly
-/// `State.KillBountyGranted`, `State.ExecutedBountyGranted`, `State.Dead`. An alive
-/// (incl. merely-defeated) NPC carries NONE of these. `State.Dead` is the decisive
-/// one; `is_dead` keys off it, and Revive strips all of them (see [`apply_revive`]).
-/// A few kills also carry [`INSTANT_DEATH_TAG`] next to `State.Dead`.
-const DEAD_LOOSE_TAGS: &[&str] = &[
-    "State.KillBountyGranted",
-    "State.ExecutedBountyGranted",
-    "State.Dead",
-    INSTANT_DEATH_TAG,
-];
-
-/// What Revive strips from `LooseTagsByGlobalId`: the [`DEAD_LOOSE_TAGS`] plus
-/// `State.Defeated`, a knock-out the game clears again on its own. Leaving it would
-/// let the game empty the entry later, and an empty entry on a listed NPC is what
-/// [`stranded_by_old_revive`] looks for.
+/// What Revive strips from `LooseTagsByGlobalId` (see [`apply_revive`]).
+///
+/// A killed NPC's GameplayTagContainer there holds the death tags
+/// `State.KillBountyGranted`, `State.ExecutedBountyGranted` and `State.Dead`; a few
+/// kills also carry [`INSTANT_DEATH_TAG`]. `State.Dead` is the authoritative on-load
+/// marker `is_dead` keys off. `State.Defeated` is a knock-out the game clears again on
+/// its own; leaving it would let the game empty the entry later, and an empty entry
+/// on a listed NPC is what [`stranded_by_old_revive`] looks for.
 const REVIVE_LOOSE_TAGS: &[&str] = &[
     "State.KillBountyGranted",
     "State.ExecutedBountyGranted",
@@ -1430,7 +1421,7 @@ pub fn stranded_by_old_revives(root: &RootObject) -> Vec<String> {
         .collect()
 }
 
-/// Strip the death loose tags ([`REVIVE_LOOSE_TAGS`]: `State.Dead`,
+/// Strip the revive loose tags ([`REVIVE_LOOSE_TAGS`]: `State.Dead`,
 /// `State.KillBountyGranted`, `State.ExecutedBountyGranted`, `State.Dead.Instant`,
 /// `State.Defeated`) from NPC `id`'s `LooseTagsByGlobalId[<id>]` GameplayTagContainer, in place. This is
 /// the CRITICAL revive step: `State.Dead` here is the authoritative on-load death gate
@@ -3011,7 +3002,7 @@ mod tests {
         assert_eq!(n.max_hp, Some(80.0));
         // The three dead loose tags are gone; the unrelated loose tag survives.
         let tags = loose_tags(&root, id).expect("loose-tags entry still present");
-        for dead in DEAD_LOOSE_TAGS {
+        for dead in REVIVE_LOOSE_TAGS {
             assert!(
                 !tags.iter().any(|t| t == dead),
                 "dead loose tag {dead} must be gone"
@@ -3226,7 +3217,7 @@ mod tests {
         // 4. The dead loose tags are gone; the NPC's unrelated loose tag survives and
         //    the unrelated alive NPC's loose tags are untouched.
         let revived_tags = loose_tags(&root, id).expect("loose-tags entry present");
-        for dead in DEAD_LOOSE_TAGS {
+        for dead in REVIVE_LOOSE_TAGS {
             assert!(
                 !revived_tags.iter().any(|t| t == dead),
                 "dead loose tag {dead} must be stripped"
@@ -3678,13 +3669,15 @@ mod tests {
             .unwrap();
         assert!(!n.is_dead, "revived NPC should no longer be dead");
         assert_eq!(n.hp, n.max_hp, "HP restored to MaxHealth base");
-        // State.Dead / KillBounty / Executed gone from LooseTagsByGlobalId[Drake].
-        let after_tags = loose_tags(&root, id).expect("Drake loose-tags entry still present");
-        for dead in DEAD_LOOSE_TAGS {
-            assert!(
-                !after_tags.iter().any(|t| t == dead),
-                "dead loose tag {dead} must be stripped from LooseTagsByGlobalId[Drake]"
-            );
+        // State.Dead / KillBounty / Executed gone from LooseTagsByGlobalId[Drake]:
+        // the entry goes whole when nothing else was in it.
+        if let Some(after_tags) = loose_tags(&root, id) {
+            for dead in REVIVE_LOOSE_TAGS {
+                assert!(
+                    !after_tags.iter().any(|t| t == dead),
+                    "dead loose tag {dead} must be stripped from LooseTagsByGlobalId[Drake]"
+                );
+            }
         }
         assert!(
             !is_dead_by_loose_tags(&root, id),
