@@ -14,8 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a fresh kill could be revived: once the game had cleaned up the corpse, the
   NPC stayed gone.
 - NPCs that an older version revived but that never came back are now detected
-  when a savegame is opened. The overview offers to repair them, and they
-  appear in the game again.
+  when a savegame is opened, and the overview offers to repair them.
 
 ## [1.5.0] - 2026-09-24
 

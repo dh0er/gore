@@ -67,6 +67,8 @@ void main() {
     ];
     expect(edits.map((e) => e['path']).toSet(), {'private.npc.revive'});
     expect(edits.map((e) => (e['value'] as Map)['id']).toSet(), {drake, guard});
+    // The save is re-inspected after writing, and the repaired NPCs are gone.
+    expect(find.byType(NpcWorldRepairBanner), findsNothing);
   });
 
   testWidgets('without write capability the warning stays, the action goes', (
@@ -104,6 +106,9 @@ class _NpcCoreService implements GoresaveCoreService {
   /// Whether the codec can compress; without it no private edit can be written.
   final bool canCompress;
   final requests = <_RecordedRequest>[];
+
+  /// Whether a save went through; the repaired NPCs are no longer reported.
+  bool _written = false;
 
   static const _cheesePath = '/Script/Angelscript.ItFo_Cheese';
 
@@ -176,7 +181,9 @@ class _NpcCoreService implements GoresaveCoreService {
               'npc': {
                 'hasNpcs': true,
                 'writable': ['private.npc.revive'],
-                'strandedRevives': strandedRevives,
+                'strandedRevives': _written
+                    ? const <String>[]
+                    : strandedRevives,
               },
               'inventory': {
                 'itemStackCount': 1,
@@ -274,6 +281,7 @@ class _NpcCoreService implements GoresaveCoreService {
           'data': {'attributes': <Object?>[]},
         };
       case 'write_save':
+        _written = true;
         return {
           'ok': true,
           'data': {'backupPath': r'C:\tmp\saves\G1R-001.sav.bak.1'},
