@@ -3326,6 +3326,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
         for (final entry in sourceCounts.entries) {
           final carried = carriedItemsByPath[entry.key];
           if (carried == null) {
+            // Several source stacks can add up past the save's 32-bit count.
+            if (entry.value > 0x7fffffff) {
+              throw StateError(_l10n.transferCountLimit);
+            }
             edits.add(
               InventoryItemAdd(
                 path: entry.key,
@@ -3392,6 +3396,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
         reportProgress(_l10n.transferSavingDestination, estimate: true);
       },
     );
+    // The dialog reports a failed transfer as finished; leaving its edits
+    // staged would block a new transfer and let a later Save apply them.
+    if (!saved) clearPendingEdit('progressTransfer');
     return saved;
   }
 

@@ -7462,6 +7462,88 @@ void main() {
     },
   );
 
+  test('a failed transfer write leaves no transfer edits staged', () async {
+    const sourcePath = r'C:\archive\Old.sav';
+    const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+    final core = _FailingWriteTransferCoreService(
+      savePath: destinationPath,
+      inventoryByPath: {
+        sourcePath: {
+          'items': [
+            {
+              'id': 'ItMi_Orenugget',
+              'path': '/Script/Angelscript.ItMi_Orenugget',
+              'count': 5,
+              'containerType': 'MainContainer',
+            },
+          ],
+        },
+        destinationPath: {'items': <Object?>[]},
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(destinationPath);
+
+    expect(
+      await notifier.transferHeroProgress(
+        sourcePath: sourcePath,
+        skills: false,
+        stats: false,
+      ),
+      isFalse,
+    );
+    expect(
+      core.requests.where((request) => request.command == 'write_save'),
+      isNotEmpty,
+    );
+    expect(notifier.state.pendingEdits, isEmpty);
+    expect(notifier.state.hasUnsavedEdits, isFalse);
+  });
+
+  test(
+    'source stacks adding up past the count limit stop the transfer',
+    () async {
+      const sourcePath = r'C:\archive\Old.sav';
+      const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+      Map<String, Object?> stack(int slotId) => {
+        'id': 'ItMi_Orenugget',
+        'path': '/Script/Angelscript.ItMi_Orenugget',
+        'count': 0x7fffffff,
+        'slotId': slotId,
+        'containerType': 'MainContainer',
+      };
+      final core = _ProgressTransferCoreService(
+        savePath: destinationPath,
+        inventoryByPath: {
+          sourcePath: {
+            'items': [stack(1), stack(2)],
+          },
+          destinationPath: {'items': <Object?>[]},
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(destinationPath);
+
+      expect(
+        await notifier.transferHeroProgress(
+          sourcePath: sourcePath,
+          skills: false,
+          stats: false,
+        ),
+        isFalse,
+      );
+      expect(
+        notifier.state.error,
+        'Could not save the changes: '
+        'Transferred item count exceeds the supported limit.',
+      );
+      expect(
+        core.requests.where((request) => request.command == 'write_save'),
+        isEmpty,
+      );
+    },
+  );
+
   test(
     'Hero transfer accepts a destination spelled differently than the selection',
     () async {
@@ -8138,6 +8220,49 @@ class _FailingAssignProfileCoreService extends _RecordingCoreService {
 }
 
 /// write_save always fails.
+class _FailingWriteTransferCoreService extends _ProgressTransferCoreService {
+  _FailingWriteTransferCoreService({
+    required super.savePath,
+    super.inventoryByPath,
+  });
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'write_save') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': false,
+        'error': {'message': 'write failed'},
+      };
+    }
+    // The refresh after the failure must land back on the destination, which
+    // is when the editor keeps unwritten edits for a retry.
+    if (command == 'scan_save_dir') {
+      return {
+        'ok': true,
+        'data': {
+          'saves': [
+            {
+              'path': savePath,
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 914367,
+              'sha1': 'abc',
+              'status': 'ok',
+            },
+          ],
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
 class _FailingWriteCoreService extends _RecordingCoreService {
   _FailingWriteCoreService({super.scanData});
 
