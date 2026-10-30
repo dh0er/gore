@@ -3442,6 +3442,10 @@ class AppLocalizationsEs extends AppLocalizations {
   String get transferReadingSourceInventory => 'Leyendo inventario de origen…';
 
   @override
+  String get transferReadingDestinationInventory =>
+      'Leyendo inventario de destino…';
+
+  @override
   String get transferNoCompatibleChanges =>
       'No se encontraron cambios compatibles para transferir.';
 

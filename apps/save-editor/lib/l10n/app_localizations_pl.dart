@@ -3447,6 +3447,9 @@ class AppLocalizationsPl extends AppLocalizations {
   String get transferReadingSourceInventory => 'Odczyt ekwipunku źródła…';
 
   @override
+  String get transferReadingDestinationInventory => 'Odczyt ekwipunku celu…';
+
+  @override
   String get transferNoCompatibleChanges =>
       'Nie znaleziono zmian, które można przenieść.';
 

@@ -839,6 +839,7 @@
   "transferReadingSourceSkills": "正在讀取來源技能……",
   "transferReadingDestinationSkills": "正在讀取目標技能……",
   "transferReadingSourceInventory": "正在讀取來源物品……",
+  "transferReadingDestinationInventory": "正在讀取目標物品……",
   "transferNoCompatibleChanges": "找不到可以轉移的相容變更。",
   "transferChooseDifferentSource": "請選擇另一個來源存檔。",
   "transferDestinationChanged": "所選目標已改變。請重新選擇來源。",

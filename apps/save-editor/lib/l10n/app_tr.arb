@@ -839,6 +839,7 @@
   "transferReadingSourceSkills": "Kaynak beceriler okunuyor…",
   "transferReadingDestinationSkills": "Hedef beceriler okunuyor…",
   "transferReadingSourceInventory": "Kaynak envanter okunuyor…",
+  "transferReadingDestinationInventory": "Hedef envanter okunuyor…",
   "transferNoCompatibleChanges": "Aktarılacak uyumlu değişiklik bulunamadı.",
   "transferChooseDifferentSource": "Başka bir kaynak kayıt seçin.",
   "transferDestinationChanged": "Seçili hedef değişti. Kaynağı yeniden seçin.",

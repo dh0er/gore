@@ -3438,6 +3438,10 @@ class AppLocalizationsUk extends AppLocalizations {
   String get transferReadingSourceInventory => 'Читання інвентаря джерела…';
 
   @override
+  String get transferReadingDestinationInventory =>
+      'Читання інвентаря призначення…';
+
+  @override
   String get transferNoCompatibleChanges =>
       'Не знайдено сумісних змін для перенесення.';
 

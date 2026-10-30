@@ -3448,6 +3448,10 @@ class AppLocalizationsRu extends AppLocalizations {
   String get transferReadingSourceInventory => 'Чтение инвентаря источника…';
 
   @override
+  String get transferReadingDestinationInventory =>
+      'Чтение инвентаря назначения…';
+
+  @override
   String get transferNoCompatibleChanges =>
       'Не найдено совместимых изменений для переноса.';
 

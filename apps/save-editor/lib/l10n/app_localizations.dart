@@ -5172,6 +5172,12 @@ abstract class AppLocalizations {
   /// **'Reading source inventory...'**
   String get transferReadingSourceInventory;
 
+  /// No description provided for @transferReadingDestinationInventory.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading destination inventory...'**
+  String get transferReadingDestinationInventory;
+
   /// No description provided for @transferNoCompatibleChanges.
   ///
   /// In en, this message translates to:

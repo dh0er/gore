@@ -7269,6 +7269,79 @@ void main() {
       'value': {'path': '/Script/Angelscript.ItMw_Sword', 'count': 1},
     });
   });
+
+  test(
+    'Hero item transfer pins a stack the destination carries twice',
+    () async {
+      const sourcePath = r'C:\archive\Old.sav';
+      const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+      final core = _ProgressTransferCoreService(
+        savePath: destinationPath,
+        inventoryByPath: {
+          sourcePath: {
+            'items': [
+              {
+                'id': 'ItMi_Orenugget',
+                'path': '/Script/Angelscript.ItMi_Orenugget',
+                'count': 5,
+                'containerType': 'MainContainer',
+              },
+            ],
+          },
+          destinationPath: {
+            'items': [
+              {
+                'id': 'ItMi_Orenugget',
+                'path': '/Script/Angelscript.ItMi_Orenugget',
+                'count': 10,
+                'slotId': 4,
+                'containerType': 'MainContainer',
+              },
+              {
+                'id': 'ItMi_Orenugget',
+                'path': '/Script/Angelscript.ItMi_Orenugget',
+                'count': 7,
+                'slotId': 9,
+                'containerType': 'MainContainer',
+              },
+            ],
+          },
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(destinationPath);
+
+      expect(
+        await notifier.transferHeroProgress(
+          sourcePath: sourcePath,
+          skills: false,
+          stats: false,
+        ),
+        isTrue,
+      );
+
+      final inventoryReads = core.requests.where(
+        (request) => request.command == 'private.inventory.list',
+      );
+      expect(inventoryReads.map((request) => request.payload['path']), [
+        sourcePath,
+        destinationPath,
+      ]);
+      final write = core.requests.singleWhere(
+        (request) => request.command == 'write_save',
+      );
+      expect((write.payload['edits'] as List).single, {
+        'path': 'private.inventory.setItemCount',
+        'value': {
+          'id': 'ItMi_Orenugget',
+          'path': '/Script/Angelscript.ItMi_Orenugget',
+          'count': 15,
+          'slotId': 4,
+          'containerType': 'MainContainer',
+        },
+      });
+    },
+  );
 }
 
 Map<String, Object?> _typedTransferPage(

@@ -3327,6 +3327,9 @@ class AppLocalizationsJa extends AppLocalizations {
   String get transferReadingSourceInventory => '元の所持品を読み込んでいます…';
 
   @override
+  String get transferReadingDestinationInventory => '先の所持品を読み込んでいます…';
+
+  @override
   String get transferNoCompatibleChanges => '移せる変更が見つかりませんでした。';
 
   @override

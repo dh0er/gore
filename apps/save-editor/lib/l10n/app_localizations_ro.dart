@@ -3439,6 +3439,10 @@ class AppLocalizationsRo extends AppLocalizations {
   String get transferReadingSourceInventory => 'Se citește inventarul sursă…';
 
   @override
+  String get transferReadingDestinationInventory =>
+      'Se citește inventarul destinație…';
+
+  @override
   String get transferNoCompatibleChanges =>
       'Nu s-au găsit modificări compatibile de transferat.';
 

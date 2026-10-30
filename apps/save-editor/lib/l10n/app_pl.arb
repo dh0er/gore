@@ -864,6 +864,7 @@
   "transferReadingSourceSkills": "Odczyt umiejętności źródła…",
   "transferReadingDestinationSkills": "Odczyt umiejętności celu…",
   "transferReadingSourceInventory": "Odczyt ekwipunku źródła…",
+  "transferReadingDestinationInventory": "Odczyt ekwipunku celu…",
   "transferNoCompatibleChanges": "Nie znaleziono zmian, które można przenieść.",
   "transferChooseDifferentSource": "Wybierz inny zapis źródłowy.",
   "transferDestinationChanged": "Wybrany cel się zmienił. Wybierz źródło ponownie.",

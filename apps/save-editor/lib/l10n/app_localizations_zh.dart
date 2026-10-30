@@ -3287,6 +3287,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get transferReadingSourceInventory => '正在读取来源物品……';
 
   @override
+  String get transferReadingDestinationInventory => '正在读取目标物品……';
+
+  @override
   String get transferNoCompatibleChanges => '没有找到可以转移的兼容更改。';
 
   @override
@@ -6597,6 +6600,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get transferReadingSourceInventory => '正在读取来源物品……';
+
+  @override
+  String get transferReadingDestinationInventory => '正在读取目标物品……';
 
   @override
   String get transferNoCompatibleChanges => '没有找到可以转移的兼容更改。';
@@ -9921,6 +9927,9 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get transferReadingSourceInventory => '正在讀取來源物品……';
+
+  @override
+  String get transferReadingDestinationInventory => '正在讀取目標物品……';
 
   @override
   String get transferNoCompatibleChanges => '找不到可以轉移的相容變更。';

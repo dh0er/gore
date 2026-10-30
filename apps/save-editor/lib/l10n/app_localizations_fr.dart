@@ -3458,6 +3458,10 @@ class AppLocalizationsFr extends AppLocalizations {
       'Lecture de l\'inventaire source…';
 
   @override
+  String get transferReadingDestinationInventory =>
+      'Lecture de l\'inventaire de destination…';
+
+  @override
   String get transferNoCompatibleChanges =>
       'Aucune modification compatible à transférer.';
 

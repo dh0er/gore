@@ -3439,6 +3439,10 @@ class AppLocalizationsPt extends AppLocalizations {
   String get transferReadingSourceInventory => 'A ler inventário de origem…';
 
   @override
+  String get transferReadingDestinationInventory =>
+      'A ler inventário de destino…';
+
+  @override
   String get transferNoCompatibleChanges =>
       'Não foram encontradas alterações compatíveis para transferir.';
 
@@ -6905,6 +6909,10 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get transferReadingSourceInventory => 'Lendo inventário de origem…';
+
+  @override
+  String get transferReadingDestinationInventory =>
+      'Lendo inventário de destino…';
 
   @override
   String get transferNoCompatibleChanges =>

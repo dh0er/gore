@@ -839,6 +839,7 @@
   "transferReadingSourceSkills": "Čtení zdrojových dovedností…",
   "transferReadingDestinationSkills": "Čtení cílových dovedností…",
   "transferReadingSourceInventory": "Čtení zdrojového inventáře…",
+  "transferReadingDestinationInventory": "Čtení cílového inventáře…",
   "transferNoCompatibleChanges": "Nebyly nalezeny žádné přenositelné změny.",
   "transferChooseDifferentSource": "Vyberte jiné zdrojové uložení.",
   "transferDestinationChanged": "Vybraný cíl se změnil. Zvolte zdroj znovu.",

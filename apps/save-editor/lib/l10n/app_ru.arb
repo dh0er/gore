@@ -864,6 +864,7 @@
   "transferReadingSourceSkills": "Чтение навыков источника…",
   "transferReadingDestinationSkills": "Чтение навыков назначения…",
   "transferReadingSourceInventory": "Чтение инвентаря источника…",
+  "transferReadingDestinationInventory": "Чтение инвентаря назначения…",
   "transferNoCompatibleChanges": "Не найдено совместимых изменений для переноса.",
   "transferChooseDifferentSource": "Выберите другое сохранение-источник.",
   "transferDestinationChanged": "Выбранное назначение изменилось. Выберите источник снова.",

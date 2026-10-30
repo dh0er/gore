@@ -864,6 +864,7 @@
   "transferReadingSourceSkills": "A ler aptidões de origem…",
   "transferReadingDestinationSkills": "A ler aptidões de destino…",
   "transferReadingSourceInventory": "A ler inventário de origem…",
+  "transferReadingDestinationInventory": "A ler inventário de destino…",
   "transferNoCompatibleChanges": "Não foram encontradas alterações compatíveis para transferir.",
   "transferChooseDifferentSource": "Escolhe outro jogo guardado de origem.",
   "transferDestinationChanged": "O destino selecionado mudou. Escolhe a origem outra vez.",

@@ -3438,6 +3438,10 @@ class AppLocalizationsDe extends AppLocalizations {
   String get transferReadingSourceInventory => 'Quell-Inventar wird gelesen…';
 
   @override
+  String get transferReadingDestinationInventory =>
+      'Ziel-Inventar wird gelesen…';
+
+  @override
   String get transferNoCompatibleChanges =>
       'Es wurden keine übernehmbaren Änderungen gefunden.';
 

@@ -839,6 +839,7 @@
   "transferReadingSourceSkills": "Читання навичок джерела…",
   "transferReadingDestinationSkills": "Читання навичок призначення…",
   "transferReadingSourceInventory": "Читання інвентаря джерела…",
+  "transferReadingDestinationInventory": "Читання інвентаря призначення…",
   "transferNoCompatibleChanges": "Не знайдено сумісних змін для перенесення.",
   "transferChooseDifferentSource": "Виберіть інше збереження-джерело.",
   "transferDestinationChanged": "Вибране призначення змінилося. Виберіть джерело знову.",

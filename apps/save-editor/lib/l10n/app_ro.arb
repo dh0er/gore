@@ -839,6 +839,7 @@
   "transferReadingSourceSkills": "Se citesc abilitățile sursă…",
   "transferReadingDestinationSkills": "Se citesc abilitățile destinație…",
   "transferReadingSourceInventory": "Se citește inventarul sursă…",
+  "transferReadingDestinationInventory": "Se citește inventarul destinație…",
   "transferNoCompatibleChanges": "Nu s-au găsit modificări compatibile de transferat.",
   "transferChooseDifferentSource": "Alege o altă salvare sursă.",
   "transferDestinationChanged": "Destinația selectată s-a schimbat. Alege din nou sursa.",

@@ -3426,6 +3426,9 @@ class AppLocalizationsHu extends AppLocalizations {
   String get transferReadingSourceInventory => 'Forrás leltárának olvasása…';
 
   @override
+  String get transferReadingDestinationInventory => 'Cél leltárának olvasása…';
+
+  @override
   String get transferNoCompatibleChanges => 'Nem található átvihető módosítás.';
 
   @override

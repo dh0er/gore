@@ -1415,6 +1415,7 @@
   "transferReadingSourceSkills": "Reading source skills...",
   "transferReadingDestinationSkills": "Reading destination skills...",
   "transferReadingSourceInventory": "Reading source inventory...",
+  "transferReadingDestinationInventory": "Reading destination inventory...",
   "transferNoCompatibleChanges": "No compatible changes were found to transfer.",
   "transferChooseDifferentSource": "Choose a different source save.",
   "transferDestinationChanged": "The selected destination changed. Choose the source again.",

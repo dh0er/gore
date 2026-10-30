@@ -3430,6 +3430,9 @@ class AppLocalizationsCs extends AppLocalizations {
   String get transferReadingSourceInventory => 'Čtení zdrojového inventáře…';
 
   @override
+  String get transferReadingDestinationInventory => 'Čtení cílového inventáře…';
+
+  @override
   String get transferNoCompatibleChanges =>
       'Nebyly nalezeny žádné přenositelné změny.';
 

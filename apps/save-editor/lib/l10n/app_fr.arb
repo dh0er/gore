@@ -875,6 +875,7 @@
   "transferReadingSourceSkills": "Lecture des compétences source…",
   "transferReadingDestinationSkills": "Lecture des compétences de destination…",
   "transferReadingSourceInventory": "Lecture de l'inventaire source…",
+  "transferReadingDestinationInventory": "Lecture de l'inventaire de destination…",
   "transferNoCompatibleChanges": "Aucune modification compatible à transférer.",
   "transferChooseDifferentSource": "Choisissez une autre sauvegarde source.",
   "transferDestinationChanged": "La destination sélectionnée a changé. Choisissez à nouveau la source.",

@@ -839,6 +839,7 @@
   "transferReadingSourceSkills": "Forrás képességeinek olvasása…",
   "transferReadingDestinationSkills": "Cél képességeinek olvasása…",
   "transferReadingSourceInventory": "Forrás leltárának olvasása…",
+  "transferReadingDestinationInventory": "Cél leltárának olvasása…",
   "transferNoCompatibleChanges": "Nem található átvihető módosítás.",
   "transferChooseDifferentSource": "Válassz másik forrásmentést.",
   "transferDestinationChanged": "A kiválasztott cél megváltozott. Válaszd ki újra a forrást.",

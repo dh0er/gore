@@ -3420,6 +3420,9 @@ class AppLocalizationsTr extends AppLocalizations {
   String get transferReadingSourceInventory => 'Kaynak envanter okunuyor…';
 
   @override
+  String get transferReadingDestinationInventory => 'Hedef envanter okunuyor…';
+
+  @override
   String get transferNoCompatibleChanges =>
       'Aktarılacak uyumlu değişiklik bulunamadı.';
 

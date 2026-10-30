@@ -871,6 +871,7 @@
   "transferReadingSourceSkills": "元のスキルを読み込んでいます…",
   "transferReadingDestinationSkills": "先のスキルを読み込んでいます…",
   "transferReadingSourceInventory": "元の所持品を読み込んでいます…",
+  "transferReadingDestinationInventory": "先の所持品を読み込んでいます…",
   "transferNoCompatibleChanges": "移せる変更が見つかりませんでした。",
   "transferChooseDifferentSource": "別の元セーブを選んでください。",
   "transferDestinationChanged": "選択中の移動先が変わりました。元のセーブを選び直してください。",

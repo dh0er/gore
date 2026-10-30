@@ -3111,7 +3111,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (!items && !skills && !stats) return false;
 
     final edits = <Map<String, Object?>>[];
-    final totalReads = (stats ? 2 : 0) + (skills ? 2 : 0) + (items ? 1 : 0);
+    final totalReads = (stats ? 2 : 0) + (skills ? 2 : 0) + (items ? 2 : 0);
     var completedReads = 0;
     var completedWrites = 0;
     var totalWrites = 0;
@@ -3245,7 +3245,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
           _l10n.transferReadingSourceInventory,
           () => _loadTransferInventory(sourcePath),
         );
-        final destinationInventory = state.inspection!.privateInventory;
+        // The inspection's inventory comes from the legacy scan and carries no
+        // slot ids, so a count edit built from it falls back to path-only
+        // matching and fails once two carried stacks share an item. The full
+        // list addresses each stack by container and slot.
+        final destinationInventory = await readAction(
+          _l10n.transferReadingDestinationInventory,
+          () => _loadTransferInventory(destinationPath),
+        );
         final carriedItemsByPath = <String, PrivateInventoryItem>{};
         for (final item in destinationInventory.items) {
           if (item.containerType == null ||

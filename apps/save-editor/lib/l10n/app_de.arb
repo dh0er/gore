@@ -864,6 +864,7 @@
   "transferReadingSourceSkills": "Quell-Talente werden gelesen…",
   "transferReadingDestinationSkills": "Ziel-Talente werden gelesen…",
   "transferReadingSourceInventory": "Quell-Inventar wird gelesen…",
+  "transferReadingDestinationInventory": "Ziel-Inventar wird gelesen…",
   "transferNoCompatibleChanges": "Es wurden keine übernehmbaren Änderungen gefunden.",
   "transferChooseDifferentSource": "Wähle ein anderes Quell-Savegame.",
   "transferDestinationChanged": "Das ausgewählte Ziel hat sich geändert. Wähle die Quelle erneut.",
