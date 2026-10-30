@@ -1428,7 +1428,8 @@ pub fn stranded_by_old_revives(root: &RootObject) -> Vec<String> {
 /// An entry holding nothing else is removed whole, the shape of an NPC that was
 /// never killed. Emptying it instead is what older builds did, and the mark
 /// [`stranded_by_old_revive`] looks for; leaving one would flag this NPC too once the
-/// story despawns it. An entry that is already empty stays as it is.
+/// story despawns it. An entry that is already empty goes only when an older build
+/// left it on an NPC still out of the world, the repair; otherwise it stays.
 ///
 /// Each tag removal is a length-changing splice on a native tag container that is a
 /// MAP VALUE (no per-value size header), so it goes through
@@ -1461,7 +1462,7 @@ fn plan_dead_loose_tag_removal(
         PropertyValue::Struct(StructValue::GameplayTagContainer(tags))
             if !tags.is_empty() && tags.iter().all(|t| DEAD_LOOSE_TAGS.contains(&t.as_str()))
     );
-    if only_death_tags {
+    if only_death_tags || stranded_by_old_revive(root, id) {
         return Ok(Some(ReviveEdit::RemoveMapEntries {
             target: chain.target.clone(),
             enclosing: chain.enclosing_size_fields,
@@ -3501,6 +3502,11 @@ mod tests {
         assert!(removed_from_world(set, dead));
         assert!(removed_from_world(set, despawned));
         assert!(stranded_by_old_revives(&root).is_empty());
+        assert_eq!(
+            loose_tags(&root, stranded),
+            None,
+            "the trace goes too, so a later story despawn is not flagged"
+        );
     }
 
     #[test]
