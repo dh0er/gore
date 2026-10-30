@@ -5347,6 +5347,56 @@ void main() {
     },
   );
 
+  test(
+    'choosing the right folder after a missing one opens its active profile',
+    () async {
+      const savePath = r'E:\G1R\Saved\SaveGames\G1R-001.sav';
+      final core = _MissingFolderCoreService(
+        missingPath: r'C:\missing\saves',
+        scanData: {
+          'saves': [
+            {
+              'path': savePath,
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 914367,
+              'sha1': 'abc',
+              'status': 'ok',
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-001'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\missing\saves',
+        settingsStore: _MemoryEditorSettingsStore(),
+        directoryExists: (path) => path != r'C:\missing\saves',
+      );
+      await pumpEventQueue();
+      expect(notifier.state.missingSaveDir, r'C:\missing\saves');
+      expect(notifier.state.otherSavesSelected, isTrue);
+
+      await notifier.setSaveDir(r'E:\G1R\Saved\SaveGames');
+
+      expect(notifier.state.missingSaveDir, isNull);
+      expect(notifier.state.otherSavesSelected, isFalse);
+      expect(notifier.state.activeProfile?.profileId, 0);
+      expect(notifier.state.selectedPath, savePath);
+      expect(
+        core.requests.where((request) => request.command == 'inspect_save'),
+        isNotEmpty,
+      );
+    },
+  );
+
   test('a failed scan of an existing folder keeps the core message', () async {
     final notifier = EditorNotifier(
       _FailingScanCoreService(),
@@ -8199,6 +8249,31 @@ class _FailingScanCoreService extends _RecordingCoreService {
       return {
         'ok': false,
         'error': {'message': 'save folder is unavailable'},
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Fails the scan of [missingPath] like the core does for an absent folder and
+/// scans every other folder normally.
+class _MissingFolderCoreService extends _RecordingCoreService {
+  _MissingFolderCoreService({required this.missingPath, super.scanData});
+
+  final String missingPath;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir' && payload['path'] == missingPath) {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': false,
+        'error': {'message': 'io error: save directory does not exist'},
       };
     }
     return super.execute(command, payload: payload);

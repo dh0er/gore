@@ -1867,6 +1867,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       selectedPath: null,
       activeProfileId: null,
       selectedProfileId: null,
+      // Start the new folder like a fresh launch: its active profile, not the
+      // Other saves view an empty or missing previous folder fell back to.
+      otherSavesSelected: false,
       clearInspection: true,
       clearBackups: true,
     );
