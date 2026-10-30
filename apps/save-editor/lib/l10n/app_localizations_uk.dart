@@ -3325,4 +3325,149 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get locksResetPending => 'Скасувати зміни замків у черзі';
+
+  @override
+  String get transferProgress => 'Перенести прогрес';
+
+  @override
+  String get transferProgressTooltip =>
+      'Перенести прогрес з іншого збереження.';
+
+  @override
+  String get transferProgressTitle => 'Перенести прогрес персонажа';
+
+  @override
+  String get transferProgressDescription =>
+      'Копіює предмети, навички й атрибути героя зі старішого збереження у вибране. Квести, час, місце і прогрес NPC лишаються як у призначенні. Предмети додаються до ношеного інвентаря; навички й атрибути копіюються там, де обидва збереження їх підтримують.';
+
+  @override
+  String get transferFrom => 'З';
+
+  @override
+  String get transferTo => 'До';
+
+  @override
+  String get transferStarting => 'Запуск перенесення…';
+
+  @override
+  String get transferCheckingConflicts =>
+      'Перевірка конфліктів і розклад змін на безпечні кроки запису. Збереження призначення ще не записується.';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return 'Читання $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return 'Запис $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return 'Етап: $stage · Разом: $total';
+  }
+
+  @override
+  String get transferCompleted => 'Перенесення завершено.';
+
+  @override
+  String get transferFailed => 'Перенесення не вдалося.';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return 'Завершено за $duration';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return 'Збій за $duration';
+  }
+
+  @override
+  String get transferLessThanASecond => 'менше секунди';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds с';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes хв $seconds с';
+  }
+
+  @override
+  String get transferCalculatingPlan => 'Розрахунок плану збереження…';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return 'Читання: ще близько $duration; оцінка запису буде далі';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return 'Запис $current/$total · час невідомий (ще немає зразка запису)';
+  }
+
+  @override
+  String get transferEstimating => 'Оцінка часу, що лишився…';
+
+  @override
+  String get transferLongerThanEstimated => 'Триває довше за оцінку';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return 'Лишилося близько $duration';
+  }
+
+  @override
+  String get transferReadingSourceAttributes => 'Читання атрибутів джерела…';
+
+  @override
+  String get transferReadingDestinationAttributes =>
+      'Читання атрибутів призначення…';
+
+  @override
+  String get transferReadingSourceSkills => 'Читання навичок джерела…';
+
+  @override
+  String get transferReadingDestinationSkills => 'Читання навичок призначення…';
+
+  @override
+  String get transferReadingSourceInventory => 'Читання інвентаря джерела…';
+
+  @override
+  String get transferNoCompatibleChanges =>
+      'Не знайдено сумісних змін для перенесення.';
+
+  @override
+  String get transferChooseDifferentSource =>
+      'Виберіть інше збереження-джерело.';
+
+  @override
+  String get transferDestinationChanged =>
+      'Вибране призначення змінилося. Виберіть джерело знову.';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return 'Підготовка $count змін…';
+  }
+
+  @override
+  String get transferPlanningSteps => 'Планування безпечних кроків збереження…';
+
+  @override
+  String get transferSavingDestination => 'Збереження призначення…';
+
+  @override
+  String get transferCountLimit =>
+      'Перенесена кількість предметів перевищує дозволену межу.';
+
+  @override
+  String get transferNoSkillData =>
+      'В одному зі збережень немає змінюваних навичок героя.';
+
+  @override
+  String get transferDone => 'Готово';
 }

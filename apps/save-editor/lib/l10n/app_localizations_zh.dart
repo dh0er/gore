@@ -3177,6 +3177,143 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get locksResetPending => '放弃待保存的锁改动';
+
+  @override
+  String get transferProgress => '转移进度';
+
+  @override
+  String get transferProgressTooltip => '从另一个存档转移进度。';
+
+  @override
+  String get transferProgressTitle => '转移角色进度';
+
+  @override
+  String get transferProgressDescription =>
+      '将英雄的物品、技能和属性从较早的存档复制到当前选中的存档。任务、时间、地点和 NPC 进度保持目标存档中的原样。物品会加入随身物品栏；技能和属性仅在两个存档都支持时复制。';
+
+  @override
+  String get transferFrom => '从';
+
+  @override
+  String get transferTo => '到';
+
+  @override
+  String get transferStarting => '正在开始转移……';
+
+  @override
+  String get transferCheckingConflicts => '正在检查冲突，并把更改排成安全的写入步骤。目标存档尚未写入。';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return '读取 $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return '写入 $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return '阶段：$stage · 总计：$total';
+  }
+
+  @override
+  String get transferCompleted => '转移完成。';
+
+  @override
+  String get transferFailed => '转移失败。';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return '用时 $duration 完成';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return '用时 $duration 失败';
+  }
+
+  @override
+  String get transferLessThanASecond => '不到一秒';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds 秒';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes 分 $seconds 秒';
+  }
+
+  @override
+  String get transferCalculatingPlan => '正在计算保存步骤……';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return '读取大约还需 $duration，随后估算写入时间';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return '写入 $current/$total · 无法估计剩余时间（还没有写入样本）';
+  }
+
+  @override
+  String get transferEstimating => '正在估计剩余时间……';
+
+  @override
+  String get transferLongerThanEstimated => '比估计更久';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return '大约还需 $duration';
+  }
+
+  @override
+  String get transferReadingSourceAttributes => '正在读取来源属性……';
+
+  @override
+  String get transferReadingDestinationAttributes => '正在读取目标属性……';
+
+  @override
+  String get transferReadingSourceSkills => '正在读取来源技能……';
+
+  @override
+  String get transferReadingDestinationSkills => '正在读取目标技能……';
+
+  @override
+  String get transferReadingSourceInventory => '正在读取来源物品……';
+
+  @override
+  String get transferNoCompatibleChanges => '没有找到可以转移的兼容更改。';
+
+  @override
+  String get transferChooseDifferentSource => '请选择另一个来源存档。';
+
+  @override
+  String get transferDestinationChanged => '所选目标已改变。请重新选择来源。';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return '正在准备 $count 项更改……';
+  }
+
+  @override
+  String get transferPlanningSteps => '正在规划安全的保存步骤……';
+
+  @override
+  String get transferSavingDestination => '正在保存目标……';
+
+  @override
+  String get transferCountLimit => '转移的物品数量超过了支持的上限。';
+
+  @override
+  String get transferNoSkillData => '其中一个存档没有可编辑的英雄技能数据。';
+
+  @override
+  String get transferDone => '完成';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -6352,6 +6489,143 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get locksResetPending => '放弃待保存的锁改动';
+
+  @override
+  String get transferProgress => '转移进度';
+
+  @override
+  String get transferProgressTooltip => '从另一个存档转移进度。';
+
+  @override
+  String get transferProgressTitle => '转移角色进度';
+
+  @override
+  String get transferProgressDescription =>
+      '将英雄的物品、技能和属性从较早的存档复制到当前选中的存档。任务、时间、地点和 NPC 进度保持目标存档中的原样。物品会加入随身物品栏；技能和属性仅在两个存档都支持时复制。';
+
+  @override
+  String get transferFrom => '从';
+
+  @override
+  String get transferTo => '到';
+
+  @override
+  String get transferStarting => '正在开始转移……';
+
+  @override
+  String get transferCheckingConflicts => '正在检查冲突，并把更改排成安全的写入步骤。目标存档尚未写入。';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return '读取 $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return '写入 $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return '阶段：$stage · 总计：$total';
+  }
+
+  @override
+  String get transferCompleted => '转移完成。';
+
+  @override
+  String get transferFailed => '转移失败。';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return '用时 $duration 完成';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return '用时 $duration 失败';
+  }
+
+  @override
+  String get transferLessThanASecond => '不到一秒';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds 秒';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes 分 $seconds 秒';
+  }
+
+  @override
+  String get transferCalculatingPlan => '正在计算保存步骤……';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return '读取大约还需 $duration，随后估算写入时间';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return '写入 $current/$total · 无法估计剩余时间（还没有写入样本）';
+  }
+
+  @override
+  String get transferEstimating => '正在估计剩余时间……';
+
+  @override
+  String get transferLongerThanEstimated => '比估计更久';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return '大约还需 $duration';
+  }
+
+  @override
+  String get transferReadingSourceAttributes => '正在读取来源属性……';
+
+  @override
+  String get transferReadingDestinationAttributes => '正在读取目标属性……';
+
+  @override
+  String get transferReadingSourceSkills => '正在读取来源技能……';
+
+  @override
+  String get transferReadingDestinationSkills => '正在读取目标技能……';
+
+  @override
+  String get transferReadingSourceInventory => '正在读取来源物品……';
+
+  @override
+  String get transferNoCompatibleChanges => '没有找到可以转移的兼容更改。';
+
+  @override
+  String get transferChooseDifferentSource => '请选择另一个来源存档。';
+
+  @override
+  String get transferDestinationChanged => '所选目标已改变。请重新选择来源。';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return '正在准备 $count 项更改……';
+  }
+
+  @override
+  String get transferPlanningSteps => '正在规划安全的保存步骤……';
+
+  @override
+  String get transferSavingDestination => '正在保存目标……';
+
+  @override
+  String get transferCountLimit => '转移的物品数量超过了支持的上限。';
+
+  @override
+  String get transferNoSkillData => '其中一个存档没有可编辑的英雄技能数据。';
+
+  @override
+  String get transferDone => '完成';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hant`).
@@ -9539,4 +9813,141 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get locksResetPending => '放棄待儲存的鎖改動';
+
+  @override
+  String get transferProgress => '轉移進度';
+
+  @override
+  String get transferProgressTooltip => '從另一個存檔轉移進度。';
+
+  @override
+  String get transferProgressTitle => '轉移角色進度';
+
+  @override
+  String get transferProgressDescription =>
+      '將英雄的物品、技能和屬性從較早的存檔複製到目前選取的存檔。任務、時間、地點和 NPC 進度維持目標存檔中的原樣。物品會加入隨身物品欄；技能和屬性只在兩個存檔都支援時複製。';
+
+  @override
+  String get transferFrom => '從';
+
+  @override
+  String get transferTo => '到';
+
+  @override
+  String get transferStarting => '正在開始轉移……';
+
+  @override
+  String get transferCheckingConflicts => '正在檢查衝突，並把變更排成安全的寫入步驟。目標存檔尚未寫入。';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return '讀取 $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return '寫入 $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return '階段：$stage · 總計：$total';
+  }
+
+  @override
+  String get transferCompleted => '轉移完成。';
+
+  @override
+  String get transferFailed => '轉移失敗。';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return '耗時 $duration 完成';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return '耗時 $duration 失敗';
+  }
+
+  @override
+  String get transferLessThanASecond => '不到一秒';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds 秒';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes 分 $seconds 秒';
+  }
+
+  @override
+  String get transferCalculatingPlan => '正在計算儲存步驟……';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return '讀取大約還需 $duration，接著估算寫入時間';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return '寫入 $current/$total · 無法估計剩餘時間（還沒有寫入樣本）';
+  }
+
+  @override
+  String get transferEstimating => '正在估計剩餘時間……';
+
+  @override
+  String get transferLongerThanEstimated => '比估計更久';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return '大約還需 $duration';
+  }
+
+  @override
+  String get transferReadingSourceAttributes => '正在讀取來源屬性……';
+
+  @override
+  String get transferReadingDestinationAttributes => '正在讀取目標屬性……';
+
+  @override
+  String get transferReadingSourceSkills => '正在讀取來源技能……';
+
+  @override
+  String get transferReadingDestinationSkills => '正在讀取目標技能……';
+
+  @override
+  String get transferReadingSourceInventory => '正在讀取來源物品……';
+
+  @override
+  String get transferNoCompatibleChanges => '找不到可以轉移的相容變更。';
+
+  @override
+  String get transferChooseDifferentSource => '請選擇另一個來源存檔。';
+
+  @override
+  String get transferDestinationChanged => '所選目標已改變。請重新選擇來源。';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return '正在準備 $count 項變更……';
+  }
+
+  @override
+  String get transferPlanningSteps => '正在規劃安全的儲存步驟……';
+
+  @override
+  String get transferSavingDestination => '正在儲存目標……';
+
+  @override
+  String get transferCountLimit => '轉移的物品數量超過了支援的上限。';
+
+  @override
+  String get transferNoSkillData => '其中一個存檔沒有可編輯的英雄技能資料。';
+
+  @override
+  String get transferDone => '完成';
 }

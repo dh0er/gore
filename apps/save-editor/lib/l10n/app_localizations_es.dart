@@ -3328,4 +3328,149 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get locksResetPending =>
       'Descartar los cambios de cerraduras pendientes';
+
+  @override
+  String get transferProgress => 'Transferir progreso';
+
+  @override
+  String get transferProgressTooltip =>
+      'Transferir el progreso desde otra partida guardada.';
+
+  @override
+  String get transferProgressTitle => 'Transferir el progreso del personaje';
+
+  @override
+  String get transferProgressDescription =>
+      'Copia los objetos, habilidades y atributos del héroe de una partida anterior a la seleccionada. Las misiones, el tiempo, el lugar y el progreso de los NPC se quedan como están en el destino. Los objetos se añaden al inventario que llevas; las habilidades y los atributos se copian donde ambas partidas los admiten.';
+
+  @override
+  String get transferFrom => 'De';
+
+  @override
+  String get transferTo => 'A';
+
+  @override
+  String get transferStarting => 'Iniciando la transferencia…';
+
+  @override
+  String get transferCheckingConflicts =>
+      'Comprobando conflictos y ordenando los cambios en pasos de escritura seguros. La partida de destino todavía no se está escribiendo.';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return 'Lecturas $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return 'Escrituras $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return 'Paso: $stage · Total: $total';
+  }
+
+  @override
+  String get transferCompleted => 'Transferencia completada.';
+
+  @override
+  String get transferFailed => 'La transferencia ha fallado.';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return 'Completada en $duration';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return 'Fallida en $duration';
+  }
+
+  @override
+  String get transferLessThanASecond => 'menos de un segundo';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds s';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes min $seconds s';
+  }
+
+  @override
+  String get transferCalculatingPlan => 'Calculando el plan de guardado…';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return 'Lecturas: quedan unos $duration; después se estimará la escritura';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return 'Escritura $current/$total · sin tiempo estimado (aún no hay una escritura previa)';
+  }
+
+  @override
+  String get transferEstimating => 'Estimando el tiempo restante…';
+
+  @override
+  String get transferLongerThanEstimated => 'Está tardando más de lo estimado';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return 'Quedan unos $duration';
+  }
+
+  @override
+  String get transferReadingSourceAttributes => 'Leyendo atributos de origen…';
+
+  @override
+  String get transferReadingDestinationAttributes =>
+      'Leyendo atributos de destino…';
+
+  @override
+  String get transferReadingSourceSkills => 'Leyendo habilidades de origen…';
+
+  @override
+  String get transferReadingDestinationSkills =>
+      'Leyendo habilidades de destino…';
+
+  @override
+  String get transferReadingSourceInventory => 'Leyendo inventario de origen…';
+
+  @override
+  String get transferNoCompatibleChanges =>
+      'No se encontraron cambios compatibles para transferir.';
+
+  @override
+  String get transferChooseDifferentSource => 'Elige otra partida de origen.';
+
+  @override
+  String get transferDestinationChanged =>
+      'El destino seleccionado ha cambiado. Elige el origen de nuevo.';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return 'Preparando $count cambios…';
+  }
+
+  @override
+  String get transferPlanningSteps => 'Planificando pasos de guardado seguros…';
+
+  @override
+  String get transferSavingDestination => 'Guardando el destino…';
+
+  @override
+  String get transferCountLimit =>
+      'La cantidad transferida supera el límite admitido.';
+
+  @override
+  String get transferNoSkillData =>
+      'En una de las partidas no hay datos editables de habilidades del héroe.';
+
+  @override
+  String get transferDone => 'Hecho';
 }

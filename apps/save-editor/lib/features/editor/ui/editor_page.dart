@@ -295,21 +295,6 @@ class _SaveSidebar extends StatelessWidget {
             isLoading: state.isLoading,
             profileWritesBlocked: state.deletedSaveRecovery != null,
           ),
-          if (state.selectedPath != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-              child: SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  key: const ValueKey('transfer-progress-button'),
-                  icon: const Icon(Icons.drive_file_move_outlined),
-                  label: const Text('Transfer progress'),
-                  onPressed: state.isLoading || state.hasUnsavedEdits
-                      ? null
-                      : () => _chooseProgressTransferSource(context, notifier),
-                ),
-              ),
-            ),
           if (state.otherSavesSelected)
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
@@ -406,9 +391,13 @@ Future<void> _chooseProgressTransferSource(
 ) async {
   final destinationPath = notifier.selectedPath;
   if (destinationPath == null) return;
+  final l10n = AppLocalizations.of(context);
   final file = await openFile(
     acceptedTypeGroups: [
-      XTypeGroup(label: 'Gothic save', extensions: const ['sav']),
+      XTypeGroup(
+        label: l10n.editorGothicSavegameFileType,
+        extensions: const ['sav'],
+      ),
     ],
   );
   if (file == null || !context.mounted) return;
@@ -475,38 +464,47 @@ class _TransferProgressDialogState extends State<_TransferProgressDialog> {
     });
   }
 
-  String _formatEstimate(Duration duration) {
+  String _formatEstimate(AppLocalizations l10n, Duration duration) {
     final seconds = (duration.inSeconds + 0.5).floor();
-    if (seconds < 1) return 'less than a second';
+    if (seconds < 1) return l10n.transferLessThanASecond;
     final minutes = seconds ~/ 60;
     final remainingSeconds = seconds % 60;
-    if (minutes == 0) return '$seconds sec';
-    if (remainingSeconds == 0) return '$minutes min';
-    return '$minutes min $remainingSeconds sec';
+    if (minutes == 0) return l10n.transferSeconds(seconds);
+    if (remainingSeconds == 0) return l10n.durationMinutes(minutes);
+    return l10n.transferMinutesSeconds(minutes, remainingSeconds);
   }
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
     return AlertDialog(
-      title: const Text('Transfer character progress'),
+      title: Row(
+        children: [
+          Icon(Icons.drive_file_move_outlined, color: scheme.primary),
+          const SizedBox(width: 10),
+          Expanded(child: Text(l10n.transferProgressTitle)),
+        ],
+      ),
       content: SizedBox(
         width: 460,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Copy the Hero\'s items, skills, and attributes from an older '
-              'save into the selected save. Quests, time, location, and NPC '
-              'progress stay as they are in the destination. Items are added '
-              'to carried inventory; skills and attributes are copied where '
-              'both saves support them.',
-            ),
+            _TransferInfoBox(text: l10n.transferProgressDescription),
             const SizedBox(height: 12),
-            _TransferSavePath(label: 'From', path: widget.sourcePath),
+            _TransferSavePath(
+              icon: Icons.file_open_outlined,
+              label: l10n.transferFrom,
+              path: widget.sourcePath,
+            ),
             const SizedBox(height: 8),
-            _TransferSavePath(label: 'To', path: widget.destinationPath),
+            _TransferSavePath(
+              icon: Icons.save_outlined,
+              label: l10n.transferTo,
+              path: widget.destinationPath,
+            ),
             const SizedBox(height: 8),
             if (_working) ...[
               LinearProgressIndicator(
@@ -519,7 +517,7 @@ class _TransferProgressDialogState extends State<_TransferProgressDialog> {
               ),
               const SizedBox(height: 8),
               Text(
-                _transferProgress?.stage ?? 'Starting transfer...',
+                _transferProgress?.stage ?? l10n.transferStarting,
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               if (_transferProgress case final progress?
@@ -527,25 +525,32 @@ class _TransferProgressDialogState extends State<_TransferProgressDialog> {
                       progress.completedReads == progress.totalReads) ...[
                 const SizedBox(height: 4),
                 Text(
-                  'Checking changes for conflicts and arranging them into safe write steps. The destination save is not being written yet.',
+                  l10n.transferCheckingConflicts,
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
-              if (_transferProgress != null) ...[
+              if (_transferProgress case final progress?) ...[
                 const SizedBox(height: 4),
                 Text(
-                  'Reads ${_transferProgress!.completedReads}/${_transferProgress!.totalReads}'
-                  '${_transferProgress!.totalWrites == 0 ? '' : ' · Writes ${_transferProgress!.completedWrites}/${_transferProgress!.totalWrites}'}',
+                  progress.totalWrites == 0
+                      ? l10n.transferReadCount(
+                          progress.completedReads,
+                          progress.totalReads,
+                        )
+                      : '${l10n.transferReadCount(progress.completedReads, progress.totalReads)} · ${l10n.transferWriteCount(progress.completedWrites, progress.totalWrites)}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  _transferEtaLabel(_transferProgress!),
+                  _transferEtaLabel(l10n, progress),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Stage elapsed: ${_formatEstimate(_stageElapsed)} · Total: ${_formatEstimate(_transferStopwatch.elapsed)}',
+                  l10n.transferStageElapsed(
+                    _formatEstimate(l10n, _stageElapsed),
+                    _formatEstimate(l10n, _transferStopwatch.elapsed),
+                  ),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -555,7 +560,7 @@ class _TransferProgressDialogState extends State<_TransferProgressDialog> {
               const SizedBox(height: 8),
               Text(
                 _resultMessage ??
-                    (_succeeded ? 'Transfer completed.' : 'Transfer failed.'),
+                    (_succeeded ? l10n.transferCompleted : l10n.transferFailed),
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: _succeeded
                       ? Theme.of(context).colorScheme.primary
@@ -564,29 +569,35 @@ class _TransferProgressDialogState extends State<_TransferProgressDialog> {
               ),
               const SizedBox(height: 4),
               Text(
-                '${_succeeded ? 'Completed' : 'Failed'} in ${_formatEstimate(_transferStopwatch.elapsed)}',
+                _succeeded
+                    ? l10n.transferCompletedIn(
+                        _formatEstimate(l10n, _transferStopwatch.elapsed),
+                      )
+                    : l10n.transferFailedIn(
+                        _formatEstimate(l10n, _transferStopwatch.elapsed),
+                      ),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
-            CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(l10n.tabInventory),
+            _TransferOption(
+              icon: Icons.inventory_2_outlined,
+              title: l10n.tabInventory,
               value: _items,
               onChanged: _working
                   ? null
                   : (value) => setState(() => _items = value ?? false),
             ),
-            CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(l10n.heroGroupSkills),
+            _TransferOption(
+              icon: Icons.school_outlined,
+              title: l10n.heroGroupSkills,
               value: _skills,
               onChanged: _working
                   ? null
                   : (value) => setState(() => _skills = value ?? false),
             ),
-            CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(l10n.tabAttribute),
+            _TransferOption(
+              icon: Icons.person_outline,
+              title: l10n.tabAttribute,
               value: _stats,
               onChanged: _working
                   ? null
@@ -599,7 +610,7 @@ class _TransferProgressDialogState extends State<_TransferProgressDialog> {
           ? [
               FilledButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('Done'),
+                child: Text(l10n.transferDone),
               ),
             ]
           : [
@@ -645,9 +656,9 @@ class _TransferProgressDialogState extends State<_TransferProgressDialog> {
                           _succeeded = succeeded;
                           _resultMessage = succeeded
                               ? widget.notifier.lastWriteMessage ??
-                                    'Transfer completed.'
+                                    l10n.transferCompleted
                               : widget.notifier.errorMessage ??
-                                    'Transfer failed.';
+                                    l10n.transferFailed;
                         });
                       },
               ),
@@ -655,28 +666,35 @@ class _TransferProgressDialogState extends State<_TransferProgressDialog> {
     );
   }
 
-  String _transferEtaLabel(TransferProgress progress) {
+  String _transferEtaLabel(AppLocalizations l10n, TransferProgress progress) {
     final estimate = progress.estimatedRemaining;
     if (estimate == null) {
       final readEstimate = progress.estimatedReadRemaining;
       if (!progress.writePlanReady) {
         if (progress.completedReads == progress.totalReads) {
-          return 'Calculating save plan...';
+          return l10n.transferCalculatingPlan;
         }
         if (readEstimate != null) {
-          return 'Reads about ${_formatEstimate(_remainingAfterElapsed(readEstimate))} remaining; write estimate follows';
+          return l10n.transferReadsRemaining(
+            _formatEstimate(l10n, _remainingAfterElapsed(readEstimate)),
+          );
         }
       }
       if (progress.writePlanReady &&
           progress.completedWrites < progress.totalWrites) {
-        return 'Write ${progress.completedWrites + 1}/${progress.totalWrites} · ETA unavailable (no prior write sample)';
+        return l10n.transferWriteEtaUnavailable(
+          progress.completedWrites + 1,
+          progress.totalWrites,
+        );
       }
-      return 'Estimating remaining time...';
+      return l10n.transferEstimating;
     }
     if (_stageElapsed > estimate && estimate > Duration.zero) {
-      return 'Taking longer than estimated';
+      return l10n.transferLongerThanEstimated;
     }
-    return 'About ${_formatEstimate(_remainingAfterElapsed(estimate))} remaining';
+    return l10n.transferAboutRemaining(
+      _formatEstimate(l10n, _remainingAfterElapsed(estimate)),
+    );
   }
 
   Duration _remainingAfterElapsed(Duration estimate) {
@@ -685,33 +703,100 @@ class _TransferProgressDialogState extends State<_TransferProgressDialog> {
   }
 }
 
-class _TransferSavePath extends StatelessWidget {
-  const _TransferSavePath({required this.label, required this.path});
+class _TransferInfoBox extends StatelessWidget {
+  const _TransferInfoBox({required this.text});
 
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              Icons.info_outline,
+              size: 18,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: Text(text, style: theme.textTheme.bodySmall)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TransferOption extends StatelessWidget {
+  const _TransferOption({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final bool value;
+  final ValueChanged<bool?>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return CheckboxListTile(
+      contentPadding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+      controlAffinity: ListTileControlAffinity.trailing,
+      secondary: Icon(icon, size: 20),
+      title: Text(title),
+      value: value,
+      onChanged: onChanged,
+    );
+  }
+}
+
+class _TransferSavePath extends StatelessWidget {
+  const _TransferSavePath({
+    required this.icon,
+    required this.label,
+    required this.path,
+  });
+
+  final IconData icon;
   final String label;
   final String path;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final normalizedPath = path.replaceAll('\\', '/');
     final fileName = normalizedPath.split('/').last;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SizedBox(
-          width: 40,
-          child: Text(label, style: Theme.of(context).textTheme.labelLarge),
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Icon(icon, size: 18, color: theme.colorScheme.primary),
         ),
+        const SizedBox(width: 8),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Text(label, style: theme.textTheme.labelLarge),
               Text(fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
               Text(
                 path,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall,
+                style: theme.textTheme.bodySmall,
               ),
             ],
           ),
@@ -1973,6 +2058,34 @@ class _HeaderCardState extends State<_HeaderCard> {
               );
             }
 
+            Widget? transferAction() {
+              if (state.selectedPath == null) return null;
+              final enabled = !state.isLoading && !state.hasUnsavedEdits;
+              return Tooltip(
+                message: l10n.transferProgressTooltip,
+                child: AbsorbPointer(
+                  absorbing: !enabled,
+                  child: TextButton.icon(
+                    key: const ValueKey('transfer-progress-button'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: enabled
+                          ? null
+                          : Theme.of(
+                              context,
+                            ).colorScheme.onSurface.withValues(alpha: 0.38),
+                      minimumSize: const Size(0, 32),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    icon: const Icon(Icons.drive_file_move_outlined, size: 18),
+                    label: Text(l10n.transferProgress),
+                    onPressed: () =>
+                        _chooseProgressTransferSource(context, notifier),
+                  ),
+                ),
+              );
+            }
+
             Widget? deleteAction() {
               if (save == null || currentProfile == null) return null;
               return TextButton.icon(
@@ -1996,8 +2109,23 @@ class _HeaderCardState extends State<_HeaderCard> {
               );
             }
 
-            Widget details({required bool fillPreviewHeight}) {
+            Widget? headerActions() {
+              final transfer = transferAction();
               final delete = deleteAction();
+              if (transfer == null && delete == null) return null;
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ?transfer,
+                  if (transfer != null && delete != null)
+                    const SizedBox(width: 4),
+                  ?delete,
+                ],
+              );
+            }
+
+            Widget details({required bool fillPreviewHeight}) {
+              final actions = headerActions();
               final nameSyncsPersistentDataList =
                   state.selectedSave?.isExternal != true;
               return Column(
@@ -2035,17 +2163,17 @@ class _HeaderCardState extends State<_HeaderCard> {
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Expanded(child: badges()),
-                        if (delete != null) ...[
+                        if (actions != null) ...[
                           const SizedBox(width: 4),
-                          delete,
+                          actions,
                         ],
                       ],
                     )
                   else ...[
                     badges(),
-                    if (delete != null) ...[
+                    if (actions != null) ...[
                       const SizedBox(height: 8),
-                      Align(alignment: Alignment.centerRight, child: delete),
+                      Align(alignment: Alignment.centerRight, child: actions),
                     ],
                   ],
                 ],

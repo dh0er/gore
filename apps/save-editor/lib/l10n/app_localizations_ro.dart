@@ -3325,4 +3325,149 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get locksResetPending => 'Renunță la modificările de lăcate din coadă';
+
+  @override
+  String get transferProgress => 'Transferă progresul';
+
+  @override
+  String get transferProgressTooltip =>
+      'Transferă progresul dintr-un alt joc salvat.';
+
+  @override
+  String get transferProgressTitle => 'Transferă progresul personajului';
+
+  @override
+  String get transferProgressDescription =>
+      'Copiază obiectele, abilitățile și atributele eroului dintr-o salvare mai veche în cea selectată. Misiunile, timpul, locul și progresul NPC rămân cele din destinație. Obiectele se adaugă în inventarul purtat; abilitățile și atributele se copiază acolo unde ambele salvări le acceptă.';
+
+  @override
+  String get transferFrom => 'Din';
+
+  @override
+  String get transferTo => 'În';
+
+  @override
+  String get transferStarting => 'Se pornește transferul…';
+
+  @override
+  String get transferCheckingConflicts =>
+      'Se verifică conflictele și se aranjează modificările în pași siguri de scriere. Salvarea destinație nu este încă scrisă.';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return 'Citiri $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return 'Scrieri $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return 'Etapă: $stage · Total: $total';
+  }
+
+  @override
+  String get transferCompleted => 'Transfer finalizat.';
+
+  @override
+  String get transferFailed => 'Transferul a eșuat.';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return 'Finalizat în $duration';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return 'Eșuat în $duration';
+  }
+
+  @override
+  String get transferLessThanASecond => 'mai puțin de o secundă';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds sec';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes min $seconds sec';
+  }
+
+  @override
+  String get transferCalculatingPlan => 'Se calculează planul de salvare…';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return 'Citiri: aproximativ $duration rămase; estimarea scrierii urmează';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return 'Scriere $current/$total · timp indisponibil (încă nu există o scriere anterioară)';
+  }
+
+  @override
+  String get transferEstimating => 'Se estimează timpul rămas…';
+
+  @override
+  String get transferLongerThanEstimated => 'Durează mai mult decât estimarea';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return 'Aproximativ $duration rămase';
+  }
+
+  @override
+  String get transferReadingSourceAttributes => 'Se citesc atributele sursă…';
+
+  @override
+  String get transferReadingDestinationAttributes =>
+      'Se citesc atributele destinație…';
+
+  @override
+  String get transferReadingSourceSkills => 'Se citesc abilitățile sursă…';
+
+  @override
+  String get transferReadingDestinationSkills =>
+      'Se citesc abilitățile destinație…';
+
+  @override
+  String get transferReadingSourceInventory => 'Se citește inventarul sursă…';
+
+  @override
+  String get transferNoCompatibleChanges =>
+      'Nu s-au găsit modificări compatibile de transferat.';
+
+  @override
+  String get transferChooseDifferentSource => 'Alege o altă salvare sursă.';
+
+  @override
+  String get transferDestinationChanged =>
+      'Destinația selectată s-a schimbat. Alege din nou sursa.';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return 'Se pregătesc $count modificări…';
+  }
+
+  @override
+  String get transferPlanningSteps => 'Se planifică pași siguri de salvare…';
+
+  @override
+  String get transferSavingDestination => 'Se salvează destinația…';
+
+  @override
+  String get transferCountLimit =>
+      'Cantitatea transferată depășește limita acceptată.';
+
+  @override
+  String get transferNoSkillData =>
+      'Într-una dintre salvări nu există abilități editabile ale eroului.';
+
+  @override
+  String get transferDone => 'Gata';
 }

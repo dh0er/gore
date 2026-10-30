@@ -3090,9 +3090,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
     if (selectedPath == null || !_sameSavePath(selectedPath, destinationPath)) {
       state = state.copyWith(
-        error: _l10n.editorSaveFailed(
-          'The selected destination changed. Choose the source again.',
-        ),
+        error: _l10n.editorSaveFailed(_l10n.transferDestinationChanged),
       );
       return false;
     }
@@ -3106,7 +3104,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
     if (_sameSavePath(sourcePath, destinationPath)) {
       state = state.copyWith(
-        error: _l10n.editorSaveFailed('Choose a different source save.'),
+        error: _l10n.editorSaveFailed(_l10n.transferChooseDifferentSource),
       );
       return false;
     }
@@ -3177,11 +3175,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
     try {
       if (stats) {
         final sourceAttributes = await readAction(
-          'Reading source attributes...',
+          _l10n.transferReadingSourceAttributes,
           () => _loadTransferAttributeHits(sourcePath),
         );
         final destinationAttributes = await readAction(
-          'Reading destination attributes...',
+          _l10n.transferReadingDestinationAttributes,
           () => _loadTransferAttributeHits(destinationPath),
         );
         final destinationByPath = {
@@ -3219,11 +3217,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
       if (skills) {
         final sourceSkills = await readAction(
-          'Reading source skills...',
+          _l10n.transferReadingSourceSkills,
           () => _loadTransferSkills(sourcePath),
         );
         final destinationSkills = await readAction(
-          'Reading destination skills...',
+          _l10n.transferReadingDestinationSkills,
           () => _loadTransferSkills(destinationPath),
         );
         final destinationByBase = {
@@ -3244,7 +3242,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
       if (items) {
         final sourceInventory = await readAction(
-          'Reading source inventory...',
+          _l10n.transferReadingSourceInventory,
           () => _loadTransferInventory(sourcePath),
         );
         final destinationInventory = state.inspection!.privateInventory;
@@ -3281,9 +3279,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
           final count = carried.count ?? 0;
           final nextCount = count + entry.value;
           if (nextCount > 0x7fffffff) {
-            throw StateError(
-              'Transferred item count exceeds the supported limit.',
-            );
+            throw StateError(_l10n.transferCountLimit);
           }
           edits.add(
             InventoryItemCountChange(
@@ -3311,21 +3307,22 @@ class EditorNotifier extends StateNotifier<EditorState> {
     state = state.copyWith(isLoading: false);
     if (edits.isEmpty) {
       state = state.copyWith(
-        error: _l10n.editorSaveFailed(
-          'No compatible changes were found to transfer.',
-        ),
+        error: _l10n.editorSaveFailed(_l10n.transferNoCompatibleChanges),
       );
       return false;
     }
     setPendingEdit('progressTransfer', PendingSaveEdit(edits: edits));
-    reportProgress('Preparing ${edits.length} changes...', estimate: false);
-    reportProgress('Planning safe save steps...', estimate: false);
+    reportProgress(
+      _l10n.transferPreparingChanges(edits.length),
+      estimate: false,
+    );
+    reportProgress(_l10n.transferPlanningSteps, estimate: false);
     final saved = await saveAllPending(
       onProgress: (done, total) {
         writePlanReady = true;
         totalWrites = total;
         completedWrites = done;
-        reportProgress('Saving destination...', estimate: true);
+        reportProgress(_l10n.transferSavingDestination, estimate: true);
       },
     );
     return saved;
@@ -3360,11 +3357,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       (response['data'] as Map).cast<String, Object?>(),
     );
     if (!result.found) {
-      throw StateError(
-        _l10n.editorSkillsLoadFailed(
-          'No editable Hero skill data was found in one of the saves.',
-        ),
-      );
+      throw StateError(_l10n.editorSkillsLoadFailed(_l10n.transferNoSkillData));
     }
     return result;
   }

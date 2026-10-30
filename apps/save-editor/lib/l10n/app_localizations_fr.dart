@@ -3343,4 +3343,152 @@ class AppLocalizationsFr extends AppLocalizations {
   @override
   String get locksResetPending =>
       'Abandonner les modifications de serrures en attente';
+
+  @override
+  String get transferProgress => 'Transférer la progression';
+
+  @override
+  String get transferProgressTooltip =>
+      'Transférer la progression depuis une autre sauvegarde.';
+
+  @override
+  String get transferProgressTitle => 'Transférer la progression du personnage';
+
+  @override
+  String get transferProgressDescription =>
+      'Copie les objets, compétences et attributs du héros d\'une sauvegarde plus ancienne vers la sauvegarde sélectionnée. Les quêtes, le temps, le lieu et la progression des PNJ restent ceux de la destination. Les objets sont ajoutés à l\'inventaire porté ; les compétences et attributs sont copiés lorsque les deux sauvegardes les prennent en charge.';
+
+  @override
+  String get transferFrom => 'De';
+
+  @override
+  String get transferTo => 'Vers';
+
+  @override
+  String get transferStarting => 'Démarrage du transfert…';
+
+  @override
+  String get transferCheckingConflicts =>
+      'Vérification des conflits et rangement des changements en étapes d\'écriture sûres. La sauvegarde de destination n\'est pas encore écrite.';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return 'Lectures $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return 'Écritures $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return 'Étape : $stage · Total : $total';
+  }
+
+  @override
+  String get transferCompleted => 'Transfert terminé.';
+
+  @override
+  String get transferFailed => 'Le transfert a échoué.';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return 'Terminé en $duration';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return 'Échoué en $duration';
+  }
+
+  @override
+  String get transferLessThanASecond => 'moins d\'une seconde';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds s';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes min $seconds s';
+  }
+
+  @override
+  String get transferCalculatingPlan => 'Calcul du plan d\'enregistrement…';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return 'Lectures : environ $duration restantes ; l\'estimation d\'écriture suivra';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return 'Écriture $current/$total · durée indisponible (aucune écriture précédente)';
+  }
+
+  @override
+  String get transferEstimating => 'Estimation du temps restant…';
+
+  @override
+  String get transferLongerThanEstimated => 'Plus long que prévu';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return 'Environ $duration restantes';
+  }
+
+  @override
+  String get transferReadingSourceAttributes => 'Lecture des attributs source…';
+
+  @override
+  String get transferReadingDestinationAttributes =>
+      'Lecture des attributs de destination…';
+
+  @override
+  String get transferReadingSourceSkills => 'Lecture des compétences source…';
+
+  @override
+  String get transferReadingDestinationSkills =>
+      'Lecture des compétences de destination…';
+
+  @override
+  String get transferReadingSourceInventory =>
+      'Lecture de l\'inventaire source…';
+
+  @override
+  String get transferNoCompatibleChanges =>
+      'Aucune modification compatible à transférer.';
+
+  @override
+  String get transferChooseDifferentSource =>
+      'Choisissez une autre sauvegarde source.';
+
+  @override
+  String get transferDestinationChanged =>
+      'La destination sélectionnée a changé. Choisissez à nouveau la source.';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return 'Préparation de $count modifications…';
+  }
+
+  @override
+  String get transferPlanningSteps =>
+      'Planification d\'étapes d\'enregistrement sûres…';
+
+  @override
+  String get transferSavingDestination => 'Enregistrement de la destination…';
+
+  @override
+  String get transferCountLimit =>
+      'La quantité transférée dépasse la limite prise en charge.';
+
+  @override
+  String get transferNoSkillData =>
+      'Aucune compétence de héros modifiable n\'a été trouvée dans l\'une des sauvegardes.';
+
+  @override
+  String get transferDone => 'Terminé';
 }
