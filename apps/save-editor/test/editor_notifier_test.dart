@@ -7404,6 +7404,9 @@ void main() {
   test(
     'Hero transfer refuses the destination reached through a symlink',
     () async {
+      // Steam's symlinked folders are a Linux/macOS case, and a directory link
+      // needs extra rights on Windows.
+      if (Platform.isWindows) return;
       final root = Directory.systemTemp.createTempSync('gore_transfer_alias');
       addTearDown(() => root.deleteSync(recursive: true));
       final realDir = Directory(p.join(root.path, 'real'))..createSync();
