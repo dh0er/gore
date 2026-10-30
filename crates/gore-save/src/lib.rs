@@ -7302,9 +7302,10 @@ fn assemble_private_inventory(
 /// When NPCs are present, `writable` advertises the two NPC-specific structural
 /// edits (per-attribute editing rides on the already-advertised
 /// `private.typed.setValue`). `strandedRevives` lists the NPCs an older build
-/// revived without putting them back into the world. Mirrors the inventory/progression blocks: always
-/// emit the object, with `hasNpcs: false` + empty `writable` when the private
-/// payload doesn't parse or has no NPCs.
+/// revived without putting them back into the world, whenever the private payload
+/// parses. Mirrors the inventory/progression blocks: always emit the object, with
+/// `hasNpcs: false` + empty `writable` when the private payload doesn't parse or
+/// has no NPCs.
 fn summarize_private_npc_payload(root: Option<&properties::RootObject>) -> Value {
     let has_npcs = root
         .and_then(|r| npc::list_npcs(r).ok())

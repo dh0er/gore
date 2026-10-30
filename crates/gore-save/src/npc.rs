@@ -1954,8 +1954,9 @@ impl ReviveEdit {
 /// 5. Restore Health to MaxHealth.
 ///
 /// Everything is planned against ONE parse and applied back to front, so no step
-/// reuses an offset a later one moved. An already-alive NPC with full HP is a clean
-/// no-op.
+/// reuses an offset a later one moved. An already-alive NPC with full HP and no
+/// `REVIVE_LOOSE_TAGS` on it is a clean no-op; one that still carries a bounty tag
+/// or `State.Defeated` loses it.
 pub fn apply_revive(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
     let root = parse_private_root(payload)?;
 
