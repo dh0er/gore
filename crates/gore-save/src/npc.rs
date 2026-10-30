@@ -1389,9 +1389,11 @@ fn left_by_old_revive(tags: &[String]) -> bool {
     tags.iter().all(|t| t == INSTANT_DEATH_TAG)
 }
 
-/// Every NPC [`stranded_by_old_revive`], in set order. Reviving one again takes it
-/// off the set, which is the whole repair: everything else the old revive already
-/// did.
+/// Every NPC an older build revived but left in `GlobalIDsRemovedFromWorld`, in set
+/// order: listed there, with a `LooseTagsByGlobalId` entry that is empty or holds
+/// nothing but `State.Dead.Instant` (see `stranded_by_old_revive`). Reviving one
+/// again takes it off the set, which is the whole repair: everything else the old
+/// revive already did.
 pub fn stranded_by_old_revives(root: &RootObject) -> Vec<String> {
     let Some((_, set_prop)) = find_property_by_name(root, REMOVED_FROM_WORLD_SET) else {
         return Vec::new();
@@ -1940,13 +1942,15 @@ impl ReviveEdit {
 ///
 /// 1. Scan every `LongTermMemoryByGlobalId` owner and remove only defeat/kill
 ///    events that refer to this NPC.
-/// 2. Strip the authoritative `State.Dead`, kill-bounty, and execution-bounty
-///    loose tags while preserving unrelated tags.
+/// 2. Strip `REVIVE_LOOSE_TAGS` (the authoritative `State.Dead`, the kill- and
+///    execution-bounty tags, `State.Dead.Instant` and `State.Defeated`) while
+///    preserving unrelated tags. An entry left with nothing else is dropped whole
+///    (see `plan_dead_loose_tag_removal`).
 /// 3. Remove the NPC's lootable corpse entry from `m_SavedInventories`.
 /// 4. Take a dead NPC off `GlobalIDsRemovedFromWorld`. The game adds it there once
 ///    it cleans up the corpse; without this step only a fresh kill revives. A
 ///    living NPC the story despawned stays listed. An NPC an older build revived
-///    without this step is taken off too (see [`stranded_by_old_revive`]).
+///    without this step is taken off too (see `stranded_by_old_revive`).
 /// 5. Restore Health to MaxHealth.
 ///
 /// Everything is planned against ONE parse and applied back to front, so no step
