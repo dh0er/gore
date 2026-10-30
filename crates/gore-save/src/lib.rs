@@ -3067,13 +3067,27 @@ fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
 
 #[cfg(target_os = "linux")]
 fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt as _;
+    let (source, destination) = (c_path(source)?, c_path(destination)?);
+    match renameat2_noreplace(&source, &destination) {
+        // A hard link is the other atomic no-replace primitive: `link` refuses
+        // an existing destination just like the flagged rename would.
+        Err(error) if noreplace_unsupported(&error) => link_then_unlink(&source, &destination),
+        result => result,
+    }
+}
 
-    let source = CString::new(source.as_os_str().as_bytes())
-        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    let destination = CString::new(destination.as_os_str().as_bytes())
-        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+#[cfg(target_os = "linux")]
+fn c_path(path: &Path) -> std::io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt as _;
+    std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+}
+
+#[cfg(target_os = "linux")]
+fn renameat2_noreplace(
+    source: &std::ffi::CStr,
+    destination: &std::ffi::CStr,
+) -> std::io::Result<()> {
     let renamed = unsafe {
         libc::renameat2(
             libc::AT_FDCWD,
@@ -3084,16 +3098,20 @@ fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
         )
     };
     if renamed == 0 {
-        return Ok(());
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
     }
-    let error = std::io::Error::last_os_error();
-    match error.raw_os_error() {
-        // The filesystem (WSL's drvfs, NFS, CIFS, many FUSE mounts) or kernel
-        // lacks the flag. A hard link is the other atomic no-replace primitive:
-        // `link` refuses an existing destination just like the rename would.
-        Some(libc::EINVAL) | Some(libc::ENOSYS) => link_then_unlink(&source, &destination),
-        _ => Err(error),
-    }
+}
+
+/// The filesystem (WSL's drvfs, NFS, CIFS, many FUSE mounts) or the kernel
+/// lacks `RENAME_NOREPLACE`.
+#[cfg(target_os = "linux")]
+fn noreplace_unsupported(error: &std::io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::EINVAL) | Some(libc::ENOSYS)
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -3109,6 +3127,37 @@ fn link_then_unlink(source: &std::ffi::CStr, destination: &std::ffi::CStr) -> st
         return Err(error);
     }
     Ok(())
+}
+
+/// Move the live `target` aside to the fresh, process-unique `claim` name.
+///
+/// Where `RENAME_NOREPLACE` is unsupported this must not use the link+unlink
+/// fallback: a writer replacing `target` between the two calls would have its
+/// new file unlinked unseen while the claim still holds the old bytes and
+/// passes the comparison. A plain rename moves whatever `target` names at that
+/// instant, so a concurrent replacement is claimed and then fails the
+/// comparison. Its replace semantics cannot hit anything, because nothing else
+/// creates the unique claim name.
+#[cfg(target_os = "linux")]
+fn rename_to_claim(target: &Path, claim: &Path) -> std::io::Result<()> {
+    let (c_target, c_claim) = (c_path(target)?, c_path(claim)?);
+    match renameat2_noreplace(&c_target, &c_claim) {
+        Err(error) if noreplace_unsupported(&error) => rename_to_unused_name(target, claim),
+        result => result,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn rename_to_unused_name(target: &Path, claim: &Path) -> std::io::Result<()> {
+    if fs::symlink_metadata(claim).is_ok() {
+        return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
+    }
+    fs::rename(target, claim)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn rename_to_claim(target: &Path, claim: &Path) -> std::io::Result<()> {
+    rename_noreplace(target, claim)
 }
 
 #[cfg(target_os = "macos")]
@@ -3140,7 +3189,7 @@ fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> 
 fn claim_existing_target(target: &Path, label: &str) -> std::io::Result<PathBuf> {
     for _ in 0..1024 {
         let candidate = unique_sidecar_candidate(target, label);
-        match rename_noreplace(target, &candidate) {
+        match rename_to_claim(target, &candidate) {
             Ok(()) => return Ok(candidate),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
@@ -23263,9 +23312,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn link_fallback_moves_without_replacing() {
-        use std::ffi::CString;
-        use std::os::unix::ffi::OsStrExt as _;
-        let c = |path: &Path| CString::new(path.as_os_str().as_bytes()).unwrap();
+        let c = |path: &Path| c_path(path).unwrap();
         let dir = tempdir().unwrap();
         let source = dir.path().join("staged.sav");
         let free = dir.path().join("G1R-001.sav");
@@ -23281,6 +23328,31 @@ mod tests {
         link_then_unlink(&c(&source), &c(&free)).unwrap();
         assert!(!source.exists());
         assert_eq!(fs::read(&free).unwrap(), b"new");
+    }
+
+    /// The claim fallback for filesystems without `RENAME_NOREPLACE` moves the
+    /// file `target` names at that moment and never reuses a taken name.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn claim_fallback_takes_the_current_file_and_keeps_taken_names() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("G1R-001.sav");
+        let staged = dir.path().join("game-replacement.tmp");
+        fs::write(&target, b"old").unwrap();
+        // The game replaces the save right before the editor claims it.
+        fs::write(&staged, b"game").unwrap();
+        fs::rename(&staged, &target).unwrap();
+
+        let taken = dir.path().join("G1R-001.sav.claim-taken");
+        fs::write(&taken, b"theirs").unwrap();
+        let error = rename_to_unused_name(&target, &taken).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&taken).unwrap(), b"theirs");
+
+        let claim = dir.path().join("G1R-001.sav.claim-fresh");
+        rename_to_unused_name(&target, &claim).unwrap();
+        assert!(!target.exists());
+        assert_eq!(fs::read(&claim).unwrap(), b"game");
     }
 
     #[test]

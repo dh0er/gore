@@ -86,6 +86,7 @@ class RunBuildTest(unittest.TestCase):
             with (
                 mock.patch.object(gore_build, 'ROOT', root),
                 mock.patch.object(gore_build.sys, 'platform', 'linux'),
+                mock.patch.object(gore_build.platform, 'machine', return_value='x86_64'),
             ):
                 self.assertEqual(
                     gore_build.flutter_build_dir('gore-save-editor', release=False),
@@ -98,6 +99,19 @@ class RunBuildTest(unittest.TestCase):
                 self.assertEqual(
                     gore_build.core_library_filename('gore-save-editor'),
                     'libgore_save.so',
+                )
+
+    def test_linux_save_editor_bundle_follows_an_arm64_host(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (
+                mock.patch.object(gore_build, 'ROOT', root),
+                mock.patch.object(gore_build.sys, 'platform', 'linux'),
+                mock.patch.object(gore_build.platform, 'machine', return_value='aarch64'),
+            ):
+                self.assertEqual(
+                    gore_build.flutter_build_dir('gore-save-editor'),
+                    root / 'apps/save-editor/build/linux/arm64/release/bundle',
                 )
 
     def test_linux_build_builds_runner_and_stages_shared_library(self):
@@ -118,6 +132,7 @@ class RunBuildTest(unittest.TestCase):
             with (
                 mock.patch.object(gore_build, 'ROOT', root),
                 mock.patch.object(gore_build.sys, 'platform', 'linux'),
+                mock.patch.object(gore_build.platform, 'machine', return_value='x86_64'),
                 mock.patch.object(gore_build, 'run', side_effect=build_step),
                 mock.patch.object(gore_build, 'discard_line_ending_only_churn'),
                 mock.patch.object(gore_build, 'resolve_git_sha', return_value='test-sha'),

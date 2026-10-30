@@ -55,6 +55,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 import hashlib
 import os
+import platform
 import posixpath
 import re
 import shutil
@@ -1314,7 +1315,9 @@ def discard_line_ending_only_churn(project: str) -> None:
 def flutter_build_dir(project: str, release: bool = True) -> Path:
     if sys.platform == "linux" and project == "gore-save-editor":
         mode = "release" if release else "debug"
-        return pdir(project) / "build" / "linux" / "x64" / mode / "bundle"
+        # Flutter names the Linux output folder after the host CPU.
+        arch = "arm64" if platform.machine().lower() in ("aarch64", "arm64") else "x64"
+        return pdir(project) / "build" / "linux" / arch / mode / "bundle"
     mode = "Release" if release else "Debug"
     return pdir(project) / "build" / "windows" / "x64" / "runner" / mode
 
