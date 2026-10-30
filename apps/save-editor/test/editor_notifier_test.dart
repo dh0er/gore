@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,6 +16,7 @@ import 'package:goresave/features/editor/domain/story_state_models.dart';
 import 'package:goresave/l10n/app_localizations_de.dart';
 import 'package:goresave/l10n/app_localizations_en.dart';
 import 'package:goresave/providers/data_providers.dart';
+import 'package:path/path.dart' as p;
 
 bool _sameTestPath(String a, String b) =>
     a.replaceAll('/', '\\').toLowerCase() ==
@@ -7398,6 +7400,64 @@ void main() {
       'value': {'path': '/Script/Angelscript.ItMw_Sword', 'count': 1},
     });
   });
+
+  test(
+    'Hero transfer refuses the destination reached through a symlink',
+    () async {
+      final root = Directory.systemTemp.createTempSync('gore_transfer_alias');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final realDir = Directory(p.join(root.path, 'real'))..createSync();
+      final destinationPath = p.join(realDir.path, 'G1R-001.sav');
+      File(destinationPath).writeAsBytesSync(const [0]);
+      Link(p.join(root.path, 'alias')).createSync(realDir.path);
+      final aliasPath = p.join(root.path, 'alias', 'G1R-001.sav');
+      final core = _ProgressTransferCoreService(savePath: destinationPath);
+      final notifier = EditorNotifier(core, saveDir: realDir.path);
+      await notifier.inspect(destinationPath);
+
+      expect(
+        await notifier.transferHeroProgress(sourcePath: aliasPath),
+        isFalse,
+      );
+      expect(notifier.state.error, contains('different'));
+      expect(
+        core.requests.where(
+          (request) => request.command == 'private.inventory.list',
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'a failed transfer read shows its message without a Dart prefix',
+    () async {
+      const sourcePath = r'C:\archive\Old.sav';
+      const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+      final core = _ProgressTransferCoreService(
+        savePath: destinationPath,
+        skillsByPath: {
+          sourcePath: {'found': false, 'skills': <Object?>[]},
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(destinationPath);
+
+      expect(
+        await notifier.transferHeroProgress(
+          sourcePath: sourcePath,
+          items: false,
+          stats: false,
+        ),
+        isFalse,
+      );
+      expect(
+        notifier.state.error,
+        'Could not save the changes: Skills load failed: '
+        'No editable Hero skill data was found in one of the saves.',
+      );
+    },
+  );
 
   test(
     'Hero transfer accepts a destination spelled differently than the selection',

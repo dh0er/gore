@@ -104,6 +104,18 @@ bool _sameSavePath(String a, String b) {
       : normalizedA == normalizedB;
 }
 
+/// Whether [a] and [b] name the same file on disk, also when they are spelled
+/// differently, such as through a symlinked Steam folder. Paths that cannot be
+/// checked fall back to [_sameSavePath].
+bool _sameSaveFile(String a, String b) {
+  if (_sameSavePath(a, b)) return true;
+  try {
+    return FileSystemEntity.identicalSync(a, b);
+  } on FileSystemException {
+    return false;
+  }
+}
+
 List<String> _addSavePath(List<String> paths, String path) {
   if (paths.any((candidate) => _sameSavePath(candidate, path))) return paths;
   return List.unmodifiable([...paths, path]);
@@ -3141,7 +3153,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(error: _l10n.editorUnsavedBeforeOpenFile);
       return false;
     }
-    if (_sameSavePath(sourcePath, destinationPath)) {
+    if (_sameSaveFile(sourcePath, destinationPath)) {
       state = state.copyWith(
         error: _l10n.editorSaveFailed(_l10n.transferChooseDifferentSource),
       );
@@ -3339,9 +3351,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
         }
       }
     } catch (error) {
+      // The reads throw StateError with an already localized message; its
+      // toString() would prefix Dart's English "Bad state: ".
       state = state.copyWith(
         isLoading: false,
-        error: _l10n.editorSaveFailed('$error'),
+        error: _l10n.editorSaveFailed(
+          error is StateError ? error.message : '$error',
+        ),
       );
       return false;
     }

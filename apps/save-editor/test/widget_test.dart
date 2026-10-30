@@ -184,6 +184,41 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  for (final (width, labeled) in const [(1400.0, false), (2400.0, true)]) {
+    testWidgets('the transfer button is ${labeled ? 'labeled' : 'an icon'} '
+        'in a ${width.toInt()} px window', (tester) async {
+      await tester.binding.setSurfaceSize(Size(width, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(
+              withSharedPlanner(_FakeCoreService()),
+            ),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+            uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+            itemIconCatalogProvider.overrideWith(
+              (ref) async => const ItemIconCatalog.empty(),
+            ),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final button = find.byKey(const ValueKey('transfer-progress-button'));
+      expect(button, findsOneWidget);
+      expect(
+        find.descendant(of: button, matching: find.text('Transfer progress')),
+        labeled ? findsOneWidget : findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('a running progress transfer keeps its dialog open', (
     tester,
   ) async {

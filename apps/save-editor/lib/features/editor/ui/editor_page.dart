@@ -2096,30 +2096,77 @@ class _HeaderCardState extends State<_HeaderCard> {
               );
             }
 
+            // Width of a header TextButton.icon: padding, icon, the gap before
+            // the label, and the label itself.
+            double labeledActionWidth(String label) {
+              final painter = TextPainter(
+                text: TextSpan(
+                  text: label,
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                textDirection: Directionality.of(context),
+                textScaler: MediaQuery.textScalerOf(context),
+                maxLines: 1,
+              )..layout();
+              final width = 12 + 18 + 8 + painter.width + 12;
+              painter.dispose();
+              return width;
+            }
+
+            // The details column sits beside the screenshot, or below it when
+            // compact. Beside the badges the actions get at most half the row
+            // so the badges keep their layout; on their own line, all of it.
+            final detailsWidth = compact
+                ? constraints.maxWidth
+                : constraints.maxWidth - previewWidth - 14;
+            final labeledActionsWidth =
+                labeledActionWidth(l10n.transferProgress) +
+                (save == null || currentProfile == null
+                    ? 0
+                    : 4 + labeledActionWidth(l10n.deleteSavegame));
+            final showTransferLabel =
+                labeledActionsWidth <=
+                (compact ? detailsWidth : detailsWidth / 2);
+
             Widget? transferAction() {
               if (state.selectedPath == null) return null;
               final enabled = !state.isLoading && !state.hasUnsavedEdits;
+              final foregroundColor = enabled
+                  ? null
+                  : Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.38);
+              const icon = Icon(Icons.drive_file_move_outlined, size: 18);
+              void onPressed() =>
+                  _chooseProgressTransferSource(context, notifier);
               return Tooltip(
                 message: l10n.transferProgressTooltip,
                 child: AbsorbPointer(
                   absorbing: !enabled,
-                  child: TextButton.icon(
-                    key: const ValueKey('transfer-progress-button'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: enabled
-                          ? null
-                          : Theme.of(
-                              context,
-                            ).colorScheme.onSurface.withValues(alpha: 0.38),
-                      minimumSize: const Size(0, 32),
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    icon: const Icon(Icons.drive_file_move_outlined, size: 18),
-                    label: Text(l10n.transferProgress),
-                    onPressed: () =>
-                        _chooseProgressTransferSource(context, notifier),
-                  ),
+                  child: showTransferLabel
+                      ? TextButton.icon(
+                          key: const ValueKey('transfer-progress-button'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: foregroundColor,
+                            minimumSize: const Size(0, 32),
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: icon,
+                          label: Text(l10n.transferProgress),
+                          onPressed: onPressed,
+                        )
+                      : IconButton(
+                          key: const ValueKey('transfer-progress-button'),
+                          style: IconButton.styleFrom(
+                            foregroundColor: foregroundColor,
+                            minimumSize: const Size(32, 32),
+                            padding: const EdgeInsets.all(6),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: icon,
+                          onPressed: onPressed,
+                        ),
                 ),
               );
             }
