@@ -1909,13 +1909,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
         };
       }
       if (seq != _loadSeq) return;
+      final scanSucceeded = response['ok'] == true;
       String? scanError;
       String? missingSaveDir;
       Map<String, Object?>? data;
       DeletedSaveRecovery? discoveredDeletedSaveRecovery;
       late final List<ProfileSummary> profiles;
       late final List<SaveSlot> saves;
-      if (response['ok'] == true) {
+      if (scanSucceeded) {
         data = (response['data'] as Map?)?.cast<String, Object?>();
         final rawRecovery = data?['deletedSaveRecovery'];
         if (rawRecovery is Map) {
@@ -2050,7 +2051,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
       hiddenOtherSavePaths = keptHiddenOtherSavePaths;
       _sortByPlaytimeDesc(saves);
-      final activeProfileId = scanError == null
+      final activeProfileId = scanSucceeded
           ? (data?['activeProfileId'] as num?)?.toInt()
           : state.activeProfileId;
       // Keep the explicit profile selection if that profile still exists in
@@ -2066,7 +2067,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // token once a successful scan sees its target recreated; keeping it
       // would expose an undo action that can no longer restore safely.
       final retainedDeletedSaveRecovery =
-          scanError == null &&
+          scanSucceeded &&
               state.deletedSaveRecovery != null &&
               saves.any(
                 (save) =>
@@ -2156,7 +2157,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (scanError != null && state.error == null) {
         state = state.copyWith(error: scanError);
       }
-      if (missingSaveDir != null && state.error == null) {
+      // The missing folder is the root cause even when re-inspecting a stale
+      // selection failed too, and it has its own pane, so it always shows.
+      if (missingSaveDir != null) {
         state = state.copyWith(missingSaveDir: missingSaveDir);
       }
     } catch (error) {
@@ -3343,8 +3346,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return false;
     }
 
-    if (state.selectedPath != destinationPath) {
-      state = state.copyWith(isLoading: false);
+    final selectedAfterReads = state.selectedPath;
+    if (selectedAfterReads == null ||
+        !_sameSavePath(selectedAfterReads, destinationPath)) {
+      state = state.copyWith(
+        isLoading: false,
+        error: _l10n.editorSaveFailed(_l10n.transferDestinationChanged),
+      );
       return false;
     }
     state = state.copyWith(isLoading: false);

@@ -5397,6 +5397,55 @@ void main() {
     },
   );
 
+  test(
+    'a save folder that vanishes keeps the last scan and reports the folder',
+    () async {
+      const savePath = r'C:\tmp\saves\G1R-001.sav';
+      final core = _VanishingFolderCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': savePath,
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 914367,
+              'sha1': 'abc',
+              'status': 'ok',
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-001'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      var folderExists = true;
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: _MemoryEditorSettingsStore(),
+        directoryExists: (_) => folderExists,
+      );
+      await pumpEventQueue();
+      expect(notifier.state.activeProfileId, 0);
+
+      folderExists = false;
+      core.folderGone = true;
+      await notifier.refresh();
+
+      // A failed scan carries no profile data to replace the last one with.
+      expect(notifier.state.activeProfileId, 0);
+      // Re-inspecting the vanished save fails as well, but the missing folder
+      // is the cause the user has to act on.
+      expect(notifier.state.error, isNotNull);
+      expect(notifier.state.missingSaveDir, r'C:\tmp\saves');
+    },
+  );
+
   test('a failed scan of an existing folder keeps the core message', () async {
     final notifier = EditorNotifier(
       _FailingScanCoreService(),
@@ -7351,6 +7400,48 @@ void main() {
   });
 
   test(
+    'Hero transfer accepts a destination spelled differently than the selection',
+    () async {
+      const sourcePath = r'C:\archive\Old.sav';
+      const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+      const destinationSpelling = r'c:/TMP/saves/g1r-001.SAV';
+      final core = _ProgressTransferCoreService(
+        savePath: destinationPath,
+        inventoryByPath: {
+          sourcePath: {
+            'items': [
+              {
+                'id': 'ItMi_Orenugget',
+                'path': '/Script/Angelscript.ItMi_Orenugget',
+                'count': 5,
+                'containerType': 'MainContainer',
+              },
+            ],
+          },
+          destinationSpelling: {'items': <Object?>[]},
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(destinationPath);
+
+      expect(
+        await notifier.transferHeroProgress(
+          sourcePath: sourcePath,
+          targetPath: destinationSpelling,
+          skills: false,
+          stats: false,
+        ),
+        isTrue,
+      );
+      expect(notifier.state.error, isNull);
+      expect(
+        core.requests.where((request) => request.command == 'write_save'),
+        hasLength(1),
+      );
+    },
+  );
+
+  test(
     'Hero item transfer pins a stack the destination carries twice',
     () async {
       const sourcePath = r'C:\archive\Old.sav';
@@ -8274,6 +8365,32 @@ class _MissingFolderCoreService extends _RecordingCoreService {
       return {
         'ok': false,
         'error': {'message': 'io error: save directory does not exist'},
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Scans and inspects normally until [folderGone], then fails both like the
+/// core does once the save folder was deleted.
+class _VanishingFolderCoreService extends _RecordingCoreService {
+  _VanishingFolderCoreService({super.scanData});
+
+  var folderGone = false;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (folderGone &&
+        (command == 'scan_save_dir' || command == 'inspect_save')) {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': false,
+        'error': {'message': 'io error: No such file or directory'},
       };
     }
     return super.execute(command, payload: payload);

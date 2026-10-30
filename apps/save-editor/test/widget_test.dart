@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
@@ -181,6 +182,66 @@ void main() {
 
     itemCatalog.complete(const ItemIconCatalog.empty());
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('a running progress transfer keeps its dialog open', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const pickerChannel = MethodChannel('plugins.flutter.io/file_selector');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      pickerChannel,
+      (call) async => [r'C:\archive\Old.sav'],
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        pickerChannel,
+        null,
+      ),
+    );
+    final core = _BlockingTransferCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+          itemIconCatalogProvider.overrideWith(
+            (ref) async => const ItemIconCatalog.empty(),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.byKey(const ValueKey('transfer-progress-button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Transfer character progress'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Confirm'));
+    await tester.pump();
+    expect(core.transferReadStarted, isTrue);
+
+    // The transfer cannot be cancelled, so neither Escape nor a barrier tap
+    // may close the dialog while it runs.
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('Transfer character progress'), findsOneWidget);
+    await tester.tapAt(const Offset(5, 5));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('Transfer character progress'), findsOneWidget);
+
+    core.releaseTransferReads();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
   });
 
   testWidgets('a missing save folder offers the picker and the settings tab', (
@@ -2359,6 +2420,28 @@ class _RecordedRequest {
 
   final String command;
   final Map<String, Object?> payload;
+}
+
+/// Holds the first progress-transfer read open until [releaseTransferReads].
+class _BlockingTransferCoreService extends _FakeCoreService {
+  final _release = Completer<void>();
+  var transferReadStarted = false;
+
+  void releaseTransferReads() {
+    if (!_release.isCompleted) _release.complete();
+  }
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (payload['path'] == r'C:\archive\Old.sav') {
+      transferReadStarted = true;
+      await _release.future;
+    }
+    return super.execute(command, payload: payload);
+  }
 }
 
 class _FakeCoreService implements GoresaveCoreService {

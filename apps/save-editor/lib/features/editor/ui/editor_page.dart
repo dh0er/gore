@@ -478,6 +478,19 @@ class _TransferProgressDialogState extends State<_TransferProgressDialog> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
+    // A running transfer cannot be cancelled, so Escape or a barrier tap must
+    // not close the dialog and suggest otherwise while the save is written.
+    return PopScope(
+      canPop: !_working,
+      child: _buildDialog(context, l10n, scheme),
+    );
+  }
+
+  Widget _buildDialog(
+    BuildContext context,
+    AppLocalizations l10n,
+    ColorScheme scheme,
+  ) {
     return AlertDialog(
       title: Row(
         children: [
