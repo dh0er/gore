@@ -3461,8 +3461,8 @@ class AppLocalizationsTr extends AppLocalizations {
       'Aktarımın bir kısmı zaten kaydedildi. Geri kalanı bekliyor; tamamlamak için kaydet.';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return 'Düzenleyici bu eşyaları tanımadığı için aktarılmadı: $items';
+  String transferSkippedItems(String items) {
+    return 'Bu eşyalar aktarılamadı: $items';
   }
 
   @override

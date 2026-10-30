@@ -850,7 +850,7 @@
   "transferSavingDestination": "正在儲存目標……",
   "transferCountLimit": "轉移的物品數量超過了支援的上限。",
   "transferPartiallySaved": "部分轉移已儲存。其餘變更仍待儲存；儲存即可完成轉移。",
-  "transferSkippedUnknownItems": "編輯器無法識別以下物品，因此未轉移：{items}",
+  "transferSkippedItems": "以下物品無法轉移：{items}",
   "transferNoSkillData": "其中一個存檔沒有可編輯的英雄技能資料。",
   "transferDone": "完成"
 }

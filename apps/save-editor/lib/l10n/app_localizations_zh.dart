@@ -3324,8 +3324,8 @@ class AppLocalizationsZh extends AppLocalizations {
   String get transferPartiallySaved => '部分转移已保存。其余更改仍待保存；保存即可完成转移。';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return '编辑器无法识别以下物品，因此未转移：$items';
+  String transferSkippedItems(String items) {
+    return '以下物品无法转移：$items';
   }
 
   @override
@@ -6655,8 +6655,8 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get transferPartiallySaved => '部分转移已保存。其余更改仍待保存；保存即可完成转移。';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return '编辑器无法识别以下物品，因此未转移：$items';
+  String transferSkippedItems(String items) {
+    return '以下物品无法转移：$items';
   }
 
   @override
@@ -9998,8 +9998,8 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String get transferPartiallySaved => '部分轉移已儲存。其餘變更仍待儲存；儲存即可完成轉移。';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return '編輯器無法識別以下物品，因此未轉移：$items';
+  String transferSkippedItems(String items) {
+    return '以下物品無法轉移：$items';
   }
 
   @override

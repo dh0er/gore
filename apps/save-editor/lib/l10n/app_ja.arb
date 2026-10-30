@@ -882,7 +882,7 @@
   "transferSavingDestination": "移動先を保存しています…",
   "transferCountLimit": "移したアイテム数が対応上限を超えています。",
   "transferPartiallySaved": "転送の一部はすでに保存されています。残りは保留のままです。保存すると転送が完了します。",
-  "transferSkippedUnknownItems": "エディターが認識できないため転送されなかったアイテム: {items}",
+  "transferSkippedItems": "次のアイテムは転送できませんでした: {items}",
   "transferNoSkillData": "いずれかのセーブに編集できる主人公のスキルがありません。",
   "transferDone": "完了"
 }

@@ -3488,8 +3488,8 @@ class AppLocalizationsPl extends AppLocalizations {
       'Część przeniesienia jest już zapisana. Reszta pozostaje oczekująca; zapisz, aby je dokończyć.';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return 'Nie przeniesiono, ponieważ edytor nie zna tych przedmiotów: $items';
+  String transferSkippedItems(String items) {
+    return 'Nie udało się przenieść tych przedmiotów: $items';
   }
 
   @override

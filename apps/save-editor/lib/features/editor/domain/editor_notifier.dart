@@ -3253,11 +3253,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
               attributeSegment.startsWith('{') && attributeSegment.endsWith('}')
               ? attributeSegment.substring(1, attributeSegment.length - 1)
               : attributeSegment;
-          final setSegment = hit.path
-              .where((segment) => segment.startsWith('{AttributeSet_'))
-              .firstOrNull;
-          final setClass = setSegment?.substring(1, setSegment.length - 1);
-          if (heroAttributeHidden(attributeId, setClass)) continue;
+          if (heroAttributeHidden(
+            attributeId,
+            heroAttributeSetClass(hit.path),
+          )) {
+            continue;
+          }
           final target = destinationByPath[hit.path.join('\u0000')];
           if (target == null ||
               !target.editable ||
@@ -3312,12 +3313,17 @@ class EditorNotifier extends StateNotifier<EditorState> {
           () => _loadTransferInventory(destinationPath),
         );
         final carriedItemsByPath = <String, PrivateInventoryItem>{};
+        final uncountedItemPaths = <String>{};
         for (final item in destinationInventory.items) {
-          // A stack without a stored count has no field a count edit could
-          // change, so the source amount becomes a stack of its own instead.
-          if (item.count != null &&
-              (item.containerType == null ||
-                  item.containerType == 'MainContainer')) {
+          if (item.containerType != null &&
+              item.containerType != 'MainContainer') {
+            continue;
+          }
+          if (item.count == null) {
+            // No stored count for a count edit to change, and the core will
+            // not add a second stack of an item the inventory already holds.
+            uncountedItemPaths.add(item.path);
+          } else {
             carriedItemsByPath.putIfAbsent(item.path, () => item);
           }
         }
@@ -3344,7 +3350,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
           if (carried == null) {
             // The core refuses to add an item class it does not know (a newer
             // patch or a mod); one such item must not sink the whole transfer.
-            if (knownItemPaths != null && !knownItemPaths.contains(entry.key)) {
+            if (uncountedItemPaths.contains(entry.key) ||
+                (knownItemPaths != null &&
+                    !knownItemPaths.contains(entry.key))) {
               skippedItems.add(entry.key.split('.').last);
               continue;
             }
@@ -3399,7 +3407,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     state = state.copyWith(isLoading: false);
     final skippedNote = skippedItems.isEmpty
         ? null
-        : _l10n.transferSkippedUnknownItems(skippedItems.join(', '));
+        : _l10n.transferSkippedItems(skippedItems.join(', '));
     if (edits.isEmpty) {
       state = state.copyWith(
         error: [
@@ -3432,18 +3440,23 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return true;
     }
     final remaining = state.pendingEdits['progressTransfer'];
-    if (remaining != null && remaining.edits.length < edits.length) {
-      // An earlier sub-write is already on disk. Dropping the rest would
-      // leave the save half transferred, and a new transfer would add the
-      // written items again; keeping it lets Save finish the transfer.
-      state = state.copyWith(
-        error: [?state.error, _l10n.transferPartiallySaved].join('\n'),
-      );
-    } else {
+    final partlyWritten =
+        remaining != null && remaining.edits.length < edits.length;
+    if (!partlyWritten) {
       // Nothing was written. Leaving the edits staged would block a new
       // transfer and let a later Save apply the one reported as failed.
       clearPendingEdit('progressTransfer');
     }
+    // An earlier sub-write is already on disk when partly written. Dropping
+    // the rest would leave the save half transferred, and a new transfer would
+    // add the written items again; keeping it lets Save finish the transfer.
+    state = state.copyWith(
+      error: [
+        ?state.error,
+        if (partlyWritten) _l10n.transferPartiallySaved,
+        ?skippedNote,
+      ].join('\n'),
+    );
     return false;
   }
 

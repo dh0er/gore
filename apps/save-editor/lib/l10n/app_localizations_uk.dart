@@ -3481,8 +3481,8 @@ class AppLocalizationsUk extends AppLocalizations {
       'Частину перенесення вже збережено. Решта залишається в очікуванні; збережіть, щоб завершити.';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return 'Не перенесено, бо редактор не знає цих предметів: $items';
+  String transferSkippedItems(String items) {
+    return 'Ці предмети не вдалося перенести: $items';
   }
 
   @override

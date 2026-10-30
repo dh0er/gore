@@ -3457,8 +3457,8 @@ class AppLocalizationsEn extends AppLocalizations {
       'Part of the transfer is already saved. The rest stays staged; save to finish it.';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return 'Not transferred because the editor does not know these items: $items';
+  String transferSkippedItems(String items) {
+    return 'These items could not be transferred: $items';
   }
 
   @override

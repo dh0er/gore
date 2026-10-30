@@ -3471,8 +3471,8 @@ class AppLocalizationsCs extends AppLocalizations {
       'Část přenosu je již uložena. Zbytek zůstává připraven; uložením přenos dokončíte.';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return 'Nepřeneseno, protože editor tyto předměty nezná: $items';
+  String transferSkippedItems(String items) {
+    return 'Tyto předměty nebylo možné přenést: $items';
   }
 
   @override

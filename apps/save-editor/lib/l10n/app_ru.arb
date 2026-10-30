@@ -875,7 +875,7 @@
   "transferSavingDestination": "Сохранение назначения…",
   "transferCountLimit": "Перенесённое количество предметов превышает допустимый предел.",
   "transferPartiallySaved": "Часть переноса уже сохранена. Остальное остаётся в ожидании; сохраните, чтобы завершить перенос.",
-  "transferSkippedUnknownItems": "Не перенесено, так как редактор не знает эти предметы: {items}",
+  "transferSkippedItems": "Эти предметы не удалось перенести: {items}",
   "transferNoSkillData": "В одном из сохранений нет изменяемых навыков героя.",
   "transferDone": "Готово"
 }

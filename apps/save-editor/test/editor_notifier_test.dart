@@ -7154,6 +7154,61 @@ void main() {
   });
 
   test(
+    'Hero transfer leaves attributes hidden within their set alone',
+    () async {
+      const sourcePath = r'C:\archive\Old.sav';
+      const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+      List<String> sleepRecovery(String set) => [
+        'm_GenericData',
+        'AttributesByGlobalId',
+        '{Hero}',
+        'AttributeSetsByClass',
+        '{/Script/G1R.AttributeSet_$set}',
+        'Attributes',
+        '{RecoveryRatePerHourOfSleep}',
+        'BaseValue',
+      ];
+      Map<String, Object?> page(String value) => {
+        'offset': 0,
+        'limit': 1000,
+        'total': 2,
+        'results': [
+          for (final set in ['Fatigue', 'Health'])
+            {
+              'path': sleepRecovery(set),
+              'display': '$set RecoveryRatePerHourOfSleep',
+              'type': 'FloatProperty',
+              'value': value,
+              'editable': true,
+              'editValue': double.parse(value),
+            },
+        ],
+      };
+      final core = _ProgressTransferCoreService(
+        savePath: destinationPath,
+        typedByPath: {sourcePath: page('9'), destinationPath: page('1')},
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(destinationPath);
+
+      expect(
+        await notifier.transferHeroProgress(
+          sourcePath: sourcePath,
+          items: false,
+          skills: false,
+        ),
+        isTrue,
+      );
+      final write = core.requests.singleWhere(
+        (request) => request.command == 'write_save',
+      );
+      // Sleep recovery is inert on Fatigue and hidden there, but real on Health.
+      final edit = (write.payload['edits'] as List).single as Map;
+      expect((edit['value'] as Map)['path'], sleepRecovery('Health'));
+    },
+  );
+
+  test(
     'Hero progress transfer reads source and writes selected destination',
     () async {
       const sourcePath = r'C:\archive\Old.sav';
@@ -7476,12 +7531,22 @@ void main() {
               'count': 5,
               'containerType': 'MainContainer',
             },
+            {
+              'id': 'ItMi_ModdedRelic',
+              'path': '/Script/Angelscript.ItMi_ModdedRelic',
+              'count': 1,
+              'containerType': 'MainContainer',
+            },
           ],
         },
         destinationPath: {'items': <Object?>[]},
       },
     );
-    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      knownItemPaths: () async => {'/Script/Angelscript.ItMi_Orenugget'},
+    );
     await notifier.inspect(destinationPath);
 
     expect(
@@ -7498,6 +7563,8 @@ void main() {
     );
     expect(notifier.state.pendingEdits, isEmpty);
     expect(notifier.state.hasUnsavedEdits, isFalse);
+    // The failure still names what the transfer would have left out.
+    expect(notifier.state.error, endsWith('ItMi_ModdedRelic'));
   });
 
   test(
@@ -7607,7 +7674,7 @@ void main() {
   );
 
   test(
-    'a destination stack without a stored count gets the source amount added',
+    'an item the destination holds without a stored count is skipped and named',
     () async {
       const sourcePath = r'C:\archive\Old.sav';
       const destinationPath = r'C:\tmp\saves\G1R-001.sav';
@@ -7615,7 +7682,15 @@ void main() {
         savePath: destinationPath,
         inventoryByPath: {
           sourcePath: {
-            'items': [orenugget(3)],
+            'items': [
+              orenugget(3),
+              {
+                'id': 'ItMi_Gold',
+                'path': '/Script/Angelscript.ItMi_Gold',
+                'count': 20,
+                'containerType': 'MainContainer',
+              },
+            ],
           },
           destinationPath: {
             'items': [
@@ -7632,7 +7707,10 @@ void main() {
       final notifier = EditorNotifier(
         core,
         saveDir: r'C:\tmp\saves',
-        knownItemPaths: () async => {'/Script/Angelscript.ItMi_Orenugget'},
+        knownItemPaths: () async => {
+          '/Script/Angelscript.ItMi_Orenugget',
+          '/Script/Angelscript.ItMi_Gold',
+        },
       );
       await notifier.inspect(destinationPath);
 
@@ -7647,9 +7725,14 @@ void main() {
       final write = core.requests.singleWhere(
         (request) => request.command == 'write_save',
       );
+      // The core refuses a second stack of a held item, and the held stack has
+      // no count field to raise, so only the gold goes through.
       final edit = (write.payload['edits'] as List).single as Map;
-      expect(edit['path'], 'private.inventory.addItem');
-      expect((edit['value'] as Map)['count'], 3);
+      expect((edit['value'] as Map)['path'], '/Script/Angelscript.ItMi_Gold');
+      expect(
+        notifier.lastWriteMessage,
+        endsWith('These items could not be transferred: ItMi_Orenugget'),
+      );
     },
   );
 
@@ -7698,10 +7781,7 @@ void main() {
     );
     expect(
       notifier.lastWriteMessage,
-      endsWith(
-        'Not transferred because the editor does not know these items: '
-        'ItMi_ModdedRelic',
-      ),
+      endsWith('These items could not be transferred: ItMi_ModdedRelic'),
     );
   });
 

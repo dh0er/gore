@@ -3481,8 +3481,8 @@ class AppLocalizationsRo extends AppLocalizations {
       'O parte din transfer este deja salvată. Restul rămâne în așteptare; salvează pentru a-l finaliza.';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return 'Netransferate, deoarece editorul nu cunoaște aceste obiecte: $items';
+  String transferSkippedItems(String items) {
+    return 'Aceste obiecte nu au putut fi transferate: $items';
   }
 
   @override

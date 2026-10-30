@@ -850,7 +850,7 @@
   "transferSavingDestination": "Hedef kaydediliyor…",
   "transferCountLimit": "Aktarılan eşya sayısı desteklenen sınırı aşıyor.",
   "transferPartiallySaved": "Aktarımın bir kısmı zaten kaydedildi. Geri kalanı bekliyor; tamamlamak için kaydet.",
-  "transferSkippedUnknownItems": "Düzenleyici bu eşyaları tanımadığı için aktarılmadı: {items}",
+  "transferSkippedItems": "Bu eşyalar aktarılamadı: {items}",
   "transferNoSkillData": "Kayıtlardan birinde düzenlenebilir kahraman becerisi yok.",
   "transferDone": "Bitti"
 }

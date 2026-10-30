@@ -3482,8 +3482,8 @@ class AppLocalizationsDe extends AppLocalizations {
       'Ein Teil der Übertragung ist bereits gespeichert. Der Rest bleibt vorgemerkt; speichere, um sie abzuschließen.';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return 'Nicht übertragen, weil der Editor diese Gegenstände nicht kennt: $items';
+  String transferSkippedItems(String items) {
+    return 'Diese Gegenstände konnten nicht übertragen werden: $items';
   }
 
   @override

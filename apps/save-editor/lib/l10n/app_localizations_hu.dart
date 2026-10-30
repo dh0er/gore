@@ -3466,8 +3466,8 @@ class AppLocalizationsHu extends AppLocalizations {
       'Az átvitel egy része már mentve van. A többi függőben marad; mentsd el a befejezéshez.';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return 'Nem lett átvive, mert a szerkesztő nem ismeri ezeket a tárgyakat: $items';
+  String transferSkippedItems(String items) {
+    return 'Ezeket a tárgyakat nem sikerült átvinni: $items';
   }
 
   @override

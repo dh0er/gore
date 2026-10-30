@@ -3482,8 +3482,8 @@ class AppLocalizationsPt extends AppLocalizations {
       'Parte da transferência já está guardada. O resto fica pendente; guarde para a concluir.';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return 'Não transferidos porque o editor não conhece estes itens: $items';
+  String transferSkippedItems(String items) {
+    return 'Não foi possível transferir estes itens: $items';
   }
 
   @override
@@ -6971,8 +6971,8 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       'Parte da transferência já foi salva. O restante continua pendente; salve para concluí-la.';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return 'Não transferidos porque o editor não conhece estes itens: $items';
+  String transferSkippedItems(String items) {
+    return 'Não foi possível transferir estes itens: $items';
   }
 
   @override

@@ -3490,8 +3490,8 @@ class AppLocalizationsIt extends AppLocalizations {
       'Parte del trasferimento è già salvata. Il resto rimane in sospeso; salva per completarlo.';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return 'Non trasferiti perché l\'editor non conosce questi oggetti: $items';
+  String transferSkippedItems(String items) {
+    return 'Non è stato possibile trasferire questi oggetti: $items';
   }
 
   @override

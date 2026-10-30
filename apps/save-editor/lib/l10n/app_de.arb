@@ -875,7 +875,7 @@
   "transferSavingDestination": "Ziel wird gespeichert…",
   "transferCountLimit": "Die übertragene Gegenstandsmenge überschreitet das unterstützte Limit.",
   "transferPartiallySaved": "Ein Teil der Übertragung ist bereits gespeichert. Der Rest bleibt vorgemerkt; speichere, um sie abzuschließen.",
-  "transferSkippedUnknownItems": "Nicht übertragen, weil der Editor diese Gegenstände nicht kennt: {items}",
+  "transferSkippedItems": "Diese Gegenstände konnten nicht übertragen werden: {items}",
   "transferNoSkillData": "In einem der Savegames wurden keine bearbeitbaren Helden-Talente gefunden.",
   "transferDone": "Fertig"
 }

@@ -5238,11 +5238,11 @@ abstract class AppLocalizations {
   /// **'Part of the transfer is already saved. The rest stays staged; save to finish it.'**
   String get transferPartiallySaved;
 
-  /// No description provided for @transferSkippedUnknownItems.
+  /// No description provided for @transferSkippedItems.
   ///
   /// In en, this message translates to:
-  /// **'Not transferred because the editor does not know these items: {items}'**
-  String transferSkippedUnknownItems(String items);
+  /// **'These items could not be transferred: {items}'**
+  String transferSkippedItems(String items);
 
   /// No description provided for @transferNoSkillData.
   ///

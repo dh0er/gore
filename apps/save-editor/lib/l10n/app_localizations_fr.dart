@@ -3502,8 +3502,8 @@ class AppLocalizationsFr extends AppLocalizations {
       'Une partie du transfert est déjà enregistrée. Le reste reste en attente ; enregistrez pour le terminer.';
 
   @override
-  String transferSkippedUnknownItems(String items) {
-    return 'Non transférés, car l\'éditeur ne connaît pas ces objets : $items';
+  String transferSkippedItems(String items) {
+    return 'Ces objets n\'ont pas pu être transférés : $items';
   }
 
   @override
