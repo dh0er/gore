@@ -7301,7 +7301,8 @@ fn assemble_private_inventory(
 /// parse succeeded and the save's `_Attributes` map yields at least one NPC.
 /// When NPCs are present, `writable` advertises the two NPC-specific structural
 /// edits (per-attribute editing rides on the already-advertised
-/// `private.typed.setValue`). Mirrors the inventory/progression blocks: always
+/// `private.typed.setValue`). `strandedRevives` lists the NPCs an older build
+/// revived without putting them back into the world. Mirrors the inventory/progression blocks: always
 /// emit the object, with `hasNpcs: false` + empty `writable` when the private
 /// payload doesn't parse or has no NPCs.
 fn summarize_private_npc_payload(root: Option<&properties::RootObject>) -> Value {
@@ -7318,9 +7319,13 @@ fn summarize_private_npc_payload(root: Option<&properties::RootObject>) -> Value
             writable.push("private.npc.setRelationship");
         }
     }
+    // Damage an older editor build left behind: NPCs it revived that the game
+    // still keeps out of the world. Reviving them again is the repair.
+    let stranded = root.map(npc::stranded_by_old_revives).unwrap_or_default();
     json!({
         "hasNpcs": has_npcs,
         "writable": writable,
+        "strandedRevives": stranded,
     })
 }
 
@@ -28078,6 +28083,7 @@ mod tests {
         let writable = npc["writable"].as_array().unwrap();
         assert!(writable.contains(&json!("private.npc.revive")));
         assert!(!writable.contains(&json!("private.npc.setRelationship")));
+        assert_eq!(npc["strandedRevives"], json!([]));
 
         let supported =
             npc_attributes_with_relationship_map_payload(&[("OC_VLK_Herek_511", 100.0, 120.0)]);

@@ -172,7 +172,9 @@ class AttributeDetail extends ConsumerWidget {
     // the registry so a queued revive reflects optimistically before Save; the
     // reloadKey matches the panel's so a Save's trailing refresh re-seeds the
     // status line/HP from disk.
-    final revivePending = state.pendingEdits.containsKey('npc.revive:$npcId');
+    final revivePending = state.pendingEdits.containsKey(
+      EditorNotifier.npcRevivePendingKey(npcId),
+    );
     final statusConfig = NpcStatusConfig(
       npcId: npcId,
       editable: editable,

@@ -785,6 +785,8 @@
   "slotRepairUnavailable": "Şu an onarım mümkün değil — bu kayıt yazılamıyor.",
   "editorDeletedBackupWithLabelWarning": "Yedek silindi: {path} — adı kaldırılamadı: {details}",
   "slotRepairNotOffered": "Onarım bu kayıt için kullanılamıyor.",
+  "npcWorldRepairTitle": "Diriltilen NPC'ler dünyada yok",
+  "npcWorldRepairBody": "Bu düzenleyicinin eski bir sürümü NPC'leri dünyaya geri koymadan diriltti, bu yüzden oyun onları hiç ortaya çıkarmıyor. Etkilenen: {count}. Onarım diriltmeyi tamamlar ve onları geri getirir. Kaydederken her zamanki gibi bir yedek oluşturulur.",
   "statisticsTitle": "İstatistikler",
   "statisticsSubtitle": "Karakter, görev, dünya ve kayıt ilerlemesinin özet görünümü.",
   "statisticsCardTitle": "{card, select, timing{Zaman} character{Karakter} quests{Görevler} progress{İlerleme} encounters{Savaş ve temaslar} inventory{Beceriler ve envanter} other{{fallback}}}",

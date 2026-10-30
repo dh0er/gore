@@ -3170,6 +3170,14 @@ class AppLocalizationsCs extends AppLocalizations {
       'Oprava není pro tuto uloženou hru k dispozici.';
 
   @override
+  String get npcWorldRepairTitle => 'Oživené postavy NPC chybí ve světě';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'Starší verze tohoto editoru oživila postavy NPC, aniž by je vrátila do světa, takže je hra nikdy nevytvoří. Týká se: $count. Oprava dokončí oživení a vrátí je zpět. Při uložení se jako vždy vytvoří záloha.';
+  }
+
+  @override
   String get statisticsTitle => 'Statistiky';
 
   @override

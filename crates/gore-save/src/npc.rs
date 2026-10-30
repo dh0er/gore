@@ -438,8 +438,7 @@ fn value_has_tag(value: &PropertyValue, tag: &str) -> bool {
 /// The map value is parsed inline as a native `GameplayTagContainer`
 /// ([`StructValue::GameplayTagContainer`]) — the value descriptor's struct_type is
 /// `GameplayTagContainer`, so the entry value is the container directly (no proplist
-/// wrapper). Test helper (only the test build references it directly).
-#[cfg_attr(not(test), allow(dead_code))]
+/// wrapper).
 fn loose_tags<'a>(root: &'a RootObject, id: &str) -> Option<&'a [String]> {
     let (_path, map_prop) = find_property_by_name(root, LOOSE_TAGS_MAP)?;
     let PropertyValue::Map { entries, .. } = &map_prop.value else {
@@ -1322,9 +1321,10 @@ fn plan_corpse_removal(root: &RootObject, id: &str) -> Result<Option<ReviveEdit>
 /// on load. No-op (Ok) if the set is absent or does not list the NPC — a freshly
 /// killed NPC whose corpse the game has not cleaned up yet.
 ///
-/// Only a DEAD NPC is taken off. Story scripts despawn living NPCs into the same
-/// set (the Old Mine crew, convoy guards, ...); reviving one of those must stay a
-/// no-op rather than respawn it out of step with the story.
+/// Only a DEAD NPC, or one [`stranded_by_old_revive`], is taken off. Story scripts
+/// despawn living NPCs into the same set (the Old Mine crew, convoy guards, ...);
+/// reviving one of those must stay a no-op rather than respawn it out of step with
+/// the story.
 ///
 /// The set holds FNames, which compare case-insensitively; [`ContainerEdit::SetRemove`]
 /// matches the same way, so what is found here is what gets removed.
@@ -1332,19 +1332,13 @@ fn plan_removed_from_world_removal(
     root: &RootObject,
     id: &str,
 ) -> Result<Option<ReviveEdit>, CoreError> {
-    if !is_dead_by_loose_tags(root, id) {
+    if !is_dead_by_loose_tags(root, id) && !stranded_by_old_revive(root, id) {
         return Ok(None);
     }
     let Some((path, set_prop)) = find_property_by_name(root, REMOVED_FROM_WORLD_SET) else {
         return Ok(None);
     };
-    let PropertyValue::Set { elements, .. } = &set_prop.value else {
-        return Ok(None);
-    };
-    let listed = elements
-        .iter()
-        .any(|e| matches!(e, PropertyValue::Name(s) if s.eq_ignore_ascii_case(id)));
-    if !listed {
+    if !removed_from_world(set_prop, id) {
         return Ok(None);
     }
     let segs = parse_path(&path)?;
@@ -1354,6 +1348,67 @@ fn plan_removed_from_world_removal(
         enclosing: chain.enclosing_size_fields,
         value: id.to_string(),
     }))
+}
+
+/// Does the [`REMOVED_FROM_WORLD_SET`] property list NPC `id`?
+fn removed_from_world(set_prop: &Property, id: &str) -> bool {
+    let PropertyValue::Set { elements, .. } = &set_prop.value else {
+        return false;
+    };
+    elements
+        .iter()
+        .any(|e| matches!(e, PropertyValue::Name(s) if s.eq_ignore_ascii_case(id)))
+}
+
+/// Was NPC `id` revived by an older build of this editor after the game had already
+/// cleaned up its corpse? Those builds stripped the death tags but left the id in
+/// [`REMOVED_FROM_WORLD_SET`], so the NPC counts as alive and is never spawned.
+///
+/// The trace it left: a `LooseTagsByGlobalId` entry without any [`DEAD_LOOSE_TAGS`].
+/// The game only creates an entry when an NPC is killed or bounty-tagged, and never
+/// empties one; a living NPC the story despawned has no entry, or still carries
+/// `State.KillBountyGranted`. Note that this cannot tell apart an NPC that was
+/// revived correctly and then despawned by the story later — that NPC comes back.
+fn stranded_by_old_revive(root: &RootObject, id: &str) -> bool {
+    loose_tags(root, id).is_some_and(lacks_death_tags)
+        && find_property_by_name(root, REMOVED_FROM_WORLD_SET)
+            .is_some_and(|(_, set_prop)| removed_from_world(set_prop, id))
+}
+
+fn lacks_death_tags(tags: &[String]) -> bool {
+    !tags.iter().any(|t| DEAD_LOOSE_TAGS.contains(&t.as_str()))
+}
+
+/// Every NPC [`stranded_by_old_revive`], in set order. Reviving one again takes it
+/// off the set, which is the whole repair: everything else the old revive already
+/// did.
+pub fn stranded_by_old_revives(root: &RootObject) -> Vec<String> {
+    let Some((_, set_prop)) = find_property_by_name(root, REMOVED_FROM_WORLD_SET) else {
+        return Vec::new();
+    };
+    let PropertyValue::Set { elements, .. } = &set_prop.value else {
+        return Vec::new();
+    };
+    let Some((_, loose_prop)) = find_property_by_name(root, LOOSE_TAGS_MAP) else {
+        return Vec::new();
+    };
+    let PropertyValue::Map { entries, .. } = &loose_prop.value else {
+        return Vec::new();
+    };
+    elements
+        .iter()
+        .filter_map(|e| match e {
+            PropertyValue::Name(id) => match lookup_entry(entries, id) {
+                Some(PropertyValue::Struct(StructValue::GameplayTagContainer(tags)))
+                    if lacks_death_tags(tags) =>
+                {
+                    Some(id.clone())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
 }
 
 /// Strip the death loose tags ([`DEAD_LOOSE_TAGS`]: `State.Dead`,
@@ -1862,7 +1917,8 @@ impl ReviveEdit {
 /// 3. Remove the NPC's lootable corpse entry from `m_SavedInventories`.
 /// 4. Take a dead NPC off `GlobalIDsRemovedFromWorld`. The game adds it there once
 ///    it cleans up the corpse; without this step only a fresh kill revives. A
-///    living NPC the story despawned stays listed.
+///    living NPC the story despawned stays listed. An NPC an older build revived
+///    without this step is taken off too (see [`stranded_by_old_revive`]).
 /// 5. Restore Health to MaxHealth.
 ///
 /// Everything is planned against ONE parse and applied back to front, so no step
@@ -3266,15 +3322,16 @@ mod tests {
     #[test]
     fn revive_leaves_a_living_story_despawn_out_of_the_world() {
         // Story scripts put living NPCs in the same set; reviving one must not
-        // respawn it.
+        // respawn it. Such an NPC has no loose-tag entry at all.
         let id = "OM_GRD_Drake_260-WorldPointActor_Drake";
+        let other = "OCR_Rat_1";
         let mut payload = private_root(&[
             character_state_map(
                 "AttributesMap",
                 ATTRIBUTES_TYPE,
                 &[(id, wounded_attributes_entry_value(200.0, 200.0, 200.0))],
             ),
-            loose_tags_map(&[(id, &[])]),
+            loose_tags_map(&[(other, &["State.Dead"])]),
             name_set_property(REMOVED_FROM_WORLD_SET, &[id]),
         ]);
         let snapshot = payload.clone();
@@ -3282,6 +3339,61 @@ mod tests {
         apply_revive(&mut payload, id).unwrap();
 
         assert_eq!(payload, snapshot, "a living NPC stays despawned");
+        let root = parse_private_root(&payload).unwrap();
+        assert!(stranded_by_old_revives(&root).is_empty());
+    }
+
+    #[test]
+    fn a_bounty_tagged_story_despawn_is_not_mistaken_for_an_old_revive() {
+        // The other shape a living story despawn takes: a bounty tag from an
+        // earlier fight, but no State.Dead. It stays listed.
+        let id = "OM_GRD_Drake_260-WorldPointActor_Drake";
+        let payload = private_root(&[
+            loose_tags_map(&[(id, &["State.KillBountyGranted"])]),
+            name_set_property(REMOVED_FROM_WORLD_SET, &[id]),
+        ]);
+        let root = parse_private_root(&payload).unwrap();
+
+        assert!(stranded_by_old_revives(&root).is_empty());
+        assert!(
+            plan_removed_from_world_removal(&root, id)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn revive_puts_back_an_npc_an_older_build_revived_into_nowhere() {
+        // An older build stripped the death tags of a cleaned-up corpse but left
+        // it listed: an empty loose-tag entry, still in the set. Reviving it
+        // again takes it off; nothing else is left to change.
+        let stranded = "OM_GRD_Drake_260-WorldPointActor_Drake";
+        let dead = "OCR_Rat_1";
+        let despawned = "OM_STT_Ian";
+        let mut payload = private_root(&[
+            character_state_map(
+                "AttributesMap",
+                ATTRIBUTES_TYPE,
+                &[(
+                    stranded,
+                    wounded_attributes_entry_value(200.0, 200.0, 200.0),
+                )],
+            ),
+            loose_tags_map(&[(stranded, &[]), (dead, &["State.Dead"])]),
+            name_set_property(REMOVED_FROM_WORLD_SET, &[dead, stranded, despawned]),
+        ]);
+        let root = parse_private_root(&payload).unwrap();
+        assert_eq!(stranded_by_old_revives(&root), vec![stranded.to_string()]);
+        drop(root);
+
+        apply_revive(&mut payload, stranded).unwrap();
+
+        let root = parse_private_root(&payload).unwrap();
+        let (_, set) = find_property_by_name(&root, REMOVED_FROM_WORLD_SET).unwrap();
+        assert!(!removed_from_world(set, stranded));
+        assert!(removed_from_world(set, dead));
+        assert!(removed_from_world(set, despawned));
+        assert!(stranded_by_old_revives(&root).is_empty());
     }
 
     #[test]

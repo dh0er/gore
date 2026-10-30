@@ -3192,6 +3192,14 @@ class AppLocalizationsFr extends AppLocalizations {
       'La réparation n’est pas disponible pour cette sauvegarde.';
 
   @override
+  String get npcWorldRepairTitle => 'PNJ ressuscités absents du monde';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'Une ancienne version de cet éditeur a ressuscité des PNJ sans les remettre dans le monde : le jeu ne les fait donc jamais apparaître. Concernés : $count. La réparation termine la résurrection et les ramène. Une sauvegarde de secours est créée à l’enregistrement, comme toujours.';
+  }
+
+  @override
   String get statisticsTitle => 'Statistiques';
 
   @override

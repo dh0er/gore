@@ -3787,6 +3787,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return pending.length == 1 ? pending.single : null;
   }
 
+  /// The pending-edit key a revive of NPC [id] is registered under.
+  static String npcRevivePendingKey(String id) => 'npc.revive:$id';
+
   /// Register a PENDING revive of an NPC under the per-NPC key `npc.revive:$id`.
   /// The global Save button applies it via [saveAllPending], which submits
   /// `private.npc.revive` as its own write_save (the core rejects batching this
@@ -3798,7 +3801,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// overwrites its key (idempotent).
   void setPendingNpcRevive(String id) {
     setPendingEdit(
-      'npc.revive:$id',
+      npcRevivePendingKey(id),
       PendingSaveEdit(
         edits: [
           {

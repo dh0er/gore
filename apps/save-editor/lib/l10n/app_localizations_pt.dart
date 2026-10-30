@@ -3174,6 +3174,14 @@ class AppLocalizationsPt extends AppLocalizations {
       'O reparo não está disponível para este jogo salvo.';
 
   @override
+  String get npcWorldRepairTitle => 'NPCs revividos ausentes do mundo';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'Uma versão anterior deste editor reviveu NPCs sem colocá-los de volta no mundo, então o jogo nunca os faz aparecer. Afetados: $count. O reparo conclui a revivência e os traz de volta. Ao salvar, um backup é criado, como sempre.';
+  }
+
+  @override
   String get statisticsTitle => 'Estatísticas';
 
   @override
@@ -6493,6 +6501,14 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get slotRepairNotOffered =>
       'O reparo não está disponível para este jogo salvo.';
+
+  @override
+  String get npcWorldRepairTitle => 'NPCs revividos ausentes do mundo';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'Uma versão anterior deste editor reviveu NPCs sem colocá-los de volta no mundo, então o jogo nunca os faz aparecer. Afetados: $count. O reparo conclui a revivência e os traz de volta. Ao salvar, um backup é criado, como sempre.';
+  }
 
   @override
   String get statisticsTitle => 'Estatísticas';

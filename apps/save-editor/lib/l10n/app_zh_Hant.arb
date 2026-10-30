@@ -785,6 +785,8 @@
   "slotRepairUnavailable": "目前無法修復 — 無法寫入此存檔。",
   "editorDeletedBackupWithLabelWarning": "已刪除備份：{path} — 但無法移除其名稱：{details}",
   "slotRepairNotOffered": "此存檔不支持修復。",
+  "npcWorldRepairTitle": "已復活的 NPC 不在世界中",
+  "npcWorldRepairBody": "此編輯器的舊版本復活了 NPC，卻沒有把它們放回世界，因此遊戲不會再生成它們。受影響：{count}。修復會完成復活並讓它們回來。儲存時照常會建立備份。",
   "statisticsTitle": "統計",
   "statisticsSubtitle": "角色、任務、世界和遊戲進度的簡要概覽。",
   "statisticsCardTitle": "{card, select, timing{時間} character{角色} quests{任務} progress{進度} encounters{戰鬥與交往} inventory{技能與物品} other{{fallback}}}",

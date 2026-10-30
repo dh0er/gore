@@ -785,6 +785,8 @@
   "slotRepairUnavailable": "Oprava teď není možná — tuto uloženou hru nelze zapsat.",
   "editorDeletedBackupWithLabelWarning": "Záloha smazána: {path} — nepodařilo se odstranit její název: {details}",
   "slotRepairNotOffered": "Oprava není pro tuto uloženou hru k dispozici.",
+  "npcWorldRepairTitle": "Oživené postavy NPC chybí ve světě",
+  "npcWorldRepairBody": "Starší verze tohoto editoru oživila postavy NPC, aniž by je vrátila do světa, takže je hra nikdy nevytvoří. Týká se: {count}. Oprava dokončí oživení a vrátí je zpět. Při uložení se jako vždy vytvoří záloha.",
   "statisticsTitle": "Statistiky",
   "statisticsSubtitle": "Stručné shrnutí postavy, questů, světa a postupu uložené hry.",
   "statisticsCardTitle": "{card, select, timing{Čas} character{Postava} quests{Úkoly} progress{Postup} encounters{Boj a kontakty} inventory{Dovednosti a inventář} other{{fallback}}}",

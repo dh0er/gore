@@ -3175,6 +3175,14 @@ class AppLocalizationsUk extends AppLocalizations {
   String get slotRepairNotOffered => 'Ремонт недоступний для цього збереження.';
 
   @override
+  String get npcWorldRepairTitle => 'Воскрешені NPC відсутні у світі';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'Стара версія цього редактора воскрешала NPC, не повертаючи їх у світ, тому гра їх більше не створює. Зачеплено: $count. Ремонт завершує воскресіння і повертає їх. Під час збереження, як завжди, створюється резервна копія.';
+  }
+
+  @override
   String get statisticsTitle => 'Статистика';
 
   @override
