@@ -123,6 +123,18 @@ const DEAD_LOOSE_TAGS: &[&str] = &[
     INSTANT_DEATH_TAG,
 ];
 
+/// What Revive strips from `LooseTagsByGlobalId`: the [`DEAD_LOOSE_TAGS`] plus
+/// `State.Defeated`, a knock-out the game clears again on its own. Leaving it would
+/// let the game empty the entry later, and an empty entry on a listed NPC is what
+/// [`stranded_by_old_revive`] looks for.
+const REVIVE_LOOSE_TAGS: &[&str] = &[
+    "State.KillBountyGranted",
+    "State.ExecutedBountyGranted",
+    "State.Dead",
+    INSTANT_DEATH_TAG,
+    "State.Defeated",
+];
+
 /// Only ever seen next to `State.Dead`. Older builds of this editor did not strip
 /// it, so it can be all that is left of a revive (see [`stranded_by_old_revive`]).
 const INSTANT_DEATH_TAG: &str = "State.Dead.Instant";
@@ -1418,9 +1430,9 @@ pub fn stranded_by_old_revives(root: &RootObject) -> Vec<String> {
         .collect()
 }
 
-/// Strip the death loose tags ([`DEAD_LOOSE_TAGS`]: `State.Dead`,
-/// `State.KillBountyGranted`, `State.ExecutedBountyGranted`, `State.Dead.Instant`)
-/// from NPC `id`'s `LooseTagsByGlobalId[<id>]` GameplayTagContainer, in place. This is
+/// Strip the death loose tags ([`REVIVE_LOOSE_TAGS`]: `State.Dead`,
+/// `State.KillBountyGranted`, `State.ExecutedBountyGranted`, `State.Dead.Instant`,
+/// `State.Defeated`) from NPC `id`'s `LooseTagsByGlobalId[<id>]` GameplayTagContainer, in place. This is
 /// the CRITICAL revive step: `State.Dead` here is the authoritative on-load death gate
 /// the game reads (AngelScript re-applies it), so without removing it a revived NPC
 /// reverts to a corpse on load. Unrelated tags in the container survive.
@@ -1460,7 +1472,7 @@ fn plan_dead_loose_tag_removal(
     let only_death_tags = matches!(
         &entries[entry_index].1,
         PropertyValue::Struct(StructValue::GameplayTagContainer(tags))
-            if !tags.is_empty() && tags.iter().all(|t| DEAD_LOOSE_TAGS.contains(&t.as_str()))
+            if !tags.is_empty() && tags.iter().all(|t| REVIVE_LOOSE_TAGS.contains(&t.as_str()))
     );
     if only_death_tags || stranded_by_old_revive(root, id) {
         return Ok(Some(ReviveEdit::RemoveMapEntries {
@@ -1912,7 +1924,7 @@ impl ReviveEdit {
                 &target,
                 &enclosing,
                 entry_index,
-                DEAD_LOOSE_TAGS,
+                REVIVE_LOOSE_TAGS,
             )
             .map(|_| ()),
             ReviveEdit::RemoveSetElement {
@@ -3376,7 +3388,7 @@ mod tests {
                 ATTRIBUTES_TYPE,
                 &[(id, wounded_attributes_entry_value(100.0, 100.0, 100.0))],
             ),
-            loose_tags_map(&[(id, &["State.Dead", INSTANT_DEATH_TAG, "State.Defeated"])]),
+            loose_tags_map(&[(id, &["State.Dead", INSTANT_DEATH_TAG, "State.Sitting"])]),
         ]);
 
         apply_revive(&mut payload, id).unwrap();
@@ -3385,17 +3397,19 @@ mod tests {
         assert_eq!(root.consumed, payload.len(), "byte-clean re-parse");
         assert_eq!(
             loose_tags(&root, id),
-            Some(&["State.Defeated".to_string()][..])
+            Some(&["State.Sitting".to_string()][..])
         );
     }
 
     #[test]
     fn a_revived_npc_the_story_despawns_later_is_not_flagged() {
         // Revive today, story despawn tomorrow: the NPC must not read as one an
-        // older build stranded. Same for a living bounty-tagged despawn revived
-        // through the API: it stays listed and is not flagged afterwards.
+        // older build stranded. Same for living bounty-tagged despawns revived
+        // through the API: they stay listed and are not flagged afterwards, even
+        // once the game clears a State.Defeated of its own.
         let killed = "OM_VLK_Digger23_579";
         let despawned = "OM_GRD_Guard11_273";
+        let convoy = "OC_GRD_Guard31_283N-WP_OW_CONVOY_SPAWN";
         let mut payload = private_root(&[
             character_state_map(
                 "AttributesMap",
@@ -3406,26 +3420,32 @@ mod tests {
                         despawned,
                         wounded_attributes_entry_value(100.0, 100.0, 100.0),
                     ),
+                    (convoy, wounded_attributes_entry_value(100.0, 0.0, 100.0)),
                 ],
             ),
             loose_tags_map(&[
                 (killed, &["State.Dead", "State.KillBountyGranted"]),
                 (despawned, &["State.KillBountyGranted"]),
+                (convoy, &["State.Defeated", "State.KillBountyGranted"]),
             ]),
-            name_set_property(REMOVED_FROM_WORLD_SET, &[despawned]),
+            name_set_property(REMOVED_FROM_WORLD_SET, &[despawned, convoy]),
         ]);
 
         apply_revive(&mut payload, killed).unwrap();
         apply_revive(&mut payload, despawned).unwrap();
+        apply_revive(&mut payload, convoy).unwrap();
 
         let root = parse_private_root(&payload).unwrap();
+        assert_eq!(root.consumed, payload.len(), "byte-clean re-parse");
         assert_eq!(loose_tags(&root, killed), None);
         assert_eq!(loose_tags(&root, despawned), None);
+        assert_eq!(loose_tags(&root, convoy), None);
         let (_, set) = find_property_by_name(&root, REMOVED_FROM_WORLD_SET).unwrap();
         assert!(
             removed_from_world(set, despawned),
             "the despawn stays listed"
         );
+        assert!(removed_from_world(set, convoy), "the despawn stays listed");
         drop(root);
 
         // The story now despawns the revived NPC.
