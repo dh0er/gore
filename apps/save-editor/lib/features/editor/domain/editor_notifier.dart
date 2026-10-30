@@ -171,6 +171,7 @@ class EditorState {
     this.inspection,
     this.codecStatus,
     this.error,
+    this.missingSaveDir,
     this.codecError,
     this.lastWriteMessage,
     this.deletedSaveRecovery,
@@ -282,6 +283,12 @@ class EditorState {
   final bool heroGlobalIdSettled;
 
   final String? error;
+
+  /// The configured save folder, when the last scan failed because it does
+  /// not exist. Kept apart from [error] so the UI words it in the current
+  /// language (it is usually first seen before the language is chosen) and can
+  /// offer the folder picker.
+  final String? missingSaveDir;
 
   /// Compression-dependent private writes are safe when the in-process codec
   /// reports it can compress. The always-on codec reports this directly, so
@@ -408,6 +415,7 @@ class EditorState {
     SaveInspection? inspection,
     CodecStatus? codecStatus,
     String? error,
+    Object? missingSaveDir = _unchanged,
     String? codecError,
     String? lastWriteMessage,
     Object? deletedSaveRecovery = _unchanged,
@@ -468,6 +476,11 @@ class EditorState {
       inspection: clearInspection ? null : inspection ?? this.inspection,
       codecStatus: clearCodecStatus ? null : codecStatus ?? this.codecStatus,
       error: clearError ? null : error ?? this.error,
+      missingSaveDir: clearError
+          ? null
+          : identical(missingSaveDir, _unchanged)
+          ? this.missingSaveDir
+          : missingSaveDir as String?,
       codecError: clearCodecError ? null : codecError ?? this.codecError,
       lastWriteMessage: clearWriteMessage
           ? null
@@ -504,9 +517,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
     EditorSettingsStore? settingsStore,
     AppLocalizations Function()? localizations,
     bool Function(String path)? fileExists,
+    bool Function(String path)? directoryExists,
   }) : _settingsStore = settingsStore ?? const NoopEditorSettingsStore(),
        _localizations = localizations ?? _defaultEnglishLocalizations,
        _fileExists = fileExists ?? ((path) => File(path).existsSync()),
+       _directoryExists =
+           directoryExists ?? ((path) => Directory(path).existsSync()),
        super(
          _initialState(
            saveDir: saveDir,
@@ -522,6 +538,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   final EditorSettingsStore _settingsStore;
   final AppLocalizations Function() _localizations;
   final bool Function(String path) _fileExists;
+  final bool Function(String path) _directoryExists;
   final List<Duration> _recentTransferReadDurations = [];
   final List<Duration> _recentTransferWriteDurations = [];
 
@@ -1025,7 +1042,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   /// Dismiss the current error banner.
   void dismissError() {
-    if (state.error != null) state = state.copyWith(clearError: true);
+    if (state.error != null || state.missingSaveDir != null) {
+      state = state.copyWith(clearError: true);
+    }
   }
 
   /// Dismiss the current success/status banner.
@@ -1871,12 +1890,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
       Map<String, Object?> response;
+      var scanThrew = false;
       try {
         response = await _execute(
           'scan_save_dir',
           payload: {'path': state.saveDir},
         );
       } catch (error) {
+        scanThrew = true;
         // Treat a thrown worker/native failure like a structured scan error so
         // detached files can still be restored and stale paths pruned.
         response = {
@@ -1886,6 +1907,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
       if (seq != _loadSeq) return;
       String? scanError;
+      String? missingSaveDir;
       Map<String, Object?>? data;
       DeletedSaveRecovery? discoveredDeletedSaveRecovery;
       late final List<ProfileSummary> profiles;
@@ -1932,7 +1954,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
         // Detached saves are independent from the configured game save folder.
         // Keep the last successful folder snapshot, but still restore/prune the
         // persisted external list when that folder is missing or unreadable.
-        scanError = _l10n.editorScanSavesFailed(_errorDetails(response));
+        // The core's message is English-only; a missing folder is by far the
+        // most common cause, so recognise it here and let the UI word it. A
+        // thrown worker failure keeps its own message.
+        final saveDir = state.saveDir;
+        if (!scanThrew && saveDir.isNotEmpty && !_directoryExists(saveDir)) {
+          missingSaveDir = saveDir;
+        } else {
+          scanError = _l10n.editorScanSavesFailed(_errorDetails(response));
+        }
         profiles = List<ProfileSummary>.of(state.profiles);
         saves = state.saves.where((save) => !save.isExternal).toList();
       }
@@ -2122,6 +2152,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
       if (scanError != null && state.error == null) {
         state = state.copyWith(error: scanError);
+      }
+      if (missingSaveDir != null && state.error == null) {
+        state = state.copyWith(missingSaveDir: missingSaveDir);
       }
     } catch (error) {
       // A thrown core call (e.g. invalid/null native JSON) must surface as an

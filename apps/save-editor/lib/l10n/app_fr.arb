@@ -749,6 +749,8 @@
   "editorDeleteSaveFailed": "Impossible de supprimer la sauvegarde : {details}",
   "editorSaveFailed": "Impossible d’enregistrer les modifications : {details}",
   "editorScanSavesFailed": "Impossible d’analyser les sauvegardes : {details}",
+  "saveFolderNotFoundTitle": "Dossier de sauvegardes introuvable",
+  "saveFolderNotFoundBody": "Le dossier {path} n'existe pas. Choisissez le dossier qui contient vos sauvegardes de Gothic.",
   "editorInspectSaveFailed": "Impossible d’inspecter la sauvegarde : {details}",
   "editorLoadBackupsFailed": "Impossible de charger les copies de sauvegarde : {details}",
   "editorRestoreFailed": "Impossible de restaurer la copie de sauvegarde : {details}",

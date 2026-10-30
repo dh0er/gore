@@ -2679,6 +2679,14 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Папка сохранений не найдена';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'Папка $path не существует. Выберите папку с сохранениями Gothic.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Не удалось проверить сохранение: $details';
   }

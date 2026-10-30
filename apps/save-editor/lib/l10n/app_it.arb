@@ -738,6 +738,8 @@
   "editorDeleteSaveFailed": "Impossibile eliminare il salvataggio: {details}",
   "editorSaveFailed": "Impossibile salvare le modifiche: {details}",
   "editorScanSavesFailed": "Impossibile analizzare i salvataggi: {details}",
+  "saveFolderNotFoundTitle": "Cartella dei salvataggi non trovata",
+  "saveFolderNotFoundBody": "La cartella {path} non esiste. Scegli la cartella che contiene i tuoi salvataggi di Gothic.",
   "editorInspectSaveFailed": "Impossibile esaminare il salvataggio: {details}",
   "editorLoadBackupsFailed": "Impossibile caricare i backup: {details}",
   "editorRestoreFailed": "Impossibile ripristinare il backup: {details}",

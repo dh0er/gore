@@ -2674,6 +2674,14 @@ class AppLocalizationsIt extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Cartella dei salvataggi non trovata';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'La cartella $path non esiste. Scegli la cartella che contiene i tuoi salvataggi di Gothic.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Impossibile esaminare il salvataggio: $details';
   }

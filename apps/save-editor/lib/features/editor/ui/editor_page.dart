@@ -1472,7 +1472,15 @@ class _EditorWorkspace extends StatelessWidget {
         icon: const Icon(Icons.folder_open_outlined),
         label: Text(l10n.savegameDirectoryTitle),
       );
-      final emptyPane = state.error != null
+      final missingSaveDir = state.missingSaveDir;
+      final emptyPane = missingSaveDir != null
+          ? _MessagePane(
+              icon: Icons.folder_off_outlined,
+              title: l10n.saveFolderNotFoundTitle,
+              body: l10n.saveFolderNotFoundBody(missingSaveDir),
+              action: chooseSaveDirButton,
+            )
+          : state.error != null
           ? _MessagePane(
               icon: Icons.error_outline,
               title: l10n.errorTitle,
@@ -1611,6 +1619,23 @@ class _EditorWorkspace extends StatelessWidget {
                 leading: Icon(Icons.error_outline, color: scheme.error),
                 content: Text(state.error!),
                 actions: [
+                  TextButton(
+                    onPressed: notifier.dismissError,
+                    child: Text(l10n.ok),
+                  ),
+                ],
+              ),
+            if (state.missingSaveDir != null)
+              MaterialBanner(
+                leading: const Icon(Icons.folder_off_outlined),
+                content: Text(
+                  l10n.saveFolderNotFoundBody(state.missingSaveDir!),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: state.isLoading ? null : notifier.chooseSaveDir,
+                    child: Text(l10n.savegameDirectoryTitle),
+                  ),
                   TextButton(
                     onPressed: notifier.dismissError,
                     child: Text(l10n.ok),

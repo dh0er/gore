@@ -5325,9 +5325,39 @@ void main() {
       expect(notifier.state.otherSavesSelected, isTrue);
       expect(notifier.state.otherSaves.single.path, existingPath);
       expect(notifier.state.selectedSave?.path, existingPath);
-      expect(notifier.state.error, isNotNull);
+      expect(notifier.state.missingSaveDir, r'C:\missing\saves');
     },
   );
+
+  test(
+    'a scan of a missing save folder reports the folder, not core text',
+    () async {
+      final notifier = EditorNotifier(
+        _FailingScanCoreService(),
+        saveDir: r'C:\missing\saves',
+        directoryExists: (_) => false,
+      );
+      await pumpEventQueue();
+
+      expect(notifier.state.missingSaveDir, r'C:\missing\saves');
+      expect(notifier.state.error, isNull);
+
+      notifier.dismissError();
+      expect(notifier.state.missingSaveDir, isNull);
+    },
+  );
+
+  test('a failed scan of an existing folder keeps the core message', () async {
+    final notifier = EditorNotifier(
+      _FailingScanCoreService(),
+      saveDir: r'C:\tmp\saves',
+      directoryExists: (_) => true,
+    );
+    await pumpEventQueue();
+
+    expect(notifier.state.missingSaveDir, isNull);
+    expect(notifier.state.error, contains('save folder is unavailable'));
+  });
 
   test(
     'thrown folder scan still restores external saves and prunes missing paths',

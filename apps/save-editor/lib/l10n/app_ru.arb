@@ -738,6 +738,8 @@
   "editorDeleteSaveFailed": "Не удалось удалить сохранение: {details}",
   "editorSaveFailed": "Не удалось сохранить изменения: {details}",
   "editorScanSavesFailed": "Не удалось просканировать сохранения: {details}",
+  "saveFolderNotFoundTitle": "Папка сохранений не найдена",
+  "saveFolderNotFoundBody": "Папка {path} не существует. Выберите папку с сохранениями Gothic.",
   "editorInspectSaveFailed": "Не удалось проверить сохранение: {details}",
   "editorLoadBackupsFailed": "Не удалось загрузить резервные копии: {details}",
   "editorRestoreFailed": "Не удалось восстановить резервную копию: {details}",

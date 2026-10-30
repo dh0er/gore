@@ -2647,6 +2647,14 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Save folder not found';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'The folder $path does not exist. Choose the folder that holds your Gothic saves.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Failed to inspect save: $details';
   }

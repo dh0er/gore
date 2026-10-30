@@ -4471,6 +4471,18 @@ abstract class AppLocalizations {
   /// **'Failed to scan saves: {details}'**
   String editorScanSavesFailed(String details);
 
+  /// No description provided for @saveFolderNotFoundTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Save folder not found'**
+  String get saveFolderNotFoundTitle;
+
+  /// No description provided for @saveFolderNotFoundBody.
+  ///
+  /// In en, this message translates to:
+  /// **'The folder {path} does not exist. Choose the folder that holds your Gothic saves.'**
+  String saveFolderNotFoundBody(String path);
+
   /// No description provided for @editorInspectSaveFailed.
   ///
   /// In en, this message translates to:

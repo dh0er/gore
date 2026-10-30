@@ -724,6 +724,8 @@
   "editorDeleteSaveFailed": "Kayıt silinemedi: {details}",
   "editorSaveFailed": "Değişiklikler kaydedilemedi: {details}",
   "editorScanSavesFailed": "Kayıtlar taranamadı: {details}",
+  "saveFolderNotFoundTitle": "Kayıt klasörü bulunamadı",
+  "saveFolderNotFoundBody": "{path} klasörü mevcut değil. Gothic kayıtlarının bulunduğu klasörü seç.",
   "editorInspectSaveFailed": "Kayıt incelenemedi: {details}",
   "editorLoadBackupsFailed": "Yedekler yüklenemedi: {details}",
   "editorRestoreFailed": "Yedek geri yüklenemedi: {details}",

@@ -2668,6 +2668,14 @@ class AppLocalizationsDe extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Spielstandordner nicht gefunden';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'Der Ordner $path existiert nicht. Wähle den Ordner, in dem deine Gothic-Spielstände liegen.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Der Spielstand konnte nicht geprüft werden: $details';
   }

@@ -724,6 +724,8 @@
   "editorDeleteSaveFailed": "Nu s-a putut șterge salvarea: {details}",
   "editorSaveFailed": "Nu s-au putut salva modificările: {details}",
   "editorScanSavesFailed": "Scanarea salvărilor a eșuat: {details}",
+  "saveFolderNotFoundTitle": "Folderul salvărilor nu a fost găsit",
+  "saveFolderNotFoundBody": "Folderul {path} nu există. Alege folderul care conține salvările Gothic.",
   "editorInspectSaveFailed": "Inspecția salvării a eșuat: {details}",
   "editorLoadBackupsFailed": "Încărcarea copiilor de rezervă a eșuat: {details}",
   "editorRestoreFailed": "Nu s-a putut restaura copia de rezervă: {details}",

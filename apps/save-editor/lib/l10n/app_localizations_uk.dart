@@ -2671,6 +2671,14 @@ class AppLocalizationsUk extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Теку збережень не знайдено';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'Тека $path не існує. Виберіть теку зі збереженнями Gothic.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Не вдалося переглянути збереження: $details';
   }

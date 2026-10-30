@@ -2681,6 +2681,14 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Nie znaleziono folderu zapisów';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'Folder $path nie istnieje. Wybierz folder, w którym znajdują się zapisy Gothic.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Nie udało się sprawdzić zapisu: $details';
   }

@@ -724,6 +724,8 @@
   "editorDeleteSaveFailed": "Не вдалося видалити збереження: {details}",
   "editorSaveFailed": "Не вдалося зберегти зміни: {details}",
   "editorScanSavesFailed": "Не вдалося просканувати збереження: {details}",
+  "saveFolderNotFoundTitle": "Теку збережень не знайдено",
+  "saveFolderNotFoundBody": "Тека {path} не існує. Виберіть теку зі збереженнями Gothic.",
   "editorInspectSaveFailed": "Не вдалося переглянути збереження: {details}",
   "editorLoadBackupsFailed": "Не вдалося завантажити резервні копії: {details}",
   "editorRestoreFailed": "Не вдалося відновити резервну копію: {details}",

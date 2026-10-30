@@ -2657,6 +2657,14 @@ class AppLocalizationsHu extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'A mentések mappája nem található';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'A(z) $path mappa nem létezik. Válaszd ki azt a mappát, amelyben a Gothic mentéseid vannak.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'A mentés vizsgálata sikertelen: $details';
   }

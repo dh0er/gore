@@ -738,6 +738,8 @@
   "editorDeleteSaveFailed": "Não foi possível eliminar o jogo guardado: {details}",
   "editorSaveFailed": "Não foi possível guardar as alterações: {details}",
   "editorScanSavesFailed": "Não foi possível analisar os jogos guardados: {details}",
+  "saveFolderNotFoundTitle": "Pasta de gravações não encontrada",
+  "saveFolderNotFoundBody": "A pasta {path} não existe. Escolha a pasta que contém as suas gravações de Gothic.",
   "editorInspectSaveFailed": "Não foi possível inspecionar o jogo guardado: {details}",
   "editorLoadBackupsFailed": "Não foi possível carregar as cópias de segurança: {details}",
   "editorRestoreFailed": "Não foi possível restaurar a cópia de segurança: {details}",

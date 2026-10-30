@@ -2527,6 +2527,14 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => '未找到存档文件夹';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return '文件夹 $path 不存在。请选择存放 Gothic 存档的文件夹。';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return '检查存档失败：$details';
   }
@@ -5839,6 +5847,14 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String editorScanSavesFailed(String details) {
     return '扫描存档失败：$details';
+  }
+
+  @override
+  String get saveFolderNotFoundTitle => '未找到存档文件夹';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return '文件夹 $path 不存在。请选择存放 Gothic 存档的文件夹。';
   }
 
   @override
@@ -9166,6 +9182,14 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   @override
   String editorScanSavesFailed(String details) {
     return '掃描存檔失敗：$details';
+  }
+
+  @override
+  String get saveFolderNotFoundTitle => '找不到存檔資料夾';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return '資料夾 $path 不存在。請選擇存放 Gothic 存檔的資料夾。';
   }
 
   @override

@@ -738,6 +738,8 @@
   "editorDeleteSaveFailed": "Nie udało się usunąć zapisu: {details}",
   "editorSaveFailed": "Nie udało się zapisać zmian: {details}",
   "editorScanSavesFailed": "Nie udało się przeskanować zapisów: {details}",
+  "saveFolderNotFoundTitle": "Nie znaleziono folderu zapisów",
+  "saveFolderNotFoundBody": "Folder {path} nie istnieje. Wybierz folder, w którym znajdują się zapisy Gothic.",
   "editorInspectSaveFailed": "Nie udało się sprawdzić zapisu: {details}",
   "editorLoadBackupsFailed": "Nie udało się załadować kopii zapasowych: {details}",
   "editorRestoreFailed": "Nie udało się przywrócić kopii zapasowej: {details}",

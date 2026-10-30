@@ -2669,6 +2669,14 @@ class AppLocalizationsPt extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Pasta de gravações não encontrada';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'A pasta $path não existe. Escolha a pasta que contém as suas gravações de Gothic.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Não foi possível inspecionar o jogo guardado: $details';
   }
@@ -6137,6 +6145,14 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String editorScanSavesFailed(String details) {
     return 'Não foi possível examinar os jogos salvos: $details';
+  }
+
+  @override
+  String get saveFolderNotFoundTitle => 'Pasta de salvamentos não encontrada';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'A pasta $path não existe. Escolha a pasta que contém seus salvamentos de Gothic.';
   }
 
   @override

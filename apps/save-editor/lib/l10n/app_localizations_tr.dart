@@ -2654,6 +2654,14 @@ class AppLocalizationsTr extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Kayıt klasörü bulunamadı';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return '$path klasörü mevcut değil. Gothic kayıtlarının bulunduğu klasörü seç.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Kayıt incelenemedi: $details';
   }

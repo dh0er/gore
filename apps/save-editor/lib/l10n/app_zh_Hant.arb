@@ -724,6 +724,8 @@
   "editorDeleteSaveFailed": "無法刪除存檔：{details}",
   "editorSaveFailed": "無法儲存修改：{details}",
   "editorScanSavesFailed": "掃描存檔失敗：{details}",
+  "saveFolderNotFoundTitle": "找不到存檔資料夾",
+  "saveFolderNotFoundBody": "資料夾 {path} 不存在。請選擇存放 Gothic 存檔的資料夾。",
   "editorInspectSaveFailed": "檢查存檔失敗：{details}",
   "editorLoadBackupsFailed": "載入備份失敗：{details}",
   "editorRestoreFailed": "無法恢復備份：{details}",

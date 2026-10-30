@@ -183,6 +183,50 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('a missing save folder offers the picker and the settings tab', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const missingDir = r'C:\missing\saves';
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          editorProvider.overrideWith(
+            (ref) => EditorNotifier(
+              withSharedPlanner(_FailingScanCoreService()),
+              saveDir: missingDir,
+              directoryExists: (_) => false,
+            ),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+          itemIconCatalogProvider.overrideWith(
+            (ref) async => const ItemIconCatalog.empty(),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    // The title bar's image preparation keeps animating, so step time instead
+    // of waiting for the tree to settle.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('Save folder not found'), findsOneWidget);
+    expect(find.textContaining(missingDir), findsOneWidget);
+    expect(
+      find.widgetWithText(OutlinedButton, 'Savegame directory'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.widgetWithText(Tab, 'Settings'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    // Language and the rest of the settings are reachable without a save.
+    expect(find.text('Appearance'), findsOneWidget);
+    expect(find.text('Interface'), findsOneWidget);
+  });
+
   testWidgets('title bar fits the minimum window at 200 percent UI scale', (
     tester,
   ) async {
@@ -2796,6 +2840,22 @@ class _FakeCoreService implements GoresaveCoreService {
           'error': {'message': 'Unhandled fake command $command'},
         };
     }
+  }
+}
+
+class _FailingScanCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command != 'scan_save_dir') {
+      return super.execute(command, payload: payload);
+    }
+    return {
+      'ok': false,
+      'error': {'message': 'io error: save directory does not exist'},
+    };
   }
 }
 

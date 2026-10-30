@@ -2672,6 +2672,14 @@ class AppLocalizationsEs extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'No se encontró la carpeta de partidas';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'La carpeta $path no existe. Elige la carpeta que contiene tus partidas de Gothic.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'No se pudo inspeccionar la partida: $details';
   }

@@ -724,6 +724,8 @@
   "editorDeleteSaveFailed": "Nepodařilo se smazat uloženou hru: {details}",
   "editorSaveFailed": "Nepodařilo se uložit změny: {details}",
   "editorScanSavesFailed": "Nepodařilo se prohledat uložené hry: {details}",
+  "saveFolderNotFoundTitle": "Složka s uloženými hrami nenalezena",
+  "saveFolderNotFoundBody": "Složka {path} neexistuje. Vyberte složku, ve které jsou uložené hry Gothic.",
   "editorInspectSaveFailed": "Nepodařilo se zkontrolovat uloženou hru: {details}",
   "editorLoadBackupsFailed": "Nepodařilo se načíst zálohy: {details}",
   "editorRestoreFailed": "Nepodařilo se obnovit zálohu: {details}",

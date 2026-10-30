@@ -738,6 +738,8 @@
   "editorDeleteSaveFailed": "セーブデータを削除できませんでした: {details}",
   "editorSaveFailed": "変更を保存できませんでした: {details}",
   "editorScanSavesFailed": "セーブデータのスキャンに失敗しました: {details}",
+  "saveFolderNotFoundTitle": "セーブフォルダーが見つかりません",
+  "saveFolderNotFoundBody": "フォルダー {path} は存在しません。Gothic のセーブデータがあるフォルダーを選択してください。",
   "editorInspectSaveFailed": "セーブデータの検査に失敗しました: {details}",
   "editorLoadBackupsFailed": "バックアップの読み込みに失敗しました: {details}",
   "editorRestoreFailed": "バックアップを復元できませんでした: {details}",

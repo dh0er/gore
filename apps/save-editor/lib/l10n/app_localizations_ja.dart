@@ -2566,6 +2566,14 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'セーブフォルダーが見つかりません';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'フォルダー $path は存在しません。Gothic のセーブデータがあるフォルダーを選択してください。';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'セーブデータの検査に失敗しました: $details';
   }

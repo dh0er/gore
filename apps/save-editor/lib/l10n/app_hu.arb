@@ -724,6 +724,8 @@
   "editorDeleteSaveFailed": "Nem sikerült törölni a mentést: {details}",
   "editorSaveFailed": "Nem sikerült menteni a változásokat: {details}",
   "editorScanSavesFailed": "A mentések szkennelése sikertelen: {details}",
+  "saveFolderNotFoundTitle": "A mentések mappája nem található",
+  "saveFolderNotFoundBody": "A(z) {path} mappa nem létezik. Válaszd ki azt a mappát, amelyben a Gothic mentéseid vannak.",
   "editorInspectSaveFailed": "A mentés vizsgálata sikertelen: {details}",
   "editorLoadBackupsFailed": "A biztonsági mentések betöltése sikertelen: {details}",
   "editorRestoreFailed": "Nem sikerült visszaállítani a biztonsági mentést: {details}",

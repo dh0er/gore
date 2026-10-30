@@ -738,6 +738,8 @@
   "editorDeleteSaveFailed": "Das Savegame konnte nicht gelöscht werden: {details}",
   "editorSaveFailed": "Die Änderungen konnten nicht gespeichert werden: {details}",
   "editorScanSavesFailed": "Die Spielstände konnten nicht eingelesen werden: {details}",
+  "saveFolderNotFoundTitle": "Spielstandordner nicht gefunden",
+  "saveFolderNotFoundBody": "Der Ordner {path} existiert nicht. Wähle den Ordner, in dem deine Gothic-Spielstände liegen.",
   "editorInspectSaveFailed": "Der Spielstand konnte nicht geprüft werden: {details}",
   "editorLoadBackupsFailed": "Die Sicherungen konnten nicht geladen werden: {details}",
   "editorRestoreFailed": "Die Sicherung konnte nicht wiederhergestellt werden: {details}",

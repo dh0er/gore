@@ -738,6 +738,8 @@
   "editorDeleteSaveFailed": "无法删除存档：{details}",
   "editorSaveFailed": "无法保存修改：{details}",
   "editorScanSavesFailed": "扫描存档失败：{details}",
+  "saveFolderNotFoundTitle": "未找到存档文件夹",
+  "saveFolderNotFoundBody": "文件夹 {path} 不存在。请选择存放 Gothic 存档的文件夹。",
   "editorInspectSaveFailed": "检查存档失败：{details}",
   "editorLoadBackupsFailed": "加载备份失败：{details}",
   "editorRestoreFailed": "无法恢复备份：{details}",

@@ -2686,6 +2686,14 @@ class AppLocalizationsFr extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Dossier de sauvegardes introuvable';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'Le dossier $path n\'existe pas. Choisissez le dossier qui contient vos sauvegardes de Gothic.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Impossible d’inspecter la sauvegarde : $details';
   }

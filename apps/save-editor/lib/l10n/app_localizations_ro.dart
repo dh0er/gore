@@ -2670,6 +2670,14 @@ class AppLocalizationsRo extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Folderul salvărilor nu a fost găsit';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'Folderul $path nu există. Alege folderul care conține salvările Gothic.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Inspecția salvării a eșuat: $details';
   }

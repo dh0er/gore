@@ -738,6 +738,8 @@
   "editorDeleteSaveFailed": "No se pudo eliminar la partida: {details}",
   "editorSaveFailed": "No se pudieron guardar los cambios: {details}",
   "editorScanSavesFailed": "No se pudieron examinar las partidas: {details}",
+  "saveFolderNotFoundTitle": "No se encontró la carpeta de partidas",
+  "saveFolderNotFoundBody": "La carpeta {path} no existe. Elige la carpeta que contiene tus partidas de Gothic.",
   "editorInspectSaveFailed": "No se pudo inspeccionar la partida: {details}",
   "editorLoadBackupsFailed": "No se pudieron cargar las copias de seguridad: {details}",
   "editorRestoreFailed": "No se pudo restaurar la copia de seguridad: {details}",

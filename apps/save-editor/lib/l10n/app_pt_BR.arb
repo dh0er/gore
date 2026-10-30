@@ -738,6 +738,8 @@
   "editorDeleteSaveFailed": "Não foi possível excluir o jogo salvo: {details}",
   "editorSaveFailed": "Não foi possível salvar as alterações: {details}",
   "editorScanSavesFailed": "Não foi possível examinar os jogos salvos: {details}",
+  "saveFolderNotFoundTitle": "Pasta de salvamentos não encontrada",
+  "saveFolderNotFoundBody": "A pasta {path} não existe. Escolha a pasta que contém seus salvamentos de Gothic.",
   "editorInspectSaveFailed": "Não foi possível inspecionar o jogo salvo: {details}",
   "editorLoadBackupsFailed": "Não foi possível carregar os backups: {details}",
   "editorRestoreFailed": "Não foi possível restaurar o backup: {details}",

@@ -2665,6 +2665,14 @@ class AppLocalizationsCs extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Složka s uloženými hrami nenalezena';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'Složka $path neexistuje. Vyberte složku, ve které jsou uložené hry Gothic.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Nepodařilo se zkontrolovat uloženou hru: $details';
   }
