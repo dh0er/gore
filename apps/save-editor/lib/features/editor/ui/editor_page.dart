@@ -1380,33 +1380,71 @@ class _EditorWorkspace extends StatelessWidget {
 
     Widget content;
     if (state.inspection == null) {
+      // A missing or wrong default save folder is the usual reason nothing is
+      // loaded, so offer the folder picker right on the empty pane as well.
+      final chooseSaveDirButton = OutlinedButton.icon(
+        onPressed: state.isLoading ? null : notifier.chooseSaveDir,
+        icon: const Icon(Icons.folder_open_outlined),
+        label: Text(l10n.savegameDirectoryTitle),
+      );
       final emptyPane = state.error != null
           ? _MessagePane(
               icon: Icons.error_outline,
               title: l10n.errorTitle,
               body: state.error!,
+              action: chooseSaveDirButton,
             )
           : _MessagePane(
               icon: Icons.search,
               title: l10n.selectASaveTitle,
               body: l10n.selectASaveBody,
+              action: chooseSaveDirButton,
             );
-      final hasBanner =
-          state.deletedSaveRecovery != null || state.lastWriteMessage != null;
-      content = !hasBanner
-          ? emptyPane
-          : Column(
-              children: [
-                if (state.deletedSaveRecovery != null)
-                  deletedSaveRecoveryBanner(),
-                if (state.lastWriteMessage != null) writeMessageBanner(),
-                Expanded(child: emptyPane),
-              ],
-            );
+      // Settings (language, save folder, game data) must stay reachable without
+      // a loaded save, so keep a reduced tab bar: the message pane plus Settings.
+      // Distinct keys keep the save tabs from inheriting this controller's index.
+      content = DefaultTabController(
+        key: const ValueKey('no-save-tabs'),
+        length: 2,
+        child: Column(
+          children: [
+            Container(
+              color: scheme.surfaceContainerLowest,
+              child: TabBar(
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                tabs: [
+                  Tab(
+                    icon: const Icon(Icons.dashboard_outlined),
+                    text: l10n.tabOverview,
+                  ),
+                  Tab(
+                    icon: const Icon(Icons.settings_outlined),
+                    text: l10n.tabSettings,
+                  ),
+                ],
+              ),
+            ),
+            if (state.deletedSaveRecovery != null) deletedSaveRecoveryBanner(),
+            if (state.lastWriteMessage != null) writeMessageBanner(),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  emptyPane,
+                  _KeepAliveTab(
+                    child: _SettingsPanel(state: state, notifier: notifier),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
     } else {
       final inspection = state.inspection!;
       final pendingCount = state.pendingEditCount;
       content = DefaultTabController(
+        key: const ValueKey('save-tabs'),
         length: 6,
         child: Column(
           children: [
@@ -4334,33 +4372,45 @@ class _MessagePane extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.body,
+    this.action,
   });
 
   final IconData icon;
   final String title;
   final String body;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
+    // Scroll rather than overflow when the pane is short (the tab bar above it
+    // takes height too); a pane that fits stays centred.
     return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  icon,
-                  size: 48,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(height: 12),
-                Text(title, style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 8),
-                Text(body, textAlign: TextAlign.center),
-              ],
+      child: SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    icon,
+                    size: 48,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(title, style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 8),
+                  Text(body, textAlign: TextAlign.center),
+                  if (action != null) ...[
+                    const SizedBox(height: 16),
+                    // A button label can't wrap like the body text; shrink it in a
+                    // very narrow pane rather than overflow.
+                    FittedBox(fit: BoxFit.scaleDown, child: action),
+                  ],
+                ],
+              ),
             ),
           ),
         ),

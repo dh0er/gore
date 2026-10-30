@@ -21,8 +21,8 @@ static void my_application_activate(GApplication* application) {
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   FlView* view = fl_view_new(project);
-  fl_register_plugins(FL_PLUGIN_REGISTRY(view));
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
+  fl_register_plugins(FL_PLUGIN_REGISTRY(view));
   gtk_widget_show_all(GTK_WIDGET(window));
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
