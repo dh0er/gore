@@ -3084,10 +3084,31 @@ fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
         )
     };
     if renamed == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
+        return Ok(());
     }
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        // The filesystem (WSL's drvfs, NFS, CIFS, many FUSE mounts) or kernel
+        // lacks the flag. A hard link is the other atomic no-replace primitive:
+        // `link` refuses an existing destination just like the rename would.
+        Some(libc::EINVAL) | Some(libc::ENOSYS) => link_then_unlink(&source, &destination),
+        _ => Err(error),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn link_then_unlink(source: &std::ffi::CStr, destination: &std::ffi::CStr) -> std::io::Result<()> {
+    if unsafe { libc::link(source.as_ptr(), destination.as_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::unlink(source.as_ptr()) } != 0 {
+        let error = std::io::Error::last_os_error();
+        // Both names share one inode, so dropping the new one restores the
+        // state before the move instead of leaving the source behind.
+        unsafe { libc::unlink(destination.as_ptr()) };
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -23235,6 +23256,31 @@ mod tests {
             value["profiles"][0]["savedSlots"],
             json!(["G1R-001", "G1R-002"])
         );
+    }
+
+    /// The fallback taken where `renameat2(RENAME_NOREPLACE)` is unsupported
+    /// (WSL's /mnt/c answers EINVAL) must keep the no-replace contract.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn link_fallback_moves_without_replacing() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt as _;
+        let c = |path: &Path| CString::new(path.as_os_str().as_bytes()).unwrap();
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("staged.sav");
+        let free = dir.path().join("G1R-001.sav");
+        let taken = dir.path().join("G1R-002.sav");
+        fs::write(&source, b"new").unwrap();
+        fs::write(&taken, b"theirs").unwrap();
+
+        let error = link_then_unlink(&c(&source), &c(&taken)).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&taken).unwrap(), b"theirs");
+        assert_eq!(fs::read(&source).unwrap(), b"new");
+
+        link_then_unlink(&c(&source), &c(&free)).unwrap();
+        assert!(!source.exists());
+        assert_eq!(fs::read(&free).unwrap(), b"new");
     }
 
     #[test]
