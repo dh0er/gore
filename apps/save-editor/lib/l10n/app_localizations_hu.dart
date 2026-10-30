@@ -3462,6 +3462,15 @@ class AppLocalizationsHu extends AppLocalizations {
       'Az átvitt tárgymennyiség meghaladja a támogatott határt.';
 
   @override
+  String get transferPartiallySaved =>
+      'Az átvitel egy része már mentve van. A többi függőben marad; mentsd el a befejezéshez.';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'Nem lett átvive, mert a szerkesztő nem ismeri ezeket a tárgyakat: $items';
+  }
+
+  @override
   String get transferNoSkillData =>
       'Az egyik mentésben nem találhatók szerkeszthető hős-képességadatok.';
 

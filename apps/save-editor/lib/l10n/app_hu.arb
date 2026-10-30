@@ -849,6 +849,8 @@
   "transferPlanningSteps": "Biztonságos mentési lépések tervezése…",
   "transferSavingDestination": "Cél mentése…",
   "transferCountLimit": "Az átvitt tárgymennyiség meghaladja a támogatott határt.",
+  "transferPartiallySaved": "Az átvitel egy része már mentve van. A többi függőben marad; mentsd el a befejezéshez.",
+  "transferSkippedUnknownItems": "Nem lett átvive, mert a szerkesztő nem ismeri ezeket a tárgyakat: {items}",
   "transferNoSkillData": "Az egyik mentésben nem találhatók szerkeszthető hős-képességadatok.",
   "transferDone": "Kész"
 }

@@ -3321,6 +3321,14 @@ class AppLocalizationsZh extends AppLocalizations {
   String get transferCountLimit => '转移的物品数量超过了支持的上限。';
 
   @override
+  String get transferPartiallySaved => '部分转移已保存。其余更改仍待保存；保存即可完成转移。';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return '编辑器无法识别以下物品，因此未转移：$items';
+  }
+
+  @override
   String get transferNoSkillData => '其中一个存档没有可编辑的英雄技能数据。';
 
   @override
@@ -6642,6 +6650,14 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get transferCountLimit => '转移的物品数量超过了支持的上限。';
+
+  @override
+  String get transferPartiallySaved => '部分转移已保存。其余更改仍待保存；保存即可完成转移。';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return '编辑器无法识别以下物品，因此未转移：$items';
+  }
 
   @override
   String get transferNoSkillData => '其中一个存档没有可编辑的英雄技能数据。';
@@ -9977,6 +9993,14 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get transferCountLimit => '轉移的物品數量超過了支援的上限。';
+
+  @override
+  String get transferPartiallySaved => '部分轉移已儲存。其餘變更仍待儲存；儲存即可完成轉移。';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return '編輯器無法識別以下物品，因此未轉移：$items';
+  }
 
   @override
   String get transferNoSkillData => '其中一個存檔沒有可編輯的英雄技能資料。';

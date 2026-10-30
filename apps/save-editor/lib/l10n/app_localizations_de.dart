@@ -3478,6 +3478,15 @@ class AppLocalizationsDe extends AppLocalizations {
       'Die übertragene Gegenstandsmenge überschreitet das unterstützte Limit.';
 
   @override
+  String get transferPartiallySaved =>
+      'Ein Teil der Übertragung ist bereits gespeichert. Der Rest bleibt vorgemerkt; speichere, um sie abzuschließen.';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'Nicht übertragen, weil der Editor diese Gegenstände nicht kennt: $items';
+  }
+
+  @override
   String get transferNoSkillData =>
       'In einem der Savegames wurden keine bearbeitbaren Helden-Talente gefunden.';
 

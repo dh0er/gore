@@ -3498,6 +3498,15 @@ class AppLocalizationsFr extends AppLocalizations {
       'La quantité transférée dépasse la limite prise en charge.';
 
   @override
+  String get transferPartiallySaved =>
+      'Une partie du transfert est déjà enregistrée. Le reste reste en attente ; enregistrez pour le terminer.';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'Non transférés, car l\'éditeur ne connaît pas ces objets : $items';
+  }
+
+  @override
   String get transferNoSkillData =>
       'Aucune compétence de héros modifiable n\'a été trouvée dans l\'une des sauvegardes.';
 

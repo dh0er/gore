@@ -3467,6 +3467,15 @@ class AppLocalizationsCs extends AppLocalizations {
       'Přenesený počet předmětů překračuje podporovaný limit.';
 
   @override
+  String get transferPartiallySaved =>
+      'Část přenosu je již uložena. Zbytek zůstává připraven; uložením přenos dokončíte.';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'Nepřeneseno, protože editor tyto předměty nezná: $items';
+  }
+
+  @override
   String get transferNoSkillData =>
       'V jednom z uložení nebyla nalezena upravitelná data dovedností hrdiny.';
 

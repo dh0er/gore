@@ -874,6 +874,8 @@
   "transferPlanningSteps": "Planowanie bezpiecznych kroków zapisu…",
   "transferSavingDestination": "Zapisywanie celu…",
   "transferCountLimit": "Przeniesiona liczba przedmiotów przekracza obsługiwany limit.",
+  "transferPartiallySaved": "Część przeniesienia jest już zapisana. Reszta pozostaje oczekująca; zapisz, aby je dokończyć.",
+  "transferSkippedUnknownItems": "Nie przeniesiono, ponieważ edytor nie zna tych przedmiotów: {items}",
   "transferNoSkillData": "W jednym z zapisów nie ma edytowalnych umiejętności bohatera.",
   "transferDone": "Gotowe"
 }

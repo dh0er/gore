@@ -3477,6 +3477,15 @@ class AppLocalizationsRo extends AppLocalizations {
       'Cantitatea transferată depășește limita acceptată.';
 
   @override
+  String get transferPartiallySaved =>
+      'O parte din transfer este deja salvată. Restul rămâne în așteptare; salvează pentru a-l finaliza.';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'Netransferate, deoarece editorul nu cunoaște aceste obiecte: $items';
+  }
+
+  @override
   String get transferNoSkillData =>
       'Într-una dintre salvări nu există abilități editabile ale eroului.';
 

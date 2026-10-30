@@ -3453,6 +3453,15 @@ class AppLocalizationsEn extends AppLocalizations {
       'Transferred item count exceeds the supported limit.';
 
   @override
+  String get transferPartiallySaved =>
+      'Part of the transfer is already saved. The rest stays staged; save to finish it.';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'Not transferred because the editor does not know these items: $items';
+  }
+
+  @override
   String get transferNoSkillData =>
       'No editable Hero skill data was found in one of the saves.';
 

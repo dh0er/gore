@@ -881,6 +881,8 @@
   "transferPlanningSteps": "正在规划安全的保存步骤……",
   "transferSavingDestination": "正在保存目标……",
   "transferCountLimit": "转移的物品数量超过了支持的上限。",
+  "transferPartiallySaved": "部分转移已保存。其余更改仍待保存；保存即可完成转移。",
+  "transferSkippedUnknownItems": "编辑器无法识别以下物品，因此未转移：{items}",
   "transferNoSkillData": "其中一个存档没有可编辑的英雄技能数据。",
   "transferDone": "完成"
 }

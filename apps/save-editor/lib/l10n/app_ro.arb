@@ -849,6 +849,8 @@
   "transferPlanningSteps": "Se planifică pași siguri de salvare…",
   "transferSavingDestination": "Se salvează destinația…",
   "transferCountLimit": "Cantitatea transferată depășește limita acceptată.",
+  "transferPartiallySaved": "O parte din transfer este deja salvată. Restul rămâne în așteptare; salvează pentru a-l finaliza.",
+  "transferSkippedUnknownItems": "Netransferate, deoarece editorul nu cunoaște aceste obiecte: {items}",
   "transferNoSkillData": "Într-una dintre salvări nu există abilități editabile ale eroului.",
   "transferDone": "Gata"
 }

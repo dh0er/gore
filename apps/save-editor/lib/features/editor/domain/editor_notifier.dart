@@ -10,6 +10,7 @@ import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/glossary_models.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
+import 'package:goresave/features/editor/domain/item_catalog.dart';
 import 'package:goresave/features/editor/domain/locks_models.dart';
 import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/npc_attributes.dart';
@@ -530,11 +531,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
     AppLocalizations Function()? localizations,
     bool Function(String path)? fileExists,
     bool Function(String path)? directoryExists,
+    Future<Set<String>> Function()? knownItemPaths,
   }) : _settingsStore = settingsStore ?? const NoopEditorSettingsStore(),
        _localizations = localizations ?? _defaultEnglishLocalizations,
        _fileExists = fileExists ?? ((path) => File(path).existsSync()),
        _directoryExists =
            directoryExists ?? ((path) => Directory(path).existsSync()),
+       _knownItemPaths = knownItemPaths ?? ItemCatalog.loadBundledPaths,
        super(
          _initialState(
            saveDir: saveDir,
@@ -551,6 +554,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
   final AppLocalizations Function() _localizations;
   final bool Function(String path) _fileExists;
   final bool Function(String path) _directoryExists;
+
+  /// Item classes the core accepts for a new inventory item.
+  final Future<Set<String>> Function() _knownItemPaths;
   final List<Duration> _recentTransferReadDurations = [];
   final List<Duration> _recentTransferWriteDurations = [];
 
@@ -3162,6 +3168,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (!items && !skills && !stats) return false;
 
     final edits = <Map<String, Object?>>[];
+    final skippedItems = <String>[];
     final totalReads = (stats ? 2 : 0) + (skills ? 2 : 0) + (items ? 2 : 0);
     var completedReads = 0;
     var completedWrites = 0;
@@ -3306,8 +3313,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
         );
         final carriedItemsByPath = <String, PrivateInventoryItem>{};
         for (final item in destinationInventory.items) {
-          if (item.containerType == null ||
-              item.containerType == 'MainContainer') {
+          // A stack without a stored count has no field a count edit could
+          // change, so the source amount becomes a stack of its own instead.
+          if (item.count != null &&
+              (item.containerType == null ||
+                  item.containerType == 'MainContainer')) {
             carriedItemsByPath.putIfAbsent(item.path, () => item);
           }
         }
@@ -3323,9 +3333,21 @@ class EditorNotifier extends StateNotifier<EditorState> {
             ifAbsent: () => itemCount,
           );
         }
+        Set<String>? knownItemPaths;
+        try {
+          knownItemPaths = await _knownItemPaths();
+        } catch (_) {
+          // Without the catalog, leave the check to the core.
+        }
         for (final entry in sourceCounts.entries) {
           final carried = carriedItemsByPath[entry.key];
           if (carried == null) {
+            // The core refuses to add an item class it does not know (a newer
+            // patch or a mod); one such item must not sink the whole transfer.
+            if (knownItemPaths != null && !knownItemPaths.contains(entry.key)) {
+              skippedItems.add(entry.key.split('.').last);
+              continue;
+            }
             // Several source stacks can add up past the save's 32-bit count.
             if (entry.value > 0x7fffffff) {
               throw StateError(_l10n.transferCountLimit);
@@ -3338,8 +3360,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
             );
             continue;
           }
-          final count = carried.count ?? 0;
-          final nextCount = count + entry.value;
+          final nextCount = carried.count! + entry.value;
           if (nextCount > 0x7fffffff) {
             throw StateError(_l10n.transferCountLimit);
           }
@@ -3376,9 +3397,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return false;
     }
     state = state.copyWith(isLoading: false);
+    final skippedNote = skippedItems.isEmpty
+        ? null
+        : _l10n.transferSkippedUnknownItems(skippedItems.join(', '));
     if (edits.isEmpty) {
       state = state.copyWith(
-        error: _l10n.editorSaveFailed(_l10n.transferNoCompatibleChanges),
+        error: [
+          _l10n.editorSaveFailed(_l10n.transferNoCompatibleChanges),
+          ?skippedNote,
+        ].join('\n'),
       );
       return false;
     }
@@ -3396,10 +3423,28 @@ class EditorNotifier extends StateNotifier<EditorState> {
         reportProgress(_l10n.transferSavingDestination, estimate: true);
       },
     );
-    // The dialog reports a failed transfer as finished; leaving its edits
-    // staged would block a new transfer and let a later Save apply them.
-    if (!saved) clearPendingEdit('progressTransfer');
-    return saved;
+    if (saved) {
+      if (skippedNote != null) {
+        state = state.copyWith(
+          lastWriteMessage: [?state.lastWriteMessage, skippedNote].join('\n'),
+        );
+      }
+      return true;
+    }
+    final remaining = state.pendingEdits['progressTransfer'];
+    if (remaining != null && remaining.edits.length < edits.length) {
+      // An earlier sub-write is already on disk. Dropping the rest would
+      // leave the save half transferred, and a new transfer would add the
+      // written items again; keeping it lets Save finish the transfer.
+      state = state.copyWith(
+        error: [?state.error, _l10n.transferPartiallySaved].join('\n'),
+      );
+    } else {
+      // Nothing was written. Leaving the edits staged would block a new
+      // transfer and let a later Save apply the one reported as failed.
+      clearPendingEdit('progressTransfer');
+    }
+    return false;
   }
 
   Future<List<TypedPropertyHit>> _loadTransferAttributeHits(String path) async {

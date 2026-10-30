@@ -7544,6 +7544,167 @@ void main() {
     },
   );
 
+  Map<String, Object?> orenugget(int count) => {
+    'id': 'ItMi_Orenugget',
+    'path': '/Script/Angelscript.ItMi_Orenugget',
+    'count': count,
+    'containerType': 'MainContainer',
+  };
+
+  test(
+    'a transfer that fails after a partial write keeps the rest staged',
+    () async {
+      const sourcePath = r'C:\archive\Old.sav';
+      const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+      final core = _FailingWriteTransferCoreService(
+        savePath: destinationPath,
+        succeedingWrites: 1,
+        inventoryByPath: {
+          sourcePath: {
+            'items': [
+              orenugget(5),
+              {
+                'id': 'ItMi_Gold',
+                'path': '/Script/Angelscript.ItMi_Gold',
+                'count': 20,
+                'containerType': 'MainContainer',
+              },
+            ],
+          },
+          destinationPath: {'items': <Object?>[]},
+        },
+      );
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        knownItemPaths: () async => {
+          '/Script/Angelscript.ItMi_Orenugget',
+          '/Script/Angelscript.ItMi_Gold',
+        },
+      );
+      await notifier.inspect(destinationPath);
+
+      expect(
+        await notifier.transferHeroProgress(
+          sourcePath: sourcePath,
+          skills: false,
+          stats: false,
+        ),
+        isFalse,
+      );
+      expect(
+        notifier.state.pendingEdits['progressTransfer']?.edits,
+        hasLength(1),
+      );
+      expect(
+        notifier.state.error,
+        endsWith(
+          'Part of the transfer is already saved. '
+          'The rest stays staged; save to finish it.',
+        ),
+      );
+    },
+  );
+
+  test(
+    'a destination stack without a stored count gets the source amount added',
+    () async {
+      const sourcePath = r'C:\archive\Old.sav';
+      const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+      final core = _ProgressTransferCoreService(
+        savePath: destinationPath,
+        inventoryByPath: {
+          sourcePath: {
+            'items': [orenugget(3)],
+          },
+          destinationPath: {
+            'items': [
+              {
+                'id': 'ItMi_Orenugget',
+                'path': '/Script/Angelscript.ItMi_Orenugget',
+                'slotId': 4,
+                'containerType': 'MainContainer',
+              },
+            ],
+          },
+        },
+      );
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        knownItemPaths: () async => {'/Script/Angelscript.ItMi_Orenugget'},
+      );
+      await notifier.inspect(destinationPath);
+
+      expect(
+        await notifier.transferHeroProgress(
+          sourcePath: sourcePath,
+          skills: false,
+          stats: false,
+        ),
+        isTrue,
+      );
+      final write = core.requests.singleWhere(
+        (request) => request.command == 'write_save',
+      );
+      final edit = (write.payload['edits'] as List).single as Map;
+      expect(edit['path'], 'private.inventory.addItem');
+      expect((edit['value'] as Map)['count'], 3);
+    },
+  );
+
+  test('items the editor does not know are skipped and named', () async {
+    const sourcePath = r'C:\archive\Old.sav';
+    const destinationPath = r'C:\tmp\saves\G1R-001.sav';
+    final core = _ProgressTransferCoreService(
+      savePath: destinationPath,
+      inventoryByPath: {
+        sourcePath: {
+          'items': [
+            orenugget(5),
+            {
+              'id': 'ItMi_ModdedRelic',
+              'path': '/Script/Angelscript.ItMi_ModdedRelic',
+              'count': 1,
+              'containerType': 'MainContainer',
+            },
+          ],
+        },
+        destinationPath: {'items': <Object?>[]},
+      },
+    );
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      knownItemPaths: () async => {'/Script/Angelscript.ItMi_Orenugget'},
+    );
+    await notifier.inspect(destinationPath);
+
+    expect(
+      await notifier.transferHeroProgress(
+        sourcePath: sourcePath,
+        skills: false,
+        stats: false,
+      ),
+      isTrue,
+    );
+    final write = core.requests.singleWhere(
+      (request) => request.command == 'write_save',
+    );
+    final edit = (write.payload['edits'] as List).single as Map;
+    expect(
+      (edit['value'] as Map)['path'],
+      '/Script/Angelscript.ItMi_Orenugget',
+    );
+    expect(
+      notifier.lastWriteMessage,
+      endsWith(
+        'Not transferred because the editor does not know these items: '
+        'ItMi_ModdedRelic',
+      ),
+    );
+  });
+
   test(
     'Hero transfer accepts a destination spelled differently than the selection',
     () async {
@@ -8220,17 +8381,41 @@ class _FailingAssignProfileCoreService extends _RecordingCoreService {
 }
 
 /// write_save always fails.
+/// Fails every write after the first [succeedingWrites]. With any succeeding
+/// writes it plans one group per edit, so a transfer can commit in part.
 class _FailingWriteTransferCoreService extends _ProgressTransferCoreService {
   _FailingWriteTransferCoreService({
     required super.savePath,
     super.inventoryByPath,
+    this.succeedingWrites = 0,
   });
+
+  final int succeedingWrites;
+  var _writes = 0;
 
   @override
   Future<Map<String, Object?>> execute(
     String command, {
     Map<String, Object?> payload = const {},
   }) async {
+    if (command == 'plan_edits' && succeedingWrites > 0) {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      final edits = payload['edits'] as List;
+      return {
+        'ok': true,
+        'data': {
+          'groups': [
+            for (var index = 0; index < edits.length; index++) [index],
+          ],
+          'sidecars': [for (final _ in edits) <String, Object?>{}],
+        },
+      };
+    }
+    if (command == 'write_save' && _writes++ < succeedingWrites) {
+      return super.execute(command, payload: payload);
+    }
     if (command == 'write_save') {
       requests.add(
         _RecordedRequest(command, Map<String, Object?>.from(payload)),

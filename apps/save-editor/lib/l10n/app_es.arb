@@ -874,6 +874,8 @@
   "transferPlanningSteps": "Planificando pasos de guardado seguros…",
   "transferSavingDestination": "Guardando el destino…",
   "transferCountLimit": "La cantidad transferida supera el límite admitido.",
+  "transferPartiallySaved": "Parte de la transferencia ya está guardada. El resto queda pendiente; guarda para terminarla.",
+  "transferSkippedUnknownItems": "No transferidos porque el editor no conoce estos objetos: {items}",
   "transferNoSkillData": "En una de las partidas no hay datos editables de habilidades del héroe.",
   "transferDone": "Hecho"
 }

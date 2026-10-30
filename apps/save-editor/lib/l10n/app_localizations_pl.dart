@@ -3484,6 +3484,15 @@ class AppLocalizationsPl extends AppLocalizations {
       'Przeniesiona liczba przedmiotów przekracza obsługiwany limit.';
 
   @override
+  String get transferPartiallySaved =>
+      'Część przeniesienia jest już zapisana. Reszta pozostaje oczekująca; zapisz, aby je dokończyć.';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'Nie przeniesiono, ponieważ edytor nie zna tych przedmiotów: $items';
+  }
+
+  @override
   String get transferNoSkillData =>
       'W jednym z zapisów nie ma edytowalnych umiejętności bohatera.';
 

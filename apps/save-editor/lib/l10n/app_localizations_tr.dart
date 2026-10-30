@@ -3457,6 +3457,15 @@ class AppLocalizationsTr extends AppLocalizations {
       'Aktarılan eşya sayısı desteklenen sınırı aşıyor.';
 
   @override
+  String get transferPartiallySaved =>
+      'Aktarımın bir kısmı zaten kaydedildi. Geri kalanı bekliyor; tamamlamak için kaydet.';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'Düzenleyici bu eşyaları tanımadığı için aktarılmadı: $items';
+  }
+
+  @override
   String get transferNoSkillData =>
       'Kayıtlardan birinde düzenlenebilir kahraman becerisi yok.';
 

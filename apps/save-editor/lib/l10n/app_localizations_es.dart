@@ -3480,6 +3480,15 @@ class AppLocalizationsEs extends AppLocalizations {
       'La cantidad transferida supera el límite admitido.';
 
   @override
+  String get transferPartiallySaved =>
+      'Parte de la transferencia ya está guardada. El resto queda pendiente; guarda para terminarla.';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'No transferidos porque el editor no conoce estos objetos: $items';
+  }
+
+  @override
   String get transferNoSkillData =>
       'En una de las partidas no hay datos editables de habilidades del héroe.';
 

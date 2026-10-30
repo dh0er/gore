@@ -3477,6 +3477,15 @@ class AppLocalizationsUk extends AppLocalizations {
       'Перенесена кількість предметів перевищує дозволену межу.';
 
   @override
+  String get transferPartiallySaved =>
+      'Частину перенесення вже збережено. Решта залишається в очікуванні; збережіть, щоб завершити.';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'Не перенесено, бо редактор не знає цих предметів: $items';
+  }
+
+  @override
   String get transferNoSkillData =>
       'В одному зі збережень немає змінюваних навичок героя.';
 

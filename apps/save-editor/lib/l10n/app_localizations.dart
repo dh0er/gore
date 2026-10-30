@@ -5232,6 +5232,18 @@ abstract class AppLocalizations {
   /// **'Transferred item count exceeds the supported limit.'**
   String get transferCountLimit;
 
+  /// No description provided for @transferPartiallySaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Part of the transfer is already saved. The rest stays staged; save to finish it.'**
+  String get transferPartiallySaved;
+
+  /// No description provided for @transferSkippedUnknownItems.
+  ///
+  /// In en, this message translates to:
+  /// **'Not transferred because the editor does not know these items: {items}'**
+  String transferSkippedUnknownItems(String items);
+
   /// No description provided for @transferNoSkillData.
   ///
   /// In en, this message translates to:

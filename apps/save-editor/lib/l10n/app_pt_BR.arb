@@ -874,6 +874,8 @@
   "transferPlanningSteps": "Planejando etapas seguras de gravação…",
   "transferSavingDestination": "Salvando o destino…",
   "transferCountLimit": "A quantidade transferida excede o limite suportado.",
+  "transferPartiallySaved": "Parte da transferência já foi salva. O restante continua pendente; salve para concluí-la.",
+  "transferSkippedUnknownItems": "Não transferidos porque o editor não conhece estes itens: {items}",
   "transferNoSkillData": "Em um dos jogos salvos não há habilidades editáveis do herói.",
   "transferDone": "Concluído"
 }

@@ -3478,6 +3478,15 @@ class AppLocalizationsPt extends AppLocalizations {
       'A quantidade transferida excede o limite suportado.';
 
   @override
+  String get transferPartiallySaved =>
+      'Parte da transferência já está guardada. O resto fica pendente; guarde para a concluir.';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'Não transferidos porque o editor não conhece estes itens: $items';
+  }
+
+  @override
   String get transferNoSkillData =>
       'Num dos jogos guardados não há aptidões editáveis do herói.';
 
@@ -6956,6 +6965,15 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get transferCountLimit =>
       'A quantidade transferida excede o limite suportado.';
+
+  @override
+  String get transferPartiallySaved =>
+      'Parte da transferência já foi salva. O restante continua pendente; salve para concluí-la.';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'Não transferidos porque o editor não conhece estes itens: $items';
+  }
 
   @override
   String get transferNoSkillData =>

@@ -3486,6 +3486,15 @@ class AppLocalizationsIt extends AppLocalizations {
       'La quantità trasferita supera il limite supportato.';
 
   @override
+  String get transferPartiallySaved =>
+      'Parte del trasferimento è già salvata. Il resto rimane in sospeso; salva per completarlo.';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'Non trasferiti perché l\'editor non conosce questi oggetti: $items';
+  }
+
+  @override
   String get transferNoSkillData =>
       'In uno dei salvataggi non ci sono abilità dell\'eroe modificabili.';
 

@@ -874,6 +874,8 @@
   "transferPlanningSteps": "Pianificazione di passaggi di salvataggio sicuri…",
   "transferSavingDestination": "Salvataggio della destinazione…",
   "transferCountLimit": "La quantità trasferita supera il limite supportato.",
+  "transferPartiallySaved": "Parte del trasferimento è già salvata. Il resto rimane in sospeso; salva per completarlo.",
+  "transferSkippedUnknownItems": "Non trasferiti perché l'editor non conosce questi oggetti: {items}",
   "transferNoSkillData": "In uno dei salvataggi non ci sono abilità dell'eroe modificabili.",
   "transferDone": "Fatto"
 }

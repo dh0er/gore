@@ -3361,6 +3361,15 @@ class AppLocalizationsJa extends AppLocalizations {
   String get transferCountLimit => '移したアイテム数が対応上限を超えています。';
 
   @override
+  String get transferPartiallySaved =>
+      '転送の一部はすでに保存されています。残りは保留のままです。保存すると転送が完了します。';
+
+  @override
+  String transferSkippedUnknownItems(String items) {
+    return 'エディターが認識できないため転送されなかったアイテム: $items';
+  }
+
+  @override
   String get transferNoSkillData => 'いずれかのセーブに編集できる主人公のスキルがありません。';
 
   @override
