@@ -3152,6 +3152,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'The repair is not available for this savegame.';
 
   @override
+  String get npcWorldRepairTitle => 'Revived NPCs missing from the world';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'An older version of this editor revived NPCs without putting them back into the world, so the game never spawns them. Affected: $count. The repair finishes the revive and brings them back. A backup is created when you save, as always.';
+  }
+
+  @override
   String get statisticsTitle => 'Statistics';
 
   @override

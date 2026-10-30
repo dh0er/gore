@@ -19,6 +19,7 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/characters_tab.dart';
 import 'package:goresave/features/editor/ui/game_icon.dart';
 import 'package:goresave/features/editor/ui/game_time_dialog.dart';
+import 'package:goresave/features/editor/ui/npc_world_repair_banner.dart';
 import 'package:goresave/features/editor/ui/overview_statistics_section.dart';
 import 'package:goresave/features/editor/ui/profile_localization.dart';
 import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
@@ -1326,6 +1327,17 @@ class _OverviewPanel extends StatelessWidget {
             notifier: notifier,
             misalignedSlots: inspection.privateInventory.misalignedSlots,
             availability: slotRepairAvailability(
+              inspection,
+              canCompress: state.codecCompressReady,
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+        if (npcWorldRepairWarranted(inspection)) ...[
+          NpcWorldRepairBanner(
+            notifier: notifier,
+            npcIds: inspection.privateNpc.strandedRevives,
+            availability: npcWorldRepairAvailability(
               inspection,
               canCompress: state.codecCompressReady,
             ),

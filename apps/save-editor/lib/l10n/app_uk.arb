@@ -785,6 +785,8 @@
   "slotRepairUnavailable": "Зараз виправити не можна — це збереження не можна записати.",
   "editorDeletedBackupWithLabelWarning": "Резервну копію видалено: {path} — не вдалося прибрати її назву: {details}",
   "slotRepairNotOffered": "Ремонт недоступний для цього збереження.",
+  "npcWorldRepairTitle": "Воскрешені NPC відсутні у світі",
+  "npcWorldRepairBody": "Стара версія цього редактора воскрешала NPC, не повертаючи їх у світ, тому гра їх більше не створює. Зачеплено: {count}. Ремонт завершує воскресіння і повертає їх. Під час збереження, як завжди, створюється резервна копія.",
   "statisticsTitle": "Статистика",
   "statisticsSubtitle": "Стислий підсумок персонажа, квестів, світу та прогресу збереження.",
   "statisticsCardTitle": "{card, select, timing{Час} character{Персонаж} quests{Квести} progress{Прогрес} encounters{Бій і контакти} inventory{Навички та інвентар} other{{fallback}}}",

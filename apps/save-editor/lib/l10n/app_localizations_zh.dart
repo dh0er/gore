@@ -3030,6 +3030,14 @@ class AppLocalizationsZh extends AppLocalizations {
   String get slotRepairNotOffered => '此存档不支持修复。';
 
   @override
+  String get npcWorldRepairTitle => '已复活的 NPC 不在世界中';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return '此编辑器的旧版本复活了 NPC，却没有把它们放回世界，因此游戏不会再生成它们。受影响：$count。修复会完成复活并让它们回来。保存时照常会创建备份。';
+  }
+
+  @override
   String get statisticsTitle => '统计';
 
   @override
@@ -6203,6 +6211,14 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get slotRepairNotOffered => '此存档不支持修复。';
+
+  @override
+  String get npcWorldRepairTitle => '已复活的 NPC 不在世界中';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return '此编辑器的旧版本复活了 NPC，却没有把它们放回世界，因此游戏不会再生成它们。受影响：$count。修复会完成复活并让它们回来。保存时照常会创建备份。';
+  }
 
   @override
   String get statisticsTitle => '统计';
@@ -9390,6 +9406,14 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get slotRepairNotOffered => '此存檔不支持修復。';
+
+  @override
+  String get npcWorldRepairTitle => '已復活的 NPC 不在世界中';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return '此編輯器的舊版本復活了 NPC，卻沒有把它們放回世界，因此遊戲不會再生成它們。受影響：$count。修復會完成復活並讓它們回來。儲存時照常會建立備份。';
+  }
 
   @override
   String get statisticsTitle => '統計';

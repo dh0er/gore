@@ -785,6 +785,8 @@
   "slotRepairUnavailable": "Repararea nu e posibilă acum — această salvare nu poate fi scrisă.",
   "editorDeletedBackupWithLabelWarning": "Copie de rezervă ștearsă: {path} — numele ei nu a putut fi eliminat: {details}",
   "slotRepairNotOffered": "Reparația nu e disponibilă pentru această salvare.",
+  "npcWorldRepairTitle": "NPC-uri reînviate lipsesc din lume",
+  "npcWorldRepairBody": "O versiune mai veche a acestui editor a reînviat NPC-uri fără să le readucă în lume, așa că jocul nu le mai face să apară. Afectate: {count}. Reparația finalizează reînvierea și le aduce înapoi. La salvare se creează, ca întotdeauna, o copie de rezervă.",
   "statisticsTitle": "Statistici",
   "statisticsSubtitle": "Un rezumat compact al progresului personajului, misiunilor, lumii și salvării.",
   "statisticsCardTitle": "{card, select, timing{Timp} character{Personaj} quests{Misiuni} progress{Progres} encounters{Luptă și contacte} inventory{Abilități și inventar} other{{fallback}}}",

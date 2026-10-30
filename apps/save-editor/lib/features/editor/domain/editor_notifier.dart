@@ -3787,6 +3787,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return pending.length == 1 ? pending.single : null;
   }
 
+  /// The pending-edit key a revive of NPC [id] is registered under.
+  static String npcRevivePendingKey(String id) => 'npc.revive:$id';
+
   /// Register a PENDING revive of an NPC under the per-NPC key `npc.revive:$id`.
   /// The global Save button applies it via [saveAllPending], which submits
   /// `private.npc.revive` as its own write_save (the core rejects batching this
@@ -3798,7 +3801,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// overwrites its key (idempotent).
   void setPendingNpcRevive(String id) {
     setPendingEdit(
-      'npc.revive:$id',
+      npcRevivePendingKey(id),
       PendingSaveEdit(
         edits: [
           {
@@ -4303,11 +4306,13 @@ bool structuredEditRewrites(
       return (_pathHasName(typedPath, 'MemorizedEvents') &&
               _pathHasKey(typedPath, 'Hero')) ||
           _pathIsAQuestCurrentState(typedPath);
-    // Strips memory events, death tags and the corpse entry.
+    // Strips memory events, death tags, the corpse entry and the
+    // removed-from-world listing.
     case 'private.npc.revive':
       return _pathHasName(typedPath, 'MemorizedEvents') ||
           _pathHasName(typedPath, 'LooseTagsByGlobalId') ||
-          _pathHasName(typedPath, 'm_SavedInventories');
+          _pathHasName(typedPath, 'm_SavedInventories') ||
+          _pathHasName(typedPath, 'GlobalIDsRemovedFromWorld');
     // Insert or update ONE character's knowledge entry. Another character's
     // entry is a different map value, and every applier re-resolves its target
     // by key, so the two do not collide.

@@ -3174,6 +3174,14 @@ class AppLocalizationsDe extends AppLocalizations {
       'Für dieses Savegame steht die Reparatur nicht zur Verfügung.';
 
   @override
+  String get npcWorldRepairTitle => 'Wiederbelebte NPCs fehlen in der Welt';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'Eine ältere Version dieses Editors hat NPCs wiederbelebt, ohne sie zurück in die Welt zu holen — das Spiel lässt sie deshalb nie erscheinen. Betroffen: $count. Die Reparatur schließt die Wiederbelebung ab und holt sie zurück. Beim Speichern wird wie immer ein Backup angelegt.';
+  }
+
+  @override
   String get statisticsTitle => 'Statistiken';
 
   @override

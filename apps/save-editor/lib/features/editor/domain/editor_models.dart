@@ -647,7 +647,11 @@ class SaveInspection {
 /// this per-save capability instead of assuming every decoded save can accept
 /// `private.npc.setRelationship`.
 class PrivateNpcSummary {
-  const PrivateNpcSummary({this.hasNpcs = false, this.writable = const []});
+  const PrivateNpcSummary({
+    this.hasNpcs = false,
+    this.writable = const [],
+    this.strandedRevives = const [],
+  });
 
   factory PrivateNpcSummary.fromJson(Map<String, Object?>? json) {
     return PrivateNpcSummary(
@@ -655,11 +659,21 @@ class PrivateNpcSummary {
       writable:
           (json?['writable'] as List?)?.whereType<String>().toList() ??
           const [],
+      strandedRevives:
+          (json?['strandedRevives'] as List?)?.whereType<String>().toList() ??
+          const [],
     );
   }
 
   final bool hasNpcs;
   final List<String> writable;
+
+  /// NPCs an older version of this editor revived without putting them back
+  /// into the world — the game still lists them as removed, so they never
+  /// spawn. Reviving them again is the repair.
+  final List<String> strandedRevives;
+
+  bool get canRevive => writable.contains('private.npc.revive');
 
   bool get canSetRelationship =>
       writable.contains('private.npc.setRelationship');
