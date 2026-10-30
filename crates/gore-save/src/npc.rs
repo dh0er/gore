@@ -1425,10 +1425,10 @@ pub fn stranded_by_old_revives(root: &RootObject) -> Vec<String> {
 /// the game reads (AngelScript re-applies it), so without removing it a revived NPC
 /// reverts to a corpse on load. Unrelated tags in the container survive.
 ///
-/// An entry with nothing else in it is removed whole, the shape of an NPC that was
-/// never killed. An empty entry is what older builds left behind, and the mark
+/// An entry holding nothing else is removed whole, the shape of an NPC that was
+/// never killed. Emptying it instead is what older builds did, and the mark
 /// [`stranded_by_old_revive`] looks for; leaving one would flag this NPC too once the
-/// story despawns it.
+/// story despawns it. An entry that is already empty stays as it is.
 ///
 /// Each tag removal is a length-changing splice on a native tag container that is a
 /// MAP VALUE (no per-value size header), so it goes through
@@ -1459,7 +1459,7 @@ fn plan_dead_loose_tag_removal(
     let only_death_tags = matches!(
         &entries[entry_index].1,
         PropertyValue::Struct(StructValue::GameplayTagContainer(tags))
-            if tags.iter().all(|t| DEAD_LOOSE_TAGS.contains(&t.as_str()))
+            if !tags.is_empty() && tags.iter().all(|t| DEAD_LOOSE_TAGS.contains(&t.as_str()))
     );
     if only_death_tags {
         return Ok(Some(ReviveEdit::RemoveMapEntries {
@@ -3501,7 +3501,26 @@ mod tests {
         assert!(removed_from_world(set, dead));
         assert!(removed_from_world(set, despawned));
         assert!(stranded_by_old_revives(&root).is_empty());
-        assert_eq!(loose_tags(&root, stranded), None, "the trace goes too");
+    }
+
+    #[test]
+    fn revive_leaves_an_alive_npc_with_an_empty_entry_alone() {
+        // Not listed, nothing to strip: an empty loose-tag entry is not a death
+        // marker, so reviving must not touch it.
+        let id = "OC_GRD_Guard19_239";
+        let mut payload = private_root(&[
+            character_state_map(
+                "AttributesMap",
+                ATTRIBUTES_TYPE,
+                &[(id, wounded_attributes_entry_value(220.0, 220.0, 220.0))],
+            ),
+            loose_tags_map(&[(id, &[])]),
+        ]);
+        let snapshot = payload.clone();
+
+        apply_revive(&mut payload, id).unwrap();
+
+        assert_eq!(payload, snapshot);
     }
 
     #[test]
