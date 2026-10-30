@@ -1,6 +1,9 @@
 //! AlkimiaLocalization `.lcache` codec — Gothic 1 Remake's encrypted localization DB.
 //!
-//! The whole file is AES-256-ECB encrypted. Decrypted layout:
+//! Game builds up to CL175960 encrypt the whole file with AES-256-ECB; the
+//! ModKit build (2026-10-29) ships the same layout unencrypted and unpadded.
+//! [`Lcache::decode`] accepts both and [`Lcache::encode`] writes the form it
+//! read. Decrypted layout:
 //!   prefix:      1 byte
 //!   magic:       i32 len + bytes  (== "LCACHE")
 //!   lang_count:  i32
@@ -70,6 +73,14 @@ fn aes_ecb(data: &[u8], encrypt: bool) -> Result<Vec<u8>, LcacheError> {
         }
     }
     Ok(out)
+}
+
+/// A plaintext file shows the magic right after the 1-byte prefix; ciphertext
+/// matching those 11 bytes by chance is not a practical concern.
+fn is_plaintext(bytes: &[u8]) -> bool {
+    bytes.len() >= 1 + 4 + MAGIC.len()
+        && bytes[1..5] == (MAGIC.len() as i32).to_le_bytes()
+        && &bytes[5..5 + MAGIC.len()] == MAGIC
 }
 
 /// One length-prefixed string field. Keeps its original bytes so an unedited
@@ -165,6 +176,9 @@ pub struct Lcache {
     group_count: i32,
     groups: Vec<Group>,
     tail: Vec<u8>,
+    /// Whether the source file was AES-encrypted; `encode` writes the same form
+    /// so the game keeps reading it.
+    encrypted: bool,
     /// Set once any value is edited. Keeps the original alignment `tail` only on
     /// an unedited round trip; once the serialized length changes, the tail is
     /// dropped and padding is recomputed (so repeated imports don't accrete
@@ -269,14 +283,22 @@ impl<'a> Reader<'a> {
 }
 
 impl Lcache {
-    /// Decrypt and parse an encrypted `.lcache` file's bytes.
-    pub fn decode(encrypted: &[u8]) -> Result<Self, LcacheError> {
-        let plain = aes_ecb(encrypted, false)?;
+    /// Parse an `.lcache` file's bytes, decrypting them first unless they are
+    /// already plaintext.
+    pub fn decode(bytes: &[u8]) -> Result<Self, LcacheError> {
+        let encrypted = !is_plaintext(bytes);
+        let decrypted;
+        let plain = if encrypted {
+            decrypted = aes_ecb(bytes, false)?;
+            &decrypted[..]
+        } else {
+            bytes
+        };
         if plain.len() < 16 {
             return Err(LcacheError::Invalid("file too small"));
         }
         let mut r = Reader {
-            data: &plain,
+            data: plain,
             off: 0,
         };
         let prefix = plain[0..1].to_vec();
@@ -323,12 +345,14 @@ impl Lcache {
             group_count,
             groups,
             tail,
+            encrypted,
             dirty: false,
         })
     }
 
-    /// Rebuild the plaintext and re-encrypt. Unedited fields keep their original
-    /// bytes; the result is padded with zeros to a 16-byte boundary.
+    /// Rebuild the file in the form it was read. Unedited fields keep their
+    /// original bytes; an encrypted file is padded with zeros to a 16-byte
+    /// boundary before encryption, a plaintext one is written unpadded.
     pub fn encode(&self) -> Result<Vec<u8>, LcacheError> {
         let mut out = Vec::new();
         out.extend_from_slice(&self.prefix);
@@ -348,6 +372,9 @@ impl Lcache {
         // mirroring the game writer and avoiding extra blocks on repeat imports.
         if !self.dirty {
             out.extend_from_slice(&self.tail);
+        }
+        if !self.encrypted {
+            return Ok(out);
         }
         let pad = (16 - (out.len() % 16)) % 16;
         out.extend(std::iter::repeat(0u8).take(pad));
@@ -609,6 +636,14 @@ mod tests {
     // Build a tiny in-memory lcache the same way the game would, encrypt it, then
     // round-trip through decode/encode to prove the codec is byte-faithful.
     fn synthetic() -> Vec<u8> {
+        let mut plain = synthetic_plaintext();
+        let pad = (16 - (plain.len() % 16)) % 16;
+        plain.extend(std::iter::repeat(0u8).take(pad));
+        aes_ecb(&plain, true).unwrap()
+    }
+
+    // The ModKit build ships the same layout unencrypted and without padding.
+    fn synthetic_plaintext() -> Vec<u8> {
         fn fstr(s: &str) -> Vec<u8> {
             super::encode_fstring(s)
         }
@@ -630,10 +665,7 @@ mod tests {
                                                 // group 0 meta (empty key, no pairs)
         plain.extend_from_slice(&fstr(""));
         plain.extend_from_slice(&0i32.to_le_bytes());
-        // pad to 16
-        let pad = (16 - (plain.len() % 16)) % 16;
-        plain.extend(std::iter::repeat(0u8).take(pad));
-        aes_ecb(&plain, true).unwrap()
+        plain
     }
 
     #[test]
@@ -661,6 +693,27 @@ mod tests {
         let re = Lcache::decode(&lc.encode().unwrap()).unwrap();
         assert_eq!(re.export(false)["itfo_cheese"]["english"], "Stinky Cheese");
         // untouched value preserved
+        assert_eq!(re.export(false)["itfo_cheese"]["german"], "Käse");
+    }
+
+    #[test]
+    fn decodes_and_round_trips_an_unencrypted_cache() {
+        let plain = synthetic_plaintext();
+        assert_ne!(plain.len() % 16, 0, "fixture must exercise unpadded input");
+        let lc = Lcache::decode(&plain).unwrap();
+        assert_eq!(lc.export(false)["itfo_cheese"]["german"], "Käse");
+        assert_eq!(lc.encode().unwrap(), plain);
+    }
+
+    #[test]
+    fn edited_unencrypted_cache_stays_unencrypted() {
+        let mut lc = Lcache::decode(&synthetic_plaintext()).unwrap();
+        lc.set_value("itfo_cheese", "english", "Stinky Cheese")
+            .unwrap();
+        let out = lc.encode().unwrap();
+        assert!(super::is_plaintext(&out));
+        let re = Lcache::decode(&out).unwrap();
+        assert_eq!(re.export(false)["itfo_cheese"]["english"], "Stinky Cheese");
         assert_eq!(re.export(false)["itfo_cheese"]["german"], "Käse");
     }
 
