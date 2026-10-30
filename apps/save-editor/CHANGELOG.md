@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Reviving an NPC that has been dead for a while now brings it back. Before, only
+  a fresh kill could be revived: once the game had cleaned up the corpse, the
+  NPC stayed gone.
+
 ## [1.5.0] - 2026-09-24
 
 ### Added

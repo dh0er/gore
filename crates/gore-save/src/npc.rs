@@ -135,6 +135,14 @@ const LONG_TERM_MEMORY_MAP: &str = "LongTermMemoryByGlobalId";
 /// (almost certainly) the on-load "this NPC is dead" signal — see [`apply_revive`].
 const SAVED_INVENTORIES_MAP: &str = "m_SavedInventories";
 
+/// The `SetProperty<NameProperty>` (under `NPCCharacters`) of GlobalIds the game has
+/// taken out of the world for good: corpses cleaned up a while after death, and
+/// scripted despawns (`NPCState.RemoveFromWorld()`). An NPC listed here is not
+/// spawned on load, so a revive that clears every death marker but leaves the id in
+/// this set brings back an NPC that never appears. A fresh kill is not listed yet;
+/// an older one is — see [`apply_revive`].
+const REMOVED_FROM_WORLD_SET: &str = "GlobalIDsRemovedFromWorld";
+
 /// The memory-event tags that mark an NPC as **killed** (dead). Death is binary:
 /// only an actual kill counts — a merely *defeated* (knocked-out) NPC is ALIVE.
 /// HP is NOT the signal (a killed NPC keeps positive HP; a defeated one has HP 0).
@@ -1312,6 +1320,37 @@ fn plan_corpse_removal(root: &RootObject, id: &str) -> Result<Option<ReviveEdit>
     }))
 }
 
+/// Take NPC `id` off the game's [`REMOVED_FROM_WORLD_SET`], so it is spawned again
+/// on load. No-op (Ok) if the set is absent or does not list the NPC — a freshly
+/// killed NPC whose corpse the game has not cleaned up yet.
+///
+/// The set holds FNames, which compare case-insensitively; [`ContainerEdit::SetRemove`]
+/// matches the same way, so what is found here is what gets removed.
+fn plan_removed_from_world_removal(
+    root: &RootObject,
+    id: &str,
+) -> Result<Option<ReviveEdit>, CoreError> {
+    let Some((path, set_prop)) = find_property_by_name(root, REMOVED_FROM_WORLD_SET) else {
+        return Ok(None);
+    };
+    let PropertyValue::Set { elements, .. } = &set_prop.value else {
+        return Ok(None);
+    };
+    let listed = elements
+        .iter()
+        .any(|e| matches!(e, PropertyValue::Name(s) if s.eq_ignore_ascii_case(id)));
+    if !listed {
+        return Ok(None);
+    }
+    let segs = parse_path(&path)?;
+    let chain = resolve_chain(&root.properties, &segs)?;
+    Ok(Some(ReviveEdit::RemoveSetElement {
+        target: chain.target.clone(),
+        enclosing: chain.enclosing_size_fields,
+        value: id.to_string(),
+    }))
+}
+
 /// Strip the death loose tags ([`DEAD_LOOSE_TAGS`]: `State.Dead`,
 /// `State.KillBountyGranted`, `State.ExecutedBountyGranted`) from NPC `id`'s
 /// `LooseTagsByGlobalId[<id>]` GameplayTagContainer, in place. This is the CRITICAL
@@ -1710,7 +1749,7 @@ pub fn apply_relationship(
 
 /// One planned change to the payload, resolved from a single parse.
 ///
-/// Reviving touches four unrelated places in the save, and each used to re-parse
+/// Reviving touches five unrelated places in the save, and each used to re-parse
 /// because the one before it had spliced. It does not have to: a splice only moves
 /// bytes AFTER itself, so a change whose target sits earlier is untouched by one
 /// already applied. Planning every change against one parse and then applying them
@@ -1733,6 +1772,11 @@ enum ReviveEdit {
         enclosing: Vec<usize>,
         entry_index: usize,
     },
+    RemoveSetElement {
+        target: Property,
+        enclosing: Vec<usize>,
+        value: String,
+    },
     SetFloat {
         target: Property,
         value: f32,
@@ -1746,6 +1790,7 @@ impl ReviveEdit {
             ReviveEdit::RemoveArrayElements { target, .. }
             | ReviveEdit::RemoveMapEntries { target, .. }
             | ReviveEdit::RemoveTags { target, .. }
+            | ReviveEdit::RemoveSetElement { target, .. }
             | ReviveEdit::SetFloat { target, .. } => target,
         };
         target.value_offset..target.value_offset + target.value_size.max(1)
@@ -1785,6 +1830,16 @@ impl ReviveEdit {
                 DEAD_LOOSE_TAGS,
             )
             .map(|_| ()),
+            ReviveEdit::RemoveSetElement {
+                target,
+                enclosing,
+                value,
+            } => patch_container(
+                payload,
+                &target,
+                &enclosing,
+                &ContainerEdit::SetRemove(value),
+            ),
             ReviveEdit::SetFloat { target, value } => {
                 patch_scalar(payload, &target, ScalarValue::Float(value))
             }
@@ -1800,7 +1855,9 @@ impl ReviveEdit {
 /// 2. Strip the authoritative `State.Dead`, kill-bounty, and execution-bounty
 ///    loose tags while preserving unrelated tags.
 /// 3. Remove the NPC's lootable corpse entry from `m_SavedInventories`.
-/// 4. Restore Health to MaxHealth.
+/// 4. Take the NPC off `GlobalIDsRemovedFromWorld`. The game adds a dead NPC there
+///    once it cleans up the corpse; without this step only a fresh kill revives.
+/// 5. Restore Health to MaxHealth.
 ///
 /// Everything is planned against ONE parse and applied back to front, so no step
 /// reuses an offset a later one moved. An already-alive NPC with full HP is a clean
@@ -1810,7 +1867,8 @@ pub fn apply_revive(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
 
     // Everything reviving has to change, planned against this one parse: the
     // kill/defeat memory events across every owner, the authoritative death tags,
-    // the lootable-corpse entries, and the health restore.
+    // the lootable-corpse entries, the removed-from-world listing, and the health
+    // restore.
     let mut edits = Vec::new();
     for (owner_id, indices) in kill_memories_to_remove(&root, id) {
         let path = memorized_events_array_path(&root, &owner_id).ok_or_else(|| {
@@ -1827,11 +1885,12 @@ pub fn apply_revive(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
     }
     edits.extend(plan_dead_loose_tag_removal(&root, id)?);
     edits.extend(plan_corpse_removal(&root, id)?);
+    edits.extend(plan_removed_from_world_removal(&root, id)?);
     edits.extend(plan_hp_restore(&root, id)?);
     drop(root);
 
     // Back to front, so no change moves a target still to be applied. The ranges
-    // must not overlap for that to hold; they never do (the four live in different
+    // must not overlap for that to hold; they never do (the five live in different
     // maps), but a save that made them overlap would be corrupted silently, so it
     // is checked rather than assumed.
     edits.sort_by_key(|edit| core::cmp::Reverse(edit.range().start));
@@ -3156,6 +3215,43 @@ mod tests {
         assert_eq!(n.hp, Some(100.0), "HP restored to MaxHealth base");
 
         // Idempotent.
+        let snapshot = payload.clone();
+        apply_revive(&mut payload, id).unwrap();
+        assert_eq!(payload, snapshot, "second revive is a byte-identical no-op");
+    }
+
+    #[test]
+    fn revive_puts_a_cleaned_up_corpse_back_into_the_world() {
+        // A while after a kill the game removes the corpse and lists the NPC in
+        // GlobalIDsRemovedFromWorld; a listed NPC is never spawned on load. Revive
+        // must take it off that set (and only it), or an old kill stays gone.
+        let id = "Biter_OrcGraveyard-WP_OG_BITER_SPAWN_01-1";
+        let scripted = "OC_GRD_Guard31_283N-WP_OW_CONVOY_SPAWN";
+        let mut payload = private_root(&[
+            character_state_map(
+                "AttributesMap",
+                ATTRIBUTES_TYPE,
+                &[(id, wounded_attributes_entry_value(120.0, 0.0, 120.0))],
+            ),
+            loose_tags_map(&[(id, &["State.Dead", "State.KillBountyGranted"])]),
+            name_set_property(REMOVED_FROM_WORLD_SET, &[scripted, id]),
+        ]);
+
+        apply_revive(&mut payload, id).unwrap();
+
+        let root = parse_private_root(&payload).unwrap();
+        assert_eq!(root.consumed, payload.len(), "byte-clean re-parse");
+        let (_path, set) = find_property_by_name(&root, REMOVED_FROM_WORLD_SET).unwrap();
+        let PropertyValue::Set { elements, .. } = &set.value else {
+            panic!("{REMOVED_FROM_WORLD_SET} is no longer a set");
+        };
+        assert_eq!(
+            elements,
+            &vec![PropertyValue::Name(scripted.to_string())],
+            "only the revived NPC leaves the set"
+        );
+        assert!(!is_dead_by_loose_tags(&root, id));
+
         let snapshot = payload.clone();
         apply_revive(&mut payload, id).unwrap();
         assert_eq!(payload, snapshot, "second revive is a byte-identical no-op");
