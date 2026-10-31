@@ -2566,6 +2566,14 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'セーブフォルダーが見つかりません';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'フォルダー $path は存在しません。Gothic のセーブデータがあるフォルダーを選択してください。';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'セーブデータの検査に失敗しました: $details';
   }
@@ -3069,6 +3077,14 @@ class AppLocalizationsJa extends AppLocalizations {
   String get slotRepairNotOffered => 'このセーブデータでは修復を利用できません。';
 
   @override
+  String get npcWorldRepairTitle => '蘇生したNPCがワールドにいません';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'このエディターの旧バージョンは、NPCを蘇生してもワールドに戻していなかったため、ゲームはそのNPCを出現させません。対象：$count。修復は蘇生を完了させ、NPCを戻します。保存時にはいつも通りバックアップが作成されます。';
+  }
+
+  @override
   String get statisticsTitle => '統計';
 
   @override
@@ -3216,4 +3232,154 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get locksResetPending => '保留中の錠の変更を破棄';
+
+  @override
+  String get transferProgress => '進行状況を移す';
+
+  @override
+  String get transferProgressTooltip => '別のセーブデータから進行状況を移します。';
+
+  @override
+  String get transferProgressTitle => 'キャラクターの進行状況を移す';
+
+  @override
+  String get transferProgressDescription =>
+      '古いセーブから主人公の所持品、スキル、能力値を選択中のセーブへコピーします。クエスト、時間、場所、NPCの進行は移動先のままです。所持品は所持インベントリに追加され、スキルと能力値は両方のセーブが対応している場合にコピーされます。';
+
+  @override
+  String get transferFrom => '元';
+
+  @override
+  String get transferTo => '先';
+
+  @override
+  String get transferStarting => '転送を開始しています…';
+
+  @override
+  String get transferCheckingConflicts =>
+      '変更の競合を確認し、安全な書き込み手順に並べています。移動先のセーブはまだ書き込まれていません。';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return '読み込み $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return '書き込み $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return '段階: $stage · 合計: $total';
+  }
+
+  @override
+  String get transferCompleted => '転送が完了しました。';
+
+  @override
+  String get transferFailed => '転送に失敗しました。';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return '$durationで完了';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return '$durationで失敗';
+  }
+
+  @override
+  String get transferLessThanASecond => '1秒未満';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds秒';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes分$seconds秒';
+  }
+
+  @override
+  String get transferCalculatingPlan => '保存手順を計算しています…';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return '読み込みの残り約$duration。その後に書き込みの見積もり';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return '書き込み $current/$total · 残り時間は不明（書き込みの実績がまだありません）';
+  }
+
+  @override
+  String get transferEstimating => '残り時間を見積もっています…';
+
+  @override
+  String get transferLongerThanEstimated => '見積もりより時間がかかっています';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return '残り約$duration';
+  }
+
+  @override
+  String get transferReadingSourceAttributes => '元の能力値を読み込んでいます…';
+
+  @override
+  String get transferReadingDestinationAttributes => '先の能力値を読み込んでいます…';
+
+  @override
+  String get transferReadingSourceSkills => '元のスキルを読み込んでいます…';
+
+  @override
+  String get transferReadingDestinationSkills => '先のスキルを読み込んでいます…';
+
+  @override
+  String get transferReadingSourceInventory => '元の所持品を読み込んでいます…';
+
+  @override
+  String get transferReadingDestinationInventory => '先の所持品を読み込んでいます…';
+
+  @override
+  String get transferNoCompatibleChanges => '移せる変更が見つかりませんでした。';
+
+  @override
+  String get transferChooseDifferentSource => '別の元セーブを選んでください。';
+
+  @override
+  String get transferDestinationChanged => '選択中の移動先が変わりました。元のセーブを選び直してください。';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return '$count件の変更を準備しています…';
+  }
+
+  @override
+  String get transferPlanningSteps => '安全な保存手順を計画しています…';
+
+  @override
+  String get transferSavingDestination => '移動先を保存しています…';
+
+  @override
+  String get transferCountLimit => '移したアイテム数が対応上限を超えています。';
+
+  @override
+  String get transferPartiallySaved =>
+      '転送の一部はすでに保存されています。残りは保留のままです。保存すると転送が完了します。';
+
+  @override
+  String transferSkippedItems(String items) {
+    return '次のアイテムは転送できませんでした: $items';
+  }
+
+  @override
+  String get transferNoSkillData => 'いずれかのセーブに編集できる主人公のスキルがありません。';
+
+  @override
+  String get transferDone => '完了';
 }

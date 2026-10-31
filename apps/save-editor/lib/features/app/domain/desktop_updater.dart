@@ -56,12 +56,21 @@ bool _isInnoInstalled() {
 }
 
 /// True for the installed (Inno) build, which updates itself via WinSparkle.
-/// False for the portable zip, which checks-and-points-to-download instead.
-bool get isInstalledBuild => _innoInstalled ??= _isInnoInstalled();
+/// False for the portable zip and the Linux tarball, which check and point to
+/// the download instead.
+bool get isInstalledBuild =>
+    _innoInstalled ??= Platform.isWindows && _isInnoInstalled();
 
 /// True when this build can check for updates at all: any Windows release
-/// build, installed or portable. Dev runs stay update-free.
-bool get isUpdateCheckAvailable => kReleaseMode && Platform.isWindows;
+/// build, installed or portable, and the Linux release build. Dev runs stay
+/// update-free.
+///
+/// Linux reads the same appcast as Windows. Only its version is used, and the
+/// release workflow publishes the Windows and Linux builds of a version
+/// together before it updates the feed, so the advertised version always has
+/// a Linux download on its release page.
+bool get isUpdateCheckAvailable =>
+    kReleaseMode && (Platform.isWindows || Platform.isLinux);
 
 // --------------------------------------------------------------------------- #
 // WinSparkle path (installed build only): silent download + install + relaunch.

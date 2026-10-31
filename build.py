@@ -10,6 +10,7 @@ Usage:
     python build.py <project|all> build      [--debug|--release] [--run]
     python build.py <project>     run        [--debug|--release]  # build if missing, launch
     python build.py <project|all> dist                  # build + package
+    python build.py gore-save-editor dist               # on Linux: the only package, a tar.gz
     python build.py <project|all> installer             # dist + setup.exe
     python build.py <project|all> test
     python build.py <project>     release X.Y.Z <steps> [--dry-run]
@@ -28,8 +29,10 @@ Release steps (additive; pass at least one, or --all):
 Project names are the whole naming scheme. A project is its tag prefix and its
 artifact name: gore-cli, gore-save-editor, gore-mod-studio, gore-mod-manager
 produce tags <project>-vX.Y.Z, zips <project>-X.Y.Z-windows-x64.zip and
-installers <project>-X.Y.Z-setup.exe. The Release workflow matches the tag
-prefix and builds only that project.
+installers <project>-X.Y.Z-setup.exe. On Linux, `gore-save-editor dist` packs
+<project>-X.Y.Z-linux-<arch>.tar.gz instead; the other products are
+Windows-only. The Release workflow matches the tag prefix and builds only that
+project.
 
 Examples:
     python build.py all test
@@ -55,6 +58,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 import hashlib
 import os
+import platform
 import posixpath
 import re
 import shutil
@@ -62,6 +66,7 @@ import stat
 import struct
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 import zipfile
@@ -75,6 +80,10 @@ def _resolve_tool(env_var: str, names: list[str], fallback: Path) -> Path:
     override = os.environ.get(env_var)
     if override:
         return Path(override)
+    if sys.platform != "win32":
+        # WSL puts the Windows PATH (cargo.exe, flutter.bat) on the Linux PATH;
+        # a Linux build must pick the native tool, not the Windows one.
+        names = sorted(names, key=lambda name: name.endswith((".exe", ".bat")))
     for name in names:
         found = shutil.which(name)
         if found:
@@ -202,10 +211,20 @@ RELEASE_ORDER = [  # for `all`
 
 
 # Every shipped artifact is named after its project, which is also its tag
-# prefix: `<project>-vX.Y.Z` tags produce `<project>-X.Y.Z-windows-x64.zip` and
-# `<project>-X.Y.Z-setup.exe`. Keep these three in lockstep.
+# prefix: `<project>-vX.Y.Z` tags produce `<project>-X.Y.Z-windows-x64.zip`,
+# `<project>-X.Y.Z-setup.exe` and, for the Linux Save Editor,
+# `<project>-X.Y.Z-linux-<arch>.tar.gz`. Keep these in lockstep.
 def zip_basename(project: str, version: str) -> str:
     return f"{PROJECTS[project]['tag_prefix']}-{version}-windows-x64"
+
+
+def linux_arch() -> str:
+    """Flutter's name for the host CPU, which is also the archive's arch tag."""
+    return "arm64" if platform.machine().lower() in ("aarch64", "arm64") else "x64"
+
+
+def linux_archive_basename(project: str, version: str) -> str:
+    return f"{PROJECTS[project]['tag_prefix']}-{version}-linux-{linux_arch()}"
 
 
 def installer_basename(project: str, version: str) -> str:
@@ -1315,8 +1334,27 @@ def discard_line_ending_only_churn(project: str) -> None:
 # Build recipes                                                               #
 # --------------------------------------------------------------------------- #
 def flutter_build_dir(project: str, release: bool = True) -> Path:
+    if sys.platform == "linux" and project == "gore-save-editor":
+        mode = "release" if release else "debug"
+        # Flutter names the Linux output folder after the host CPU.
+        return pdir(project) / "build" / "linux" / linux_arch() / mode / "bundle"
     mode = "Release" if release else "Debug"
     return pdir(project) / "build" / "windows" / "x64" / "runner" / mode
+
+
+def core_library_filename(project: str) -> str:
+    core = PROJECTS[project]["core_dll"]
+    if sys.platform == "win32":
+        return f"{core}.dll"
+    if sys.platform == "darwin":
+        return f"lib{core}.dylib"
+    return f"lib{core}.so"
+
+
+def flutter_executable(project: str) -> str:
+    if sys.platform == "linux" and project == "gore-save-editor":
+        return "goresave"
+    return PROJECTS[project]["exe"]
 
 
 def dist_dir(project: str) -> Path:
@@ -2132,9 +2170,12 @@ def build_project(project: str, release: bool, dry: bool) -> None:
         _stage_standalone_compiler_bundle(project, host_dir, dry=dry)
         return
     # flutter app: build native cdylib first, then the app, then bundle the dll.
+    if sys.platform == "linux" and project != "gore-save-editor":
+        raise SystemExit(f"{project} does not support Linux yet")
     build_core_dll(project, release=release, dry=dry)
 
-    flutter_cmd = [FLUTTER, "build", "windows", f"--{mode}"]
+    flutter_target = "linux" if sys.platform == "linux" else "windows"
+    flutter_cmd = [FLUTTER, "build", flutter_target, f"--{mode}"]
     # Every Flutter app's About dialog reads GIT_SHA (String.fromEnvironment, defaultValue 'dev').
     # Only rust projects returned early above, so every project reaching here is a Flutter app —
     # supply the SHA to all of them, or released mod-studio / mod-manager binaries show 'dev'.
@@ -2157,7 +2198,7 @@ def build_project(project: str, release: bool, dry: bool) -> None:
 def runnable_exe(project: str, release: bool) -> Path:
     cfg = PROJECTS[project]
     if cfg["kind"] == "flutter":
-        return flutter_build_dir(project, release) / cfg["exe"]
+        return flutter_build_dir(project, release) / flutter_executable(project)
     if cfg["kind"] == "rust-bin":
         return target_dir(release) / f"{cfg['bin']}.exe"
     raise SystemExit(f"{project} is not runnable")
@@ -2181,7 +2222,7 @@ def build_core_dll(project: str, release: bool, dry: bool = False) -> Path:
         dry=dry,
         extra_env=_standalone_compiler_build_env(project, dry=dry),
     )
-    src = target_dir(release) / f"{cfg['core_dll']}.dll"
+    src = target_dir(release) / core_library_filename(project)
     if not dry:
         _verify_host_embedded_standalone_compiler_catalog(project, src, dry=False)
     return src
@@ -2198,14 +2239,14 @@ def stage_core_dll(project: str, release: bool) -> Path:
     rel = flutter_build_dir(project, release)
     if not rel.exists():
         raise SystemExit(f"missing flutter output: {rel}")
-    dll = f"{cfg['core_dll']}.dll"
-    src = target_dir(release) / dll
+    library = core_library_filename(project)
+    src = target_dir(release) / library
     if not src.exists():
         raise SystemExit(f"missing native artifact: {src}")
-    shutil.copy2(src, rel / dll)
-    _verify_host_embedded_standalone_compiler_catalog(project, rel / dll, dry=False)
-    print(f"copied {dll} -> {rel / dll}")
-    return rel / dll
+    shutil.copy2(src, rel / library)
+    _verify_host_embedded_standalone_compiler_catalog(project, rel / library, dry=False)
+    print(f"copied {library} -> {rel / library}")
+    return rel / library
 
 
 def run_project(project: str, release: bool) -> None:
@@ -2237,11 +2278,77 @@ def run_project(project: str, release: bool) -> None:
     raise SystemExit(completed.returncode)
 
 
+def _tar_member_normaliser(executable: str):
+    """Owner and modes for the Linux tarball, independent of the packing host.
+
+    The CI runner's account means nothing on the user's machine, so members
+    extract as whoever unpacks them. Directories, the app executable and shared
+    libraries are 0755 and every other file 0644, whatever the packing
+    filesystem reported, so the app starts even when it dropped mode bits.
+    """
+
+    def normalise(info: tarfile.TarInfo) -> tarfile.TarInfo:
+        info.uid = info.gid = 0
+        info.uname = info.gname = ""
+        if info.isdir() or info.name == executable or info.name.endswith(".so"):
+            info.mode = 0o755
+        elif info.isfile():
+            info.mode = 0o644
+        return info
+
+    return normalise
+
+
+def _dist_linux_bundle(project: str, version: str, dist: Path, dry: bool) -> Path | None:
+    """Pack the Linux Flutter bundle as <project>-X.Y.Z-linux-<arch>.tar.gz.
+
+    The archive holds one top-level directory of the same name, so unpacking
+    it never spills into the current directory. Nothing is signed: Authenticode
+    is a Windows concept, and the tarball is trusted through the GitHub release
+    that serves it.
+    """
+    rel = flutter_release_dir(project)
+    top = linux_archive_basename(project, version)
+    archive = dist / f"{top}.tar.gz"
+    if dry:
+        print(f"[dry-run] would pack {rel} -> {archive}")
+        return None
+    if not rel.is_dir():
+        raise SystemExit(f"missing flutter output: {rel}")
+    with tempfile.TemporaryDirectory(prefix=".gore-package-", dir=dist) as scratch:
+        staging = Path(scratch) / top
+        shutil.copytree(rel, staging, symlinks=True)
+        for name in ("LICENSE", "THIRD_PARTY_LICENSES.md"):
+            source = ROOT / name
+            if source.exists():
+                shutil.copy2(source, staging / name)
+        exe = staging / flutter_executable(project)
+        if not exe.is_file():
+            raise SystemExit(f"Linux bundle has no executable {exe.name}")
+        core = staging / core_library_filename(project)
+        if not core.is_file():
+            raise SystemExit(f"Linux bundle is missing its native core {core.name}")
+        # Build beside the final path and swap it in, so a failed pack never
+        # leaves a truncated archive where the release step would pick it up.
+        candidate = Path(scratch) / archive.name
+        with tarfile.open(candidate, "w:gz") as tar:
+            tar.add(
+                staging,
+                arcname=top,
+                filter=_tar_member_normaliser(f"{top}/{exe.name}"),
+            )
+        os.replace(candidate, archive)
+    print(f"\npackaged: {archive}")
+    return archive
+
+
 def dist_project(project: str, dry: bool) -> Path | None:
-    """Release-build and package into dist/. Returns the zip path."""
+    """Release-build and package into dist/. Returns the archive path."""
     cfg = PROJECTS[project]
     if not cfg.get("releasable"):
         raise SystemExit(f"{project} is not releasable")
+    if sys.platform == "linux" and project != "gore-save-editor":
+        raise SystemExit(f"{project} has no Linux package; build it on Windows")
     build_project(project, release=True, dry=dry)
     # Drop any declared companion binaries (e.g. the `gore` CLI for mod-studio)
     # into the Release dir before it is packaged / handed to the installer.
@@ -2256,6 +2363,8 @@ def dist_project(project: str, dry: bool) -> Path | None:
     dist = dist_dir(project)
     if not dry:
         dist.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "linux":
+        return _dist_linux_bundle(project, version, dist, dry=dry)
     base = dist / zip_basename(project, version)
 
     if cfg["kind"] == "flutter":

@@ -612,7 +612,9 @@ pub fn apply_add_item(payload: &mut Vec<u8>, edit: &StockLineEdit) -> Result<(),
         &crate::properties::ContainerEdit::MapInsert { entry_bytes: entry },
     )?;
     let keys_after = stock_keys_after(&patched, edit.index, edit.map).map_err(|err| {
-        CoreError::Parse(format!("adding a trader stock line left the save unreadable: {err}"))
+        CoreError::Parse(format!(
+            "adding a trader stock line left the save unreadable: {err}"
+        ))
     })?;
     if !keys_after.iter().any(|k| k == &edit.path) {
         return Err(CoreError::Parse(
@@ -694,10 +696,7 @@ mod tests {
         };
         let mut p = prop(name, stock(pairs));
         p.type_name = "MapProperty".to_string().into();
-        p.descriptor.map = Some(Box::new((
-            inner("ObjectProperty"),
-            inner("IntProperty"),
-        )));
+        p.descriptor.map = Some(Box::new((inner("ObjectProperty"), inner("IntProperty"))));
         p
     }
 
@@ -1100,7 +1099,10 @@ mod tests {
         )
         .expect("add");
 
-        assert!(payload.len() > before_len, "an insert must grow the payload");
+        assert!(
+            payload.len() > before_len,
+            "an insert must grow the payload"
+        );
         let root = crate::properties::parse_private_root(&payload).expect("reparse");
         let detail = trader_detail(&root, index).expect("detail");
         assert_eq!(detail.items.len(), before_count + 1);
@@ -1130,7 +1132,9 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(matches!(err, CoreError::InvalidRequest(m) if m.contains("not a known item class")));
+        assert!(
+            matches!(err, CoreError::InvalidRequest(m) if m.contains("not a known item class"))
+        );
         assert_eq!(payload, before, "a rejected add must not touch the payload");
     }
 
@@ -1204,7 +1208,10 @@ mod tests {
         )
         .expect("remove");
 
-        assert!(payload.len() < before_len, "a removal must shrink the payload");
+        assert!(
+            payload.len() < before_len,
+            "a removal must shrink the payload"
+        );
         let root = crate::properties::parse_private_root(&payload).expect("reparse");
         let after = trader_detail(&root, index).expect("detail");
         assert_eq!(after.items.len(), before.items.len() - 1);
@@ -1264,7 +1271,10 @@ mod tests {
         )
         .expect("remove");
 
-        assert_eq!(payload, original, "add+remove must be byte-identical to a no-op");
+        assert_eq!(
+            payload, original,
+            "add+remove must be byte-identical to a no-op"
+        );
     }
 
     #[test]

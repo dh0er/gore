@@ -125,6 +125,23 @@ class ProductContract:
     artifact_verify_command: str | None = None
     appcast_command: str | None = None
     feed_command: str | None = None
+    # Raw `needs:` value. Only a product that waits for a companion build job
+    # (see LINUX_JOBS) lists more than the quality gate.
+    needs: str = "quality-gates"
+    # Artifact a companion build job uploaded; downloaded into dist/<product>
+    # right before the single publish step, so every platform ships together.
+    companion_artifact: str | None = None
+
+
+@dataclass(frozen=True)
+class LinuxBuildContract:
+    """A build-only job that hands its archive to a product's publish step."""
+
+    product: str
+    build_step: str
+    build_command: str
+    upload_name: str
+    upload_paths: str
 
 
 @dataclass(frozen=True)
@@ -210,6 +227,37 @@ APPCAST_KEYS: dict[str, AppcastKeyContract] = {
 }
 
 
+LINUX_RUNNER = "ubuntu-22.04"
+
+LINUX_DEPENDENCIES_COMMAND = (
+    "sudo apt-get update\n"
+    "sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev "
+    "libstdc++-12-dev"
+)
+
+# The Linux job builds with no signing credentials at all: signing is
+# Authenticode-only, and a build that cannot sign has no reason to see them.
+LINUX_JOB_ENV = {
+    "GORE_SIGN": '"0"',
+    "TRUSTED_SIGNING_ENDPOINT": '""',
+    "TRUSTED_SIGNING_ACCOUNT": '""',
+    "TRUSTED_SIGNING_PROFILE": '""',
+    "AZURE_TENANT_ID": '""',
+    "AZURE_CLIENT_ID": '""',
+    "AZURE_CLIENT_SECRET": '""',
+}
+
+LINUX_JOBS: dict[str, LinuxBuildContract] = {
+    "gore-save-editor-linux": LinuxBuildContract(
+        product="gore-save-editor",
+        build_step="Build Linux tarball",
+        build_command="python build.py gore-save-editor dist",
+        upload_name="gore-save-editor-linux-x64",
+        upload_paths="dist/gore-save-editor/*.tar.gz",
+    ),
+}
+
+
 PRODUCTS: dict[str, ProductContract] = {
     "gore-save-editor": ProductContract(
         tag_prefix="gore-save-editor-v",
@@ -230,6 +278,7 @@ PRODUCTS: dict[str, ProductContract] = {
         publish_files=(
             "dist/gore-save-editor/*.zip\n"
             "dist/gore-save-editor/*.exe\n"
+            "dist/gore-save-editor/*.tar.gz\n"
             "dist/gore-save-editor/appcast-windows.xml"
         ),
         publish_body="dist/gore-save-editor/RELEASE_NOTES.md",
@@ -254,6 +303,8 @@ PRODUCTS: dict[str, ProductContract] = {
             "gh release upload gore-save-editor-appcast `\n"
             "  dist/gore-save-editor/appcast-windows.xml --clobber"
         ),
+        needs="[quality-gates, gore-save-editor-linux]",
+        companion_artifact="gore-save-editor-linux-x64",
     ),
     "gore-mod-studio": ProductContract(
         tag_prefix="gore-mod-studio-v",
@@ -900,6 +951,9 @@ def _validate_release_step_allowlist(
     if contract.artifact_verify_command is not None:
         build_index = expected_order_list.index(f"name:{contract.build_step}")
         expected_order_list.insert(build_index + 1, "name:Verify release artifacts")
+    if contract.companion_artifact is not None:
+        publish_index = expected_order_list.index("name:Publish GitHub release")
+        expected_order_list.insert(publish_index, "name:Download Linux build artifact")
     expected_order = tuple(expected_order_list)
     actual_order = tuple(_step_identity(step, context) for step in steps)
     if actual_order != expected_order:
@@ -1068,6 +1122,41 @@ def _validate_product_steps(
     if len(upload_like) != 1 or (upload is not None and upload_like[0] is not upload):
         problems.append(f"{context}: unexpected or duplicate artifact upload")
 
+    download_like = [
+        step
+        for step in steps
+        if (uses := step.fields.get("uses")) is not None
+        and "actions/download-artifact@" in _scalar(uses, context)
+    ]
+    if contract.companion_artifact is None:
+        if download_like:
+            problems.append(f"{context}: unexpected artifact download")
+    else:
+        download = _named_step(steps, "Download Linux build artifact", context, problems)
+        if download is not None:
+            _expect_keys(
+                download.fields, {"name", "uses", "with"}, f"{context} download", problems
+            )
+            _expect_scalar(
+                download.fields,
+                "uses",
+                "actions/download-artifact@v4",
+                f"{context} download",
+                problems,
+            )
+            with_field = download.fields.get("with")
+            if with_field is not None:
+                _expect_scalar_map(
+                    with_field,
+                    {"name": contract.companion_artifact, "path": f"dist/{product}"},
+                    f"{context} download.with",
+                    problems,
+                )
+        if len(download_like) != 1 or (
+            download is not None and download_like[0] is not download
+        ):
+            problems.append(f"{context}: unexpected or duplicate artifact download")
+
     publish = _named_step(steps, "Publish GitHub release", context, problems)
     if publish is not None:
         _expect_keys(
@@ -1207,6 +1296,132 @@ def _validate_product_steps(
             problems.append(f"{context}: unexpected or duplicate appcast feed command")
 
 
+def _validate_linux_job(
+    job_name: str,
+    contract: LinuxBuildContract,
+    job: Field,
+    problems: list[str],
+) -> None:
+    context = f"release.jobs.{job_name}"
+    product = PRODUCTS[contract.product]
+    fields = _mapping(job, context)
+    _expect_keys(
+        fields, {"needs", "if", "runs-on", "permissions", "env", "steps"}, context, problems
+    )
+    needs = _required(fields, "needs", context, problems)
+    condition = _required(fields, "if", context, problems)
+    env = _required(fields, "env", context, problems)
+    steps_field = _required(fields, "steps", context, problems)
+    if needs is not None and _scalar(needs, context) != QUALITY_JOB:
+        problems.append(f"{context}: needs must be the scalar {QUALITY_JOB!r}")
+    if condition is not None:
+        actual_if = _normalise_space(_scalar(condition, context))
+        if actual_if != _expected_job_if(contract.product, product):
+            problems.append(
+                f"{context}: tag/dispatch product selector changed or weakened"
+            )
+    # The glibc floor of the shipped binaries is the runner's, so the image is
+    # pinned rather than following ubuntu-latest.
+    _expect_scalar(fields, "runs-on", LINUX_RUNNER, context, problems)
+    permissions = _required(fields, "permissions", context, problems)
+    if permissions is not None:
+        _expect_scalar_map(
+            permissions, {"contents": "read"}, f"{context}.permissions", problems
+        )
+    if env is not None:
+        _expect_scalar_map(env, LINUX_JOB_ENV, f"{context}.env", problems)
+    if steps_field is None:
+        return
+    steps_context = f"{context}.steps"
+    steps = _parse_steps(steps_field, steps_context)
+    expected_order = (
+        "uses:actions/checkout@v4",
+        "name:Resolve and verify version",
+        "uses:dtolnay/rust-toolchain@stable",
+        "uses:Swatinem/rust-cache@v2",
+        "uses:subosito/flutter-action@v2",
+        "name:Install Linux desktop build dependencies",
+        f"name:{contract.build_step}",
+        "name:Upload build artifact",
+    )
+    actual_order = tuple(_step_identity(step, steps_context) for step in steps)
+    if actual_order != expected_order:
+        problems.append(f"{steps_context}: exact step order changed ({actual_order!r})")
+        return
+    _expect_simple_step(
+        steps[0], {"uses": "actions/checkout@v4"}, f"{steps_context}.checkout", problems
+    )
+    _expect_simple_step(
+        steps[1],
+        {
+            "name": "Resolve and verify version",
+            "id": "version",
+            "shell": "pwsh",
+            "run": product.version_command,
+        },
+        f"{steps_context}.version",
+        problems,
+    )
+    _expect_simple_step(
+        steps[2], {"uses": "dtolnay/rust-toolchain@stable"}, f"{steps_context}.rust", problems
+    )
+    _expect_simple_step(
+        steps[3], {"uses": "Swatinem/rust-cache@v2"}, f"{steps_context}.cargo-cache", problems
+    )
+    _expect_keys(steps[4].fields, {"uses", "with"}, f"{steps_context}.flutter", problems)
+    flutter_with = steps[4].fields.get("with")
+    if flutter_with is not None:
+        _expect_scalar_map(
+            flutter_with,
+            {"flutter-version": "3.44.0", "channel": "stable", "cache": "true"},
+            f"{steps_context}.flutter.with",
+            problems,
+        )
+    _expect_simple_step(
+        steps[5],
+        {
+            "name": "Install Linux desktop build dependencies",
+            "run": LINUX_DEPENDENCIES_COMMAND,
+        },
+        f"{steps_context}.dependencies",
+        problems,
+    )
+    _expect_simple_step(
+        steps[6],
+        {"name": contract.build_step, "run": contract.build_command},
+        f"{steps_context}.build",
+        problems,
+    )
+    _expect_keys(
+        steps[7].fields, {"name", "uses", "with"}, f"{steps_context}.upload", problems
+    )
+    _expect_scalar(
+        steps[7].fields,
+        "uses",
+        "actions/upload-artifact@v4",
+        f"{steps_context}.upload",
+        problems,
+    )
+    upload_with = steps[7].fields.get("with")
+    if upload_with is not None:
+        _expect_scalar_map(
+            upload_with,
+            {
+                "name": contract.upload_name,
+                "retention-days": "3",
+                "path": contract.upload_paths,
+            },
+            f"{steps_context}.upload.with",
+            problems,
+        )
+    if product.companion_artifact != contract.upload_name:
+        problems.append(
+            f"{context}: {contract.product} does not download this job's artifact"
+        )
+    if job_name not in [name.strip() for name in product.needs.strip("[]").split(",")]:
+        problems.append(f"{context}: {contract.product} does not wait for this job")
+
+
 def _validate_release(root: dict[str, Field], problems: list[str]) -> None:
     _expect_keys(
         root, {"name", "on", "permissions", "env", "jobs"}, "release", problems
@@ -1238,8 +1453,13 @@ def _validate_release(root: dict[str, Field], problems: list[str]) -> None:
     if jobs is None:
         return
     job_fields = _mapping(jobs, "release.jobs")
-    expected_jobs = {QUALITY_JOB, *PRODUCTS}
+    expected_jobs = {QUALITY_JOB, *PRODUCTS, *LINUX_JOBS}
     _expect_keys(job_fields, expected_jobs, "release.jobs", problems)
+
+    for job_name, linux_contract in LINUX_JOBS.items():
+        linux_job = job_fields.get(job_name)
+        if linux_job is not None:
+            _validate_linux_job(job_name, linux_contract, linux_job, problems)
 
     quality = job_fields.get(QUALITY_JOB)
     if quality is not None:
@@ -1277,8 +1497,8 @@ def _validate_release(root: dict[str, Field], problems: list[str]) -> None:
         condition = _required(fields, "if", context, problems)
         runs_on = _required(fields, "runs-on", context, problems)
         steps_field = _required(fields, "steps", context, problems)
-        if needs is not None and _scalar(needs, context) != QUALITY_JOB:
-            problems.append(f"{context}: needs must be the scalar {QUALITY_JOB!r}")
+        if needs is not None and _scalar(needs, context) != contract.needs:
+            problems.append(f"{context}: needs must be {contract.needs!r}")
         if condition is not None:
             actual_if = _normalise_space(_scalar(condition, context))
             expected_if = _expected_job_if(product, contract)

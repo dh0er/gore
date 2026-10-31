@@ -6,7 +6,24 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.5.1] - 2026-10-31
+
+### Added
+
+- The Save Editor is now also released for Linux, as a
+  `gore-save-editor-<version>-linux-x64.tar.gz` download. It finds Steam Proton
+  savegames on its own and lets you know when a new version is out.
+- Character progress can now be transferred from another savegame. The Hero's
+  items, skills and attributes are copied into the selected save, while quests,
+  time, location and NPC progress stay as they are there.
+
+### Fixed
+
+- Reviving an NPC that has been dead for a while now brings it back. Before, only
+  a fresh kill could be revived: once the game had cleaned up the corpse, the
+  NPC stayed gone.
+- NPCs that an older version revived but that never came back are now detected
+  when a savegame is opened, and the overview offers to repair them.
 
 ## [1.5.0] - 2026-09-24
 

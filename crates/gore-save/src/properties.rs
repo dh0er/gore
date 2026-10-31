@@ -593,6 +593,8 @@ pub struct PropertyHit {
     /// True for values `private.typed.setValue` can patch: fixed-size scalars
     /// and Str/Name strings (length-changing, size chain fixed up on write).
     pub editable: bool,
+    /// Lossless value accepted by `private.typed.setValue` when editable.
+    pub edit_value: Option<Value>,
 }
 
 /// One node in the exhaustive property browser. Unlike [`PropertyHit`], this
@@ -891,12 +893,14 @@ fn walk_search<'a>(
         // Leaf value?
         if is_scalar(&p.value) {
             if ctx.matches(path) {
+                let editable = addressable && scalar_editable(&p.value);
                 ctx.record(|| PropertyHit {
                     path: path.to_owned_segments(),
                     display: path.display.clone(),
                     type_name: p.type_name.to_string(),
                     value_display: scalar_display(&p.value).unwrap_or_default(),
-                    editable: addressable && scalar_editable(&p.value),
+                    editable,
+                    edit_value: editable.then(|| browse_value_json(&p.value)).flatten(),
                 });
             }
         } else {
@@ -977,6 +981,7 @@ fn descend_value<'a>(
                 // paths ending on a container element, so such scalars are not
                 // editable even though they are fixed-size.
                 editable: false,
+                edit_value: None,
             });
         }
     } else {
@@ -2127,6 +2132,9 @@ pub enum ContainerEdit {
     /// type; the caller is responsible for that (it is validated by the
     /// re-parse the caller performs afterwards).
     ArrayInsertBytes(Vec<u8>),
+    /// Append several concatenated, schema-valid elements to an ArrayProperty
+    /// in one splice pass. `count` is the number of encoded elements in `bytes`.
+    ArrayInsertManyBytes { bytes: Vec<u8>, count: usize },
     /// Append a pre-built (inline key ++ inline value) entry to a MapProperty.
     /// The bytes must be schema-valid for this map's key/value descriptors; the
     /// caller validates via the re-parse it performs afterwards.
@@ -2267,11 +2275,25 @@ pub fn patch_container(
             let end = target.value_offset + target.value_size;
             (Vec::new(), end, bytes.clone(), 1)
         }
+        ContainerEdit::ArrayInsertManyBytes { bytes, count } => {
+            require_kind(ContainerKind::Array, "arrayInsertManyBytes")?;
+            if *count == 0 {
+                return Err(CoreError::InvalidRequest(
+                    "arrayInsertManyBytes requires at least one element".into(),
+                ));
+            }
+            let end = target.value_offset + target.value_size;
+            let count = i64::try_from(*count)
+                .map_err(|_| CoreError::InvalidRequest("too many array elements".into()))?;
+            (Vec::new(), end, bytes.clone(), count)
+        }
         ContainerEdit::ArrayRemoveMany(indices) => {
             require_kind(ContainerKind::Array, "arrayRemoveMany")?;
             let layout = layout.as_ref().expect("array edit resolves a layout");
             let ranges = distinct_element_ranges(indices, &layout.element_ranges, layout.count)?;
-            let start = ranges.first().map_or(target.value_offset, |range| range.start);
+            let start = ranges
+                .first()
+                .map_or(target.value_offset, |range| range.start);
             let removed = ranges.len() as i64;
             (ranges, start, Vec::new(), -removed)
         }
@@ -2284,7 +2306,9 @@ pub fn patch_container(
             }
             let map = map_layout(payload, target)?;
             let ranges = distinct_element_ranges(indices, &map.entry_ranges, map.count)?;
-            let start = ranges.first().map_or(target.value_offset, |range| range.start);
+            let start = ranges
+                .first()
+                .map_or(target.value_offset, |range| range.start);
             let removed = ranges.len() as i64;
             (ranges, start, Vec::new(), -removed)
         }
@@ -2400,8 +2424,6 @@ fn distinct_element_ranges(
         })
         .collect()
 }
-
-
 
 /// Add or remove one tag in a native `GameplayTagContainer` value, applied by
 /// [`patch_tag_container`].

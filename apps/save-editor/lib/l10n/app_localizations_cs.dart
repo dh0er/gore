@@ -2665,6 +2665,14 @@ class AppLocalizationsCs extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Složka s uloženými hrami nenalezena';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'Složka $path neexistuje. Vyberte složku, ve které jsou uložené hry Gothic.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Nepodařilo se zkontrolovat uloženou hru: $details';
   }
@@ -3170,6 +3178,14 @@ class AppLocalizationsCs extends AppLocalizations {
       'Oprava není pro tuto uloženou hru k dispozici.';
 
   @override
+  String get npcWorldRepairTitle => 'Oživené postavy NPC chybí ve světě';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'Starší verze tohoto editoru oživila postavy NPC, aniž by je vrátila do světa, takže je hra nikdy nevytvoří. Týká se: $count. Oprava dokončí oživení a vrátí je zpět. Při uložení se jako vždy vytvoří záloha.';
+  }
+
+  @override
   String get statisticsTitle => 'Statistiky';
 
   @override
@@ -3319,4 +3335,158 @@ class AppLocalizationsCs extends AppLocalizations {
 
   @override
   String get locksResetPending => 'Zahodit čekající změny zámků';
+
+  @override
+  String get transferProgress => 'Přenést postup';
+
+  @override
+  String get transferProgressTooltip => 'Přenést postup z jiného uložení.';
+
+  @override
+  String get transferProgressTitle => 'Přenést postup postavy';
+
+  @override
+  String get transferProgressDescription =>
+      'Zkopíruje předměty, dovednosti a atributy hrdiny ze staršího uložení do vybraného. Úkoly, čas, místo a postup NPC zůstanou v cíli beze změny. Předměty se přidají do neseného inventáře; dovednosti a atributy se zkopírují tam, kde je podporují obě uložení.';
+
+  @override
+  String get transferFrom => 'Z';
+
+  @override
+  String get transferTo => 'Do';
+
+  @override
+  String get transferStarting => 'Přenos se spouští…';
+
+  @override
+  String get transferCheckingConflicts =>
+      'Změny se kontrolují na konflikty a řadí do bezpečných kroků zápisu. Cílové uložení se zatím nezapisuje.';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return 'Čtení $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return 'Zápisy $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return 'Krok: $stage · Celkem: $total';
+  }
+
+  @override
+  String get transferCompleted => 'Přenos dokončen.';
+
+  @override
+  String get transferFailed => 'Přenos se nezdařil.';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return 'Dokončeno za $duration';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return 'Selhalo za $duration';
+  }
+
+  @override
+  String get transferLessThanASecond => 'méně než sekundu';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds s';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes min $seconds s';
+  }
+
+  @override
+  String get transferCalculatingPlan => 'Počítá se plán uložení…';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return 'Čtení zbývá asi $duration; odhad zápisu bude následovat';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return 'Zápis $current/$total · odhad času není k dispozici (zatím žádný vzorek zápisu)';
+  }
+
+  @override
+  String get transferEstimating => 'Odhaduje se zbývající čas…';
+
+  @override
+  String get transferLongerThanEstimated => 'Trvá déle než odhad';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return 'Zbývá asi $duration';
+  }
+
+  @override
+  String get transferReadingSourceAttributes => 'Čtení zdrojových atributů…';
+
+  @override
+  String get transferReadingDestinationAttributes => 'Čtení cílových atributů…';
+
+  @override
+  String get transferReadingSourceSkills => 'Čtení zdrojových dovedností…';
+
+  @override
+  String get transferReadingDestinationSkills => 'Čtení cílových dovedností…';
+
+  @override
+  String get transferReadingSourceInventory => 'Čtení zdrojového inventáře…';
+
+  @override
+  String get transferReadingDestinationInventory => 'Čtení cílového inventáře…';
+
+  @override
+  String get transferNoCompatibleChanges =>
+      'Nebyly nalezeny žádné přenositelné změny.';
+
+  @override
+  String get transferChooseDifferentSource => 'Vyberte jiné zdrojové uložení.';
+
+  @override
+  String get transferDestinationChanged =>
+      'Vybraný cíl se změnil. Zvolte zdroj znovu.';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return 'Připravuje se $count změn…';
+  }
+
+  @override
+  String get transferPlanningSteps => 'Plánují se bezpečné kroky uložení…';
+
+  @override
+  String get transferSavingDestination => 'Ukládá se cíl…';
+
+  @override
+  String get transferCountLimit =>
+      'Přenesený počet předmětů překračuje podporovaný limit.';
+
+  @override
+  String get transferPartiallySaved =>
+      'Část přenosu je již uložena. Zbytek zůstává připraven; uložením přenos dokončíte.';
+
+  @override
+  String transferSkippedItems(String items) {
+    return 'Tyto předměty nebylo možné přenést: $items';
+  }
+
+  @override
+  String get transferNoSkillData =>
+      'V jednom z uložení nebyla nalezena upravitelná data dovedností hrdiny.';
+
+  @override
+  String get transferDone => 'Hotovo';
 }

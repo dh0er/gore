@@ -5464,6 +5464,7 @@ fn attribute_writes_resolve_exact_sets_and_reject_ambiguous_hero_and_npc_targets
                 };
                 expected_edits.push(json!({"path":"private.typed.setValue","value":{"path":row["path"],"value":value}}));
                 row["value"] = json!(value.to_string());
+                row["editValue"] = json!(value);
             } else {
                 for (field, path, value) in
                     [("base", "basePath", 0.5), ("current", "currentPath", 0.75)]

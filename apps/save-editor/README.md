@@ -79,15 +79,31 @@ Download `gore-save-editor-<version>-setup.exe` from the
 The app checks for updates on startup and prompts you when a new version is
 available.
 
-A portable zip is also attached to each release; the portable build does not
-auto-update.
+A portable zip is also attached to each release. The portable build does not
+replace itself: when a new version is out it opens the release page, and you
+replace your files with the new download.
+
+On Linux, download `gore-save-editor-<version>-linux-x64.tar.gz` from the same
+release, unpack it anywhere you can write to, and start `goresave` inside the
+unpacked folder:
+
+```sh
+tar -xzf gore-save-editor-<version>-linux-x64.tar.gz
+./gore-save-editor-<version>-linux-x64/goresave
+```
+
+It needs GTK 3 and glibc 2.34 or newer, which current desktop distributions
+and SteamOS already ship. Like
+the portable zip, it checks for new versions and opens the release page
+instead of updating itself.
 
 ## Requirements
 
-- Windows 10 or newer.
+- Windows 10 or newer for the released installer and portable builds.
+- Linux x64 for the released tarball and for running from source.
 - Rust toolchain.
-- Flutter with Windows desktop support.
-- Visual Studio 2022 with Desktop development with C++.
+- Flutter with Windows desktop support on Windows, or Linux desktop support on Linux.
+- Visual Studio 2022 with Desktop development with C++ for Windows builds.
 
 The local development setup used for this repository is Flutter 3.44.0, Dart
 3.12.0, and Rust 1.96.0.
@@ -105,11 +121,26 @@ python test.py
 ```
 
 Run the Flutter app (build the native core first so the loader's upward search
-finds `gore_save.dll` under the workspace `target/`):
+finds the native library under the workspace `target/`):
 
 ```powershell
 cargo build -p gore-save
 flutter run -d windows
+```
+
+On Linux, install Flutter's Linux desktop dependencies, then run the Linux
+target:
+
+```sh
+sudo apt install clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev
+cargo build -p gore-save
+flutter run -d linux
+```
+
+The Linux desktop runner is also available through the repository build helper:
+
+```sh
+python ../../build.py gore-save-editor run --debug
 ```
 
 This library-only build needs no CLI compiler bundle or `development-cli`
@@ -124,6 +155,9 @@ python build.py gore-save-editor dist
 ```
 
 Add `installer` instead of `dist` to also compile the Inno Setup installer.
+
+On Linux, the same `dist` command builds the native `libgore_save.so` and the
+Flutter Linux bundle, and packs `dist/gore-save-editor/gore-save-editor-<version>-linux-x64.tar.gz`.
 
 ## Safety
 

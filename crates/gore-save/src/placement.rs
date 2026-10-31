@@ -364,7 +364,9 @@ pub fn parse_records(value: &Value) -> Result<Vec<(String, PlacementNote)>, Core
                 CoreError::InvalidRequest("placementNotes entry needs note".to_string())
             })?;
             let note: PlacementNote = serde_json::from_value(note.clone()).map_err(|err| {
-                CoreError::InvalidRequest(format!("placementNotes entry for {npc} is invalid: {err}"))
+                CoreError::InvalidRequest(format!(
+                    "placementNotes entry for {npc} is invalid: {err}"
+                ))
             })?;
             // No finite-coordinate guard here on purpose: `serde_json` refuses
             // `Infinity`/`NaN` while parsing the request, so a non-finite
@@ -385,14 +387,11 @@ pub fn parse_clears(value: &Value) -> Result<Vec<String>, CoreError> {
     entries
         .iter()
         .map(|entry| {
-            entry
-                .as_str()
-                .map(str::to_string)
-                .ok_or_else(|| {
-                    CoreError::InvalidRequest(
-                        "clearPlacementNotes entries must be NPC GlobalId strings".to_string(),
-                    )
-                })
+            entry.as_str().map(str::to_string).ok_or_else(|| {
+                CoreError::InvalidRequest(
+                    "clearPlacementNotes entries must be NPC GlobalId strings".to_string(),
+                )
+            })
         })
         .collect()
 }
@@ -409,9 +408,7 @@ mod tests {
             original_routine_class: Some("/Script/Angelscript.DailyRoutine_A_Start".to_string()),
             written_location: [4.0, 5.0, 6.0],
             written_rotation: None,
-            written_routine_class: Some(
-                "/Script/Angelscript.DailyRoutine_Empty".to_string(),
-            ),
+            written_routine_class: Some("/Script/Angelscript.DailyRoutine_Empty".to_string()),
         }
     }
 
@@ -540,7 +537,10 @@ mod tests {
         clear(&save, &["Npc-A".to_string()]).unwrap();
         snapshot_backup(&save, &inside).unwrap();
 
-        assert_eq!(read_notes_for(&save, &beside_key).get("Npc-A"), Some(&note()));
+        assert_eq!(
+            read_notes_for(&save, &beside_key).get("Npc-A"),
+            Some(&note())
+        );
         assert!(read_notes_for(&save, &inside_key).is_empty());
     }
 
@@ -684,7 +684,8 @@ mod tests {
         let missing_note = serde_json::json!([{ "npc": "Npc-A" }]);
         assert!(parse_records(&missing_note).is_err());
 
-        let bad_shape = serde_json::json!([{ "npc": "Npc-A", "note": { "written_location": [4.0] } }]);
+        let bad_shape =
+            serde_json::json!([{ "npc": "Npc-A", "note": { "written_location": [4.0] } }]);
         assert!(parse_records(&bad_shape).is_err());
 
         assert!(parse_records(&serde_json::json!("not an array")).is_err());

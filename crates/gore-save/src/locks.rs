@@ -651,21 +651,31 @@ mod tests {
                 .all(|name| { name != "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1351102996" })
         );
         let fence = leaf_aliases("AbandonedMine_Fence_Door");
-        assert!(fence.iter().any(|name| {
-            name == "FenceDoor_Abandoned_C_UAID_E89C256C6855633902_1078604137"
-        }));
+        assert!(
+            fence
+                .iter()
+                .any(|name| { name == "FenceDoor_Abandoned_C_UAID_E89C256C6855633902_1078604137" })
+        );
         let altar = leaf_aliases("SunkenTower_Door_02_Altar_A");
         assert!(altar.iter().any(|name| {
             name == "SunkenTower_Door_02_Altar_C_UAID_2CF05D5C3CF14B7E02_1407505779"
         }));
-        assert!(altar.iter().all(|name| name != "Sunken_Door_01_C_UAID_2CF05D5C3CF1EB7E02_1534383934"));
+        assert!(
+            altar
+                .iter()
+                .all(|name| name != "Sunken_Door_01_C_UAID_2CF05D5C3CF1EB7E02_1534383934")
+        );
         let cell_05 = leaf_aliases("OC_Prison_Dungeons_Cell_05_Door");
-        assert!(cell_05.iter().any(|name| {
-            name == "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1308812995"
-        }));
-        assert!(cell_05.iter().all(|name| {
-            name != "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1784882001"
-        }));
+        assert!(
+            cell_05
+                .iter()
+                .any(|name| { name == "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1308812995" })
+        );
+        assert!(
+            cell_05
+                .iter()
+                .all(|name| { name != "IO_OC_NormalDoor_C_UAID_2CF05D5C3CF171D501_1784882001" })
+        );
     }
 
     #[test]

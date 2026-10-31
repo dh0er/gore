@@ -2674,6 +2674,14 @@ class AppLocalizationsIt extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Cartella dei salvataggi non trovata';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'La cartella $path non esiste. Scegli la cartella che contiene i tuoi salvataggi di Gothic.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Impossibile esaminare il salvataggio: $details';
   }
@@ -3179,6 +3187,14 @@ class AppLocalizationsIt extends AppLocalizations {
       'La riparazione non è disponibile per questo salvataggio.';
 
   @override
+  String get npcWorldRepairTitle => 'PNG rianimati assenti dal mondo';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'Una versione precedente di questo editor ha rianimato dei PNG senza rimetterli nel mondo, quindi il gioco non li fa mai comparire. Interessati: $count. La riparazione completa la rianimazione e li riporta indietro. Al salvataggio viene creato un backup, come sempre.';
+  }
+
+  @override
   String get statisticsTitle => 'Statistiche';
 
   @override
@@ -3330,4 +3346,166 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get locksResetPending =>
       'Scarta le modifiche alle serrature in sospeso';
+
+  @override
+  String get transferProgress => 'Trasferisci progressi';
+
+  @override
+  String get transferProgressTooltip =>
+      'Trasferisci i progressi da un altro salvataggio.';
+
+  @override
+  String get transferProgressTitle => 'Trasferisci i progressi del personaggio';
+
+  @override
+  String get transferProgressDescription =>
+      'Copia oggetti, abilità e attributi dell\'eroe da un salvataggio più vecchio a quello selezionato. Missioni, tempo, luogo e progressi degli NPC restano quelli della destinazione. Gli oggetti vengono aggiunti all\'inventario trasportato; abilità e attributi vengono copiati dove entrambi i salvataggi li supportano.';
+
+  @override
+  String get transferFrom => 'Da';
+
+  @override
+  String get transferTo => 'A';
+
+  @override
+  String get transferStarting => 'Avvio del trasferimento…';
+
+  @override
+  String get transferCheckingConflicts =>
+      'Controllo dei conflitti e ordinamento delle modifiche in passaggi di scrittura sicuri. Il salvataggio di destinazione non viene ancora scritto.';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return 'Letture $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return 'Scritture $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return 'Fase: $stage · Totale: $total';
+  }
+
+  @override
+  String get transferCompleted => 'Trasferimento completato.';
+
+  @override
+  String get transferFailed => 'Trasferimento non riuscito.';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return 'Completato in $duration';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return 'Non riuscito in $duration';
+  }
+
+  @override
+  String get transferLessThanASecond => 'meno di un secondo';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds s';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes min $seconds s';
+  }
+
+  @override
+  String get transferCalculatingPlan => 'Calcolo del piano di salvataggio…';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return 'Letture: circa $duration rimanenti; poi la stima di scrittura';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return 'Scrittura $current/$total · tempo non disponibile (nessuna scrittura precedente)';
+  }
+
+  @override
+  String get transferEstimating => 'Stima del tempo rimanente…';
+
+  @override
+  String get transferLongerThanEstimated => 'Sta richiedendo più del previsto';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return 'Circa $duration rimanenti';
+  }
+
+  @override
+  String get transferReadingSourceAttributes =>
+      'Lettura degli attributi di origine…';
+
+  @override
+  String get transferReadingDestinationAttributes =>
+      'Lettura degli attributi di destinazione…';
+
+  @override
+  String get transferReadingSourceSkills => 'Lettura delle abilità di origine…';
+
+  @override
+  String get transferReadingDestinationSkills =>
+      'Lettura delle abilità di destinazione…';
+
+  @override
+  String get transferReadingSourceInventory =>
+      'Lettura dell\'inventario di origine…';
+
+  @override
+  String get transferReadingDestinationInventory =>
+      'Lettura dell\'inventario di destinazione…';
+
+  @override
+  String get transferNoCompatibleChanges =>
+      'Nessuna modifica compatibile da trasferire.';
+
+  @override
+  String get transferChooseDifferentSource =>
+      'Scegli un altro salvataggio di origine.';
+
+  @override
+  String get transferDestinationChanged =>
+      'La destinazione selezionata è cambiata. Scegli di nuovo l\'origine.';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return 'Preparazione di $count modifiche…';
+  }
+
+  @override
+  String get transferPlanningSteps =>
+      'Pianificazione di passaggi di salvataggio sicuri…';
+
+  @override
+  String get transferSavingDestination => 'Salvataggio della destinazione…';
+
+  @override
+  String get transferCountLimit =>
+      'La quantità trasferita supera il limite supportato.';
+
+  @override
+  String get transferPartiallySaved =>
+      'Parte del trasferimento è già salvata. Il resto rimane in sospeso; salva per completarlo.';
+
+  @override
+  String transferSkippedItems(String items) {
+    return 'Non è stato possibile trasferire questi oggetti: $items';
+  }
+
+  @override
+  String get transferNoSkillData =>
+      'In uno dei salvataggi non ci sono abilità dell\'eroe modificabili.';
+
+  @override
+  String get transferDone => 'Fatto';
 }

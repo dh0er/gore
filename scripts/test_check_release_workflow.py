@@ -10,6 +10,7 @@ import unittest
 from check_release_workflow import (
     APPCAST_KEYS,
     DOWNLOAD_TOOLS,
+    LINUX_JOBS,
     MANUAL_CI_GATE,
     PRODUCTS,
     PUBLISH_GUARD,
@@ -84,10 +85,10 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_release_tag_must_match_the_advertised_version(self) -> None:
         self.assertEqual(
-            validate_download_table(self.readme, "gore-save-editor-v1.5.0"), []
+            validate_download_table(self.readme, "gore-save-editor-v1.5.1"), []
         )
         self.assert_invalid(
-            self.readme, "gore-save-editor-v1.4.1", "the release tag is"
+            self.readme, "gore-save-editor-v1.5.0", "the release tag is"
         )
 
     def test_releasing_an_unreleased_product_requires_a_row(self) -> None:
@@ -290,28 +291,124 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         self.assert_invalid(release=unknown, mentions="unexpected=")
 
     def test_every_product_needs_exact_quality_job_scalar(self) -> None:
-        for product in PRODUCTS:
+        for product, contract in PRODUCTS.items():
+            needs = f"needs: {contract.needs}"
             with self.subTest(product=product, mutation="missing"):
-                missing = mutate_job(
-                    self.release, product, "    needs: quality-gates\n", ""
-                )
+                missing = mutate_job(self.release, product, f"    {needs}\n", "")
                 self.assert_invalid(release=missing, mentions="missing 'needs'")
             with self.subTest(product=product, mutation="wrong"):
                 wrong = mutate_job(
+                    self.release, product, needs, "needs: some-other-job"
+                )
+                self.assert_invalid(release=wrong, mentions="needs must be")
+            with self.subTest(product=product, mutation="list"):
+                changed = (
+                    "needs: [quality-gates]"
+                    if contract.needs == "quality-gates"
+                    else "needs: quality-gates"
+                )
+                sequence = mutate_job(self.release, product, needs, changed)
+                self.assert_invalid(release=sequence, mentions="needs must be")
+        for job in LINUX_JOBS:
+            with self.subTest(job=job):
+                wrong = mutate_job(
                     self.release,
-                    product,
+                    job,
                     "needs: quality-gates",
                     "needs: some-other-job",
                 )
                 self.assert_invalid(release=wrong, mentions="needs must be")
-            with self.subTest(product=product, mutation="list"):
-                sequence = mutate_job(
-                    self.release,
-                    product,
-                    "needs: quality-gates",
-                    "needs: [quality-gates]",
-                )
-                self.assert_invalid(release=sequence, mentions="needs must be")
+
+    def test_linux_job_is_build_only_and_handed_to_the_windows_publish(self) -> None:
+        job = "gore-save-editor-linux"
+        contract = LINUX_JOBS[job]
+        self.assert_invalid(release=remove_job(self.release, job), mentions="missing=")
+
+        mutations = {
+            "selector changed": (
+                "startsWith(github.ref_name, 'gore-save-editor-v')",
+                "startsWith(github.ref_name, 'gore-')",
+            ),
+            "runs-on: changed": ("runs-on: ubuntu-22.04", "runs-on: ubuntu-latest"),
+            "permissions.contents: changed": ("contents: read", "contents: write"),
+            "GORE_SIGN: changed": ('GORE_SIGN: "0"', 'GORE_SIGN: "1"'),
+            "AZURE_CLIENT_SECRET: changed": (
+                'AZURE_CLIENT_SECRET: ""',
+                "AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}",
+            ),
+            "build.run: changed": (
+                f"run: {contract.build_command}",
+                f"run: {contract.build_command} --changed",
+            ),
+            "upload.with.name: changed": (
+                f"name: {contract.upload_name}",
+                "name: changed-linux",
+            ),
+            "upload.with.path: changed": (
+                f"path: {contract.upload_paths}",
+                "path: dist/gore-save-editor/*",
+            ),
+            "dependencies.run: changed": ("libgtk-3-dev", "libgtk-4-dev"),
+            "exact step order changed": (
+                "      - name: Upload build artifact\n",
+                "      - name: Publish GitHub release\n"
+                f"        if: {PUBLISH_GUARD}\n"
+                "        uses: softprops/action-gh-release@v2\n\n"
+                "      - name: Upload build artifact\n",
+            ),
+        }
+        for mentions, (old, new) in mutations.items():
+            with self.subTest(mutation=mentions):
+                changed = mutate_job(self.release, job, old, new)
+                self.assert_invalid(release=changed, mentions=mentions)
+
+    def test_save_editor_publishes_the_linux_tarball_it_downloaded(self) -> None:
+        product = "gore-save-editor"
+        no_download = mutate_job(
+            self.release,
+            product,
+            "      - name: Download Linux build artifact\n"
+            "        uses: actions/download-artifact@v4\n"
+            "        with:\n"
+            "          name: gore-save-editor-linux-x64\n"
+            "          path: dist/gore-save-editor\n\n",
+            "",
+        )
+        self.assert_invalid(release=no_download, mentions="exact step order changed")
+
+        wrong_artifact = mutate_job(
+            self.release,
+            product,
+            "          name: gore-save-editor-linux-x64\n",
+            "          name: gore-save-editor-windows-x64\n",
+        )
+        self.assert_invalid(release=wrong_artifact, mentions="download.with.name: changed")
+
+        wrong_path = mutate_job(
+            self.release,
+            product,
+            "          path: dist/gore-save-editor\n",
+            "          path: dist\n",
+        )
+        self.assert_invalid(release=wrong_path, mentions="download.with.path: changed")
+
+        no_tarball = mutate_job(
+            self.release,
+            product,
+            "            dist/gore-save-editor/*.tar.gz\n",
+            "",
+        )
+        self.assert_invalid(release=no_tarball, mentions="published release files changed")
+
+        other_download = mutate_job(
+            self.release,
+            "gore-cli",
+            "      - name: Publish GitHub release\n",
+            "      - name: Download Linux build artifact\n"
+            "        uses: actions/download-artifact@v4\n\n"
+            "      - name: Publish GitHub release\n",
+        )
+        self.assert_invalid(release=other_download, mentions="unexpected artifact download")
 
     def test_product_selectors_require_push_tag_prefix_or_exact_dispatch(self) -> None:
         mutations = (

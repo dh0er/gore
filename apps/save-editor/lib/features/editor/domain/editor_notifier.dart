@@ -10,6 +10,7 @@ import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/glossary_models.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
+import 'package:goresave/features/editor/domain/item_catalog.dart';
 import 'package:goresave/features/editor/domain/locks_models.dart';
 import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/npc_attributes.dart';
@@ -104,6 +105,18 @@ bool _sameSavePath(String a, String b) {
       : normalizedA == normalizedB;
 }
 
+/// Whether [a] and [b] name the same file on disk, also when they are spelled
+/// differently, such as through a symlinked Steam folder. Paths that cannot be
+/// checked fall back to [_sameSavePath].
+bool _sameSaveFile(String a, String b) {
+  if (_sameSavePath(a, b)) return true;
+  try {
+    return FileSystemEntity.identicalSync(a, b);
+  } on FileSystemException {
+    return false;
+  }
+}
+
 List<String> _addSavePath(List<String> paths, String path) {
   if (paths.any((candidate) => _sameSavePath(candidate, path))) return paths;
   return List.unmodifiable([...paths, path]);
@@ -132,6 +145,28 @@ bool _sameDeletedSaveRecovery(DeletedSaveRecovery? a, DeletedSaveRecovery? b) {
       a.deletedPersistentSha1 == b.deletedPersistentSha1;
 }
 
+class TransferProgress {
+  const TransferProgress({
+    required this.stage,
+    required this.completedReads,
+    required this.totalReads,
+    required this.completedWrites,
+    required this.totalWrites,
+    required this.writePlanReady,
+    this.estimatedReadRemaining,
+    this.estimatedRemaining,
+  });
+
+  final String stage;
+  final int completedReads;
+  final int totalReads;
+  final int completedWrites;
+  final int totalWrites;
+  final bool writePlanReady;
+  final Duration? estimatedReadRemaining;
+  final Duration? estimatedRemaining;
+}
+
 class EditorState {
   EditorState({
     required this.saveDir,
@@ -149,6 +184,7 @@ class EditorState {
     this.inspection,
     this.codecStatus,
     this.error,
+    this.missingSaveDir,
     this.codecError,
     this.lastWriteMessage,
     this.deletedSaveRecovery,
@@ -260,6 +296,12 @@ class EditorState {
   final bool heroGlobalIdSettled;
 
   final String? error;
+
+  /// The configured save folder, when the last scan failed because it does
+  /// not exist. Kept apart from [error] so the UI words it in the current
+  /// language (it is usually first seen before the language is chosen) and can
+  /// offer the folder picker.
+  final String? missingSaveDir;
 
   /// Compression-dependent private writes are safe when the in-process codec
   /// reports it can compress. The always-on codec reports this directly, so
@@ -386,6 +428,7 @@ class EditorState {
     SaveInspection? inspection,
     CodecStatus? codecStatus,
     String? error,
+    Object? missingSaveDir = _unchanged,
     String? codecError,
     String? lastWriteMessage,
     Object? deletedSaveRecovery = _unchanged,
@@ -446,6 +489,11 @@ class EditorState {
       inspection: clearInspection ? null : inspection ?? this.inspection,
       codecStatus: clearCodecStatus ? null : codecStatus ?? this.codecStatus,
       error: clearError ? null : error ?? this.error,
+      missingSaveDir: clearError
+          ? null
+          : identical(missingSaveDir, _unchanged)
+          ? this.missingSaveDir
+          : missingSaveDir as String?,
       codecError: clearCodecError ? null : codecError ?? this.codecError,
       lastWriteMessage: clearWriteMessage
           ? null
@@ -482,9 +530,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
     EditorSettingsStore? settingsStore,
     AppLocalizations Function()? localizations,
     bool Function(String path)? fileExists,
+    bool Function(String path)? directoryExists,
+    Future<Set<String>> Function()? knownItemPaths,
   }) : _settingsStore = settingsStore ?? const NoopEditorSettingsStore(),
        _localizations = localizations ?? _defaultEnglishLocalizations,
        _fileExists = fileExists ?? ((path) => File(path).existsSync()),
+       _directoryExists =
+           directoryExists ?? ((path) => Directory(path).existsSync()),
+       _knownItemPaths = knownItemPaths ?? ItemCatalog.loadBundledPaths,
        super(
          _initialState(
            saveDir: saveDir,
@@ -500,6 +553,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
   final EditorSettingsStore _settingsStore;
   final AppLocalizations Function() _localizations;
   final bool Function(String path) _fileExists;
+  final bool Function(String path) _directoryExists;
+
+  /// Item classes the core accepts for a new inventory item.
+  final Future<Set<String>> Function() _knownItemPaths;
+  final List<Duration> _recentTransferReadDurations = [];
+  final List<Duration> _recentTransferWriteDurations = [];
 
   AppLocalizations get _l10n => _localizations();
 
@@ -509,6 +568,21 @@ class EditorNotifier extends StateNotifier<EditorState> {
     } catch (_) {
       return false;
     }
+  }
+
+  void _rememberTransferDuration(List<Duration> samples, Duration duration) {
+    if (duration <= Duration.zero) return;
+    if (samples.length == 5) samples.removeAt(0);
+    samples.add(duration);
+  }
+
+  Duration? _averageTransferDuration(List<Duration> samples) {
+    if (samples.isEmpty) return null;
+    final totalMicroseconds = samples.fold<int>(
+      0,
+      (total, sample) => total + sample.inMicroseconds,
+    );
+    return Duration(microseconds: totalMicroseconds ~/ samples.length);
   }
 
   /// Monotonic token identifying the latest in-flight load. Only the op holding
@@ -897,6 +971,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// The currently selected save path. Lets async UI callbacks read the live
   /// value without reaching into the protected `state`.
   String? get selectedPath => state.selectedPath;
+  String? get errorMessage => state.error;
+  String? get lastWriteMessage => state.lastWriteMessage;
 
   /// The pending edit registered under [key], or null. Lets UI surfaces
   /// rehydrate their local draft from a previously-registered per-actor entry
@@ -984,7 +1060,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   /// Dismiss the current error banner.
   void dismissError() {
-    if (state.error != null) state = state.copyWith(clearError: true);
+    if (state.error != null || state.missingSaveDir != null) {
+      state = state.copyWith(clearError: true);
+    }
   }
 
   /// Dismiss the current success/status banner.
@@ -1350,7 +1428,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
   ///
   /// Difficulty is NOT part of this path — it is a profile-level edit written
   /// directly by [writeProfileDifficulty] from the profile-header dialog.
-  Future<bool> saveAllPending() async {
+  Future<bool> saveAllPending({
+    void Function(int done, int total)? onProgress,
+  }) async {
     if (state.hasInvalidEdits) return false;
     if (state.pendingEdits.isEmpty) return true;
     if (state.isLoading || _planningSave) return false;
@@ -1456,6 +1536,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     ];
 
     final n = displayEditCount;
+    onProgress?.call(0, worklist.length);
     // Edit objects that committed bytes to disk, captured BEFORE the trailing
     // refresh() so we still converge even if that refresh fails. Tracked per-EDIT,
     // not per-key: one pending key can span several sequential sub-writes (e.g.
@@ -1485,6 +1566,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         for (var i = 0; i < worklist.length; i++) {
           final sub = worklist[i];
           Map<String, Object?> response;
+          final writeStopwatch = Stopwatch()..start();
           try {
             response = await _execute(
               'write_save',
@@ -1529,6 +1611,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
           state = state.copyWith(
             saveProgress: (done: i + 1, total: worklist.length),
           );
+          final writeDuration = writeStopwatch.elapsed;
+          _rememberTransferDuration(
+            _recentTransferWriteDurations,
+            writeDuration,
+          );
+          onProgress?.call(i + 1, worklist.length);
         }
         // Writes are done — drop the bar so the trailing refresh shows the plain
         // spinner (and a failure path shows its error, not a frozen bar).
@@ -1797,6 +1885,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       selectedPath: null,
       activeProfileId: null,
       selectedProfileId: null,
+      // Start the new folder like a fresh launch: its active profile, not the
+      // Other saves view an empty or missing previous folder fell back to.
+      otherSavesSelected: false,
       clearInspection: true,
       clearBackups: true,
     );
@@ -1820,12 +1911,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
       Map<String, Object?> response;
+      var scanThrew = false;
       try {
         response = await _execute(
           'scan_save_dir',
           payload: {'path': state.saveDir},
         );
       } catch (error) {
+        scanThrew = true;
         // Treat a thrown worker/native failure like a structured scan error so
         // detached files can still be restored and stale paths pruned.
         response = {
@@ -1834,12 +1927,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
         };
       }
       if (seq != _loadSeq) return;
+      final scanSucceeded = response['ok'] == true;
       String? scanError;
+      String? missingSaveDir;
       Map<String, Object?>? data;
       DeletedSaveRecovery? discoveredDeletedSaveRecovery;
       late final List<ProfileSummary> profiles;
       late final List<SaveSlot> saves;
-      if (response['ok'] == true) {
+      if (scanSucceeded) {
         data = (response['data'] as Map?)?.cast<String, Object?>();
         final rawRecovery = data?['deletedSaveRecovery'];
         if (rawRecovery is Map) {
@@ -1881,7 +1976,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
         // Detached saves are independent from the configured game save folder.
         // Keep the last successful folder snapshot, but still restore/prune the
         // persisted external list when that folder is missing or unreadable.
-        scanError = _l10n.editorScanSavesFailed(_errorDetails(response));
+        // The core's message is English-only; a missing folder is by far the
+        // most common cause, so recognise it here and let the UI word it. A
+        // thrown worker failure keeps its own message.
+        final saveDir = state.saveDir;
+        if (!scanThrew && saveDir.isNotEmpty && !_directoryExists(saveDir)) {
+          missingSaveDir = saveDir;
+        } else {
+          scanError = _l10n.editorScanSavesFailed(_errorDetails(response));
+        }
         profiles = List<ProfileSummary>.of(state.profiles);
         saves = state.saves.where((save) => !save.isExternal).toList();
       }
@@ -1966,7 +2069,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
       hiddenOtherSavePaths = keptHiddenOtherSavePaths;
       _sortByPlaytimeDesc(saves);
-      final activeProfileId = scanError == null
+      final activeProfileId = scanSucceeded
           ? (data?['activeProfileId'] as num?)?.toInt()
           : state.activeProfileId;
       // Keep the explicit profile selection if that profile still exists in
@@ -1982,7 +2085,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // token once a successful scan sees its target recreated; keeping it
       // would expose an undo action that can no longer restore safely.
       final retainedDeletedSaveRecovery =
-          scanError == null &&
+          scanSucceeded &&
               state.deletedSaveRecovery != null &&
               saves.any(
                 (save) =>
@@ -2071,6 +2174,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
       if (scanError != null && state.error == null) {
         state = state.copyWith(error: scanError);
+      }
+      // The missing folder is the root cause even when re-inspecting a stale
+      // selection failed too, and it has its own pane, so it always shows.
+      if (missingSaveDir != null) {
+        state = state.copyWith(missingSaveDir: missingSaveDir);
       }
     } catch (error) {
       // A thrown core call (e.g. invalid/null native JSON) must surface as an
@@ -2830,12 +2938,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
     int offset = 0,
     int limit = 50,
     String source = 'private',
+    String? savePath,
     bool includeNodes = false,
     String? kind,
     String? type,
     bool? editable,
   }) async {
-    final path = state.selectedPath;
+    final path = savePath ?? state.selectedPath;
     if (path == null) {
       return TypedSearchResult(error: _l10n.editorNoSaveSelected);
     }
@@ -3017,6 +3126,385 @@ class EditorNotifier extends StateNotifier<EditorState> {
     } catch (error) {
       return SkillsResult(error: _l10n.editorSkillsLoadFailed('$error'));
     }
+  }
+
+  /// Copy selected Hero progression from [sourcePath] into the selected save.
+  /// The source is read-only; every mutation is addressed against the pinned
+  /// destination and saved through the ordinary edit planner.
+  Future<bool> transferHeroProgress({
+    required String sourcePath,
+    String? targetPath,
+    void Function(TransferProgress progress)? onProgress,
+    bool items = true,
+    bool skills = true,
+    bool stats = true,
+  }) async {
+    final selectedPath = state.selectedPath;
+    final destinationPath = targetPath ?? selectedPath;
+    if (destinationPath == null || state.inspection == null) {
+      state = state.copyWith(error: _l10n.editorNoSaveSelected);
+      return false;
+    }
+    if (selectedPath == null || !_sameSavePath(selectedPath, destinationPath)) {
+      state = state.copyWith(
+        error: _l10n.editorSaveFailed(_l10n.transferDestinationChanged),
+      );
+      return false;
+    }
+    if (state.isLoading) {
+      state = state.copyWith(error: _l10n.editorOperationInProgress);
+      return false;
+    }
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(error: _l10n.editorUnsavedBeforeOpenFile);
+      return false;
+    }
+    if (_sameSaveFile(sourcePath, destinationPath)) {
+      state = state.copyWith(
+        error: _l10n.editorSaveFailed(_l10n.transferChooseDifferentSource),
+      );
+      return false;
+    }
+    if (!items && !skills && !stats) return false;
+
+    final edits = <Map<String, Object?>>[];
+    final skippedItems = <String>[];
+    final totalReads = (stats ? 2 : 0) + (skills ? 2 : 0) + (items ? 2 : 0);
+    var completedReads = 0;
+    var completedWrites = 0;
+    var totalWrites = 0;
+    var writePlanReady = false;
+
+    void reportProgress(String stage, {bool estimate = true}) {
+      final remainingReads = totalReads - completedReads;
+      final remainingWrites = totalWrites - completedWrites;
+      final averageRead = _averageTransferDuration(
+        _recentTransferReadDurations,
+      );
+      final averageWrite = _averageTransferDuration(
+        _recentTransferWriteDurations,
+      );
+      final estimatedReadRemaining = remainingReads == 0
+          ? null
+          : averageRead == null
+          ? null
+          : averageRead * remainingReads;
+      final remainingReadEstimate = remainingReads == 0
+          ? Duration.zero
+          : estimatedReadRemaining;
+      Duration? estimatedRemaining;
+      if (estimate &&
+          writePlanReady &&
+          remainingReadEstimate != null &&
+          (remainingWrites == 0 || averageWrite != null)) {
+        estimatedRemaining = remainingReadEstimate;
+        if (averageWrite != null) {
+          estimatedRemaining += averageWrite * remainingWrites;
+        }
+      }
+      onProgress?.call(
+        TransferProgress(
+          stage: stage,
+          completedReads: completedReads,
+          totalReads: totalReads,
+          completedWrites: completedWrites,
+          totalWrites: totalWrites,
+          writePlanReady: writePlanReady,
+          estimatedReadRemaining: estimatedReadRemaining,
+          estimatedRemaining: estimatedRemaining,
+        ),
+      );
+    }
+
+    Future<T> readAction<T>(String stage, Future<T> Function() action) async {
+      reportProgress(stage);
+      final stopwatch = Stopwatch()..start();
+      final result = await action();
+      _rememberTransferDuration(
+        _recentTransferReadDurations,
+        stopwatch.elapsed,
+      );
+      completedReads++;
+      reportProgress(stage);
+      return result;
+    }
+
+    state = state.copyWith(isLoading: true, clearError: true);
+    try {
+      if (stats) {
+        final sourceAttributes = await readAction(
+          _l10n.transferReadingSourceAttributes,
+          () => _loadTransferAttributeHits(sourcePath),
+        );
+        final destinationAttributes = await readAction(
+          _l10n.transferReadingDestinationAttributes,
+          () => _loadTransferAttributeHits(destinationPath),
+        );
+        final destinationByPath = {
+          for (final hit in destinationAttributes) hit.path.join('\u0000'): hit,
+        };
+        for (final hit in sourceAttributes) {
+          if (hit.path.length < 2 ||
+              !const {'BaseValue', 'CurrentValue'}.contains(hit.path.last)) {
+            continue;
+          }
+          final attributeSegment = hit.path[hit.path.length - 2];
+          final attributeId =
+              attributeSegment.startsWith('{') && attributeSegment.endsWith('}')
+              ? attributeSegment.substring(1, attributeSegment.length - 1)
+              : attributeSegment;
+          if (heroAttributeHidden(
+            attributeId,
+            heroAttributeSetClass(hit.path),
+          )) {
+            continue;
+          }
+          final target = destinationByPath[hit.path.join('\u0000')];
+          if (target == null ||
+              !target.editable ||
+              hit.type != target.type ||
+              hit.editValue == null ||
+              hit.value == target.value) {
+            continue;
+          }
+          edits.add({
+            'path': 'private.typed.setValue',
+            'value': {'path': hit.path, 'value': hit.editValue},
+          });
+        }
+      }
+
+      if (skills) {
+        final sourceSkills = await readAction(
+          _l10n.transferReadingSourceSkills,
+          () => _loadTransferSkills(sourcePath),
+        );
+        final destinationSkills = await readAction(
+          _l10n.transferReadingDestinationSkills,
+          () => _loadTransferSkills(destinationPath),
+        );
+        final destinationByBase = {
+          for (final skill in destinationSkills.skills) skill.base: skill,
+        };
+        for (final skill in sourceSkills.skills) {
+          final target = destinationByBase[skill.base];
+          if (target == null ||
+              target.current == skill.current ||
+              !target.options.any((option) => option.value == skill.current)) {
+            continue;
+          }
+          edits.add(
+            SkillSetEdit(base: skill.base, tier: skill.current).toEditJson(),
+          );
+        }
+      }
+
+      if (items) {
+        final sourceInventory = await readAction(
+          _l10n.transferReadingSourceInventory,
+          () => _loadTransferInventory(sourcePath),
+        );
+        // The inspection's inventory comes from the legacy scan and carries no
+        // slot ids, so a count edit built from it falls back to path-only
+        // matching and fails once two carried stacks share an item. The full
+        // list addresses each stack by container and slot.
+        final destinationInventory = await readAction(
+          _l10n.transferReadingDestinationInventory,
+          () => _loadTransferInventory(destinationPath),
+        );
+        final carriedItemsByPath = <String, PrivateInventoryItem>{};
+        final uncountedItemPaths = <String>{};
+        for (final item in destinationInventory.items) {
+          if (item.containerType != null &&
+              item.containerType != 'MainContainer') {
+            continue;
+          }
+          if (item.count == null) {
+            // No stored count for a count edit to change, and the core will
+            // not add a second stack of an item the inventory already holds.
+            uncountedItemPaths.add(item.path);
+          } else {
+            carriedItemsByPath.putIfAbsent(item.path, () => item);
+          }
+        }
+        final sourceCounts = <String, int>{};
+        for (final item in sourceInventory.items) {
+          final itemCount = item.count ?? 1;
+          if (item.path.isEmpty || itemCount <= 0) {
+            continue;
+          }
+          sourceCounts.update(
+            item.path,
+            (count) => count + itemCount,
+            ifAbsent: () => itemCount,
+          );
+        }
+        Set<String>? knownItemPaths;
+        try {
+          knownItemPaths = await _knownItemPaths();
+        } catch (_) {
+          // Without the catalog, leave the check to the core.
+        }
+        for (final entry in sourceCounts.entries) {
+          final carried = carriedItemsByPath[entry.key];
+          if (carried == null) {
+            // The core refuses to add an item class it does not know (a newer
+            // patch or a mod); one such item must not sink the whole transfer.
+            if (uncountedItemPaths.contains(entry.key) ||
+                (knownItemPaths != null &&
+                    !knownItemPaths.contains(entry.key))) {
+              skippedItems.add(entry.key.split('.').last);
+              continue;
+            }
+            // Several source stacks can add up past the save's 32-bit count.
+            if (entry.value > 0x7fffffff) {
+              throw StateError(_l10n.transferCountLimit);
+            }
+            edits.add(
+              InventoryItemAdd(
+                path: entry.key,
+                count: entry.value,
+              ).toEditJson(),
+            );
+            continue;
+          }
+          final nextCount = carried.count! + entry.value;
+          if (nextCount > 0x7fffffff) {
+            throw StateError(_l10n.transferCountLimit);
+          }
+          edits.add(
+            InventoryItemCountChange(
+              id: carried.id,
+              path: carried.path,
+              count: nextCount,
+              slotId: carried.slotId,
+              containerType: carried.containerType,
+            ).toEditJson(),
+          );
+        }
+      }
+    } catch (error) {
+      // The reads throw StateError with an already localized message; its
+      // toString() would prefix Dart's English "Bad state: ".
+      state = state.copyWith(
+        isLoading: false,
+        error: _l10n.editorSaveFailed(
+          error is StateError ? error.message : '$error',
+        ),
+      );
+      return false;
+    }
+
+    final selectedAfterReads = state.selectedPath;
+    if (selectedAfterReads == null ||
+        !_sameSavePath(selectedAfterReads, destinationPath)) {
+      state = state.copyWith(
+        isLoading: false,
+        error: _l10n.editorSaveFailed(_l10n.transferDestinationChanged),
+      );
+      return false;
+    }
+    state = state.copyWith(isLoading: false);
+    final skippedNote = skippedItems.isEmpty
+        ? null
+        : _l10n.transferSkippedItems(skippedItems.join(', '));
+    if (edits.isEmpty) {
+      state = state.copyWith(
+        error: [
+          _l10n.editorSaveFailed(_l10n.transferNoCompatibleChanges),
+          ?skippedNote,
+        ].join('\n'),
+      );
+      return false;
+    }
+    setPendingEdit('progressTransfer', PendingSaveEdit(edits: edits));
+    reportProgress(
+      _l10n.transferPreparingChanges(edits.length),
+      estimate: false,
+    );
+    reportProgress(_l10n.transferPlanningSteps, estimate: false);
+    final saved = await saveAllPending(
+      onProgress: (done, total) {
+        writePlanReady = true;
+        totalWrites = total;
+        completedWrites = done;
+        reportProgress(_l10n.transferSavingDestination, estimate: true);
+      },
+    );
+    if (saved) {
+      if (skippedNote != null) {
+        state = state.copyWith(
+          lastWriteMessage: [?state.lastWriteMessage, skippedNote].join('\n'),
+        );
+      }
+      return true;
+    }
+    final remaining = state.pendingEdits['progressTransfer'];
+    final partlyWritten =
+        remaining != null && remaining.edits.length < edits.length;
+    if (!partlyWritten) {
+      // Nothing was written. Leaving the edits staged would block a new
+      // transfer and let a later Save apply the one reported as failed.
+      clearPendingEdit('progressTransfer');
+    }
+    // An earlier sub-write is already on disk when partly written. Dropping
+    // the rest would leave the save half transferred, and a new transfer would
+    // add the written items again; keeping it lets Save finish the transfer.
+    state = state.copyWith(
+      error: [
+        ?state.error,
+        if (partlyWritten) _l10n.transferPartiallySaved,
+        ?skippedNote,
+      ].join('\n'),
+    );
+    return false;
+  }
+
+  Future<List<TypedPropertyHit>> _loadTransferAttributeHits(String path) async {
+    final hits = <TypedPropertyHit>[];
+    var offset = 0;
+    while (true) {
+      final result = await searchTypedProperties(
+        heroAttributesQuery,
+        offset: offset,
+        limit: 1000,
+        savePath: path,
+      );
+      if (result.error != null) throw StateError(result.error!);
+      hits.addAll(result.results);
+      offset += result.results.length;
+      if (offset >= result.total || result.results.isEmpty) return hits;
+    }
+  }
+
+  Future<SkillsResult> _loadTransferSkills(String path) async {
+    final response = await _execute(
+      'private.skills.list',
+      payload: {'path': path, 'actor': 'Hero'},
+    );
+    if (response['ok'] != true) {
+      throw StateError(_errorDetails(response));
+    }
+    final result = SkillsResult.fromJson(
+      (response['data'] as Map).cast<String, Object?>(),
+    );
+    if (!result.found) {
+      throw StateError(_l10n.editorSkillsLoadFailed(_l10n.transferNoSkillData));
+    }
+    return result;
+  }
+
+  Future<PrivateInventorySummary> _loadTransferInventory(String path) async {
+    final response = await _execute(
+      'private.inventory.list',
+      payload: {'path': path},
+    );
+    if (response['ok'] != true) {
+      throw StateError(_errorDetails(response));
+    }
+    return PrivateInventorySummary.fromJson(
+      (response['data'] as Map).cast<String, Object?>(),
+    );
   }
 
   /// Load every merchant's shop record (`private.traders.list`).
@@ -3787,6 +4275,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return pending.length == 1 ? pending.single : null;
   }
 
+  /// The pending-edit key a revive of NPC [id] is registered under.
+  static String npcRevivePendingKey(String id) => 'npc.revive:$id';
+
   /// Register a PENDING revive of an NPC under the per-NPC key `npc.revive:$id`.
   /// The global Save button applies it via [saveAllPending], which submits
   /// `private.npc.revive` as its own write_save (the core rejects batching this
@@ -3798,7 +4289,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// overwrites its key (idempotent).
   void setPendingNpcRevive(String id) {
     setPendingEdit(
-      'npc.revive:$id',
+      npcRevivePendingKey(id),
       PendingSaveEdit(
         edits: [
           {
@@ -4009,8 +4500,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
     required EditorSettingsStore settingsStore,
   }) {
     final stored = settingsStore.read();
+    final discoveredSaveDir = defaultSaveRoot();
     return EditorState(
-      saveDir: saveDir ?? stored.saveDir ?? defaultSaveRoot(),
+      saveDir: resolveSaveRoot(
+        override: saveDir,
+        stored: stored.saveDir,
+        fallback: discoveredSaveDir,
+        isLinux: Platform.isLinux,
+      ),
       externalSavePaths: stored.externalSavePaths,
       hiddenOtherSavePaths: stored.hiddenOtherSavePaths,
       deletedSaveRecovery: stored.deletedSaveRecovery,
@@ -4303,11 +4800,13 @@ bool structuredEditRewrites(
       return (_pathHasName(typedPath, 'MemorizedEvents') &&
               _pathHasKey(typedPath, 'Hero')) ||
           _pathIsAQuestCurrentState(typedPath);
-    // Strips memory events, death tags and the corpse entry.
+    // Strips memory events, death tags, the corpse entry and the
+    // removed-from-world listing.
     case 'private.npc.revive':
       return _pathHasName(typedPath, 'MemorizedEvents') ||
           _pathHasName(typedPath, 'LooseTagsByGlobalId') ||
-          _pathHasName(typedPath, 'm_SavedInventories');
+          _pathHasName(typedPath, 'm_SavedInventories') ||
+          _pathHasName(typedPath, 'GlobalIDsRemovedFromWorld');
     // Insert or update ONE character's knowledge entry. Another character's
     // entry is a different map value, and every applier re-resolves its target
     // by key, so the two do not collide.

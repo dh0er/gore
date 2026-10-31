@@ -222,6 +222,18 @@ const heroThievingAttributes = [
 /// Whether an attribute is hidden from the curated view. [setClass] matters for
 /// the ids that exist in several sets: `RecoveryRatePerHourOfSleep` is inert on
 /// Fatigue but real on Health and Mana.
+/// The AttributeSet class a hero attribute path belongs to: the segment after
+/// `AttributeSetsByClass` without its braces, such as
+/// `/Script/G1R.AttributeSet_Health`, or `''` when the path names none.
+String heroAttributeSetClass(List<String> path) {
+  final setIndex = path.indexOf('AttributeSetsByClass');
+  if (setIndex < 0 || setIndex + 1 >= path.length) return '';
+  final segment = path[setIndex + 1];
+  return segment.startsWith('{') && segment.endsWith('}')
+      ? segment.substring(1, segment.length - 1)
+      : '';
+}
+
 bool heroAttributeHidden(String id, [String? setClass]) =>
     heroHiddenAttributeIds.contains(id) ||
     heroHiddenAttributeIds.contains(heroAttributeKey(id, setClass));
@@ -287,14 +299,7 @@ List<HeroAttribute> parseHeroAttributes(List<TypedPropertyHit> hits) {
     final idSegment = path[path.length - 2];
     if (!idSegment.startsWith('{') || !idSegment.endsWith('}')) continue;
     final id = idSegment.substring(1, idSegment.length - 1);
-    final setIndex = path.indexOf('AttributeSetsByClass');
-    var setClass = '';
-    if (setIndex >= 0 && setIndex + 1 < path.length) {
-      final seg = path[setIndex + 1];
-      if (seg.startsWith('{') && seg.endsWith('}')) {
-        setClass = seg.substring(1, seg.length - 1);
-      }
-    }
+    final setClass = heroAttributeSetClass(path);
     // Needs the set: `RecoveryRatePerHourOfSleep` is inert on Fatigue but real
     // on Health and Mana, so the bare id cannot decide this.
     if (heroAttributeHidden(id, setClass)) continue;

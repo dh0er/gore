@@ -4471,6 +4471,18 @@ abstract class AppLocalizations {
   /// **'Failed to scan saves: {details}'**
   String editorScanSavesFailed(String details);
 
+  /// No description provided for @saveFolderNotFoundTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Save folder not found'**
+  String get saveFolderNotFoundTitle;
+
+  /// No description provided for @saveFolderNotFoundBody.
+  ///
+  /// In en, this message translates to:
+  /// **'The folder {path} does not exist. Choose the folder that holds your Gothic saves.'**
+  String saveFolderNotFoundBody(String path);
+
   /// No description provided for @editorInspectSaveFailed.
   ///
   /// In en, this message translates to:
@@ -4841,6 +4853,18 @@ abstract class AppLocalizations {
   /// **'The repair is not available for this savegame.'**
   String get slotRepairNotOffered;
 
+  /// No description provided for @npcWorldRepairTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Revived NPCs missing from the world'**
+  String get npcWorldRepairTitle;
+
+  /// No description provided for @npcWorldRepairBody.
+  ///
+  /// In en, this message translates to:
+  /// **'An older version of this editor revived NPCs without putting them back into the world, so the game never spawns them. Affected: {count}. The repair finishes the revive and brings them back. A backup is created when you save, as always.'**
+  String npcWorldRepairBody(int count);
+
   /// No description provided for @statisticsTitle.
   ///
   /// In en, this message translates to:
@@ -4997,6 +5021,252 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Discard queued lock changes'**
   String get locksResetPending;
+
+  /// No description provided for @transferProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Transfer progress'**
+  String get transferProgress;
+
+  /// No description provided for @transferProgressTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Transfer progress from another savegame.'**
+  String get transferProgressTooltip;
+
+  /// No description provided for @transferProgressTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Transfer character progress'**
+  String get transferProgressTitle;
+
+  /// No description provided for @transferProgressDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy the Hero\'s items, skills, and attributes from an older save into the selected save. Quests, time, location, and NPC progress stay as they are in the destination. Items are added to carried inventory; skills and attributes are copied where both saves support them.'**
+  String get transferProgressDescription;
+
+  /// No description provided for @transferFrom.
+  ///
+  /// In en, this message translates to:
+  /// **'From'**
+  String get transferFrom;
+
+  /// No description provided for @transferTo.
+  ///
+  /// In en, this message translates to:
+  /// **'To'**
+  String get transferTo;
+
+  /// No description provided for @transferStarting.
+  ///
+  /// In en, this message translates to:
+  /// **'Starting transfer...'**
+  String get transferStarting;
+
+  /// No description provided for @transferCheckingConflicts.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking changes for conflicts and arranging them into safe write steps. The destination save is not being written yet.'**
+  String get transferCheckingConflicts;
+
+  /// No description provided for @transferReadCount.
+  ///
+  /// In en, this message translates to:
+  /// **'Reads {completed}/{total}'**
+  String transferReadCount(int completed, int total);
+
+  /// No description provided for @transferWriteCount.
+  ///
+  /// In en, this message translates to:
+  /// **'Writes {completed}/{total}'**
+  String transferWriteCount(int completed, int total);
+
+  /// No description provided for @transferStageElapsed.
+  ///
+  /// In en, this message translates to:
+  /// **'Stage elapsed: {stage} · Total: {total}'**
+  String transferStageElapsed(String stage, String total);
+
+  /// No description provided for @transferCompleted.
+  ///
+  /// In en, this message translates to:
+  /// **'Transfer completed.'**
+  String get transferCompleted;
+
+  /// No description provided for @transferFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Transfer failed.'**
+  String get transferFailed;
+
+  /// No description provided for @transferCompletedIn.
+  ///
+  /// In en, this message translates to:
+  /// **'Completed in {duration}'**
+  String transferCompletedIn(String duration);
+
+  /// No description provided for @transferFailedIn.
+  ///
+  /// In en, this message translates to:
+  /// **'Failed in {duration}'**
+  String transferFailedIn(String duration);
+
+  /// No description provided for @transferLessThanASecond.
+  ///
+  /// In en, this message translates to:
+  /// **'less than a second'**
+  String get transferLessThanASecond;
+
+  /// No description provided for @transferSeconds.
+  ///
+  /// In en, this message translates to:
+  /// **'{seconds} sec'**
+  String transferSeconds(int seconds);
+
+  /// No description provided for @transferMinutesSeconds.
+  ///
+  /// In en, this message translates to:
+  /// **'{minutes} min {seconds} sec'**
+  String transferMinutesSeconds(int minutes, int seconds);
+
+  /// No description provided for @transferCalculatingPlan.
+  ///
+  /// In en, this message translates to:
+  /// **'Calculating save plan...'**
+  String get transferCalculatingPlan;
+
+  /// No description provided for @transferReadsRemaining.
+  ///
+  /// In en, this message translates to:
+  /// **'Reads about {duration} remaining; write estimate follows'**
+  String transferReadsRemaining(String duration);
+
+  /// No description provided for @transferWriteEtaUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Write {current}/{total} · ETA unavailable (no prior write sample)'**
+  String transferWriteEtaUnavailable(int current, int total);
+
+  /// No description provided for @transferEstimating.
+  ///
+  /// In en, this message translates to:
+  /// **'Estimating remaining time...'**
+  String get transferEstimating;
+
+  /// No description provided for @transferLongerThanEstimated.
+  ///
+  /// In en, this message translates to:
+  /// **'Taking longer than estimated'**
+  String get transferLongerThanEstimated;
+
+  /// No description provided for @transferAboutRemaining.
+  ///
+  /// In en, this message translates to:
+  /// **'About {duration} remaining'**
+  String transferAboutRemaining(String duration);
+
+  /// No description provided for @transferReadingSourceAttributes.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading source attributes...'**
+  String get transferReadingSourceAttributes;
+
+  /// No description provided for @transferReadingDestinationAttributes.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading destination attributes...'**
+  String get transferReadingDestinationAttributes;
+
+  /// No description provided for @transferReadingSourceSkills.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading source skills...'**
+  String get transferReadingSourceSkills;
+
+  /// No description provided for @transferReadingDestinationSkills.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading destination skills...'**
+  String get transferReadingDestinationSkills;
+
+  /// No description provided for @transferReadingSourceInventory.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading source inventory...'**
+  String get transferReadingSourceInventory;
+
+  /// No description provided for @transferReadingDestinationInventory.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading destination inventory...'**
+  String get transferReadingDestinationInventory;
+
+  /// No description provided for @transferNoCompatibleChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'No compatible changes were found to transfer.'**
+  String get transferNoCompatibleChanges;
+
+  /// No description provided for @transferChooseDifferentSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a different source save.'**
+  String get transferChooseDifferentSource;
+
+  /// No description provided for @transferDestinationChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected destination changed. Choose the source again.'**
+  String get transferDestinationChanged;
+
+  /// No description provided for @transferPreparingChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'Preparing {count} changes...'**
+  String transferPreparingChanges(int count);
+
+  /// No description provided for @transferPlanningSteps.
+  ///
+  /// In en, this message translates to:
+  /// **'Planning safe save steps...'**
+  String get transferPlanningSteps;
+
+  /// No description provided for @transferSavingDestination.
+  ///
+  /// In en, this message translates to:
+  /// **'Saving destination...'**
+  String get transferSavingDestination;
+
+  /// No description provided for @transferCountLimit.
+  ///
+  /// In en, this message translates to:
+  /// **'Transferred item count exceeds the supported limit.'**
+  String get transferCountLimit;
+
+  /// No description provided for @transferPartiallySaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Part of the transfer is already saved. The rest stays staged; save to finish it.'**
+  String get transferPartiallySaved;
+
+  /// No description provided for @transferSkippedItems.
+  ///
+  /// In en, this message translates to:
+  /// **'These items could not be transferred: {items}'**
+  String transferSkippedItems(String items);
+
+  /// No description provided for @transferNoSkillData.
+  ///
+  /// In en, this message translates to:
+  /// **'No editable Hero skill data was found in one of the saves.'**
+  String get transferNoSkillData;
+
+  /// No description provided for @transferDone.
+  ///
+  /// In en, this message translates to:
+  /// **'Done'**
+  String get transferDone;
 }
 
 class _AppLocalizationsDelegate
