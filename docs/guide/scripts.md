@@ -698,7 +698,9 @@ mod's complete source, without merging the update's changes into it. See
 [source-backed Manager updates](mod-manager.md#apply).
 For binary-only packages, compile or remap the module again against the new
 pristine `PrecompiledScript_Shipping.Cache`; do not reuse the previous mini-cache
-or copy its old GUID. Supported equivalent
+or copy its old GUID. `extract` and `extract-remap` refuse an output that still
+has `.sources.json`/`.sources` provenance from an earlier compile; remove those
+alongside the old mini or choose a new output. Supported equivalent
 generations reuse the authenticated native API evidence described above while
 still targeting the new cache. A membership refusal on a known compatible
 generation needs a toolkit correction, not `--force`, even if a generic error

@@ -2960,6 +2960,30 @@ fn fail_after_full_graph_side_output_error<T>(
     );
 }
 
+/// Binary-only mini producers overwrite their output in place. Source provenance left beside it by
+/// an earlier compile would describe different bytes and make `gore mod build` fail later, so
+/// refuse before writing. Only existence is checked; any output filename stays accepted.
+fn refuse_stale_script_source_provenance(out: &Path) -> Result<()> {
+    let manifest = gore_mod::script_sources::script_source_provenance_path_v1(out);
+    let mut payloads = out.as_os_str().to_os_string();
+    payloads.push(".sources");
+    for path in [manifest, PathBuf::from(payloads)] {
+        match std::fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) => bail!(
+                "source provenance from an earlier compile exists at {}; it would not match this binary-only mini. Remove {} and its .sources.json/.sources outputs, or choose a new output",
+                path.display(),
+                out.display()
+            ),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("inspecting source provenance {}", path.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Refuse an existing compile-module output before compiling. Publication is no-clobber, so
 /// without this check a lengthy compile would only fail at the very end.
 fn preflight_compile_module_output_absent(out: &Path) -> Result<()> {
@@ -4449,6 +4473,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let b = read_module_cache(&cache)?;
             let n = module_count(&b);
             let mini = gore_as::cache::splice::extract_module(&b, &module).context("extract")?;
+            refuse_stale_script_source_provenance(&out)?;
             std::fs::write(&out, &mini).with_context(|| format!("writing {}", out.display()))?;
             println!(
                 "extracted {:?} from {} modules -> 1-module mini ; {} bytes ; wrote {}",
@@ -4479,6 +4504,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     gore_as::cache::remap::RemapOptions { allow_new_symbols },
                 )
                 .context("remap")?;
+            refuse_stale_script_source_provenance(&out)?;
             std::fs::write(&out, &remapped)
                 .with_context(|| format!("writing {}", out.display()))?;
             println!(
@@ -7225,6 +7251,25 @@ mod default_cli_tests {
             publish_compile_module_outputs(&out, &mini, &base, publication_source(), || Ok(()))
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn binary_mini_producers_refuse_stale_source_provenance() {
+        let root = tempfile::tempdir().unwrap();
+        let out = root.path().join("foo.cache");
+        std::fs::write(&out, b"compiled with sources").unwrap();
+        refuse_stale_script_source_provenance(&out).unwrap();
+        std::fs::create_dir(root.path().join("foo.cache.sources")).unwrap();
+        let error = refuse_stale_script_source_provenance(&out).unwrap_err();
+        assert!(error.to_string().contains("source provenance from an earlier compile"));
+        std::fs::remove_dir(root.path().join("foo.cache.sources")).unwrap();
+        std::fs::write(
+            gore_mod::script_sources::script_source_provenance_path_v1(&out),
+            b"{}",
+        )
+        .unwrap();
+        assert!(refuse_stale_script_source_provenance(&out).is_err());
+        assert_eq!(std::fs::read(&out).unwrap(), b"compiled with sources");
     }
 
     #[test]
