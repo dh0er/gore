@@ -1,8 +1,9 @@
 # Standalone compiler build and qualification contract
 
-The standalone AngelScript compiler is an internal component of GORE CLI and
-GORE Mod Studio. It has no separate release, tag, download, or update channel.
-GORE Save Editor and GORE Mod Manager do not contain it.
+The standalone AngelScript compiler is an internal component of GORE CLI,
+GORE Mod Studio and GORE Mod Manager. Manager uses it to rebuild source-backed
+script mods against an updated pristine cache. It has no separate release, tag,
+download, or update channel. GORE Save Editor does not contain it.
 
 Two independent contracts are kept deliberately separate:
 
@@ -14,7 +15,7 @@ Two independent contracts are kept deliberately separate:
   not a compiler-compatibility identifier.
 
 The checked-in source asset therefore contains qualified profiles and evidence,
-not a release compiler executable. A CLI or Studio build compiles the sidecar
+not a release compiler executable. A CLI, Studio or Manager build compiles the sidecar
 from the same source revision, runs its native tests, verifies its semantic ABI,
 and then composes the product bundle. `GORE_SIGN=1` signs that fresh sidecar once
 before its final length and SHA-256 are written to the embedded product catalog.

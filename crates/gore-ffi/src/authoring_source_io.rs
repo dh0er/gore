@@ -34,8 +34,24 @@ pub(super) fn read_source_no_follow(
     path: &Path,
     max_bytes: u64,
 ) -> Result<Vec<u8>, SourceReadError> {
+    read_no_follow(path, max_bytes, true)
+}
+
+/// Complete authored modules may be empty; binary authoring inputs must contain data.
+pub(super) fn read_authored_source_no_follow(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<Vec<u8>, SourceReadError> {
+    read_no_follow(path, max_bytes, false)
+}
+
+fn read_no_follow(
+    path: &Path,
+    max_bytes: u64,
+    require_content: bool,
+) -> Result<Vec<u8>, SourceReadError> {
     let (mut file, initial) = open_regular_no_follow(path)?;
-    if initial.byte_len == 0 || initial.byte_len > max_bytes {
+    if (require_content && initial.byte_len == 0) || initial.byte_len > max_bytes {
         return Err(SourceReadError::Limit);
     }
     let capacity = usize::try_from(initial.byte_len).map_err(|_| SourceReadError::Limit)?;
@@ -183,6 +199,17 @@ fn snapshot_open_handle(file: &File) -> Result<HandleSnapshot, SourceReadError> 
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn binary_reader_still_rejects_empty_inputs() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("Binds.Cache");
+        fs::write(&source, b"").unwrap();
+        assert!(matches!(
+            read_source_no_follow(&source, 1024),
+            Err(SourceReadError::Limit)
+        ));
+    }
 
     #[test]
     fn guarded_reader_is_bounded_and_rejects_hard_links() {

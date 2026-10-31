@@ -286,7 +286,7 @@ void main() {
   );
 
   testWidgets(
-    'private output recovery keeps an openable report without blocking the game install',
+    'source publication recovery preserves payloads and an openable report without blocking the game install',
     (tester) async {
       final fixture = Directory.systemTemp.createTempSync(
         'gore-script-output-recovery-widget-',
@@ -356,6 +356,12 @@ void main() {
         findsNothing,
       );
       expect(find.text('Compiler report'), findsOneWidget);
+      final workspace = core._createdWorkspaces.single;
+      expect(workspace.existsSync(), isTrue);
+      final retainedSource = File(
+        p.join(workspace.path, 'module.cache.sources', 'source', '0000.as'),
+      );
+      expect(retainedSource.readAsBytesSync(), List<int>.filled(128, 32));
       expect(
         tester
             .widget<FilledButton>(find.widgetWithText(FilledButton, 'Compile'))
@@ -372,7 +378,7 @@ void main() {
       );
       expect(find.textContaining('Game install: not touched'), findsOneWidget);
       expect(
-        find.textContaining('standalone module output disposal failed'),
+        find.textContaining('SCRIPT_SOURCE_RECOVERY_REQUIRED'),
         findsOneWidget,
       );
     },
@@ -1102,14 +1108,20 @@ final class _ScriptCompileFixtureCore implements GoreCoreFfiService {
                 },
         };
         if (outputRecovery) {
+          final retainedSource = File(
+            p.join(work.path, 'module.cache.sources', 'source', '0000.as'),
+          );
+          retainedSource.parent.createSync(recursive: true);
+          retainedSource.writeAsBytesSync(List<int>.filled(128, 32));
           return <String, Object?>{
             'ok': true,
             'outcome': 'failed',
             'mini_path': null,
             'module': null,
             'compile_error': <String, Object?>{
-              'code': 'COMPILER_REGEN_FAILED',
-              'message': 'standalone module output disposal failed',
+              'code': 'COMPILE_OUTPUT_UNSAFE',
+              'message':
+                  'retaining original script source failed: SCRIPT_SOURCE_RECOVERY_REQUIRED: partial payload remains',
             },
             'compiler_diagnostics': <String, Object?>{
               'capture': 'captured',

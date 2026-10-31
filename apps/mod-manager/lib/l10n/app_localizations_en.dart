@@ -747,4 +747,31 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get close => 'Close';
+
+  @override
+  String get scriptUpdateConfirmationTitle =>
+      'Review script changes after game update';
+
+  @override
+  String get scriptUpdateConfirmationBody =>
+      'The game update affects script modules also supplied or changed by these mods. Rebuilding from the bundled mod sources can overwrite game fixes or restore outdated game logic. Continue only if you accept this risk.';
+
+  @override
+  String get scriptUpdateConfirmationAction => 'Rebuild and apply';
+
+  @override
+  String scriptUpdateConfirmationModule(String modName, String module) {
+    return '$modName: $module';
+  }
+
+  @override
+  String get scriptUpdateModuleChanged => 'The original game module changed.';
+
+  @override
+  String get scriptUpdateModuleMissing =>
+      'The original game module is no longer present.';
+
+  @override
+  String get scriptUpdateModuleNowExists =>
+      'The game now includes a module with the same name as this mod’s new module.';
 }

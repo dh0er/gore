@@ -5707,6 +5707,7 @@ fn goremod_components(
                     limits.max_manifest_bytes,
                 )?;
                 let entries: Vec<ScriptEntry> = serde_json::from_slice(&bytes)?;
+                crate::script_sources::load_script_sources_v1(bundle_dir, path, &entries)?;
                 // Conflict targets are every module the mini actually carries: a multi-module
                 // mini names only one of them in its manifest entry. Fall back to the manifest
                 // name when the payload cannot be read here; inspection validates it later.
@@ -6083,6 +6084,9 @@ fn validate_inspected_gore_bundle(
                     "script manifest",
                     limits.max_manifest_bytes,
                 )?)?;
+                // Source-bearing downloads use the same strict contract as native bundles.
+                // Corrupt, incomplete or hash-mismatched sources never silently become binary-only.
+                crate::script_sources::load_script_sources_v1(bundle_dir, path, &entries)?;
                 for entry in entries {
                     if entry.op != "add" && entry.op != "edit" {
                         return Err(ModError::Other(format!(

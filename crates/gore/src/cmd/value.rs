@@ -348,6 +348,7 @@ pub fn compile_values_into_scripts(
             let source_path = work_root.join(format!("{stem}.as"));
             std::fs::write(&source_path, &rewritten)
                 .with_context(|| format!("writing {}", source_path.display()))?;
+            let authored_source_sha = hex_sha256(rewritten.as_bytes());
             let mini_path = mini_root.join(format!("{stem}.mini.cache"));
             super::as_cache::run(AsCmd::CompileModule {
                 op: "edit".into(),
@@ -363,7 +364,7 @@ pub fn compile_values_into_scripts(
                 game: Some(game.to_path_buf()),
                 expect_base: None,
                 expect_base_sha256: Some(cache_sha.clone()),
-                expect_source_sha256: None,
+                expect_source_sha256: Some(authored_source_sha),
                 no_diagnostics: true,
                 diagnostics_hook: None,
                 diagnostics_inject_delay_ms: 0,

@@ -37,7 +37,9 @@ stamps the target cache GUID during remap and, before any installation mutation,
 requires the mini GUID to equal the effective base cache and resolves its
 bytecode and retained table dependencies against that base. A game update that
 changes the cache therefore invalidates old minis even when their module names
-still exist; rebuild or remap them against the new pristine cache.
+still exist. Source-backed GORE packages let Mod Manager rebuild them against
+the new pristine cache, with a confirmation if an edited vanilla module changed.
+Binary-only minis still need an author-provided rebuild or remap.
 
 A fourth input is sealed but **not shipped by Steam**: the `.usmap` reflection
 dump under `G1R\Binaries\Win64\ue4ss\`. UE4SS generates it on your machine. Its

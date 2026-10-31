@@ -715,4 +715,29 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get close => '閉じる';
+
+  @override
+  String get scriptUpdateConfirmationTitle => 'ゲーム更新後のスクリプト変更を確認';
+
+  @override
+  String get scriptUpdateConfirmationBody =>
+      'ゲーム更新が、これらのModも提供または変更するスクリプトモジュールに影響しています。同梱のModソースから再コンパイルすると、ゲームの修正を上書きしたり、古いゲームロジックを復元したりする可能性があります。このリスクを了承した場合のみ続行してください。';
+
+  @override
+  String get scriptUpdateConfirmationAction => '再コンパイルして適用';
+
+  @override
+  String scriptUpdateConfirmationModule(String modName, String module) {
+    return '$modName: $module';
+  }
+
+  @override
+  String get scriptUpdateModuleChanged => 'ゲームの元のモジュールが変更されています。';
+
+  @override
+  String get scriptUpdateModuleMissing => 'ゲームの元のモジュールは存在しなくなりました。';
+
+  @override
+  String get scriptUpdateModuleNowExists =>
+      'ゲームに、このModの新しいモジュールと同じ名前のモジュールが追加されています。';
 }

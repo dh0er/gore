@@ -44,6 +44,13 @@ struct FunctionRecord {
     signature: Range<usize>,
     /// bIsUFunction plus its optional metadata/flags, which follow body/debug data on the wire.
     ufunction_tail: Range<usize>,
+    is_ufunction: bool,
+}
+
+impl FunctionRecord {
+    fn removal_requires_preservation(&self) -> bool {
+        self.is_ufunction || self.name.starts_with("__") || self.traits & 0x40000 != 0
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -67,6 +74,7 @@ struct ClassRecord {
     behaviors: Vec<FunctionRecord>,
     behavior_types: Range<usize>,
     preprocessor_tail: Range<usize>,
+    removal_requires_preservation: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -214,6 +222,102 @@ impl ExistingModuleStructurePlan {
     /// metadata normalization: those qualified repairs may restore a Shipping method table, but
     /// this plan itself never writes stale base bytes into the regenerated module.
     pub(crate) fn verify(&self, mini: &[u8]) -> Result<(), String> {
+        let (regen_bytes, regen) = self.regenerated_entry(mini)?;
+        self.verify_entries(regen_bytes, &regen, &self.base)
+    }
+
+    /// Complete Manager sources may omit plain declarations introduced by vanilla drift.
+    /// Keep the same layout/reflection proof for surviving declarations. Removal of reflected,
+    /// generated/default-bearing or native-derived classes is never authorized here. The caller
+    /// must also run guarded composition, whose final declaration audit rejects dangling tail
+    /// rows and executable references; this proof alone does not authorize publication.
+    pub(crate) fn verify_manager_source_replacement(&self, mini: &[u8]) -> Result<(), String> {
+        let (regen_bytes, mut regen) = self.regenerated_entry(mini)?;
+        let mut base = self.base.clone();
+        (base.functions, regen.functions) = matched_structure_records(
+            &self.base.functions,
+            &regen.functions,
+            |record| {
+                range_bytes(
+                    &self.base_entry,
+                    record.declaration.clone(),
+                    "base function",
+                )
+            },
+            |record| {
+                range_bytes(
+                    regen_bytes,
+                    record.declaration.clone(),
+                    "regenerated function",
+                )
+            },
+        )?;
+        (base.classes, regen.classes) = matched_structure_records(
+            &self.base.classes,
+            &regen.classes,
+            |record| structure_identity(&self.base_entry, &record.prefix, 2),
+            |record| structure_identity(regen_bytes, &record.prefix, 2),
+        )?;
+        let retained_classes = base
+            .classes
+            .iter()
+            .map(|class| (class.namespace.as_str(), class.name.as_str()))
+            .collect::<HashSet<_>>();
+        for class in &self.base.classes {
+            if !retained_classes.contains(&(class.namespace.as_str(), class.name.as_str()))
+                && class.removal_requires_preservation
+            {
+                return Err(format!(
+                    "Manager replacement omits class {}::{} with native/reflection/generated metadata",
+                    class.namespace, class.name
+                ));
+            }
+        }
+        (base.enum_entries, regen.enum_entries) = matched_structure_records(
+            &self.base.enum_entries,
+            &regen.enum_entries,
+            |range| structure_identity(&self.base_entry, range, 2),
+            |range| structure_identity(regen_bytes, range, 2),
+        )?;
+        (base.global_entries, regen.global_entries) = matched_structure_records(
+            &self.base.global_entries,
+            &regen.global_entries,
+            |record| structure_identity(&self.base_entry, &record.declaration, 2),
+            |record| structure_identity(regen_bytes, &record.declaration, 2),
+        )?;
+        (base.import_entries, regen.import_entries) = matched_structure_records(
+            &self.base.import_entries,
+            &regen.import_entries,
+            |range| range_bytes(&self.base_entry, range.clone(), "base import"),
+            |range| range_bytes(regen_bytes, range.clone(), "regenerated import"),
+        )?;
+        (base.imported_modules, regen.imported_modules) = matched_structure_records(
+            &self.base.imported_modules,
+            &regen.imported_modules,
+            |range| range_bytes(&self.base_entry, range.clone(), "base imported module"),
+            |range| range_bytes(regen_bytes, range.clone(), "regenerated imported module"),
+        )?;
+        // Native registrations can invoke named declarations without a T1/T3/T5 pointer row.
+        // Keep their declaration sets until a more specific registration-root proof exists.
+        let named_registrations =
+            !structure_identity(&self.base_entry, &self.base.statics_class, 1)?[0].is_empty()
+                || !self.base.declared_events.is_empty()
+                || !self.base.declared_delegates.is_empty()
+                || !self.base.post_init_functions.is_empty();
+        if named_registrations
+            && (base.functions.len() != self.base.functions.len()
+                || base.classes.len() != self.base.classes.len()
+                || base.global_entries.len() != self.base.global_entries.len()
+                || base.import_entries.len() != self.base.import_entries.len())
+        {
+            return Err("Manager replacement omits declarations in a module with named native registrations".into());
+        }
+        // Statics, event/delegate/post-init registrations and each surviving class's properties,
+        // method tables and native/default metadata still pass the ordinary preservation proof.
+        self.verify_entries(regen_bytes, &regen, &base)
+    }
+
+    fn regenerated_entry<'a>(&self, mini: &'a [u8]) -> Result<(&'a [u8], ModuleEntry), String> {
         let header = CacheHeader::parse(mini)
             .map_err(|error| format!("parsing module-structure mini header: {error}"))?;
         if header.type_count != 1 || module_count(mini) != 1 {
@@ -248,19 +352,28 @@ impl ExistingModuleStructurePlan {
                 self.base.key, self.base.name, self.base.file, regen.key, regen.name, regen.file
             ));
         }
-        if regen.classes.len() < self.base.classes.len() {
+        Ok((regen_bytes, regen))
+    }
+
+    fn verify_entries(
+        &self,
+        regen_bytes: &[u8],
+        regen: &ModuleEntry,
+        base: &ModuleEntry,
+    ) -> Result<(), String> {
+        if regen.classes.len() < base.classes.len() {
             return Err(format!(
                 "module-structure class count shrank in {:?}: base {}, regenerated {}",
                 self.module_name,
-                self.base.classes.len(),
+                base.classes.len(),
                 regen.classes.len()
             ));
         }
-        if regen.functions.len() < self.base.functions.len() {
+        if regen.functions.len() < base.functions.len() {
             return Err(format!(
                 "module-structure free-function count shrank in {:?}: base {}, regenerated {}",
                 self.module_name,
-                self.base.functions.len(),
+                base.functions.len(),
                 regen.functions.len()
             ));
         }
@@ -271,70 +384,70 @@ impl ExistingModuleStructurePlan {
         // declarations still may neither disappear nor reorder.
         compare_existing_free_function_subsequence(
             &self.base_entry,
-            &self.base.functions,
+            &base.functions,
             regen_bytes,
             &regen,
-            self.base.classes.len(),
+            base.classes.len(),
             "module free functions",
         )?;
         compare_structure_record_prefix(
             &self.base_entry,
-            &self.base.enum_entries,
+            &base.enum_entries,
             regen_bytes,
             &regen.enum_entries,
             "module enums",
         )?;
         compare_global_record_prefix(
             &self.base_entry,
-            &self.base.global_entries,
+            &base.global_entries,
             regen_bytes,
             &regen.global_entries,
             "module globals",
         )?;
         compare_structure_record_prefix(
             &self.base_entry,
-            &self.base.import_entries,
+            &base.import_entries,
             regen_bytes,
             &regen.import_entries,
             "module imports",
         )?;
         compare_structure_record_prefix(
             &self.base_entry,
-            &self.base.imported_modules,
+            &base.imported_modules,
             regen_bytes,
             &regen.imported_modules,
             "module imported-modules",
         )?;
         compare_structure_range(
             &self.base_entry,
-            &self.base.statics_class,
+            &base.statics_class,
             regen_bytes,
             &regen.statics_class,
             "module statics-class",
         )?;
         compare_structure_record_prefix(
             &self.base_entry,
-            &self.base.declared_events,
+            &base.declared_events,
             regen_bytes,
             &regen.declared_events,
             "module declared-events",
         )?;
         compare_structure_record_prefix(
             &self.base_entry,
-            &self.base.declared_delegates,
+            &base.declared_delegates,
             regen_bytes,
             &regen.declared_delegates,
             "module declared-delegates",
         )?;
         compare_structure_record_prefix(
             &self.base_entry,
-            &self.base.post_init_functions,
+            &base.post_init_functions,
             regen_bytes,
             &regen.post_init_functions,
             "module post-init-functions",
         )?;
         for (index, (base_class, regen_class)) in
-            self.base.classes.iter().zip(&regen.classes).enumerate()
+            base.classes.iter().zip(&regen.classes).enumerate()
         {
             if base_class.name != regen_class.name || base_class.namespace != regen_class.namespace
             {
@@ -412,6 +525,71 @@ impl ExistingModuleStructurePlan {
     }
 }
 
+/// Match by exact declaration identity, retaining both sides in regenerated order. Newly authored
+/// records are checked by compiler/remap/composition, rather than mistaken for old metadata.
+/// Decoded name identities prevent another SIA encoding from treating a surviving declaration
+/// as new and evading its layout proof. Signature/registration identities borrow bounded bytes.
+fn matched_structure_records<T: Clone, K: Eq + std::hash::Hash>(
+    base: &[T],
+    regenerated: &[T],
+    base_identity: impl Fn(&T) -> Result<K, String>,
+    regenerated_identity: impl Fn(&T) -> Result<K, String>,
+) -> Result<(Vec<T>, Vec<T>), String> {
+    let mut originals = HashMap::with_capacity(base.len());
+    for record in base {
+        if originals.insert(base_identity(record)?, record).is_some() {
+            return Err("duplicate base declaration identity in Manager replacement".into());
+        }
+    }
+    let mut seen = HashSet::with_capacity(regenerated.len());
+    let mut matched_base = Vec::new();
+    let mut matched_regenerated = Vec::new();
+    for record in regenerated {
+        let identity = regenerated_identity(record)?;
+        if seen.contains(&identity) {
+            return Err("duplicate regenerated declaration identity in Manager replacement".into());
+        }
+        if let Some(original) = originals.get(&identity) {
+            matched_base.push((*original).clone());
+            matched_regenerated.push(record.clone());
+        }
+        seen.insert(identity);
+    }
+    Ok((matched_base, matched_regenerated))
+}
+
+fn structure_identity(
+    bytes: &[u8],
+    range: &Range<usize>,
+    strings: usize,
+) -> Result<Vec<String>, String> {
+    let record = range_bytes(bytes, range.clone(), "Manager structure identity")?;
+    let mut cursor = Cursor::new(record);
+    (0..strings)
+        .map(|_| {
+            read_sia(
+                &mut cursor,
+                "Manager structure identity",
+                "declaration name",
+            )
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+enum FunctionMetadataCoverage {
+    All,
+    Present,
+    ManagerReplacement,
+}
+
+impl FunctionMetadataCoverage {
+    fn requires(self, function: &FunctionRecord) -> bool {
+        matches!(self, Self::All)
+            || matches!(self, Self::ManagerReplacement) && function.removal_requires_preservation()
+    }
+}
+
 impl ExistingFunctionMetadataPlan {
     pub(crate) fn prepare(base_cache: &[u8], module_name: &str) -> Result<Self, String> {
         let header = CacheHeader::parse(base_cache)
@@ -457,7 +635,7 @@ impl ExistingFunctionMetadataPlan {
     }
 
     pub(crate) fn apply(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
-        self.apply_inner(remapped_mini, true)
+        self.apply_inner(remapped_mini, FunctionMetadataCoverage::All)
     }
 
     /// Normalize the Shipping metadata of every existing declaration already present in a
@@ -465,13 +643,23 @@ impl ExistingFunctionMetadataPlan {
     /// generated-default carry step, which restores compiler-omitted records before [`apply`]
     /// performs the complete fail-closed check.
     pub(crate) fn apply_present(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
-        self.apply_inner(remapped_mini, false)
+        self.apply_inner(remapped_mini, FunctionMetadataCoverage::Present)
+    }
+
+    /// Restore every surviving declaration's Shipping metadata, while still requiring native
+    /// UFUNCTION and generated/default-bearing records to remain. Plain removed declarations
+    /// require the composed-cache reference proof in the Manager-only caller.
+    pub(crate) fn apply_manager_source_replacement(
+        &self,
+        remapped_mini: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        self.apply_inner(remapped_mini, FunctionMetadataCoverage::ManagerReplacement)
     }
 
     fn apply_inner(
         &self,
         remapped_mini: &[u8],
-        require_all_existing: bool,
+        coverage: FunctionMetadataCoverage,
     ) -> Result<Vec<u8>, String> {
         let header = CacheHeader::parse(remapped_mini)
             .map_err(|error| format!("parsing remapped function-metadata mini: {error}"))?;
@@ -518,14 +706,13 @@ impl ExistingFunctionMetadataPlan {
             .iter()
             .map(|site| (&site.identity, site))
             .collect::<HashMap<_, _>>();
-        if require_all_existing {
-            for base in &base_sites {
-                if !regen_by_identity.contains_key(&base.identity) {
-                    return Err(format!(
-                        "regenerated module is missing existing {} identity in {}",
-                        base.identity.category, base.identity.owner
-                    ));
-                }
+        for base in &base_sites {
+            if coverage.requires(&base.function) && !regen_by_identity.contains_key(&base.identity)
+            {
+                return Err(format!(
+                    "regenerated module is missing existing {} identity in {}",
+                    base.identity.category, base.identity.owner
+                ));
             }
         }
 
@@ -589,7 +776,7 @@ impl ExistingFunctionMetadataPlan {
         out.extend_from_slice(&remapped_mini[..CacheHeader::SIZE]);
         out.extend_from_slice(&rebuilt);
         out.extend_from_slice(&remapped_mini[module_end..]);
-        self.verify(regen_bytes, &regen_sites, &out, require_all_existing)?;
+        self.verify(regen_bytes, &regen_sites, &out, coverage)?;
         Ok(out)
     }
 
@@ -598,7 +785,7 @@ impl ExistingFunctionMetadataPlan {
         regen_bytes: &[u8],
         regen_sites: &[FunctionMetadataSite],
         output: &[u8],
-        require_all_existing: bool,
+        coverage: FunctionMetadataCoverage,
     ) -> Result<(), String> {
         let output_end = module_region_end(output)
             .map_err(|error| format!("walking function-metadata output: {error}"))?;
@@ -631,14 +818,13 @@ impl ExistingFunctionMetadataPlan {
             .iter()
             .map(|site| (&site.identity, site))
             .collect::<HashMap<_, _>>();
-        if require_all_existing {
-            for base in &base_sites {
-                if !output_by_identity.contains_key(&base.identity) {
-                    return Err(format!(
-                        "function-metadata output is missing existing {} identity in {}",
-                        base.identity.category, base.identity.owner
-                    ));
-                }
+        for base in &base_sites {
+            if coverage.requires(&base.function) && !output_by_identity.contains_key(&base.identity)
+            {
+                return Err(format!(
+                    "function-metadata output is missing existing {} identity in {}",
+                    base.identity.category, base.identity.owner
+                ));
             }
         }
 
@@ -995,6 +1181,186 @@ impl GeneratedDefaultsPlan {
         }
     }
 
+    /// Manager sources replace complete modules. Carry only qualified generated records by
+    /// declaration identity; ordinary omissions/additions still require the Manager metadata,
+    /// structure and final composed-reference proofs. The authoring carry policies stay strict.
+    pub(crate) fn apply_manager_source_replacement(
+        &self,
+        remapped_mini: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        let header = CacheHeader::parse(remapped_mini)
+            .map_err(|error| format!("parsing Manager defaults mini: {error}"))?;
+        if header.type_count != 1 || module_count(remapped_mini) != 1 {
+            return Err("Manager defaults carry requires exactly one module".into());
+        }
+        let end = module_region_end(remapped_mini)
+            .map_err(|error| format!("walking Manager defaults mini: {error}"))?;
+        let tail = parse_tail_tables(remapped_mini, end)
+            .map_err(|error| format!("parsing Manager defaults tail: {error}"))?;
+        if tail.end != remapped_mini.len() {
+            return Err("Manager defaults tail does not end at EOF".into());
+        }
+        let bytes = &remapped_mini[CacheHeader::SIZE..end];
+        let regen = parse_entry(bytes, "Manager defaults module")?;
+        if regen.key != self.base.key
+            || regen.name != self.base.name
+            || regen.file != self.base.file
+        {
+            return Err("Manager defaults module identity drift".into());
+        }
+        validate_unique_function_ids(&regen, "Manager defaults regenerated")?;
+        let mut patches = Vec::<(Range<usize>, Vec<u8>)>::new();
+        let mut functions = HashMap::new();
+        for function in &regen.functions {
+            let identity = range_bytes(bytes, function.declaration.clone(), "Manager function")?;
+            if functions.insert(identity, function).is_some() {
+                return Err("duplicate Manager defaults function declaration".into());
+            }
+        }
+        for &index in &self.generated_free_indices {
+            let base = &self.base.functions[index];
+            let identity = range_bytes(
+                &self.base_entry,
+                base.declaration.clone(),
+                "generated wrapper",
+            )?;
+            let regenerated = functions.get(&identity).ok_or_else(|| {
+                format!(
+                    "Manager defaults replacement omits generated wrapper {}::{}",
+                    base.namespace, base.name
+                )
+            })?;
+            self.compare_generated_free_function(bytes, base, regenerated, index)?;
+            patches.push((
+                regenerated.raw.clone(),
+                range_bytes(&self.base_entry, base.raw.clone(), "generated wrapper body")?.to_vec(),
+            ));
+        }
+        let mut classes = HashMap::new();
+        for class in &regen.classes {
+            if classes
+                .insert((class.namespace.as_str(), class.name.as_str()), class)
+                .is_some()
+            {
+                return Err("duplicate Manager defaults class declaration".into());
+            }
+        }
+        for base in &self.base.classes {
+            let carries_methods = base
+                .methods
+                .iter()
+                .any(|method| method.name.starts_with("__"));
+            if !carries_methods && base.behaviors.is_empty() {
+                continue;
+            }
+            let regenerated = classes
+                .get(&(base.namespace.as_str(), base.name.as_str()))
+                .ok_or_else(|| {
+                    format!(
+                        "Manager defaults replacement omits generated-bearing class {}::{}",
+                        base.namespace, base.name
+                    )
+                })?;
+            self.validate_carry_class(bytes, base, regenerated)?;
+            if carries_methods {
+                let count = i32::try_from(base.methods.len())
+                    .map_err(|_| "Manager defaults method count exceeds i32".to_string())?;
+                let mut restored = count.to_le_bytes().to_vec();
+                let mut ordinary = regenerated.methods.iter();
+                for method in &base.methods {
+                    let (source, range) = if method.name.starts_with("__") {
+                        (self.base_entry.as_slice(), method.raw.clone())
+                    } else {
+                        let regenerated_method = ordinary.next().ok_or_else(|| {
+                            "Manager defaults missing ordinary method".to_string()
+                        })?;
+                        (bytes, regenerated_method.raw.clone())
+                    };
+                    restored.extend_from_slice(&range_bytes(
+                        source,
+                        range,
+                        "Manager defaults method body",
+                    )?);
+                }
+                if ordinary.next().is_some() {
+                    return Err("Manager defaults left unconsumed ordinary methods".into());
+                }
+                restored.extend_from_slice(&range_bytes(
+                    &self.base_entry,
+                    base.method_table.clone(),
+                    "Manager defaults method table",
+                )?);
+                patches.push((
+                    regenerated.methods_count_pos..regenerated.method_table.end,
+                    restored,
+                ));
+            }
+            if !base.behaviors.is_empty() {
+                patches.push((
+                    regenerated.behaviors_block.clone(),
+                    range_bytes(
+                        &self.base_entry,
+                        base.behaviors_block.clone(),
+                        "Manager defaults behaviors",
+                    )?
+                    .to_vec(),
+                ));
+            }
+        }
+        patches.sort_by_key(|(range, _)| range.start);
+        let mut capacity = remapped_mini.len();
+        let mut previous = 0;
+        for (range, replacement) in &patches {
+            if range.start < previous || range.end > bytes.len() || range.start > range.end {
+                return Err("Manager defaults carry has overlapping or invalid ranges".into());
+            }
+            previous = range.end;
+            capacity = capacity
+                .checked_sub(range.len())
+                .and_then(|value| value.checked_add(replacement.len()))
+                .ok_or_else(|| "Manager defaults output size overflow".to_string())?;
+        }
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(capacity)
+            .map_err(|error| format!("reserving Manager defaults output: {error}"))?;
+        output.extend_from_slice(&remapped_mini[..CacheHeader::SIZE]);
+        let mut cursor = 0;
+        for (range, replacement) in patches {
+            output.extend_from_slice(&bytes[cursor..range.start]);
+            output.extend_from_slice(&replacement);
+            cursor = range.end;
+        }
+        output.extend_from_slice(&bytes[cursor..]);
+        output.extend_from_slice(&remapped_mini[end..]);
+        let output_end = module_region_end(&output)
+            .map_err(|error| format!("walking Manager defaults output: {error}"))?;
+        let carried = parse_entry(
+            &output[CacheHeader::SIZE..output_end],
+            "Manager defaults output",
+        )?;
+        validate_unique_function_ids(&carried, "Manager defaults carried")?;
+        validate_function_ids_against_outside(
+            &carried,
+            &self.outside_function_ids,
+            "Manager defaults carried",
+        )?;
+        // These checks also reject omitted native/generated records and changed survivor layout.
+        ExistingFunctionMetadataPlan {
+            module_name: self.module_name.clone(),
+            base_entry: self.base_entry.clone(),
+            base: self.base.clone(),
+        }
+        .apply_manager_source_replacement(&output)?;
+        ExistingModuleStructurePlan {
+            module_name: self.module_name.clone(),
+            base_entry: self.base_entry.clone(),
+            base: self.base.clone(),
+        }
+        .verify_manager_source_replacement(&output)?;
+        Ok(output)
+    }
+
     fn apply_strict(&self, remapped_mini: &[u8]) -> Result<Vec<u8>, String> {
         let mini_header = CacheHeader::parse(remapped_mini)
             .map_err(|error| format!("parsing remapped defaults mini header: {error}"))?;
@@ -1227,10 +1593,13 @@ impl GeneratedDefaultsPlan {
             rebuilt_entry.extend_from_slice(
                 regen_entry_bytes
                     .get(..regen.functions_count_pos)
-                    .ok_or_else(|| "hybrid defaults rebuild function prefix is invalid".to_string())?,
+                    .ok_or_else(|| {
+                        "hybrid defaults rebuild function prefix is invalid".to_string()
+                    })?,
             );
-            let function_count = i32::try_from(regen.functions.len())
-                .map_err(|_| "hybrid defaults regenerated free-function count does not fit i32".to_string())?;
+            let function_count = i32::try_from(regen.functions.len()).map_err(|_| {
+                "hybrid defaults regenerated free-function count does not fit i32".to_string()
+            })?;
             rebuilt_entry.extend_from_slice(&function_count.to_le_bytes());
             let mut base_at_regen = vec![None; regen.functions.len()];
             for (base_index, &regen_index) in free_matches.iter().enumerate() {
@@ -1238,14 +1607,17 @@ impl GeneratedDefaultsPlan {
                     "hybrid defaults matched free-function index is out of bounds".to_string()
                 })?;
                 if slot.replace(base_index).is_some() {
-                    return Err("hybrid defaults matched one regenerated free function twice".into());
+                    return Err(
+                        "hybrid defaults matched one regenerated free function twice".into(),
+                    );
                 }
             }
             for (regen_index, regen_function) in regen.functions.iter().enumerate() {
                 let (source, range) = match base_at_regen[regen_index] {
-                    Some(base_index) if self.generated_free_indices.contains(&base_index) => {
-                        (self.base_entry.as_slice(), &self.base.functions[base_index].raw)
-                    }
+                    Some(base_index) if self.generated_free_indices.contains(&base_index) => (
+                        self.base_entry.as_slice(),
+                        &self.base.functions[base_index].raw,
+                    ),
                     _ => (regen_entry_bytes, &regen_function.raw),
                 };
                 rebuilt_entry.extend_from_slice(source.get(range.clone()).ok_or_else(|| {
@@ -1267,8 +1639,9 @@ impl GeneratedDefaultsPlan {
                             "hybrid defaults rebuild class prefix range is invalid".to_string()
                         })?,
                 );
-                let method_count = i32::try_from(base_class.methods.len())
-                    .map_err(|_| "hybrid defaults base method count does not fit i32".to_string())?;
+                let method_count = i32::try_from(base_class.methods.len()).map_err(|_| {
+                    "hybrid defaults base method count does not fit i32".to_string()
+                })?;
                 rebuilt_entry.extend_from_slice(&method_count.to_le_bytes());
                 let mut regen_non_generated = regen_class.methods.iter();
                 for base_method in &base_class.methods {
@@ -1281,9 +1654,9 @@ impl GeneratedDefaultsPlan {
                         })?;
                         (regen_entry_bytes, &regen_method.raw)
                     };
-                    rebuilt_entry.extend_from_slice(source.get(range.clone()).ok_or_else(|| {
-                        "hybrid defaults rebuild method range is invalid".to_string()
-                    })?);
+                    rebuilt_entry.extend_from_slice(source.get(range.clone()).ok_or_else(
+                        || "hybrid defaults rebuild method range is invalid".to_string(),
+                    )?);
                 }
                 if regen_non_generated.next().is_some() {
                     return Err(
@@ -1319,9 +1692,9 @@ impl GeneratedDefaultsPlan {
             }
         }
         rebuilt_entry.extend_from_slice(
-            regen_entry_bytes
-                .get(cursor..)
-                .ok_or_else(|| "hybrid defaults rebuild final module range is invalid".to_string())?,
+            regen_entry_bytes.get(cursor..).ok_or_else(|| {
+                "hybrid defaults rebuild final module range is invalid".to_string()
+            })?,
         );
 
         let mut out = Vec::with_capacity(
@@ -1457,7 +1830,9 @@ impl GeneratedDefaultsPlan {
             return Err("hybrid defaults carried record counts are inconsistent".into());
         }
         if free_matches.len() != self.base.functions.len() {
-            return Err("hybrid defaults postcondition has incomplete base free-function mapping".into());
+            return Err(
+                "hybrid defaults postcondition has incomplete base free-function mapping".into(),
+            );
         }
         let mut base_at_regen = vec![None; regen.functions.len()];
         for (base_index, &regen_index) in free_matches.iter().enumerate() {
@@ -1465,19 +1840,20 @@ impl GeneratedDefaultsPlan {
                 "hybrid defaults postcondition free-function mapping is out of bounds".to_string()
             })?;
             if slot.replace(base_index).is_some() {
-                return Err("hybrid defaults postcondition mapped one regenerated free function twice".into());
+                return Err(
+                    "hybrid defaults postcondition mapped one regenerated free function twice"
+                        .into(),
+                );
             }
         }
-        for (regen_index, (regen_function, out_function)) in regen
-            .functions
-            .iter()
-            .zip(&carried.functions)
-            .enumerate()
+        for (regen_index, (regen_function, out_function)) in
+            regen.functions.iter().zip(&carried.functions).enumerate()
         {
             let (expected_bytes, expected_range) = match base_at_regen[regen_index] {
-                Some(base_index) if self.generated_free_indices.contains(&base_index) => {
-                    (self.base_entry.as_slice(), &self.base.functions[base_index].raw)
-                }
+                Some(base_index) if self.generated_free_indices.contains(&base_index) => (
+                    self.base_entry.as_slice(),
+                    &self.base.functions[base_index].raw,
+                ),
                 _ => (regen_entry_bytes, &regen_function.raw),
             };
             compare_range(
@@ -1528,7 +1904,9 @@ impl GeneratedDefaultsPlan {
             let expected_table = self
                 .base_entry
                 .get(base_class.method_table.clone())
-                .ok_or_else(|| "hybrid defaults expected MethodTable range is invalid".to_string())?;
+                .ok_or_else(|| {
+                    "hybrid defaults expected MethodTable range is invalid".to_string()
+                })?;
             let actual_table = output_entry_bytes
                 .get(out_class.method_table.clone())
                 .ok_or_else(|| "hybrid defaults output MethodTable range is invalid".to_string())?;
@@ -1647,12 +2025,8 @@ impl GeneratedDefaultsPlan {
             self.base.classes.len(),
             "hybrid module free functions",
         )?;
-        for (base_index, (base, &regen_index)) in self
-            .base
-            .functions
-            .iter()
-            .zip(&matches)
-            .enumerate()
+        for (base_index, (base, &regen_index)) in
+            self.base.functions.iter().zip(&matches).enumerate()
         {
             let regenerated = regen.functions.get(regen_index).ok_or_else(|| {
                 "hybrid defaults matched free-function index is out of bounds".to_string()
@@ -1738,108 +2112,118 @@ impl GeneratedDefaultsPlan {
                     base_class.namespace, base_class.name, regen_class.namespace, regen_class.name
                 ));
             }
-            compare_range(
-                &self.base_entry,
-                &base_class.prefix,
-                regen_bytes,
-                &regen_class.prefix,
-                &format!("{} class flags/properties", base_class.name),
-            )?;
-            compare_range(
-                &self.base_entry,
-                &base_class.derived_and_shadow,
-                regen_bytes,
-                &regen_class.derived_and_shadow,
-                &format!("{} DerivedFrom/ShadowType", base_class.name),
-            )?;
-            compare_functions(
-                &self.base_entry,
-                &base_class.constructors,
-                regen_bytes,
-                &regen_class.constructors,
-                &format!("{} constructors", base_class.name),
-            )?;
-            compare_range(
-                &self.base_entry,
-                &base_class.factory_and_behavior_refs,
-                regen_bytes,
-                &regen_class.factory_and_behavior_refs,
-                &format!("{} factory/behavior refs", base_class.name),
-            )?;
-            compare_functions(
-                &self.base_entry,
-                &base_class.behaviors,
-                regen_bytes,
-                &regen_class.behaviors,
-                &format!("{} behavior functions", base_class.name),
-            )?;
-            compare_range(
-                &self.base_entry,
-                &base_class.behavior_types,
-                regen_bytes,
-                &regen_class.behavior_types,
-                &format!("{} behavior types", base_class.name),
-            )?;
-            compare_range(
-                &self.base_entry,
-                &base_class.preprocessor_tail,
-                regen_bytes,
-                &regen_class.preprocessor_tail,
-                &format!("{} class metadata", base_class.name),
-            )?;
-            validate_method_table(regen_class, "regenerated")?;
+            self.validate_carry_class(regen_bytes, base_class, regen_class)?;
+        }
+        Ok(())
+    }
 
-            if let Some(method) = regen_class
-                .methods
-                .iter()
-                .find(|method| method.name.starts_with("__"))
-            {
-                return Err(format!(
-                    "regenerated class {} unexpectedly authored/generated {}; refusing to \
-                     overwrite it with stale defaults",
-                    regen_class.name, method.name
-                ));
-            }
-            let base_non_generated = base_class
-                .methods
-                .iter()
-                .filter(|method| !method.name.starts_with("__"))
-                .collect::<Vec<_>>();
-            if base_non_generated.len() != regen_class.methods.len() {
-                return Err(format!(
-                    "generated-default method count drift in {}: base has {} non-generated, \
-                     regenerated has {}",
-                    base_class.name,
-                    base_non_generated.len(),
-                    regen_class.methods.len()
-                ));
-            }
-            for (index, (base_method, regen_method)) in base_non_generated
-                .iter()
-                .zip(&regen_class.methods)
-                .enumerate()
-            {
-                compare_function(
-                    &self.base_entry,
-                    base_method,
-                    regen_bytes,
-                    regen_method,
-                    &format!("{} method {index}", base_class.name),
-                )?;
-            }
-            if !base_class
-                .methods
-                .iter()
-                .any(|method| method.name.starts_with("__"))
-            {
-                compare_range(
-                    &self.base_entry,
-                    &base_class.method_table,
-                    regen_bytes,
-                    &regen_class.method_table,
-                    &format!("{} MethodTable", base_class.name),
-                )?;
-            }
+    fn validate_carry_class(
+        &self,
+        regen_bytes: &[u8],
+        base_class: &ClassRecord,
+        regen_class: &ClassRecord,
+    ) -> Result<(), String> {
+        compare_range(
+            &self.base_entry,
+            &base_class.prefix,
+            regen_bytes,
+            &regen_class.prefix,
+            &format!("{} class flags/properties", base_class.name),
+        )?;
+        compare_range(
+            &self.base_entry,
+            &base_class.derived_and_shadow,
+            regen_bytes,
+            &regen_class.derived_and_shadow,
+            &format!("{} DerivedFrom/ShadowType", base_class.name),
+        )?;
+        compare_functions(
+            &self.base_entry,
+            &base_class.constructors,
+            regen_bytes,
+            &regen_class.constructors,
+            &format!("{} constructors", base_class.name),
+        )?;
+        compare_range(
+            &self.base_entry,
+            &base_class.factory_and_behavior_refs,
+            regen_bytes,
+            &regen_class.factory_and_behavior_refs,
+            &format!("{} factory/behavior refs", base_class.name),
+        )?;
+        compare_functions(
+            &self.base_entry,
+            &base_class.behaviors,
+            regen_bytes,
+            &regen_class.behaviors,
+            &format!("{} behavior functions", base_class.name),
+        )?;
+        compare_range(
+            &self.base_entry,
+            &base_class.behavior_types,
+            regen_bytes,
+            &regen_class.behavior_types,
+            &format!("{} behavior types", base_class.name),
+        )?;
+        compare_range(
+            &self.base_entry,
+            &base_class.preprocessor_tail,
+            regen_bytes,
+            &regen_class.preprocessor_tail,
+            &format!("{} class metadata", base_class.name),
+        )?;
+        validate_method_table(regen_class, "regenerated")?;
+
+        if let Some(method) = regen_class
+            .methods
+            .iter()
+            .find(|method| method.name.starts_with("__"))
+        {
+            return Err(format!(
+                "regenerated class {} unexpectedly authored/generated {}; refusing to \
+             overwrite it with stale defaults",
+                regen_class.name, method.name
+            ));
+        }
+        let base_non_generated = base_class
+            .methods
+            .iter()
+            .filter(|method| !method.name.starts_with("__"))
+            .collect::<Vec<_>>();
+        if base_non_generated.len() != regen_class.methods.len() {
+            return Err(format!(
+                "generated-default method count drift in {}: base has {} non-generated, \
+             regenerated has {}",
+                base_class.name,
+                base_non_generated.len(),
+                regen_class.methods.len()
+            ));
+        }
+        for (index, (base_method, regen_method)) in base_non_generated
+            .iter()
+            .zip(&regen_class.methods)
+            .enumerate()
+        {
+            compare_function(
+                &self.base_entry,
+                base_method,
+                regen_bytes,
+                regen_method,
+                &format!("{} method {index}", base_class.name),
+            )?;
+        }
+        if !base_class
+            .methods
+            .iter()
+            .any(|method| method.name.starts_with("__"))
+        {
+            compare_range(
+                &self.base_entry,
+                &base_class.method_table,
+                regen_bytes,
+                &regen_class.method_table,
+                &format!("{} MethodTable", base_class.name),
+            )?;
         }
         Ok(())
     }
@@ -2337,9 +2721,10 @@ fn is_new_class_compiler_helper(
     // has the exact new class name, global namespace, a zero-argument object-handle return, FINAL
     // wrapper traits, and no UFUNCTION payload.  Do not permit arbitrary authored free functions
     // merely because their spelling resembles a class constructor.
-    if new_classes.iter().any(|class| {
-        function.name == "StaticClass" && function.namespace == class.name
-    }) {
+    if new_classes
+        .iter()
+        .any(|class| function.name == "StaticClass" && function.namespace == class.name)
+    {
         return Ok(true);
     }
     let Some(_) = new_classes
@@ -2351,18 +2736,19 @@ fn is_new_class_compiler_helper(
     if !matches!(function.traits, 32 | 33) {
         return Ok(false);
     }
-    let declaration = bytes
-        .get(function.declaration.clone())
-        .ok_or_else(|| "module-structure new-class factory declaration range is invalid".to_string())?;
+    let declaration = bytes.get(function.declaration.clone()).ok_or_else(|| {
+        "module-structure new-class factory declaration range is invalid".to_string()
+    })?;
     let mut cursor = Cursor::new(declaration);
     read_sia(&mut cursor, "new-class factory", "Function.Name")?;
     read_sia(&mut cursor, "new-class factory", "Function.Namespace")?;
     let return_type = super::types::DataType::read(&mut cursor)
         .map_err(|error| format!("parsing new-class factory return type: {error}"))?;
-    let parameter_count = bounded_count(&mut cursor, "Function.ParameterTypes", "new-class factory")?;
-    let ufunction_tail = bytes
-        .get(function.ufunction_tail.clone())
-        .ok_or_else(|| "module-structure new-class factory UFUNCTION range is invalid".to_string())?;
+    let parameter_count =
+        bounded_count(&mut cursor, "Function.ParameterTypes", "new-class factory")?;
+    let ufunction_tail = bytes.get(function.ufunction_tail.clone()).ok_or_else(|| {
+        "module-structure new-class factory UFUNCTION range is invalid".to_string()
+    })?;
     Ok(return_type.is_object_handle
         && !return_type.is_reference
         && return_type.token == 5
@@ -2638,11 +3024,12 @@ fn parse_class(cursor: &mut Cursor<'_>, context: &str) -> Result<ClassRecord, St
     let start = cursor.pos();
     let name = read_sia(cursor, context, "Class.Name")?;
     let namespace = read_sia(cursor, context, "Class.Namespace")?;
-    skip(cursor, 4, context, "Class.Flags")?;
+    let flags = cursor.read_i32().map_err(|error| error.to_string())? as u32;
     let property_count =
         bounded_count_with_minimum(cursor, "Class.Properties", context, MIN_PROPERTY_BYTES)?;
+    let mut has_uproperty = false;
     for _ in 0..property_count {
-        parse_property(cursor, context)?;
+        has_uproperty |= parse_property(cursor, context)?;
     }
     let prefix = start..cursor.pos();
 
@@ -2666,7 +3053,8 @@ fn parse_class(cursor: &mut Cursor<'_>, context: &str) -> Result<ClassRecord, St
     let method_table = method_table_start..cursor.pos();
 
     let derived_start = cursor.pos();
-    skip(cursor, 16, context, "Class.DerivedFrom+ShadowType")?;
+    let derived_from = cursor.read_i64().map_err(|error| error.to_string())?;
+    let shadow_type = cursor.read_i64().map_err(|error| error.to_string())?;
     let derived_and_shadow = derived_start..cursor.pos();
 
     let constructor_count =
@@ -2719,6 +3107,17 @@ fn parse_class(cursor: &mut Cursor<'_>, context: &str) -> Result<ClassRecord, St
         read_sia(cursor, context, "Class.ComposeOntoClassName")?;
     }
     let preprocessor_tail = preprocessor_start..cursor.pos();
+    let removal_requires_preservation = has_preprocessor
+        // Only an ordinary script object may disappear without native registration evidence.
+        || flags & (1 << 22) == 0 // asOBJ_SCRIPT_OBJECT in the shipped AngelScript fork
+        || has_uproperty
+        || derived_from != 0
+        || shadow_type != 0
+        || methods
+            .iter()
+            .chain(&constructors)
+            .chain(&behaviors)
+            .any(FunctionRecord::removal_requires_preservation);
     Ok(ClassRecord {
         name,
         namespace,
@@ -2734,10 +3133,11 @@ fn parse_class(cursor: &mut Cursor<'_>, context: &str) -> Result<ClassRecord, St
         behaviors,
         behavior_types,
         preprocessor_tail,
+        removal_requires_preservation,
     })
 }
 
-fn parse_property(cursor: &mut Cursor<'_>, context: &str) -> Result<(), String> {
+fn parse_property(cursor: &mut Cursor<'_>, context: &str) -> Result<bool, String> {
     read_sia(cursor, context, "Property.Name")?;
     skip(cursor, DATA_TYPE_SIZE, context, "Property.Type")?;
     skip(cursor, 8, context, "Property.Visibility")?;
@@ -2757,7 +3157,7 @@ fn parse_property(cursor: &mut Cursor<'_>, context: &str) -> Result<(), String> 
         }
         skip(cursor, 3 * 4, context, "Property.Flags3")?;
     }
-    Ok(())
+    Ok(is_uproperty)
 }
 
 fn parse_function(cursor: &mut Cursor<'_>, context: &str) -> Result<FunctionRecord, String> {
@@ -2813,6 +3213,7 @@ fn parse_function(cursor: &mut Cursor<'_>, context: &str) -> Result<FunctionReco
         declaration,
         signature,
         ufunction_tail,
+        is_ufunction,
     })
 }
 
@@ -3420,6 +3821,7 @@ mod tests {
             0x2222,
         );
         let out = plan.apply(&regen).unwrap();
+        assert_eq!(plan.apply_manager_source_replacement(&regen).unwrap(), out);
         let parse = |bytes: &[u8], context| {
             let end = module_region_end(bytes).unwrap();
             parse_entry(&bytes[CacheHeader::SIZE..end], context).unwrap()
@@ -3448,8 +3850,8 @@ mod tests {
         let base = base_cache();
         let modules = model::parse_modules(&base).unwrap();
         let authored = HashSet::from([CLASS.to_owned(), "UNewDialogTopic".to_owned()]);
-        let error = GeneratedDefaultsPlan::prepare_hybrid(&base, &modules, MODULE, &authored)
-            .unwrap_err();
+        let error =
+            GeneratedDefaultsPlan::prepare_hybrid(&base, &modules, MODULE, &authored).unwrap_err();
         assert!(
             error.contains("refuses authored defaults for existing base class"),
             "{error}"
@@ -3545,6 +3947,10 @@ mod tests {
             2,
         );
         let carried = plan.apply(&regen).unwrap();
+        assert_eq!(
+            plan.apply_manager_source_replacement(&regen).unwrap(),
+            carried
+        );
         let parse = |bytes: &[u8], context| {
             let end = module_region_end(bytes).unwrap();
             parse_entry(&bytes[CacheHeader::SIZE..end], context).unwrap()
@@ -3886,6 +4292,202 @@ mod tests {
     }
 
     #[test]
+    fn manager_replacement_allows_plain_class_function_global_and_import_omissions() {
+        let methods = [MethodSpec {
+            name: "Act",
+            traits: 0,
+            code: &[10],
+        }];
+        let mut plain_class = class_record(CLASS, "", "Value", &methods, &[0], &[10]);
+        let flags = sia(CLASS).len() + sia("").len();
+        plain_class[flags..flags + 4].copy_from_slice(&(1u32 << 22).to_le_bytes());
+        let base = cache(&[plain_class], &[10], 0);
+        let empty = cache_with_functions(&[], &[], 1);
+        let metadata = ExistingFunctionMetadataPlan::prepare(&base, MODULE).unwrap();
+        assert!(metadata.apply(&empty).is_err());
+        metadata.apply_manager_source_replacement(&empty).unwrap();
+        let structure = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+        assert!(structure.verify(&empty).is_err());
+        structure.verify_manager_source_replacement(&empty).unwrap();
+
+        let base = cache_with_globals(&[global_record("OldFirst"), global_record("OldSecond")]);
+        let replacement =
+            cache_with_globals(&[global_record("OldSecond"), global_record("ModAddition")]);
+        let structure = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+        assert!(structure.verify(&replacement).is_err());
+        structure
+            .verify_manager_source_replacement(&replacement)
+            .unwrap();
+
+        let base = cache_with_imports(
+            &[import_record("Official.Provider", "Unused", "")],
+            &["Official.Provider"],
+        );
+        let replacement = cache_with_imports(&[], &[]);
+        let structure = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+        assert!(structure.verify(&replacement).is_err());
+        structure
+            .verify_manager_source_replacement(&replacement)
+            .unwrap();
+    }
+
+    #[test]
+    fn manager_replacement_restores_surviving_native_function_metadata() {
+        let native = ufunction(
+            &MethodSpec {
+                name: "Kept",
+                traits: 0x120,
+                code: &[10],
+            },
+            "NativeKept",
+            [1; 18],
+        );
+        let plain = function(&MethodSpec {
+            name: "Removed",
+            traits: 0,
+            code: &[10],
+        });
+        let base = cache_with_functions(&[], &[native.clone(), plain], 0);
+        let replacement = cache_with_functions(
+            &[],
+            &[function(&MethodSpec {
+                name: "Kept",
+                traits: 0,
+                code: &[77, 10],
+            })],
+            1,
+        );
+        let plan = ExistingFunctionMetadataPlan::prepare(&base, MODULE).unwrap();
+        assert!(plan.apply(&replacement).is_err());
+        let preserved = plan.apply_manager_source_replacement(&replacement).unwrap();
+        let module_end = module_region_end(&preserved).unwrap();
+        let entry = parse_entry(
+            &preserved[CacheHeader::SIZE..module_end],
+            "Manager metadata test",
+        )
+        .unwrap();
+        assert_eq!(entry.functions.len(), 1);
+        assert_eq!(entry.functions[0].traits, 0x120);
+        assert!(entry.functions[0].is_ufunction);
+        assert_eq!(
+            &preserved[CacheHeader::SIZE + entry.functions[0].ufunction_tail.start
+                ..CacheHeader::SIZE + entry.functions[0].ufunction_tail.end],
+            &native[native.len() - (entry.functions[0].ufunction_tail.len())..]
+        );
+        ExistingModuleStructurePlan::prepare(&base, MODULE)
+            .unwrap()
+            .verify_manager_source_replacement(&preserved)
+            .unwrap();
+    }
+
+    #[test]
+    fn manager_replacement_rejects_removed_native_and_generated_records() {
+        let empty = cache_with_functions(&[], &[], 0);
+        for function in [
+            ufunction(
+                &MethodSpec {
+                    name: "Native",
+                    traits: 0,
+                    code: &[10],
+                },
+                "Native",
+                [0; 18],
+            ),
+            function(&MethodSpec {
+                name: "__InitDefaults",
+                traits: 0,
+                code: &[10],
+            }),
+            function(&MethodSpec {
+                name: "Generated",
+                traits: 0x40000,
+                code: &[10],
+            }),
+        ] {
+            let base = cache_with_functions(&[], &[function], 0);
+            let error = ExistingFunctionMetadataPlan::prepare(&base, MODULE)
+                .unwrap()
+                .apply_manager_source_replacement(&empty)
+                .unwrap_err();
+            assert!(error.contains("missing existing"), "{error}");
+        }
+        let generated = [MethodSpec {
+            name: "__InitDefaults",
+            traits: 0,
+            code: &[10],
+        }];
+        let base = cache_with_functions(
+            &[class_record(CLASS, "", "Value", &generated, &[0], &[10])],
+            &[],
+            0,
+        );
+        let error = ExistingModuleStructurePlan::prepare(&base, MODULE)
+            .unwrap()
+            .verify_manager_source_replacement(&empty)
+            .unwrap_err();
+        assert!(
+            error.contains("native/reflection/generated metadata"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn manager_replacement_rejects_dangling_named_post_init_without_pointer_rows() {
+        let mut base = cache_with_functions(
+            &[],
+            &[function(&MethodSpec {
+                name: "PostInit",
+                traits: 0,
+                code: &[10],
+            })],
+            0,
+        );
+        let mut replacement = cache_with_functions(&[], &[], 1);
+        for bytes in [&mut base, &mut replacement] {
+            let module_end = module_region_end(bytes).unwrap();
+            let mut registration = 1i32.to_le_bytes().to_vec();
+            registration.extend(sia("PostInit"));
+            bytes.splice(module_end - 4..module_end, registration);
+        }
+        let plan = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+        let error = plan
+            .verify_manager_source_replacement(&replacement)
+            .unwrap_err();
+        assert!(error.contains("named native registrations"), "{error}");
+    }
+
+    #[test]
+    fn manager_replacement_keeps_surviving_property_and_method_table_guards() {
+        let methods = [MethodSpec {
+            name: "Act",
+            traits: 0,
+            code: &[10],
+        }];
+        let base = cache(
+            &[class_record(CLASS, "", "Value", &methods, &[0], &[10])],
+            &[10],
+            0,
+        );
+        let plan = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
+        for (class, expected) in [
+            (
+                class_record(CLASS, "", "Different", &methods, &[0], &[10]),
+                "flags/properties drift",
+            ),
+            (
+                class_record(CLASS, "", "Value", &methods, &[-1], &[10]),
+                "MethodTable drift",
+            ),
+        ] {
+            let replacement = cache(&[class], &[10], 1);
+            let error = plan
+                .verify_manager_source_replacement(&replacement)
+                .unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
+    #[test]
     fn existing_module_structure_rejects_existing_property_or_class_flag_drift() {
         let methods = [MethodSpec {
             name: "Act",
@@ -3973,16 +4575,10 @@ mod tests {
         let old_second = global_record("OldSecond");
         let new_global = global_record("NewGlobal");
         let base = cache_with_globals(&[old_first.clone(), old_second.clone()]);
-        let appended = cache_with_globals(&[
-            old_first.clone(),
-            old_second.clone(),
-            new_global.clone(),
-        ]);
-        let prepended = cache_with_globals(&[
-            new_global.clone(),
-            old_first.clone(),
-            old_second.clone(),
-        ]);
+        let appended =
+            cache_with_globals(&[old_first.clone(), old_second.clone(), new_global.clone()]);
+        let prepended =
+            cache_with_globals(&[new_global.clone(), old_first.clone(), old_second.clone()]);
         let interleaved = cache_with_globals(&[old_first, new_global, old_second]);
         let plan = ExistingModuleStructurePlan::prepare(&base, MODULE).unwrap();
 
@@ -4080,7 +4676,14 @@ mod tests {
         let topic = "UGoreDialogTopic";
         let base = cache_with_functions(&[], &[function(&first), function(&second)], 0x1111);
         let regen = cache_with_functions(
-            &[class_record(topic, "", "Caption", &[sneaky.clone()], &[0], &[10])],
+            &[class_record(
+                topic,
+                "",
+                "Caption",
+                &[sneaky.clone()],
+                &[0],
+                &[10],
+            )],
             &[
                 function(&first),
                 function_with_namespace(&sneaky, topic),
@@ -4166,6 +4769,10 @@ mod tests {
         let plan = prepare(&base).unwrap();
         assert_eq!(plan.generated_count(), 1);
         let carried = plan.apply(&regen).unwrap();
+        assert_eq!(
+            plan.apply_manager_source_replacement(&regen).unwrap(),
+            carried
+        );
 
         let carried_end = module_region_end(&carried).unwrap();
         let carried_entry = parse_entry(&carried[CacheHeader::SIZE..carried_end], "test").unwrap();
@@ -4290,6 +4897,10 @@ mod tests {
         let plan = prepare(&base).unwrap();
         assert_eq!(plan.generated_free_indices, HashSet::from([1]));
         let carried = plan.apply(&regen).unwrap();
+        assert_eq!(
+            plan.apply_manager_source_replacement(&regen).unwrap(),
+            carried
+        );
 
         let parse = |bytes: &[u8], context| {
             let end = module_region_end(bytes).unwrap();
@@ -4413,6 +5024,10 @@ mod tests {
         );
         let plan = prepare(&base).unwrap();
         let carried = plan.apply(&regen).unwrap();
+        assert_eq!(
+            plan.apply_manager_source_replacement(&regen).unwrap(),
+            carried
+        );
         let base_end = module_region_end(&base).unwrap();
         let out_end = module_region_end(&carried).unwrap();
         let base_entry = parse_entry(&base[CacheHeader::SIZE..base_end], "behavior base").unwrap();
@@ -4460,6 +5075,10 @@ mod tests {
             .apply(&changed_layout)
             .unwrap_err()
             .contains("flags/properties"));
+        assert!(plan
+            .apply_manager_source_replacement(&changed_layout)
+            .unwrap_err()
+            .contains("flags/properties"));
 
         let changed_namespace = cache(
             &[class_record(
@@ -4488,6 +5107,10 @@ mod tests {
             .apply(&changed_namespace)
             .unwrap_err()
             .contains("class identity/order drift"));
+        assert!(plan
+            .apply_manager_source_replacement(&changed_namespace)
+            .unwrap_err()
+            .contains("omits generated-bearing class"));
 
         let changed_traits = cache(
             &[class_record(
@@ -4516,6 +5139,10 @@ mod tests {
             .apply(&changed_traits)
             .unwrap_err()
             .contains("declaration/signature drift"));
+        assert!(plan
+            .apply_manager_source_replacement(&changed_traits)
+            .unwrap_err()
+            .contains("declaration/signature drift"));
 
         let mut changed_ufunction = regen_cache();
         let changed_end = module_region_end(&changed_ufunction).unwrap();
@@ -4538,10 +5165,18 @@ mod tests {
             .apply(&changed_ufunction)
             .unwrap_err()
             .contains("UFUNCTION metadata drift"));
+        assert!(plan
+            .apply_manager_source_replacement(&changed_ufunction)
+            .unwrap_err()
+            .contains("UFUNCTION metadata drift"));
 
         let authored_defaults = base_cache();
         assert!(plan
             .apply(&authored_defaults)
+            .unwrap_err()
+            .contains("unexpectedly authored/generated __InitDefaults"));
+        assert!(plan
+            .apply_manager_source_replacement(&authored_defaults)
             .unwrap_err()
             .contains("unexpectedly authored/generated __InitDefaults"));
 
@@ -4570,6 +5205,10 @@ mod tests {
         );
         assert!(plan
             .apply(&invalid_table)
+            .unwrap_err()
+            .contains("invalid local method 99"));
+        assert!(plan
+            .apply_manager_source_replacement(&invalid_table)
             .unwrap_err()
             .contains("invalid local method 99"));
     }

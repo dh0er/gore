@@ -13,6 +13,7 @@ pub mod loadout;
 pub mod model;
 pub mod paths;
 pub mod preflight;
+pub mod script_rebuild;
 pub mod status;
 pub mod store;
 
