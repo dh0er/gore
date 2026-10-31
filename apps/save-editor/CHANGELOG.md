@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The Save Editor is now also released for Linux, as a
+  `gore-save-editor-<version>-linux-x64.tar.gz` download. It finds Steam Proton
+  savegames on its own and lets you know when a new version is out.
+
 ### Fixed
 
 - Reviving an NPC that has been dead for a while now brings it back. Before, only

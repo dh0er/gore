@@ -358,6 +358,7 @@ class AppLocalMsvcRuntimeTest(unittest.TestCase):
 
         with (
             fixture.patched(),
+            mock.patch.object(gore_build.sys, "platform", "win32"),
             mock.patch.object(gore_build, "build_project"),
             mock.patch.object(gore_build, "stage_companions"),
             mock.patch.object(gore_build, "read_version", return_value=version),
@@ -387,6 +388,7 @@ class AppLocalMsvcRuntimeTest(unittest.TestCase):
 
         with (
             fixture.patched(),
+            mock.patch.object(gore_build.sys, "platform", "win32"),
             mock.patch.object(gore_build, "build_project"),
             mock.patch.object(gore_build, "stage_companions"),
             mock.patch.object(gore_build, "read_version", return_value=version),
