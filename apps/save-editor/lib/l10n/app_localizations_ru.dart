@@ -3193,6 +3193,14 @@ class AppLocalizationsRu extends AppLocalizations {
       'Для этого сохранения восстановление недоступно.';
 
   @override
+  String get npcWorldRepairTitle => 'Воскрешённые NPC отсутствуют в мире';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'Старая версия этого редактора воскрешала NPC, не возвращая их в мир, поэтому игра их больше не создаёт. Затронуто: $count. Восстановление завершает воскрешение и возвращает их. При сохранении, как обычно, создаётся резервная копия.';
+  }
+
+  @override
   String get statisticsTitle => 'Статистика';
 
   @override

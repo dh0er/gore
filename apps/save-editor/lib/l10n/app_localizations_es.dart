@@ -3185,6 +3185,14 @@ class AppLocalizationsEs extends AppLocalizations {
       'La reparación no está disponible para esta partida guardada.';
 
   @override
+  String get npcWorldRepairTitle => 'NPC revividos ausentes del mundo';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'Una versión anterior de este editor revivió NPC sin devolverlos al mundo, así que el juego nunca los hace aparecer. Afectados: $count. La reparación completa la reanimación y los devuelve. Al guardar se crea una copia de seguridad, como siempre.';
+  }
+
+  @override
   String get statisticsTitle => 'Estadísticas';
 
   @override

@@ -3167,6 +3167,14 @@ class AppLocalizationsTr extends AppLocalizations {
   String get slotRepairNotOffered => 'Onarım bu kayıt için kullanılamıyor.';
 
   @override
+  String get npcWorldRepairTitle => 'Diriltilen NPC\'ler dünyada yok';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'Bu düzenleyicinin eski bir sürümü NPC\'leri dünyaya geri koymadan diriltti, bu yüzden oyun onları hiç ortaya çıkarmıyor. Etkilenen: $count. Onarım diriltmeyi tamamlar ve onları geri getirir. Kaydederken her zamanki gibi bir yedek oluşturulur.';
+  }
+
+  @override
   String get statisticsTitle => 'İstatistikler';
 
   @override

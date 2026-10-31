@@ -3184,6 +3184,14 @@ class AppLocalizationsRo extends AppLocalizations {
       'Reparația nu e disponibilă pentru această salvare.';
 
   @override
+  String get npcWorldRepairTitle => 'NPC-uri reînviate lipsesc din lume';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'O versiune mai veche a acestui editor a reînviat NPC-uri fără să le readucă în lume, așa că jocul nu le mai face să apară. Afectate: $count. Reparația finalizează reînvierea și le aduce înapoi. La salvare se creează, ca întotdeauna, o copie de rezervă.';
+  }
+
+  @override
   String get statisticsTitle => 'Statistici';
 
   @override

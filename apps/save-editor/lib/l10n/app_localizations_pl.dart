@@ -3195,6 +3195,15 @@ class AppLocalizationsPl extends AppLocalizations {
       'Naprawa nie jest dostępna dla tego zapisu gry.';
 
   @override
+  String get npcWorldRepairTitle =>
+      'Wskrzeszone postacie NPC nie wróciły do świata';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'Starsza wersja tego edytora wskrzesiła postacie NPC, nie przywracając ich do świata, więc gra nigdy ich nie przywołuje. Dotyczy: $count. Naprawa kończy wskrzeszenie i przywraca je. Przy zapisie jak zawsze tworzona jest kopia zapasowa.';
+  }
+
+  @override
   String get statisticsTitle => 'Statystyki';
 
   @override

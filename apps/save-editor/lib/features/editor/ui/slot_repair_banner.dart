@@ -14,11 +14,11 @@ import 'package:goresave/providers/data_providers.dart';
 bool slotRepairWarranted(SaveInspection inspection) =>
     inspection.privateInventory.misalignedSlots > 0;
 
-/// Why the repair can or cannot be queued. The two obstacles read differently to
+/// Why a repair can or cannot be queued. The two obstacles read differently to
 /// a user — one is about this save's write capability, the other about the
 /// repair not being on offer at all — so they are kept apart rather than
 /// collapsed into one "unavailable".
-enum SlotRepairAvailability {
+enum RepairAvailability {
   /// Offered and writable: the action can be queued.
   available,
 
@@ -34,19 +34,19 @@ enum SlotRepairAvailability {
 /// same capability every other inventory action is gated on; without it — or
 /// without the core offering the op — the action could be queued but never
 /// applied.
-SlotRepairAvailability slotRepairAvailability(
+RepairAvailability slotRepairAvailability(
   SaveInspection inspection, {
   required bool canCompress,
 }) {
   if (!inspection.privateInventory.canRepairSlots) {
-    return SlotRepairAvailability.notOffered;
+    return RepairAvailability.notOffered;
   }
   if (!inspection.privateEditable ||
       !inspection.privateTypedVerified ||
       !canCompress) {
-    return SlotRepairAvailability.notWritable;
+    return RepairAvailability.notWritable;
   }
-  return SlotRepairAvailability.available;
+  return RepairAvailability.available;
 }
 
 /// Warns that this savegame carries inventory slots whose stored id no longer
@@ -75,8 +75,8 @@ class SlotRepairBanner extends ConsumerWidget {
 
   /// Whether the repair can be queued, and if not, why. The warning shows
   /// either way — the save is damaged regardless — but anything other than
-  /// [SlotRepairAvailability.available] replaces the action with its reason.
-  final SlotRepairAvailability availability;
+  /// [RepairAvailability.available] replaces the action with its reason.
+  final RepairAvailability availability;
 
   /// Pending-edit registry key. One per save; the repair is whole-save.
   static const String pendingKey = 'inventoryRepair';
@@ -122,10 +122,10 @@ class SlotRepairBanner extends ConsumerWidget {
                       color: scheme.onErrorContainer,
                     ),
                   ),
-                  if (availability != SlotRepairAvailability.available) ...[
+                  if (availability != RepairAvailability.available) ...[
                     const SizedBox(height: 4),
                     Text(
-                      availability == SlotRepairAvailability.notOffered
+                      availability == RepairAvailability.notOffered
                           ? l10n.slotRepairNotOffered
                           : l10n.slotRepairUnavailable,
                       style: theme.textTheme.bodyMedium?.copyWith(
@@ -137,7 +137,7 @@ class SlotRepairBanner extends ConsumerWidget {
                 ],
               ),
             ),
-            if (availability == SlotRepairAvailability.available) ...[
+            if (availability == RepairAvailability.available) ...[
               const SizedBox(width: 12),
               if (queued)
                 TextButton(

@@ -4853,6 +4853,18 @@ abstract class AppLocalizations {
   /// **'The repair is not available for this savegame.'**
   String get slotRepairNotOffered;
 
+  /// No description provided for @npcWorldRepairTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Revived NPCs missing from the world'**
+  String get npcWorldRepairTitle;
+
+  /// No description provided for @npcWorldRepairBody.
+  ///
+  /// In en, this message translates to:
+  /// **'An older version of this editor revived NPCs without putting them back into the world, so the game never spawns them. Affected: {count}. The repair finishes the revive and brings them back. A backup is created when you save, as always.'**
+  String npcWorldRepairBody(int count);
+
   /// No description provided for @statisticsTitle.
   ///
   /// In en, this message translates to:

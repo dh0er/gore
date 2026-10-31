@@ -3077,6 +3077,14 @@ class AppLocalizationsJa extends AppLocalizations {
   String get slotRepairNotOffered => 'このセーブデータでは修復を利用できません。';
 
   @override
+  String get npcWorldRepairTitle => '蘇生したNPCがワールドにいません';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'このエディターの旧バージョンは、NPCを蘇生してもワールドに戻していなかったため、ゲームはそのNPCを出現させません。対象：$count。修復は蘇生を完了させ、NPCを戻します。保存時にはいつも通りバックアップが作成されます。';
+  }
+
+  @override
   String get statisticsTitle => '統計';
 
   @override

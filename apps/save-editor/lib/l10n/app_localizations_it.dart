@@ -3187,6 +3187,14 @@ class AppLocalizationsIt extends AppLocalizations {
       'La riparazione non è disponibile per questo salvataggio.';
 
   @override
+  String get npcWorldRepairTitle => 'PNG rianimati assenti dal mondo';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'Una versione precedente di questo editor ha rianimato dei PNG senza rimetterli nel mondo, quindi il gioco non li fa mai comparire. Interessati: $count. La riparazione completa la rianimazione e li riporta indietro. Al salvataggio viene creato un backup, come sempre.';
+  }
+
+  @override
   String get statisticsTitle => 'Statistiche';
 
   @override

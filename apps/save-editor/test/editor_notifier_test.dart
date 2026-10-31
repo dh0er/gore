@@ -3338,6 +3338,22 @@ void main() {
       expect(editsRewriteSameTarget(typed, revive), isTrue);
     });
 
+    test('a revive claims the removed-from-world set', () {
+      final revive = {
+        'path': 'private.npc.revive',
+        'value': {'id': 'Lizard-1'},
+      };
+      final typed = typedEdit([
+        'm_GenericData',
+        '{CharacterStates}',
+        'NPCCharacters',
+        'GlobalIDsRemovedFromWorld',
+        '[3]',
+      ]);
+      expect(editsRewriteSameTarget(revive, typed), isTrue);
+      expect(editsRewriteSameTarget(typed, revive), isTrue);
+    });
+
     test('a glossary segment claims the quest CurrentState it rewrites', () {
       Map<String, Object?> glossary(List<String>? questStatePath) => {
         'path': 'private.glossary.setSegment',

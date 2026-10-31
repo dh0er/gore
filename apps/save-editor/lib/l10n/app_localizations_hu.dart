@@ -3171,6 +3171,14 @@ class AppLocalizationsHu extends AppLocalizations {
       'A javítás ehhez a mentéshez nem érhető el.';
 
   @override
+  String get npcWorldRepairTitle => 'Feltámasztott NPC-k hiányoznak a világból';
+
+  @override
+  String npcWorldRepairBody(int count) {
+    return 'A szerkesztő egy régebbi verziója feltámasztott NPC-ket anélkül, hogy visszatette volna őket a világba, ezért a játék soha nem jeleníti meg őket. Érintett: $count. A javítás befejezi a feltámasztást, és visszahozza őket. Mentéskor a szokásos módon biztonsági másolat készül.';
+  }
+
+  @override
   String get statisticsTitle => 'Statisztikák';
 
   @override

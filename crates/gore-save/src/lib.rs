@@ -7404,9 +7404,11 @@ fn assemble_private_inventory(
 /// parse succeeded and the save's `_Attributes` map yields at least one NPC.
 /// When NPCs are present, `writable` advertises the two NPC-specific structural
 /// edits (per-attribute editing rides on the already-advertised
-/// `private.typed.setValue`). Mirrors the inventory/progression blocks: always
-/// emit the object, with `hasNpcs: false` + empty `writable` when the private
-/// payload doesn't parse or has no NPCs.
+/// `private.typed.setValue`). `strandedRevives` lists the NPCs an older build
+/// revived without putting them back into the world, whenever the private payload
+/// parses. Mirrors the inventory/progression blocks: always emit the object, with
+/// `hasNpcs: false` + empty `writable` when the private payload doesn't parse or
+/// has no NPCs.
 fn summarize_private_npc_payload(root: Option<&properties::RootObject>) -> Value {
     let has_npcs = root
         .and_then(|r| npc::list_npcs(r).ok())
@@ -7421,9 +7423,13 @@ fn summarize_private_npc_payload(root: Option<&properties::RootObject>) -> Value
             writable.push("private.npc.setRelationship");
         }
     }
+    // Damage an older editor build left behind: NPCs it revived that the game
+    // still keeps out of the world. Reviving them again is the repair.
+    let stranded = root.map(npc::stranded_by_old_revives).unwrap_or_default();
     json!({
         "hasNpcs": has_npcs,
         "writable": writable,
+        "strandedRevives": stranded,
     })
 }
 
@@ -12560,12 +12566,17 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
             (path_has_name(path, "MemorizedEvents") && path_has_key(path, skills::HERO))
                 || path_is_a_quest_current_state(path)
         }
-        // Restores Health to MaxHealth and strips memory events, death tags and
-        // the corpse entry. A peer health edit would otherwise be overwritten.
+        // Restores Health to MaxHealth and strips memory events, death tags,
+        // the corpse entry and the removed-from-world listing. A peer health
+        // edit would otherwise be overwritten.
+        // It also splices the removed-from-world set, so any raw edit in that set
+        // is refused, as for the lock set: set elements have no stable key, and
+        // a raw add could put the NPC straight back.
         PrivateEdit::NpcRevive(revive) => {
             path_targets_npc_health(path, &revive.id)
                 || path_has_name(path, "MemorizedEvents")
                 || path_enters_map_entry(path, "LooseTagsByGlobalId", &revive.id)
+                || path_has_name(path, npc::REMOVED_FROM_WORLD_SET)
                 || match segment_after_name(path, "m_SavedInventories") {
                     None => false,
                     Some(Some(properties::PathSeg::MapKey(key))) => {
@@ -13365,7 +13376,8 @@ fn parse_private_typed_container_edit(
 
 /// Parse a `private.npc.revive` edit: `value = { id: String }`. Revive strips the
 /// authoritative State.Dead loose tags (the native death gate), clears the NPC's
-/// defeat/kill memory events, removes its corpse, and restores HP to MaxHealth.
+/// defeat/kill memory events, removes its corpse, puts a cleaned-up corpse back
+/// into the world, and restores HP to MaxHealth.
 fn parse_private_npc_revive_edit(edit: &Edit) -> Result<PrivateNpcReviveEdit, CoreError> {
     let value = edit.value.as_object().ok_or_else(|| {
         CoreError::InvalidRequest("private.npc.revive value must be an object".to_string())
@@ -27947,6 +27959,37 @@ mod tests {
     }
 
     #[test]
+    fn revive_claims_the_removed_from_world_set() {
+        // Revive takes the NPC off GlobalIDsRemovedFromWorld; a raw edit in that
+        // set in the same write could put it back while the write reports success.
+        let revive = PrivateEdit::NpcRevive(PrivateNpcReviveEdit {
+            id: "Biter-1".to_string(),
+        });
+        let set_path = |tail: &[&str]| {
+            let mut segs = vec![
+                "m_GenericData".to_string(),
+                "{CharacterStates}".to_string(),
+                "NPCCharacters".to_string(),
+                npc::REMOVED_FROM_WORLD_SET.to_string(),
+            ];
+            segs.extend(tail.iter().map(|s| s.to_string()));
+            properties::parse_path(&segs).unwrap()
+        };
+        assert!(structured_edit_rewrites(&revive, &set_path(&[])));
+        assert!(structured_edit_rewrites(&revive, &set_path(&["[3]"])));
+
+        let other_npc_health = properties::parse_path(&[
+            "m_GenericData".to_string(),
+            "{CharacterStates}".to_string(),
+            "AttributesByGlobalId".to_string(),
+            "{Biter-2}".to_string(),
+            "Health".to_string(),
+        ])
+        .unwrap();
+        assert!(!structured_edit_rewrites(&revive, &other_npc_health));
+    }
+
+    #[test]
     fn writing_a_slot_id_invalidates_a_later_slot_selector() {
         // A slot is selected by its m_Id, so a raw write to that field renumbers
         // slots just as a repair does. A count edit pinned to a slot id afterwards
@@ -28551,6 +28594,7 @@ mod tests {
         let writable = npc["writable"].as_array().unwrap();
         assert!(writable.contains(&json!("private.npc.revive")));
         assert!(!writable.contains(&json!("private.npc.setRelationship")));
+        assert_eq!(npc["strandedRevives"], json!([]));
 
         let supported =
             npc_attributes_with_relationship_map_payload(&[("OC_VLK_Herek_511", 100.0, 120.0)]);
