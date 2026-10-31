@@ -55,6 +55,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 import hashlib
 import os
+import platform
 import posixpath
 import re
 import shutil
@@ -1312,8 +1313,28 @@ def discard_line_ending_only_churn(project: str) -> None:
 # Build recipes                                                               #
 # --------------------------------------------------------------------------- #
 def flutter_build_dir(project: str, release: bool = True) -> Path:
+    if sys.platform == "linux" and project == "gore-save-editor":
+        mode = "release" if release else "debug"
+        # Flutter names the Linux output folder after the host CPU.
+        arch = "arm64" if platform.machine().lower() in ("aarch64", "arm64") else "x64"
+        return pdir(project) / "build" / "linux" / arch / mode / "bundle"
     mode = "Release" if release else "Debug"
     return pdir(project) / "build" / "windows" / "x64" / "runner" / mode
+
+
+def core_library_filename(project: str) -> str:
+    core = PROJECTS[project]["core_dll"]
+    if sys.platform == "win32":
+        return f"{core}.dll"
+    if sys.platform == "darwin":
+        return f"lib{core}.dylib"
+    return f"lib{core}.so"
+
+
+def flutter_executable(project: str) -> str:
+    if sys.platform == "linux" and project == "gore-save-editor":
+        return "goresave"
+    return PROJECTS[project]["exe"]
 
 
 def dist_dir(project: str) -> Path:
@@ -2129,9 +2150,12 @@ def build_project(project: str, release: bool, dry: bool) -> None:
         _stage_standalone_compiler_bundle(project, host_dir, dry=dry)
         return
     # flutter app: build native cdylib first, then the app, then bundle the dll.
+    if sys.platform == "linux" and project != "gore-save-editor":
+        raise SystemExit(f"{project} does not support Linux yet")
     build_core_dll(project, release=release, dry=dry)
 
-    flutter_cmd = [FLUTTER, "build", "windows", f"--{mode}"]
+    flutter_target = "linux" if sys.platform == "linux" else "windows"
+    flutter_cmd = [FLUTTER, "build", flutter_target, f"--{mode}"]
     # Every Flutter app's About dialog reads GIT_SHA (String.fromEnvironment, defaultValue 'dev').
     # Only rust projects returned early above, so every project reaching here is a Flutter app —
     # supply the SHA to all of them, or released mod-studio / mod-manager binaries show 'dev'.
@@ -2150,7 +2174,7 @@ def build_project(project: str, release: bool, dry: bool) -> None:
 def runnable_exe(project: str, release: bool) -> Path:
     cfg = PROJECTS[project]
     if cfg["kind"] == "flutter":
-        return flutter_build_dir(project, release) / cfg["exe"]
+        return flutter_build_dir(project, release) / flutter_executable(project)
     if cfg["kind"] == "rust-bin":
         return target_dir(release) / f"{cfg['bin']}.exe"
     raise SystemExit(f"{project} is not runnable")
@@ -2174,7 +2198,7 @@ def build_core_dll(project: str, release: bool, dry: bool = False) -> Path:
         dry=dry,
         extra_env=_standalone_compiler_build_env(project, dry=dry),
     )
-    src = target_dir(release) / f"{cfg['core_dll']}.dll"
+    src = target_dir(release) / core_library_filename(project)
     if not dry:
         _verify_host_embedded_standalone_compiler_catalog(project, src, dry=False)
     return src
@@ -2191,14 +2215,14 @@ def stage_core_dll(project: str, release: bool) -> Path:
     rel = flutter_build_dir(project, release)
     if not rel.exists():
         raise SystemExit(f"missing flutter output: {rel}")
-    dll = f"{cfg['core_dll']}.dll"
-    src = target_dir(release) / dll
+    library = core_library_filename(project)
+    src = target_dir(release) / library
     if not src.exists():
         raise SystemExit(f"missing native artifact: {src}")
-    shutil.copy2(src, rel / dll)
-    _verify_host_embedded_standalone_compiler_catalog(project, rel / dll, dry=False)
-    print(f"copied {dll} -> {rel / dll}")
-    return rel / dll
+    shutil.copy2(src, rel / library)
+    _verify_host_embedded_standalone_compiler_catalog(project, rel / library, dry=False)
+    print(f"copied {library} -> {rel / library}")
+    return rel / library
 
 
 def run_project(project: str, release: bool) -> None:

@@ -353,6 +353,31 @@ fn plan_with_root(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let paths = edits.iter().map(typed).collect::<Result<Vec<_>, _>>()?;
+    let inventory_count_paths = if let Some(root) = root {
+        specs
+            .iter()
+            .map(|spec| match spec {
+                Some(PrivateEdit::InventoryItemCount(count)) => {
+                    crate::inventory_count_rewrite_paths(count, root).map(Some)
+                }
+                _ => Ok(None),
+            })
+            .collect::<Result<Vec<_>, CoreError>>()?
+    } else {
+        vec![None; specs.len()]
+    };
+    if root.is_some() {
+        for count_paths in inventory_count_paths.iter().flatten() {
+            for path in paths.iter().flatten() {
+                if count_paths
+                    .iter()
+                    .any(|count_path| path.starts_with(count_path) || count_path.starts_with(path))
+                {
+                    return Err(pending("property", Some(path)));
+                }
+            }
+        }
+    }
     let targets = specs
         .iter()
         .map(|spec| spec.as_ref().and_then(crate::structured_edit_target))
@@ -501,13 +526,8 @@ fn plan_with_root(
                         ));
                     }
                 }
-                PrivateEdit::InventoryItemCount(count) => {
-                    let overlaps = if let Some(root) = root {
-                        crate::inventory_count_rewrites_in_root(count, path, root)?
-                    } else {
-                        crate::structured_edit_rewrites(spec, path)
-                    };
-                    if overlaps {
+                PrivateEdit::InventoryItemCount(_) => {
+                    if root.is_none() && crate::structured_edit_rewrites(spec, path) {
                         return Err(pending("property", Some(path)));
                     }
                 }

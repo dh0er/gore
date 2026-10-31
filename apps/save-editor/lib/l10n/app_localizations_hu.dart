@@ -2657,6 +2657,14 @@ class AppLocalizationsHu extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'A mentések mappája nem található';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'A(z) $path mappa nem létezik. Válaszd ki azt a mappát, amelyben a Gothic mentéseid vannak.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'A mentés vizsgálata sikertelen: $details';
   }
@@ -3321,4 +3329,159 @@ class AppLocalizationsHu extends AppLocalizations {
 
   @override
   String get locksResetPending => 'Sorba állított zárváltozások elvetése';
+
+  @override
+  String get transferProgress => 'Haladás átvitele';
+
+  @override
+  String get transferProgressTooltip => 'Haladás átvitele egy másik mentésből.';
+
+  @override
+  String get transferProgressTitle => 'Karakterhaladás átvitele';
+
+  @override
+  String get transferProgressDescription =>
+      'A hős tárgyait, képességeit és tulajdonságait egy régebbi mentésből a kiválasztott mentésbe másolja. A küldetések, az idő, a hely és az NPC-haladás a célban marad. A tárgyak a hordott leltárba kerülnek; a képességek és tulajdonságok ott másolódnak, ahol mindkét mentés támogatja őket.';
+
+  @override
+  String get transferFrom => 'Innen';
+
+  @override
+  String get transferTo => 'Ide';
+
+  @override
+  String get transferStarting => 'Átvitel indítása…';
+
+  @override
+  String get transferCheckingConflicts =>
+      'Az ütközések ellenőrzése és a módosítások biztonságos írási lépésekbe rendezése. A célmentés még nem íródik.';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return 'Olvasás $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return 'Írás $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return 'Lépés: $stage · Összesen: $total';
+  }
+
+  @override
+  String get transferCompleted => 'Az átvitel kész.';
+
+  @override
+  String get transferFailed => 'Az átvitel nem sikerült.';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return 'Kész ennyi idő alatt: $duration';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return 'Ennyi idő után sikertelen: $duration';
+  }
+
+  @override
+  String get transferLessThanASecond => 'kevesebb mint egy másodperc';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds mp';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes perc $seconds mp';
+  }
+
+  @override
+  String get transferCalculatingPlan => 'Mentési terv számítása…';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return 'Olvasásból még kb. $duration; az írási becslés utána jön';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return 'Írás $current/$total · nincs időbecslés (még nincs írási minta)';
+  }
+
+  @override
+  String get transferEstimating => 'Hátralévő idő becslése…';
+
+  @override
+  String get transferLongerThanEstimated => 'Tovább tart a becsültnél';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return 'Még kb. $duration';
+  }
+
+  @override
+  String get transferReadingSourceAttributes =>
+      'Forrás tulajdonságainak olvasása…';
+
+  @override
+  String get transferReadingDestinationAttributes =>
+      'Cél tulajdonságainak olvasása…';
+
+  @override
+  String get transferReadingSourceSkills => 'Forrás képességeinek olvasása…';
+
+  @override
+  String get transferReadingDestinationSkills => 'Cél képességeinek olvasása…';
+
+  @override
+  String get transferReadingSourceInventory => 'Forrás leltárának olvasása…';
+
+  @override
+  String get transferReadingDestinationInventory => 'Cél leltárának olvasása…';
+
+  @override
+  String get transferNoCompatibleChanges => 'Nem található átvihető módosítás.';
+
+  @override
+  String get transferChooseDifferentSource => 'Válassz másik forrásmentést.';
+
+  @override
+  String get transferDestinationChanged =>
+      'A kiválasztott cél megváltozott. Válaszd ki újra a forrást.';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return '$count módosítás előkészítése…';
+  }
+
+  @override
+  String get transferPlanningSteps => 'Biztonságos mentési lépések tervezése…';
+
+  @override
+  String get transferSavingDestination => 'Cél mentése…';
+
+  @override
+  String get transferCountLimit =>
+      'Az átvitt tárgymennyiség meghaladja a támogatott határt.';
+
+  @override
+  String get transferPartiallySaved =>
+      'Az átvitel egy része már mentve van. A többi függőben marad; mentsd el a befejezéshez.';
+
+  @override
+  String transferSkippedItems(String items) {
+    return 'Ezeket a tárgyakat nem sikerült átvinni: $items';
+  }
+
+  @override
+  String get transferNoSkillData =>
+      'Az egyik mentésben nem találhatók szerkeszthető hős-képességadatok.';
+
+  @override
+  String get transferDone => 'Kész';
 }

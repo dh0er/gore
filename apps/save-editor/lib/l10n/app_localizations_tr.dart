@@ -2654,6 +2654,14 @@ class AppLocalizationsTr extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Kayıt klasörü bulunamadı';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return '$path klasörü mevcut değil. Gothic kayıtlarının bulunduğu klasörü seç.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Kayıt incelenemedi: $details';
   }
@@ -3316,4 +3324,159 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get locksResetPending => 'Bekleyen kilit değişikliklerini iptal et';
+
+  @override
+  String get transferProgress => 'İlerlemeyi aktar';
+
+  @override
+  String get transferProgressTooltip => 'İlerlemeyi başka bir kayıttan aktar.';
+
+  @override
+  String get transferProgressTitle => 'Karakter ilerlemesini aktar';
+
+  @override
+  String get transferProgressDescription =>
+      'Kahramanın eşyalarını, becerilerini ve niteliklerini daha eski bir kayıttan seçili kayda kopyalar. Görevler, zaman, konum ve NPC ilerlemesi hedefte olduğu gibi kalır. Eşyalar taşınan envantere eklenir; beceriler ve nitelikler her iki kaydın da desteklediği yerde kopyalanır.';
+
+  @override
+  String get transferFrom => 'Kaynak';
+
+  @override
+  String get transferTo => 'Hedef';
+
+  @override
+  String get transferStarting => 'Aktarım başlatılıyor…';
+
+  @override
+  String get transferCheckingConflicts =>
+      'Çakışmalar denetleniyor ve değişiklikler güvenli yazma adımlarına ayrılıyor. Hedef kayıt henüz yazılmıyor.';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return 'Okuma $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return 'Yazma $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return 'Aşama: $stage · Toplam: $total';
+  }
+
+  @override
+  String get transferCompleted => 'Aktarım tamamlandı.';
+
+  @override
+  String get transferFailed => 'Aktarım başarısız oldu.';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return '$duration içinde tamamlandı';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return '$duration içinde başarısız oldu';
+  }
+
+  @override
+  String get transferLessThanASecond => 'bir saniyeden kısa';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds sn';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes dk $seconds sn';
+  }
+
+  @override
+  String get transferCalculatingPlan => 'Kayıt planı hesaplanıyor…';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return 'Okuma: yaklaşık $duration kaldı; yazma tahmini ardından gelir';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return 'Yazma $current/$total · süre yok (henüz yazma örneği yok)';
+  }
+
+  @override
+  String get transferEstimating => 'Kalan süre tahmin ediliyor…';
+
+  @override
+  String get transferLongerThanEstimated => 'Tahminden uzun sürüyor';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return 'Yaklaşık $duration kaldı';
+  }
+
+  @override
+  String get transferReadingSourceAttributes => 'Kaynak nitelikler okunuyor…';
+
+  @override
+  String get transferReadingDestinationAttributes =>
+      'Hedef nitelikler okunuyor…';
+
+  @override
+  String get transferReadingSourceSkills => 'Kaynak beceriler okunuyor…';
+
+  @override
+  String get transferReadingDestinationSkills => 'Hedef beceriler okunuyor…';
+
+  @override
+  String get transferReadingSourceInventory => 'Kaynak envanter okunuyor…';
+
+  @override
+  String get transferReadingDestinationInventory => 'Hedef envanter okunuyor…';
+
+  @override
+  String get transferNoCompatibleChanges =>
+      'Aktarılacak uyumlu değişiklik bulunamadı.';
+
+  @override
+  String get transferChooseDifferentSource => 'Başka bir kaynak kayıt seçin.';
+
+  @override
+  String get transferDestinationChanged =>
+      'Seçili hedef değişti. Kaynağı yeniden seçin.';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return '$count değişiklik hazırlanıyor…';
+  }
+
+  @override
+  String get transferPlanningSteps => 'Güvenli kayıt adımları planlanıyor…';
+
+  @override
+  String get transferSavingDestination => 'Hedef kaydediliyor…';
+
+  @override
+  String get transferCountLimit =>
+      'Aktarılan eşya sayısı desteklenen sınırı aşıyor.';
+
+  @override
+  String get transferPartiallySaved =>
+      'Aktarımın bir kısmı zaten kaydedildi. Geri kalanı bekliyor; tamamlamak için kaydet.';
+
+  @override
+  String transferSkippedItems(String items) {
+    return 'Bu eşyalar aktarılamadı: $items';
+  }
+
+  @override
+  String get transferNoSkillData =>
+      'Kayıtlardan birinde düzenlenebilir kahraman becerisi yok.';
+
+  @override
+  String get transferDone => 'Bitti';
 }

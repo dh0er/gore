@@ -15,7 +15,11 @@ fn exec(req: Value) -> Value {
 
 fn exec_err(req: Value) -> String {
     let resp: Value = serde_json::from_str(&gore_save::execute_json(&req.to_string())).unwrap();
-    assert_eq!(resp["ok"], json!(false), "request unexpectedly succeeded: {resp}");
+    assert_eq!(
+        resp["ok"],
+        json!(false),
+        "request unexpectedly succeeded: {resp}"
+    );
     resp["error"].to_string()
 }
 
@@ -86,7 +90,11 @@ fn list_reports_every_trader_and_the_ore_they_can_pay_with() {
     let path = start_save("list");
     let data = list(&path);
     let traders = data["traders"].as_array().unwrap();
-    assert_eq!(traders.len(), 31, "every shipped save carries 31 trader rows");
+    assert_eq!(
+        traders.len(),
+        31,
+        "every shipped save carries 31 trader rows"
+    );
 
     // Two rows are unnamed sentinels; that is why nothing may be addressed by
     // name alone.
@@ -241,10 +249,7 @@ fn add_and_remove_a_stock_line_through_the_command_surface() {
     );
     let after_add = detail(&added, index);
     assert_eq!(item_count(&after_add, &fresh), Some(9));
-    assert_eq!(
-        after_add["items"].as_array().unwrap().len(),
-        held.len() + 1
-    );
+    assert_eq!(after_add["items"].as_array().unwrap().len(), held.len() + 1);
 
     write(
         &added,
@@ -286,7 +291,10 @@ fn an_index_addressed_trader_edit_may_not_follow_a_structural_one() {
     }));
     assert!(err.contains("addresses an element by index"), "{err}");
     assert!(err.contains("private.traders.addItem"), "{err}");
-    assert!(!std::path::Path::new(&out).exists(), "a refused write must not produce a save");
+    assert!(
+        !std::path::Path::new(&out).exists(),
+        "a refused write must not produce a save"
+    );
 }
 
 #[test]
@@ -464,7 +472,10 @@ fn add_item_refuses_a_class_the_game_does_not_know() {
         }
     }));
     assert!(err.contains("not a known item class"), "{err}");
-    assert!(!std::path::Path::new(&out).exists(), "a refused write must not produce a save");
+    assert!(
+        !std::path::Path::new(&out).exists(),
+        "a refused write must not produce a save"
+    );
 }
 
 #[test]

@@ -43,4 +43,14 @@ class ItemCatalog {
 
   static Future<ItemCatalog> loadBundled() async =>
       fromJsonString(await rootBundle.loadString('assets/item_catalog.json'));
+
+  /// Every item class path in the bundled catalog, including entries without
+  /// an icon: the core accepts exactly these for a new inventory item.
+  static Future<Set<String>> loadBundledPaths() async {
+    final json = await rootBundle.loadString('assets/item_catalog.json');
+    return {
+      for (final entry in (jsonDecode(json) as List).whereType<Map>())
+        if (entry['path'] case final String path when path.isNotEmpty) path,
+    };
+  }
 }

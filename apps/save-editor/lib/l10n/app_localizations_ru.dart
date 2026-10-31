@@ -2679,6 +2679,14 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Папка сохранений не найдена';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'Папка $path не существует. Выберите папку с сохранениями Gothic.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Не удалось проверить сохранение: $details';
   }
@@ -3343,4 +3351,163 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get locksResetPending => 'Отменить несохранённые изменения замков';
+
+  @override
+  String get transferProgress => 'Перенести прогресс';
+
+  @override
+  String get transferProgressTooltip =>
+      'Перенести прогресс из другого сохранения.';
+
+  @override
+  String get transferProgressTitle => 'Перенести прогресс персонажа';
+
+  @override
+  String get transferProgressDescription =>
+      'Копирует предметы, навыки и атрибуты героя из более старого сохранения в выбранное. Квесты, время, место и прогресс NPC остаются как в назначении. Предметы добавляются в носимый инвентарь; навыки и атрибуты копируются там, где оба сохранения их поддерживают.';
+
+  @override
+  String get transferFrom => 'Из';
+
+  @override
+  String get transferTo => 'В';
+
+  @override
+  String get transferStarting => 'Запуск переноса…';
+
+  @override
+  String get transferCheckingConflicts =>
+      'Проверка конфликтов и раскладка изменений на безопасные шаги записи. Сохранение назначения пока не записывается.';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return 'Чтение $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return 'Запись $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return 'Этап: $stage · Всего: $total';
+  }
+
+  @override
+  String get transferCompleted => 'Перенос завершён.';
+
+  @override
+  String get transferFailed => 'Перенос не удался.';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return 'Завершено за $duration';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return 'Сбой за $duration';
+  }
+
+  @override
+  String get transferLessThanASecond => 'меньше секунды';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds с';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes мин $seconds с';
+  }
+
+  @override
+  String get transferCalculatingPlan => 'Расчёт плана сохранения…';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return 'Чтение: ещё около $duration; оценка записи будет следом';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return 'Запись $current/$total · время неизвестно (ещё нет образца записи)';
+  }
+
+  @override
+  String get transferEstimating => 'Оценка оставшегося времени…';
+
+  @override
+  String get transferLongerThanEstimated => 'Дольше, чем ожидалось';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return 'Осталось около $duration';
+  }
+
+  @override
+  String get transferReadingSourceAttributes => 'Чтение атрибутов источника…';
+
+  @override
+  String get transferReadingDestinationAttributes =>
+      'Чтение атрибутов назначения…';
+
+  @override
+  String get transferReadingSourceSkills => 'Чтение навыков источника…';
+
+  @override
+  String get transferReadingDestinationSkills => 'Чтение навыков назначения…';
+
+  @override
+  String get transferReadingSourceInventory => 'Чтение инвентаря источника…';
+
+  @override
+  String get transferReadingDestinationInventory =>
+      'Чтение инвентаря назначения…';
+
+  @override
+  String get transferNoCompatibleChanges =>
+      'Не найдено совместимых изменений для переноса.';
+
+  @override
+  String get transferChooseDifferentSource =>
+      'Выберите другое сохранение-источник.';
+
+  @override
+  String get transferDestinationChanged =>
+      'Выбранное назначение изменилось. Выберите источник снова.';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return 'Подготовка $count изменений…';
+  }
+
+  @override
+  String get transferPlanningSteps =>
+      'Планирование безопасных шагов сохранения…';
+
+  @override
+  String get transferSavingDestination => 'Сохранение назначения…';
+
+  @override
+  String get transferCountLimit =>
+      'Перенесённое количество предметов превышает допустимый предел.';
+
+  @override
+  String get transferPartiallySaved =>
+      'Часть переноса уже сохранена. Остальное остаётся в ожидании; сохраните, чтобы завершить перенос.';
+
+  @override
+  String transferSkippedItems(String items) {
+    return 'Эти предметы не удалось перенести: $items';
+  }
+
+  @override
+  String get transferNoSkillData =>
+      'В одном из сохранений нет изменяемых навыков героя.';
+
+  @override
+  String get transferDone => 'Готово';
 }

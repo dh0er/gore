@@ -2681,6 +2681,14 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Nie znaleziono folderu zapisów';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'Folder $path nie istnieje. Wybierz folder, w którym znajdują się zapisy Gothic.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Nie udało się sprawdzić zapisu: $details';
   }
@@ -3345,4 +3353,158 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get locksResetPending => 'Odrzuć oczekujące zmiany zamków';
+
+  @override
+  String get transferProgress => 'Przenieś postęp';
+
+  @override
+  String get transferProgressTooltip => 'Przenieś postęp z innego zapisu.';
+
+  @override
+  String get transferProgressTitle => 'Przenieś postęp postaci';
+
+  @override
+  String get transferProgressDescription =>
+      'Kopiuje przedmioty, umiejętności i atrybuty bohatera ze starszego zapisu do wybranego. Zadania, czas, miejsce i postęp NPC zostają takie jak w zapisie docelowym. Przedmioty trafiają do niesionego ekwipunku; umiejętności i atrybuty są kopiowane tam, gdzie oba zapisy je obsługują.';
+
+  @override
+  String get transferFrom => 'Z';
+
+  @override
+  String get transferTo => 'Do';
+
+  @override
+  String get transferStarting => 'Rozpoczynanie przenoszenia…';
+
+  @override
+  String get transferCheckingConflicts =>
+      'Sprawdzanie konfliktów i układanie zmian w bezpieczne kroki zapisu. Zapis docelowy nie jest jeszcze zapisywany.';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return 'Odczyty $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return 'Zapisy $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return 'Etap: $stage · Razem: $total';
+  }
+
+  @override
+  String get transferCompleted => 'Przenoszenie zakończone.';
+
+  @override
+  String get transferFailed => 'Przenoszenie nie powiodło się.';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return 'Ukończono w $duration';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return 'Niepowodzenie po $duration';
+  }
+
+  @override
+  String get transferLessThanASecond => 'mniej niż sekundę';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds s';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes min $seconds s';
+  }
+
+  @override
+  String get transferCalculatingPlan => 'Obliczanie planu zapisu…';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return 'Odczyty: około $duration do końca; potem szacunek zapisu';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return 'Zapis $current/$total · brak szacunku czasu (nie ma jeszcze próbki zapisu)';
+  }
+
+  @override
+  String get transferEstimating => 'Szacowanie pozostałego czasu…';
+
+  @override
+  String get transferLongerThanEstimated => 'Trwa dłużej niż szacunek';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return 'Zostało około $duration';
+  }
+
+  @override
+  String get transferReadingSourceAttributes => 'Odczyt atrybutów źródła…';
+
+  @override
+  String get transferReadingDestinationAttributes => 'Odczyt atrybutów celu…';
+
+  @override
+  String get transferReadingSourceSkills => 'Odczyt umiejętności źródła…';
+
+  @override
+  String get transferReadingDestinationSkills => 'Odczyt umiejętności celu…';
+
+  @override
+  String get transferReadingSourceInventory => 'Odczyt ekwipunku źródła…';
+
+  @override
+  String get transferReadingDestinationInventory => 'Odczyt ekwipunku celu…';
+
+  @override
+  String get transferNoCompatibleChanges =>
+      'Nie znaleziono zmian, które można przenieść.';
+
+  @override
+  String get transferChooseDifferentSource => 'Wybierz inny zapis źródłowy.';
+
+  @override
+  String get transferDestinationChanged =>
+      'Wybrany cel się zmienił. Wybierz źródło ponownie.';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return 'Przygotowywanie $count zmian…';
+  }
+
+  @override
+  String get transferPlanningSteps => 'Planowanie bezpiecznych kroków zapisu…';
+
+  @override
+  String get transferSavingDestination => 'Zapisywanie celu…';
+
+  @override
+  String get transferCountLimit =>
+      'Przeniesiona liczba przedmiotów przekracza obsługiwany limit.';
+
+  @override
+  String get transferPartiallySaved =>
+      'Część przeniesienia jest już zapisana. Reszta pozostaje oczekująca; zapisz, aby je dokończyć.';
+
+  @override
+  String transferSkippedItems(String items) {
+    return 'Nie udało się przenieść tych przedmiotów: $items';
+  }
+
+  @override
+  String get transferNoSkillData =>
+      'W jednym z zapisów nie ma edytowalnych umiejętności bohatera.';
+
+  @override
+  String get transferDone => 'Gotowe';
 }

@@ -84,10 +84,11 @@ auto-update.
 
 ## Requirements
 
-- Windows 10 or newer.
+- Windows 10 or newer for the released installer and portable builds.
+- Linux x64 for running from source; release packages are currently Windows-only.
 - Rust toolchain.
-- Flutter with Windows desktop support.
-- Visual Studio 2022 with Desktop development with C++.
+- Flutter with Windows desktop support on Windows, or Linux desktop support on Linux.
+- Visual Studio 2022 with Desktop development with C++ for Windows builds.
 
 The local development setup used for this repository is Flutter 3.44.0, Dart
 3.12.0, and Rust 1.96.0.
@@ -105,11 +106,26 @@ python test.py
 ```
 
 Run the Flutter app (build the native core first so the loader's upward search
-finds `gore_save.dll` under the workspace `target/`):
+finds the native library under the workspace `target/`):
 
 ```powershell
 cargo build -p gore-save
 flutter run -d windows
+```
+
+On Linux, install Flutter's Linux desktop dependencies, then run the Linux
+target:
+
+```sh
+sudo apt install clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev
+cargo build -p gore-save
+flutter run -d linux
+```
+
+The Linux desktop runner is also available through the repository build helper:
+
+```sh
+python ../../build.py gore-save-editor run --debug
 ```
 
 This library-only build needs no CLI compiler bundle or `development-cli`

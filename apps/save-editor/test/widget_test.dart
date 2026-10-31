@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
@@ -181,6 +182,145 @@ void main() {
 
     itemCatalog.complete(const ItemIconCatalog.empty());
     await tester.pumpAndSettle();
+  });
+
+  for (final (width, labeled) in const [(1400.0, false), (2400.0, true)]) {
+    testWidgets('the transfer button is ${labeled ? 'labeled' : 'an icon'} '
+        'in a ${width.toInt()} px window', (tester) async {
+      await tester.binding.setSurfaceSize(Size(width, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(
+              withSharedPlanner(_FakeCoreService()),
+            ),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+            uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+            itemIconCatalogProvider.overrideWith(
+              (ref) async => const ItemIconCatalog.empty(),
+            ),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final button = find.byKey(const ValueKey('transfer-progress-button'));
+      expect(button, findsOneWidget);
+      expect(
+        find.descendant(of: button, matching: find.text('Transfer progress')),
+        labeled ? findsOneWidget : findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('a running progress transfer keeps its dialog open', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const pickerChannel = MethodChannel('plugins.flutter.io/file_selector');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      pickerChannel,
+      (call) async => [r'C:\archive\Old.sav'],
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        pickerChannel,
+        null,
+      ),
+    );
+    final core = _BlockingTransferCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(withSharedPlanner(core)),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+          itemIconCatalogProvider.overrideWith(
+            (ref) async => const ItemIconCatalog.empty(),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.byKey(const ValueKey('transfer-progress-button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Transfer character progress'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Confirm'));
+    await tester.pump();
+    expect(core.transferReadStarted, isTrue);
+
+    // The transfer cannot be cancelled, so neither Escape nor a barrier tap
+    // may close the dialog while it runs.
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('Transfer character progress'), findsOneWidget);
+    await tester.tapAt(const Offset(5, 5));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('Transfer character progress'), findsOneWidget);
+
+    core.releaseTransferReads();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('a missing save folder offers the picker and the settings tab', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const missingDir = r'C:\missing\saves';
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          editorProvider.overrideWith(
+            (ref) => EditorNotifier(
+              withSharedPlanner(_FailingScanCoreService()),
+              saveDir: missingDir,
+              directoryExists: (_) => false,
+            ),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+          itemIconCatalogProvider.overrideWith(
+            (ref) async => const ItemIconCatalog.empty(),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    // The title bar's image preparation keeps animating, so step time instead
+    // of waiting for the tree to settle.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('Save folder not found'), findsOneWidget);
+    expect(find.textContaining(missingDir), findsOneWidget);
+    expect(
+      find.widgetWithText(OutlinedButton, 'Savegame directory'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.widgetWithText(Tab, 'Settings'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    // Language and the rest of the settings are reachable without a save.
+    expect(find.text('Appearance'), findsOneWidget);
+    expect(find.text('Interface'), findsOneWidget);
   });
 
   testWidgets('title bar fits the minimum window at 200 percent UI scale', (
@@ -2317,6 +2457,28 @@ class _RecordedRequest {
   final Map<String, Object?> payload;
 }
 
+/// Holds the first progress-transfer read open until [releaseTransferReads].
+class _BlockingTransferCoreService extends _FakeCoreService {
+  final _release = Completer<void>();
+  var transferReadStarted = false;
+
+  void releaseTransferReads() {
+    if (!_release.isCompleted) _release.complete();
+  }
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (payload['path'] == r'C:\archive\Old.sav') {
+      transferReadStarted = true;
+      await _release.future;
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
 class _FakeCoreService implements GoresaveCoreService {
   _FakeCoreService({
     this.gameTimeTotalSeconds,
@@ -2796,6 +2958,22 @@ class _FakeCoreService implements GoresaveCoreService {
           'error': {'message': 'Unhandled fake command $command'},
         };
     }
+  }
+}
+
+class _FailingScanCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command != 'scan_save_dir') {
+      return super.execute(command, payload: payload);
+    }
+    return {
+      'ok': false,
+      'error': {'message': 'io error: save directory does not exist'},
+    };
   }
 }
 

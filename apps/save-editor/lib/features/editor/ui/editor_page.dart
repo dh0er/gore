@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/ui/about_dialog.dart';
 import 'package:goresave/features/app/ui/appearance_settings.dart';
@@ -381,6 +382,440 @@ class _SaveSidebar extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+Future<void> _chooseProgressTransferSource(
+  BuildContext context,
+  EditorNotifier notifier,
+) async {
+  final destinationPath = notifier.selectedPath;
+  if (destinationPath == null) return;
+  final l10n = AppLocalizations.of(context);
+  final file = await openFile(
+    acceptedTypeGroups: [
+      XTypeGroup(
+        label: l10n.editorGothicSavegameFileType,
+        extensions: const ['sav'],
+      ),
+    ],
+  );
+  if (file == null || !context.mounted) return;
+  await showDialog<void>(
+    context: context,
+    builder: (_) => _TransferProgressDialog(
+      sourcePath: file.path,
+      destinationPath: destinationPath,
+      notifier: notifier,
+    ),
+  );
+}
+
+class _TransferProgressDialog extends StatefulWidget {
+  const _TransferProgressDialog({
+    required this.sourcePath,
+    required this.destinationPath,
+    required this.notifier,
+  });
+
+  final String sourcePath;
+  final String destinationPath;
+  final EditorNotifier notifier;
+
+  @override
+  State<_TransferProgressDialog> createState() =>
+      _TransferProgressDialogState();
+}
+
+class _TransferProgressDialogState extends State<_TransferProgressDialog> {
+  bool _items = true;
+  bool _skills = true;
+  bool _stats = true;
+  bool _working = false;
+  bool _finished = false;
+  bool _succeeded = false;
+  String? _resultMessage;
+  TransferProgress? _transferProgress;
+  Timer? _progressTimer;
+  Duration _stageElapsed = Duration.zero;
+  final Stopwatch _transferStopwatch = Stopwatch();
+
+  @override
+  void dispose() {
+    _progressTimer?.cancel();
+    super.dispose();
+  }
+
+  void _updateProgress(TransferProgress progress) {
+    setState(() {
+      _transferProgress = progress;
+      _stageElapsed = Duration.zero;
+    });
+  }
+
+  void _startProgressClock() {
+    _transferStopwatch
+      ..reset()
+      ..start();
+    _progressTimer?.cancel();
+    _progressTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() => _stageElapsed += const Duration(seconds: 1));
+    });
+  }
+
+  String _formatEstimate(AppLocalizations l10n, Duration duration) {
+    final seconds = (duration.inSeconds + 0.5).floor();
+    if (seconds < 1) return l10n.transferLessThanASecond;
+    final minutes = seconds ~/ 60;
+    final remainingSeconds = seconds % 60;
+    if (minutes == 0) return l10n.transferSeconds(seconds);
+    if (remainingSeconds == 0) return l10n.durationMinutes(minutes);
+    return l10n.transferMinutesSeconds(minutes, remainingSeconds);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    // A running transfer cannot be cancelled, so Escape or a barrier tap must
+    // not close the dialog and suggest otherwise while the save is written.
+    return PopScope(
+      canPop: !_working,
+      child: _buildDialog(context, l10n, scheme),
+    );
+  }
+
+  Widget _buildDialog(
+    BuildContext context,
+    AppLocalizations l10n,
+    ColorScheme scheme,
+  ) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          Icon(Icons.drive_file_move_outlined, color: scheme.primary),
+          const SizedBox(width: 10),
+          Expanded(child: Text(l10n.transferProgressTitle)),
+        ],
+      ),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _TransferInfoBox(text: l10n.transferProgressDescription),
+            const SizedBox(height: 12),
+            _TransferSavePath(
+              icon: Icons.file_open_outlined,
+              label: l10n.transferFrom,
+              path: widget.sourcePath,
+            ),
+            const SizedBox(height: 8),
+            _TransferSavePath(
+              icon: Icons.save_outlined,
+              label: l10n.transferTo,
+              path: widget.destinationPath,
+            ),
+            const SizedBox(height: 8),
+            if (_working) ...[
+              LinearProgressIndicator(
+                value:
+                    _transferProgress == null ||
+                        _transferProgress!.totalWrites < 2
+                    ? null
+                    : _transferProgress!.completedWrites /
+                          _transferProgress!.totalWrites,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _transferProgress?.stage ?? l10n.transferStarting,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              if (_transferProgress case final progress?
+                  when !progress.writePlanReady &&
+                      progress.completedReads == progress.totalReads) ...[
+                const SizedBox(height: 4),
+                Text(
+                  l10n.transferCheckingConflicts,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+              if (_transferProgress case final progress?) ...[
+                const SizedBox(height: 4),
+                Text(
+                  progress.totalWrites == 0
+                      ? l10n.transferReadCount(
+                          progress.completedReads,
+                          progress.totalReads,
+                        )
+                      : '${l10n.transferReadCount(progress.completedReads, progress.totalReads)} · ${l10n.transferWriteCount(progress.completedWrites, progress.totalWrites)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _transferEtaLabel(l10n, progress),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  l10n.transferStageElapsed(
+                    _formatEstimate(l10n, _stageElapsed),
+                    _formatEstimate(l10n, _transferStopwatch.elapsed),
+                  ),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+              const SizedBox(height: 8),
+            ],
+            if (_finished) ...[
+              const SizedBox(height: 8),
+              Text(
+                _resultMessage ??
+                    (_succeeded ? l10n.transferCompleted : l10n.transferFailed),
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: _succeeded
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.error,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _succeeded
+                    ? l10n.transferCompletedIn(
+                        _formatEstimate(l10n, _transferStopwatch.elapsed),
+                      )
+                    : l10n.transferFailedIn(
+                        _formatEstimate(l10n, _transferStopwatch.elapsed),
+                      ),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+            _TransferOption(
+              icon: Icons.inventory_2_outlined,
+              title: l10n.tabInventory,
+              value: _items,
+              onChanged: _working
+                  ? null
+                  : (value) => setState(() => _items = value ?? false),
+            ),
+            _TransferOption(
+              icon: Icons.school_outlined,
+              title: l10n.heroGroupSkills,
+              value: _skills,
+              onChanged: _working
+                  ? null
+                  : (value) => setState(() => _skills = value ?? false),
+            ),
+            _TransferOption(
+              icon: Icons.person_outline,
+              title: l10n.tabAttribute,
+              value: _stats,
+              onChanged: _working
+                  ? null
+                  : (value) => setState(() => _stats = value ?? false),
+            ),
+          ],
+        ),
+      ),
+      actions: _finished
+          ? [
+              FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(l10n.transferDone),
+              ),
+            ]
+          : [
+              TextButton(
+                onPressed: _working ? null : () => Navigator.pop(context),
+                child: Text(l10n.cancel),
+              ),
+              FilledButton.icon(
+                icon: _working
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.drive_file_move_outlined),
+                label: Text(l10n.confirm),
+                onPressed: _working || (!_items && !_skills && !_stats)
+                    ? null
+                    : () async {
+                        setState(() {
+                          _working = true;
+                          _transferProgress = null;
+                        });
+                        _stageElapsed = Duration.zero;
+                        _startProgressClock();
+                        final succeeded = await widget.notifier
+                            .transferHeroProgress(
+                              sourcePath: widget.sourcePath,
+                              targetPath: widget.destinationPath,
+                              onProgress: (progress) {
+                                if (!context.mounted) return;
+                                _updateProgress(progress);
+                              },
+                              items: _items,
+                              skills: _skills,
+                              stats: _stats,
+                            );
+                        _progressTimer?.cancel();
+                        _transferStopwatch.stop();
+                        if (!context.mounted) return;
+                        setState(() {
+                          _working = false;
+                          _finished = true;
+                          _succeeded = succeeded;
+                          _resultMessage = succeeded
+                              ? widget.notifier.lastWriteMessage ??
+                                    l10n.transferCompleted
+                              : widget.notifier.errorMessage ??
+                                    l10n.transferFailed;
+                        });
+                      },
+              ),
+            ],
+    );
+  }
+
+  String _transferEtaLabel(AppLocalizations l10n, TransferProgress progress) {
+    final estimate = progress.estimatedRemaining;
+    if (estimate == null) {
+      final readEstimate = progress.estimatedReadRemaining;
+      if (!progress.writePlanReady) {
+        if (progress.completedReads == progress.totalReads) {
+          return l10n.transferCalculatingPlan;
+        }
+        if (readEstimate != null) {
+          return l10n.transferReadsRemaining(
+            _formatEstimate(l10n, _remainingAfterElapsed(readEstimate)),
+          );
+        }
+      }
+      if (progress.writePlanReady &&
+          progress.completedWrites < progress.totalWrites) {
+        return l10n.transferWriteEtaUnavailable(
+          progress.completedWrites + 1,
+          progress.totalWrites,
+        );
+      }
+      return l10n.transferEstimating;
+    }
+    if (_stageElapsed > estimate && estimate > Duration.zero) {
+      return l10n.transferLongerThanEstimated;
+    }
+    return l10n.transferAboutRemaining(
+      _formatEstimate(l10n, _remainingAfterElapsed(estimate)),
+    );
+  }
+
+  Duration _remainingAfterElapsed(Duration estimate) {
+    final remaining = estimate - _stageElapsed;
+    return remaining.isNegative ? Duration.zero : remaining;
+  }
+}
+
+class _TransferInfoBox extends StatelessWidget {
+  const _TransferInfoBox({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              Icons.info_outline,
+              size: 18,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: Text(text, style: theme.textTheme.bodySmall)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TransferOption extends StatelessWidget {
+  const _TransferOption({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final bool value;
+  final ValueChanged<bool?>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return CheckboxListTile(
+      contentPadding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+      controlAffinity: ListTileControlAffinity.trailing,
+      secondary: Icon(icon, size: 20),
+      title: Text(title),
+      value: value,
+      onChanged: onChanged,
+    );
+  }
+}
+
+class _TransferSavePath extends StatelessWidget {
+  const _TransferSavePath({
+    required this.icon,
+    required this.label,
+    required this.path,
+  });
+
+  final IconData icon;
+  final String label;
+  final String path;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final normalizedPath = path.replaceAll('\\', '/');
+    final fileName = normalizedPath.split('/').last;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Icon(icon, size: 18, color: theme.colorScheme.primary),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: theme.textTheme.labelLarge),
+              Text(fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
+              Text(
+                path,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1044,33 +1479,79 @@ class _EditorWorkspace extends StatelessWidget {
 
     Widget content;
     if (state.inspection == null) {
-      final emptyPane = state.error != null
+      // A missing or wrong default save folder is the usual reason nothing is
+      // loaded, so offer the folder picker right on the empty pane as well.
+      final chooseSaveDirButton = OutlinedButton.icon(
+        onPressed: state.isLoading ? null : notifier.chooseSaveDir,
+        icon: const Icon(Icons.folder_open_outlined),
+        label: Text(l10n.savegameDirectoryTitle),
+      );
+      final missingSaveDir = state.missingSaveDir;
+      final emptyPane = missingSaveDir != null
+          ? _MessagePane(
+              icon: Icons.folder_off_outlined,
+              title: l10n.saveFolderNotFoundTitle,
+              body: l10n.saveFolderNotFoundBody(missingSaveDir),
+              action: chooseSaveDirButton,
+            )
+          : state.error != null
           ? _MessagePane(
               icon: Icons.error_outline,
               title: l10n.errorTitle,
               body: state.error!,
+              action: chooseSaveDirButton,
             )
           : _MessagePane(
               icon: Icons.search,
               title: l10n.selectASaveTitle,
               body: l10n.selectASaveBody,
+              action: chooseSaveDirButton,
             );
-      final hasBanner =
-          state.deletedSaveRecovery != null || state.lastWriteMessage != null;
-      content = !hasBanner
-          ? emptyPane
-          : Column(
-              children: [
-                if (state.deletedSaveRecovery != null)
-                  deletedSaveRecoveryBanner(),
-                if (state.lastWriteMessage != null) writeMessageBanner(),
-                Expanded(child: emptyPane),
-              ],
-            );
+      // Settings (language, save folder, game data) must stay reachable without
+      // a loaded save, so keep a reduced tab bar: the message pane plus Settings.
+      // Distinct keys keep the save tabs from inheriting this controller's index.
+      content = DefaultTabController(
+        key: const ValueKey('no-save-tabs'),
+        length: 2,
+        child: Column(
+          children: [
+            Container(
+              color: scheme.surfaceContainerLowest,
+              child: TabBar(
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                tabs: [
+                  Tab(
+                    icon: const Icon(Icons.dashboard_outlined),
+                    text: l10n.tabOverview,
+                  ),
+                  Tab(
+                    icon: const Icon(Icons.settings_outlined),
+                    text: l10n.tabSettings,
+                  ),
+                ],
+              ),
+            ),
+            if (state.deletedSaveRecovery != null) deletedSaveRecoveryBanner(),
+            if (state.lastWriteMessage != null) writeMessageBanner(),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  emptyPane,
+                  _KeepAliveTab(
+                    child: _SettingsPanel(state: state, notifier: notifier),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
     } else {
       final inspection = state.inspection!;
       final pendingCount = state.pendingEditCount;
       content = DefaultTabController(
+        key: const ValueKey('save-tabs'),
         length: 6,
         child: Column(
           children: [
@@ -1152,6 +1633,23 @@ class _EditorWorkspace extends StatelessWidget {
                 leading: Icon(Icons.error_outline, color: scheme.error),
                 content: Text(state.error!),
                 actions: [
+                  TextButton(
+                    onPressed: notifier.dismissError,
+                    child: Text(l10n.ok),
+                  ),
+                ],
+              ),
+            if (state.missingSaveDir != null)
+              MaterialBanner(
+                leading: const Icon(Icons.folder_off_outlined),
+                content: Text(
+                  l10n.saveFolderNotFoundBody(state.missingSaveDir!),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: state.isLoading ? null : notifier.chooseSaveDir,
+                    child: Text(l10n.savegameDirectoryTitle),
+                  ),
                   TextButton(
                     onPressed: notifier.dismissError,
                     child: Text(l10n.ok),
@@ -1610,6 +2108,81 @@ class _HeaderCardState extends State<_HeaderCard> {
               );
             }
 
+            // Width of a header TextButton.icon: padding, icon, the gap before
+            // the label, and the label itself.
+            double labeledActionWidth(String label) {
+              final painter = TextPainter(
+                text: TextSpan(
+                  text: label,
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                textDirection: Directionality.of(context),
+                textScaler: MediaQuery.textScalerOf(context),
+                maxLines: 1,
+              )..layout();
+              final width = 12 + 18 + 8 + painter.width + 12;
+              painter.dispose();
+              return width;
+            }
+
+            // The details column sits beside the screenshot, or below it when
+            // compact. Beside the badges the actions get at most half the row
+            // so the badges keep their layout; on their own line, all of it.
+            final detailsWidth = compact
+                ? constraints.maxWidth
+                : constraints.maxWidth - previewWidth - 14;
+            final labeledActionsWidth =
+                labeledActionWidth(l10n.transferProgress) +
+                (save == null || currentProfile == null
+                    ? 0
+                    : 4 + labeledActionWidth(l10n.deleteSavegame));
+            final showTransferLabel =
+                labeledActionsWidth <=
+                (compact ? detailsWidth : detailsWidth / 2);
+
+            Widget? transferAction() {
+              if (state.selectedPath == null) return null;
+              final enabled = !state.isLoading && !state.hasUnsavedEdits;
+              final foregroundColor = enabled
+                  ? null
+                  : Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.38);
+              const icon = Icon(Icons.drive_file_move_outlined, size: 18);
+              void onPressed() =>
+                  _chooseProgressTransferSource(context, notifier);
+              return Tooltip(
+                message: l10n.transferProgressTooltip,
+                child: AbsorbPointer(
+                  absorbing: !enabled,
+                  child: showTransferLabel
+                      ? TextButton.icon(
+                          key: const ValueKey('transfer-progress-button'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: foregroundColor,
+                            minimumSize: const Size(0, 32),
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: icon,
+                          label: Text(l10n.transferProgress),
+                          onPressed: onPressed,
+                        )
+                      : IconButton(
+                          key: const ValueKey('transfer-progress-button'),
+                          style: IconButton.styleFrom(
+                            foregroundColor: foregroundColor,
+                            minimumSize: const Size(32, 32),
+                            padding: const EdgeInsets.all(6),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: icon,
+                          onPressed: onPressed,
+                        ),
+                ),
+              );
+            }
+
             Widget? deleteAction() {
               if (save == null || currentProfile == null) return null;
               return TextButton.icon(
@@ -1633,8 +2206,23 @@ class _HeaderCardState extends State<_HeaderCard> {
               );
             }
 
-            Widget details({required bool fillPreviewHeight}) {
+            Widget? headerActions() {
+              final transfer = transferAction();
               final delete = deleteAction();
+              if (transfer == null && delete == null) return null;
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ?transfer,
+                  if (transfer != null && delete != null)
+                    const SizedBox(width: 4),
+                  ?delete,
+                ],
+              );
+            }
+
+            Widget details({required bool fillPreviewHeight}) {
+              final actions = headerActions();
               final nameSyncsPersistentDataList =
                   state.selectedSave?.isExternal != true;
               return Column(
@@ -1672,17 +2260,17 @@ class _HeaderCardState extends State<_HeaderCard> {
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Expanded(child: badges()),
-                        if (delete != null) ...[
+                        if (actions != null) ...[
                           const SizedBox(width: 4),
-                          delete,
+                          actions,
                         ],
                       ],
                     )
                   else ...[
                     badges(),
-                    if (delete != null) ...[
+                    if (actions != null) ...[
                       const SizedBox(height: 8),
-                      Align(alignment: Alignment.centerRight, child: delete),
+                      Align(alignment: Alignment.centerRight, child: actions),
                     ],
                   ],
                 ],
@@ -4009,33 +4597,45 @@ class _MessagePane extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.body,
+    this.action,
   });
 
   final IconData icon;
   final String title;
   final String body;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
+    // Scroll rather than overflow when the pane is short (the tab bar above it
+    // takes height too); a pane that fits stays centred.
     return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  icon,
-                  size: 48,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(height: 12),
-                Text(title, style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 8),
-                Text(body, textAlign: TextAlign.center),
-              ],
+      child: SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    icon,
+                    size: 48,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(title, style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 8),
+                  Text(body, textAlign: TextAlign.center),
+                  if (action != null) ...[
+                    const SizedBox(height: 16),
+                    // A button label can't wrap like the body text; shrink it in a
+                    // very narrow pane rather than overflow.
+                    FittedBox(fit: BoxFit.scaleDown, child: action),
+                  ],
+                ],
+              ),
             ),
           ),
         ),

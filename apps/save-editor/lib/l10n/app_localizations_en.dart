@@ -2647,6 +2647,14 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get saveFolderNotFoundTitle => 'Save folder not found';
+
+  @override
+  String saveFolderNotFoundBody(String path) {
+    return 'The folder $path does not exist. Choose the folder that holds your Gothic saves.';
+  }
+
+  @override
   String editorInspectSaveFailed(String details) {
     return 'Failed to inspect save: $details';
   }
@@ -3309,4 +3317,162 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get locksResetPending => 'Discard queued lock changes';
+
+  @override
+  String get transferProgress => 'Transfer progress';
+
+  @override
+  String get transferProgressTooltip =>
+      'Transfer progress from another savegame.';
+
+  @override
+  String get transferProgressTitle => 'Transfer character progress';
+
+  @override
+  String get transferProgressDescription =>
+      'Copy the Hero\'s items, skills, and attributes from an older save into the selected save. Quests, time, location, and NPC progress stay as they are in the destination. Items are added to carried inventory; skills and attributes are copied where both saves support them.';
+
+  @override
+  String get transferFrom => 'From';
+
+  @override
+  String get transferTo => 'To';
+
+  @override
+  String get transferStarting => 'Starting transfer...';
+
+  @override
+  String get transferCheckingConflicts =>
+      'Checking changes for conflicts and arranging them into safe write steps. The destination save is not being written yet.';
+
+  @override
+  String transferReadCount(int completed, int total) {
+    return 'Reads $completed/$total';
+  }
+
+  @override
+  String transferWriteCount(int completed, int total) {
+    return 'Writes $completed/$total';
+  }
+
+  @override
+  String transferStageElapsed(String stage, String total) {
+    return 'Stage elapsed: $stage · Total: $total';
+  }
+
+  @override
+  String get transferCompleted => 'Transfer completed.';
+
+  @override
+  String get transferFailed => 'Transfer failed.';
+
+  @override
+  String transferCompletedIn(String duration) {
+    return 'Completed in $duration';
+  }
+
+  @override
+  String transferFailedIn(String duration) {
+    return 'Failed in $duration';
+  }
+
+  @override
+  String get transferLessThanASecond => 'less than a second';
+
+  @override
+  String transferSeconds(int seconds) {
+    return '$seconds sec';
+  }
+
+  @override
+  String transferMinutesSeconds(int minutes, int seconds) {
+    return '$minutes min $seconds sec';
+  }
+
+  @override
+  String get transferCalculatingPlan => 'Calculating save plan...';
+
+  @override
+  String transferReadsRemaining(String duration) {
+    return 'Reads about $duration remaining; write estimate follows';
+  }
+
+  @override
+  String transferWriteEtaUnavailable(int current, int total) {
+    return 'Write $current/$total · ETA unavailable (no prior write sample)';
+  }
+
+  @override
+  String get transferEstimating => 'Estimating remaining time...';
+
+  @override
+  String get transferLongerThanEstimated => 'Taking longer than estimated';
+
+  @override
+  String transferAboutRemaining(String duration) {
+    return 'About $duration remaining';
+  }
+
+  @override
+  String get transferReadingSourceAttributes => 'Reading source attributes...';
+
+  @override
+  String get transferReadingDestinationAttributes =>
+      'Reading destination attributes...';
+
+  @override
+  String get transferReadingSourceSkills => 'Reading source skills...';
+
+  @override
+  String get transferReadingDestinationSkills =>
+      'Reading destination skills...';
+
+  @override
+  String get transferReadingSourceInventory => 'Reading source inventory...';
+
+  @override
+  String get transferReadingDestinationInventory =>
+      'Reading destination inventory...';
+
+  @override
+  String get transferNoCompatibleChanges =>
+      'No compatible changes were found to transfer.';
+
+  @override
+  String get transferChooseDifferentSource => 'Choose a different source save.';
+
+  @override
+  String get transferDestinationChanged =>
+      'The selected destination changed. Choose the source again.';
+
+  @override
+  String transferPreparingChanges(int count) {
+    return 'Preparing $count changes...';
+  }
+
+  @override
+  String get transferPlanningSteps => 'Planning safe save steps...';
+
+  @override
+  String get transferSavingDestination => 'Saving destination...';
+
+  @override
+  String get transferCountLimit =>
+      'Transferred item count exceeds the supported limit.';
+
+  @override
+  String get transferPartiallySaved =>
+      'Part of the transfer is already saved. The rest stays staged; save to finish it.';
+
+  @override
+  String transferSkippedItems(String items) {
+    return 'These items could not be transferred: $items';
+  }
+
+  @override
+  String get transferNoSkillData =>
+      'No editable Hero skill data was found in one of the saves.';
+
+  @override
+  String get transferDone => 'Done';
 }
