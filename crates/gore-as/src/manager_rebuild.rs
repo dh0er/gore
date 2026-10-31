@@ -37,7 +37,7 @@ use crate::full_graph_plan::{
 use crate::generation_receipt_v2::read_full_graph_compile_output_bytes_v2;
 use crate::standalone_package_resolver::{
     resolve_embedded_product_standalone_compiler_package_for_inputs_v1,
-    ProductStandaloneCompilerPackageResolutionV1,
+    AvailableProductStandaloneCompilerPackageV1, ProductStandaloneCompilerPackageResolutionV1,
 };
 
 /// Packaging bounds for one complete atomic mini group. Components may contain many groups.
@@ -304,27 +304,30 @@ pub fn rebuild_manager_sources_v1(
     })
 }
 
-/// Compile source winners with the exact compatible binary winners, retaining them together in
-/// one atomic mini. The original selected base must still equal authenticated pristine Shipping.
-pub fn rebuild_manager_sources_with_binary_providers_v1<F>(
-    inputs: ManagerRebuildInputsV1<'_>,
-    provider_count: usize,
-    read_provider: F,
-) -> Result<ManagerRebuildResultV1, ManagerRebuildErrorV1>
-where
-    F: FnMut(usize) -> Result<ManagerBinaryProviderV1, String>,
-{
-    validate_base_size(inputs.base_cache)?;
-    validate_sources(inputs.sources)?;
+/// Check, without compiling, that a Manager source rebuild can run at all: strict mode and an
+/// authenticated product compiler for the installed game. Callers run this before asking a user
+/// to confirm a rebuild; the rebuild itself repeats every check.
+pub fn preflight_manager_rebuild_v1(
+    host_module: &Path,
+    game_root: &Path,
+    pristine_shipping_cache: &Path,
+) -> Result<(), ManagerRebuildErrorV1> {
+    resolve_rebuild_compiler_v1(host_module, game_root, pristine_shipping_cache).map(|_| ())
+}
+
+fn resolve_rebuild_compiler_v1(
+    host_module: &Path,
+    game_root: &Path,
+    pristine_shipping_cache: &Path,
+) -> Result<(PathBuf, AvailableProductStandaloneCompilerPackageV1), ManagerRebuildErrorV1> {
     if crate::force::enabled() {
         return Err(ManagerRebuildErrorV1::new(
             ManagerRebuildErrorKindV1::Unsupported,
             "Manager source recompilation requires strict checks; process-wide --force is enabled",
         ));
     }
-    let game = resolve_game_root(inputs.game_root)?;
-    validate_temporary_root(&game, inputs.temporary_root)?;
-    if !inputs.pristine_shipping_cache.is_absolute() {
+    let game = resolve_game_root(game_root)?;
+    if !pristine_shipping_cache.is_absolute() {
         return Err(ManagerRebuildErrorV1::new(
             ManagerRebuildErrorKindV1::InvalidInput,
             "selected pristine Shipping cache path must be absolute",
@@ -333,10 +336,10 @@ where
     let executable = game.join("G1R/Binaries/Win64/G1R-Win64-Shipping.exe");
     let binds = game.join("G1R/Script/Binds.Cache");
     let package = match resolve_embedded_product_standalone_compiler_package_for_inputs_v1(
-        inputs.host_module,
+        host_module,
         CompilerTargetInputPathsV1 {
             executable: &executable,
-            shipping_cache: inputs.pristine_shipping_cache,
+            shipping_cache: pristine_shipping_cache,
             binds_cache: &binds,
         },
     ) {
@@ -358,6 +361,27 @@ where
             ));
         }
     };
+    Ok((game, package))
+}
+
+/// Compile source winners with the exact compatible binary winners, retaining them together in
+/// one atomic mini. The original selected base must still equal authenticated pristine Shipping.
+pub fn rebuild_manager_sources_with_binary_providers_v1<F>(
+    inputs: ManagerRebuildInputsV1<'_>,
+    provider_count: usize,
+    read_provider: F,
+) -> Result<ManagerRebuildResultV1, ManagerRebuildErrorV1>
+where
+    F: FnMut(usize) -> Result<ManagerBinaryProviderV1, String>,
+{
+    validate_base_size(inputs.base_cache)?;
+    validate_sources(inputs.sources)?;
+    let (game, package) = resolve_rebuild_compiler_v1(
+        inputs.host_module,
+        inputs.game_root,
+        inputs.pristine_shipping_cache,
+    )?;
+    validate_temporary_root(&game, inputs.temporary_root)?;
     ensure_pristine_base(package.target_inputs().shipping_cache(), inputs.base_cache)?;
     let workspace = RebuildWorkspaceV1::create(inputs.temporary_root)?;
     let attempt = (|| {
@@ -1395,6 +1419,21 @@ mod tests {
         let error = ensure_pristine_base(&pristine, &raw).unwrap_err();
         assert_eq!(error.kind(), ManagerRebuildErrorKindV1::Unsupported);
         assert!(error.detail().contains("raw-cache replacement"));
+    }
+
+    #[test]
+    fn preflight_refuses_without_compiling_when_no_rebuild_can_run() {
+        let root = tempfile::tempdir().unwrap();
+        let host = std::env::current_exe().unwrap();
+        let pristine = root.path().join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        let error = preflight_manager_rebuild_v1(&host, Path::new("relative-game"), &pristine)
+            .unwrap_err();
+        assert_eq!(error.kind(), ManagerRebuildErrorKindV1::InvalidInput);
+        // A test host embeds no product compiler, so the preflight reports the rebuild as
+        // unsupported exactly as the rebuild itself would.
+        let error = preflight_manager_rebuild_v1(&host, root.path(), &pristine).unwrap_err();
+        assert_eq!(error.kind(), ManagerRebuildErrorKindV1::Unsupported, "{error:?}");
+        assert!(root.path().read_dir().unwrap().next().is_none());
     }
 
     #[test]

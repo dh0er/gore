@@ -169,6 +169,9 @@ struct ScriptBinaryProvider {
 }
 
 trait ScriptRecompiler {
+    /// Fail before warnings and confirmation when no rebuild could run at all.
+    fn preflight(&mut self, game_root: &Path, pristine: &Path) -> crate::Result<()>;
+
     fn compile(
         &mut self,
         game_root: &Path,
@@ -183,6 +186,15 @@ trait ScriptRecompiler {
 struct ProductScriptRecompiler;
 
 impl ScriptRecompiler for ProductScriptRecompiler {
+    fn preflight(&mut self, game_root: &Path, pristine: &Path) -> crate::Result<()> {
+        let host_module =
+            std::env::current_exe().map_err(crate::io("locating Manager compiler host"))?;
+        gore_as::manager_rebuild::preflight_manager_rebuild_v1(&host_module, game_root, pristine)
+            .map_err(|error| {
+                ModError::Other(format!("cannot rebuild loadout script sources: {error}"))
+            })
+    }
+
     fn compile(
         &mut self,
         game_root: &Path,
@@ -1914,6 +1926,7 @@ fn apply_loadout_with_recompiler(
             ));
         }
         if !stale_keys.is_empty() || needs_source_rebuild {
+            recompiler.preflight(&abs_root, &pristine_source.path)?;
             let fingerprints =
                 gore_as::manager_rebuild::module_fingerprints(&base).map_err(|error| {
                     ModError::Other(format!("inspect updated script modules: {error}"))
@@ -2937,9 +2950,19 @@ mod tests {
         wrong_output_guid: bool,
         change_library_payload: Option<(PathBuf, Vec<u8>)>,
         tamper_binary_snapshot: bool,
+        unavailable: bool,
     }
 
     impl ScriptRecompiler for TestScriptRecompiler {
+        fn preflight(&mut self, _: &Path, _: &Path) -> crate::Result<()> {
+            if self.unavailable {
+                return Err(ModError::Other(
+                    "cannot rebuild loadout script sources: compiler unavailable".into(),
+                ));
+            }
+            Ok(())
+        }
+
         fn compile(
             &mut self,
             _: &Path,
@@ -3312,6 +3335,28 @@ mod tests {
                 .contains("unknown symbol")
         );
         assert_eq!(fs::read(game.script_cache()).unwrap(), newer);
+        assert!(crate::read_record(&game.root).unwrap().is_none());
+    }
+
+    #[test]
+    fn script_sources_unavailable_compiler_refuses_before_confirmation() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Diego", 1)], 1);
+        let updated = source_test_cache(&[("Diego", 2)], 2);
+        fs::write(game.script_cache(), &updated).unwrap();
+        let id = add_source_test_mod(&game, "diego", "Diego", &original, "edit");
+        let mut compiler = TestScriptRecompiler {
+            unavailable: true,
+            ..Default::default()
+        };
+        let error =
+            apply_source_test(&game, &loadout(&[(&id, true)]), None, &mut compiler).unwrap_err();
+        assert!(
+            matches!(&error, ModError::Other(message) if message.contains("compiler unavailable")),
+            "{error:?}"
+        );
+        assert!(compiler.calls.is_empty());
+        assert_eq!(fs::read(game.script_cache()).unwrap(), updated);
         assert!(crate::read_record(&game.root).unwrap().is_none());
     }
 
