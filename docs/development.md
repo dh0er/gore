@@ -249,16 +249,17 @@ Per-product independent semver, with prefixed release tags driving the Release
 workflow. A project name is the whole naming scheme — it is the tag prefix and
 the artifact name:
 
-| Project | Tag | Portable zip | Installer |
-|---|---|---|---|
-| `gore-cli` | `gore-cli-v*` | `gore-cli-X.Y.Z-windows-x64.zip` | — |
-| `gore-save-editor` | `gore-save-editor-v*` | `gore-save-editor-X.Y.Z-windows-x64.zip` | `gore-save-editor-X.Y.Z-setup.exe` |
-| `gore-mod-studio` | `gore-mod-studio-v*` | `gore-mod-studio-X.Y.Z-windows-x64.zip` | `gore-mod-studio-X.Y.Z-setup.exe` |
-| `gore-mod-manager` | `gore-mod-manager-v*` | `gore-mod-manager-X.Y.Z-windows-x64.zip` | `gore-mod-manager-X.Y.Z-setup.exe` |
+| Project | Tag | Portable zip | Installer | Linux tarball |
+|---|---|---|---|---|
+| `gore-cli` | `gore-cli-v*` | `gore-cli-X.Y.Z-windows-x64.zip` | — | — |
+| `gore-save-editor` | `gore-save-editor-v*` | `gore-save-editor-X.Y.Z-windows-x64.zip` | `gore-save-editor-X.Y.Z-setup.exe` | `gore-save-editor-X.Y.Z-linux-x64.tar.gz` |
+| `gore-mod-studio` | `gore-mod-studio-v*` | `gore-mod-studio-X.Y.Z-windows-x64.zip` | `gore-mod-studio-X.Y.Z-setup.exe` | — |
+| `gore-mod-manager` | `gore-mod-manager-v*` | `gore-mod-manager-X.Y.Z-windows-x64.zip` | `gore-mod-manager-X.Y.Z-setup.exe` | — |
 
-Both artifact names are derived from the project in `build.py`
-(`zip_basename` / `installer_basename`), and the installer stem is handed to
-Inno Setup as `/DOutputBaseName`, so the three cannot drift apart.
+All artifact names are derived from the project in `build.py`
+(`zip_basename` / `installer_basename` / `linux_archive_basename`), and the
+installer stem is handed to Inno Setup as `/DOutputBaseName`, so they cannot
+drift apart.
 
 The assistant plugin under `plugins/gore/` is deliberately **not** a project
 here. There is nothing to compile and nothing to zip: a marketplace serves it

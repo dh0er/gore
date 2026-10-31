@@ -329,7 +329,8 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
                 "startsWith(github.ref_name, 'gore-save-editor-v')",
                 "startsWith(github.ref_name, 'gore-')",
             ),
-            "runs-on: changed": ("runs-on: ubuntu-latest", "runs-on: windows-latest"),
+            "runs-on: changed": ("runs-on: ubuntu-22.04", "runs-on: ubuntu-latest"),
+            "permissions.contents: changed": ("contents: read", "contents: write"),
             "GORE_SIGN: changed": ('GORE_SIGN: "0"', 'GORE_SIGN: "1"'),
             "AZURE_CLIENT_SECRET: changed": (
                 'AZURE_CLIENT_SECRET: ""',

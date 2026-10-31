@@ -227,6 +227,8 @@ APPCAST_KEYS: dict[str, AppcastKeyContract] = {
 }
 
 
+LINUX_RUNNER = "ubuntu-22.04"
+
 LINUX_DEPENDENCIES_COMMAND = (
     "sudo apt-get update\n"
     "sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev "
@@ -1303,7 +1305,9 @@ def _validate_linux_job(
     context = f"release.jobs.{job_name}"
     product = PRODUCTS[contract.product]
     fields = _mapping(job, context)
-    _expect_keys(fields, {"needs", "if", "runs-on", "env", "steps"}, context, problems)
+    _expect_keys(
+        fields, {"needs", "if", "runs-on", "permissions", "env", "steps"}, context, problems
+    )
     needs = _required(fields, "needs", context, problems)
     condition = _required(fields, "if", context, problems)
     env = _required(fields, "env", context, problems)
@@ -1316,7 +1320,14 @@ def _validate_linux_job(
             problems.append(
                 f"{context}: tag/dispatch product selector changed or weakened"
             )
-    _expect_scalar(fields, "runs-on", "ubuntu-latest", context, problems)
+    # The glibc floor of the shipped binaries is the runner's, so the image is
+    # pinned rather than following ubuntu-latest.
+    _expect_scalar(fields, "runs-on", LINUX_RUNNER, context, problems)
+    permissions = _required(fields, "permissions", context, problems)
+    if permissions is not None:
+        _expect_scalar_map(
+            permissions, {"contents": "read"}, f"{context}.permissions", problems
+        )
     if env is not None:
         _expect_scalar_map(env, LINUX_JOB_ENV, f"{context}.env", problems)
     if steps_field is None:

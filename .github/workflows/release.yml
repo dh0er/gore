@@ -95,7 +95,10 @@ jobs:
   # waits for it and uploads both platforms in one release step, so a tag
   # either ships Windows and Linux together or ships nothing.
   # Signing is Authenticode-only (Windows), so this job neither signs nor sees
-  # the signing credentials.
+  # the signing credentials, and its token is read-only.
+  # Pinned to an older Ubuntu LTS rather than ubuntu-latest: the
+  # runner and libgore_save.so link against the build host's glibc, so an older
+  # host keeps the tarball running on older distributions and SteamOS.
   gore-save-editor-linux:
     needs: quality-gates
     if: >-
@@ -104,7 +107,9 @@ jobs:
         startsWith(github.ref_name, 'gore-save-editor-v')) ||
       (github.event_name == 'workflow_dispatch' &&
         inputs.project == 'gore-save-editor')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
     env:
       GORE_SIGN: "0"
       TRUSTED_SIGNING_ENDPOINT: ""

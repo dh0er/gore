@@ -92,7 +92,8 @@ tar -xzf gore-save-editor-<version>-linux-x64.tar.gz
 ./gore-save-editor-<version>-linux-x64/goresave
 ```
 
-It needs GTK 3, which desktop distributions and SteamOS already ship. Like
+It needs GTK 3 and glibc 2.34 or newer, which current desktop distributions
+and SteamOS already ship. Like
 the portable zip, it checks for new versions and opens the release page
 instead of updating itself.
 
