@@ -1894,6 +1894,20 @@ fn apply_loadout_with_recompiler(
                     .map(|_| key)
             })
             .collect::<BTreeSet<_>>();
+        // A rebuild compiles against the pristine cache and can never reproduce a differing raw
+        // replacement. Refuse before warnings and confirmation so no caller is asked to accept a
+        // rebuild that cannot succeed.
+        if (!stale_keys.is_empty() || needs_source_rebuild)
+            && raw_base
+            && crate::script_sources::script_source_sha256_v1(&base) != pristine_sha256
+        {
+            return Err(ModError::Other(
+                "cannot rebuild loadout script sources: the script cache base is a raw \
+                 whole-cache replacement that differs from the installed pristine cache; \
+                 raw-cache replacement source recompilation is unsupported"
+                    .into(),
+            ));
+        }
         if !stale_keys.is_empty() || needs_source_rebuild {
             let fingerprints =
                 gore_as::manager_rebuild::module_fingerprints(&base).map_err(|error| {
@@ -3833,6 +3847,31 @@ mod tests {
         );
         undeploy_all(&game.root).unwrap();
         assert_eq!(fs::read(game.script_cache()).unwrap(), original);
+    }
+
+    #[test]
+    fn script_sources_over_raw_cache_after_game_update_refuse_before_confirmation() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Diego", 1)], 1);
+        let updated = source_test_cache(&[("Diego", 2)], 1);
+        fs::write(game.script_cache(), &updated).unwrap();
+        let raw = source_test_cache(&[("Diego", 1), ("Extra", 5)], 1);
+        let raw_id = game.add_rawfile_mod("raw-script", "RawSc", RawTarget::ScriptCache, &raw);
+        let id = add_source_test_mod(&game, "diego", "Diego", &original, "edit");
+        let mut compiler = TestScriptRecompiler::default();
+        let error = apply_source_test(
+            &game,
+            &loadout(&[(&raw_id, true), (&id, true)]),
+            None,
+            &mut compiler,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, ModError::Other(message) if message.contains("raw-cache replacement source recompilation is unsupported")),
+            "{error:?}"
+        );
+        assert!(compiler.calls.is_empty());
+        assert_eq!(fs::read(game.script_cache()).unwrap(), updated);
     }
 
     #[test]
