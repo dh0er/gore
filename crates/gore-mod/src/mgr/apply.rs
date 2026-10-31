@@ -1979,6 +1979,9 @@ fn apply_loadout_with_recompiler(
                     ModError::Other(format!("cannot reserve binary script providers: {error}"))
                 })?;
             let mut binary_snapshot_bytes = 0u64;
+            let base_guid = gore_as::cache::header::CacheHeader::parse(&base)
+                .map_err(|error| ModError::Other(error.to_string()))?
+                .hash;
             let mut binary_output_bytes = 0u64;
             for (op, module, payload) in &scripts {
                 if script_source_groups.contains_key(&script_payload_key(payload)) {
@@ -1995,6 +1998,22 @@ fn apply_loadout_with_recompiler(
                     gore_as::cache::walk_modules::module_names(&mini).map_err(|error| {
                         ModError::Other(format!("inspect binary script provider {module}: {error}"))
                     })?;
+                // The rebuild admits binary winners only for this exact cache. Refuse a mini built
+                // for another generation before warnings and confirmation, as plain Apply does.
+                let mini_guid = gore_as::cache::header::CacheHeader::parse(&mini)
+                    .map_err(|error| {
+                        ModError::Other(format!("inspect binary script provider {module}: {error}"))
+                    })?
+                    .hash;
+                if mini_guid != base_guid {
+                    return Err(ModError::Other(format!(
+                        "binary script provider {module}: {}",
+                        gore_as::cache::splice::SpliceError::MiniGuidMismatch {
+                            base: base_guid,
+                            mini: mini_guid,
+                        }
+                    )));
+                }
                 if modules.len() > 1 {
                     crate::require_multi_module_carried_target(&mini, op, module)?;
                 }
@@ -3738,6 +3757,37 @@ mod tests {
             );
             assert_no_apply_artifacts(&game, &game.script_cache(), &current);
         }
+    }
+
+    #[test]
+    fn script_sources_refuse_binary_provider_for_old_cache_before_confirmation() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Diego", 1)], 1);
+        let updated = source_test_cache(&[("Diego", 2)], 2);
+        fs::write(game.script_cache(), &updated).unwrap();
+        let source = add_source_test_mod(&game, "source", "Diego", &original, "edit");
+        // A binary-only mod still built for the previous cache generation.
+        let provider = game.add_script_mod(
+            "provider",
+            "Provider",
+            "add",
+            "B",
+            &source_test_cache(&[("B", 77)], 1),
+        );
+        let mut compiler = TestScriptRecompiler::default();
+        let error = apply_source_test(
+            &game,
+            &loadout(&[(&source, true), (&provider, true)]),
+            None,
+            &mut compiler,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, ModError::Other(message) if message.contains("does not match target base GUID")),
+            "{error:?}"
+        );
+        assert!(compiler.calls.is_empty());
+        assert_no_apply_artifacts(&game, &game.script_cache(), &updated);
     }
 
     #[test]
