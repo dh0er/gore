@@ -9,7 +9,8 @@ release pipeline.
 Usage:
     python build.py <project|all> build      [--debug|--release] [--run]
     python build.py <project>     run        [--debug|--release]  # build if missing, launch
-    python build.py <project|all> dist                  # build + package (Linux: Save Editor tar.gz)
+    python build.py <project|all> dist                  # build + package
+    python build.py gore-save-editor dist               # on Linux: the only package, a tar.gz
     python build.py <project|all> installer             # dist + setup.exe
     python build.py <project|all> test
     python build.py <project>     release X.Y.Z <steps> [--dry-run]
