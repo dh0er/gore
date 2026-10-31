@@ -1868,9 +1868,11 @@ fn apply_loadout_with_recompiler(
                     (base, pristine_source, false)
                 }
             };
-        // Sources record the pristine cache they were compiled against, so staleness means a
-        // pristine update. A raw whole-cache replacement over an unchanged pristine keeps the
-        // binary composition it always had instead of forcing an unsupported raw-base rebuild.
+        // A source group is current when its recorded baseline is the effective base (including
+        // a raw whole-cache replacement it was built against) or the selected pristine. A raw
+        // replacement over an unchanged pristine keeps the binary composition it always had
+        // instead of forcing an unsupported raw-base rebuild.
+        let base_sha256 = crate::script_sources::script_source_sha256_v1(&base);
         let pristine_sha256 = if raw_base {
             pristine_source
                 .basis
@@ -1881,7 +1883,7 @@ fn apply_loadout_with_recompiler(
                 })?
                 .to_owned()
         } else {
-            crate::script_sources::script_source_sha256_v1(&base)
+            base_sha256.clone()
         };
         plan.bind_backup_identity(&gp.script_cache, pristine_source.basis)?;
         let stale_keys = scripts
@@ -1890,7 +1892,10 @@ fn apply_loadout_with_recompiler(
                 let key = script_payload_key(payload);
                 script_source_groups
                     .get(&key)
-                    .filter(|group| group.base_cache_sha256 != pristine_sha256)
+                    .filter(|group| {
+                        group.base_cache_sha256 != base_sha256
+                            && group.base_cache_sha256 != pristine_sha256
+                    })
                     .map(|_| key)
             })
             .collect::<BTreeSet<_>>();
@@ -1899,7 +1904,7 @@ fn apply_loadout_with_recompiler(
         // rebuild that cannot succeed.
         if (!stale_keys.is_empty() || needs_source_rebuild)
             && raw_base
-            && crate::script_sources::script_source_sha256_v1(&base) != pristine_sha256
+            && base_sha256 != pristine_sha256
         {
             return Err(ModError::Other(
                 "cannot rebuild loadout script sources: the script cache base is a raw \
@@ -3847,6 +3852,41 @@ mod tests {
         );
         undeploy_all(&game.root).unwrap();
         assert_eq!(fs::read(game.script_cache()).unwrap(), original);
+    }
+
+    #[test]
+    fn script_sources_built_against_the_raw_cache_compose_without_rebuild() {
+        let game = FakeGame::new();
+        let pristine = source_test_cache(&[("Diego", 1)], 0x11);
+        fs::write(game.script_cache(), &pristine).unwrap();
+        // A complete replacement owning its GUID, and sources recorded against that replacement.
+        let raw = source_test_cache(&[("Diego", 1), ("Extra", 5)], 0xa5);
+        let raw_id = game.add_rawfile_mod("raw-script", "RawSc", RawTarget::ScriptCache, &raw);
+        let id = add_source_test_mod(&game, "diego", "Diego", &raw, "edit");
+        let mut compiler = TestScriptRecompiler::default();
+        apply_source_test(
+            &game,
+            &loadout(&[(&raw_id, true), (&id, true)]),
+            None,
+            &mut compiler,
+        )
+        .unwrap();
+        assert!(compiler.calls.is_empty());
+        let deployed = fs::read(game.script_cache()).unwrap();
+        assert_eq!(
+            gore_as::cache::header::CacheHeader::parse(&deployed)
+                .unwrap()
+                .hash,
+            [0xa5; 16]
+        );
+        let fingerprints = gore_as::manager_rebuild::module_fingerprints(&deployed).unwrap();
+        assert!(fingerprints.contains_key("Extra"));
+        assert_ne!(
+            fingerprints["Diego"],
+            gore_as::manager_rebuild::module_fingerprints(&raw).unwrap()["Diego"]
+        );
+        undeploy_all(&game.root).unwrap();
+        assert_eq!(fs::read(game.script_cache()).unwrap(), pristine);
     }
 
     #[test]
