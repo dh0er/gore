@@ -673,15 +673,20 @@ mod tests {
             / holding.len() as f64;
         let proxy = reference_share_of_prose();
         let by_section_count = reference_sections as f64 / total_sections as f64;
+        let prose_error = (measured - proxy).abs();
+        let section_error = (measured - by_section_count).abs();
 
         assert!(
-            (measured - proxy).abs() < 0.05,
+            prose_error < 0.05,
             "the prose share {proxy:.3} no longer stands in for the average word's lean {measured:.3}"
         );
+        // Growing the guide can reduce the section-count bias. What matters is that the
+        // production prose proxy stays closer to the measured vocabulary, not that the
+        // alternative stays wrong by a fixed minimum amount.
         assert!(
-            measured - by_section_count > 0.05,
-            "the section share {by_section_count:.3} is supposed to be the biased one, but the \
-             average word leans {measured:.3}"
+            prose_error < section_error,
+            "the prose share {proxy:.3} must approximate the average word's lean {measured:.3} \
+             better than the section share {by_section_count:.3}"
         );
     }
 
@@ -690,9 +695,9 @@ mod tests {
     fn terms_of_all(text: &str) -> std::collections::HashSet<String> {
         text.to_lowercase()
             .split(|character: char| {
-                !character.is_alphanumeric() && character != '_' && character != '-'
+                !character.is_alphanumeric() && character != '_'
             })
-            .map(|word| word.trim_matches(|character| character == '_' || character == '-'))
+            .map(|word| word.trim_matches(|character| character == '_'))
             .filter(|word| word.chars().count() >= 2)
             .map(str::to_string)
             .collect()

@@ -5,6 +5,7 @@ import 'package:gore_manager/core/core_service.dart';
 import 'package:gore_manager/core/mgr_ffi.dart';
 import 'package:gore_manager/library/domain/models.dart';
 import 'package:gore_manager/status/domain/status_notifier.dart';
+import '../support/script_update_fixture.dart';
 
 StatusNotifier _notifier(FakeGoreCoreFfiService fake) =>
     StatusNotifier(MgrFfi(fake));
@@ -53,6 +54,164 @@ Future<void> _waitForRequests(_ControlledCore core, int count) async {
 }
 
 void main() {
+  group('script-update confirmation', () {
+    test(
+      'disposing while approval is pending sends no retry or postflight',
+      () async {
+        final core = _ControlledCore();
+        final n = StatusNotifier(MgrFfi(core));
+        final approval = Completer<bool>();
+        final apply = n.apply(
+          'A',
+          confirmScriptRebuild: (_) => approval.future,
+        );
+        core.requests.single.response.complete(scriptUpdateRefusal());
+        await Future<void>.delayed(Duration.zero);
+        final refresh = n.refresh('B');
+        n.dispose();
+        approval.complete(true);
+        await apply;
+        await refresh;
+        expect(core.requests, hasLength(1));
+      },
+    );
+
+    test(
+      'holds the exclusive lane through approval and resubmits exact token',
+      () async {
+        final core = _ControlledCore();
+        final n = StatusNotifier(MgrFfi(core));
+        final approval = Completer<bool>();
+        MgrScriptRebuildConfirmation? shown;
+        final apply = n.apply(
+          'A',
+          confirmScriptRebuild: (details) {
+            shown = details;
+            return approval.future;
+          },
+        );
+        core.requests.single.response.complete(scriptUpdateRefusal());
+        await Future<void>.delayed(Duration.zero);
+        expect(shown!.warnings, hasLength(2));
+        expect(n.state.busy, isTrue);
+        await n.apply('A');
+        await n.undeployAll('A');
+        expect(core.requests, hasLength(1));
+        approval.complete(true);
+        await _waitForRequests(core, 2);
+        expect(core.requests[1].payload, {
+          'game_root': 'A',
+          'script_rebuild_confirmation': 'exact-update-token',
+        });
+        core.requests[1].response.complete({
+          'ok': true,
+          'report': {
+            'applied': ['Diego Dialog'],
+            'warnings': ['Recompiled NPC/Diego'],
+          },
+        });
+        await _waitForRequests(core, 3);
+        expect(n.state.busy, isTrue);
+        core.requests[2].response.complete(_statusResponse('in_sync'));
+        await apply;
+        expect(n.state.busy, isFalse);
+        expect(n.state.error, isNull);
+        expect(n.state.lastReport!.warnings, ['Recompiled NPC/Diego']);
+      },
+    );
+
+    test(
+      'Cancel sends no second apply and does not publish an error or report',
+      () async {
+        final core = _ControlledCore();
+        final n = StatusNotifier(MgrFfi(core));
+        final apply = n.apply('A', confirmScriptRebuild: (_) async => false);
+        core.requests.single.response.complete(scriptUpdateRefusal());
+        await _waitForRequests(core, 2);
+        expect(core.requests[1].command, 'mgr_status');
+        core.requests[1].response.complete(_statusResponse('game_updated'));
+        await apply;
+        expect(
+          core.requests.where((request) => request.command == 'mgr_apply'),
+          hasLength(1),
+        );
+        expect(n.state.lastReport, isNull);
+        expect(n.state.error, isNull);
+      },
+    );
+
+    test(
+      'a changed native token requests another approval rather than auto-forcing',
+      () async {
+        final core = _ControlledCore();
+        final n = StatusNotifier(MgrFfi(core));
+        final tokens = <String>[];
+        final apply = n.apply(
+          'A',
+          confirmScriptRebuild: (details) async {
+            tokens.add(details.token);
+            return tokens.length == 1;
+          },
+        );
+        core.requests.single.response.complete(
+          scriptUpdateRefusal(token: 'first'),
+        );
+        await _waitForRequests(core, 2);
+        core.requests[1].response.complete(
+          scriptUpdateRefusal(token: 'second'),
+        );
+        await _waitForRequests(core, 3);
+        expect(core.requests[2].command, 'mgr_status');
+        core.requests[2].response.complete(_statusResponse('game_updated'));
+        await apply;
+        expect(tokens, ['first', 'second']);
+        expect(
+          core.requests.where((request) => request.command == 'mgr_apply'),
+          hasLength(2),
+        );
+      },
+    );
+
+    for (final returnToOriginal in [false, true]) {
+      test(
+        'root switch while dialog pending invalidates approval (return=$returnToOriginal)',
+        () async {
+          final core = _ControlledCore();
+          final n = StatusNotifier(MgrFfi(core));
+          final approval = Completer<bool>();
+          final apply = n.apply(
+            'A',
+            confirmScriptRebuild: (_) => approval.future,
+          );
+          core.requests.single.response.complete(scriptUpdateRefusal());
+          await Future<void>.delayed(Duration.zero);
+          final refreshB = n.refresh('B');
+          final refreshA = returnToOriginal ? n.refresh('A') : null;
+          approval.complete(true);
+          await _waitForRequests(core, 2);
+          expect(core.requests[1].command, 'mgr_status');
+          core.requests[1].response.complete(_statusResponse('game_updated'));
+          await _waitForRequests(core, 3);
+          expect(core.requests[2].payload, {
+            'game_root': returnToOriginal ? 'A' : 'B',
+          });
+          core.requests[2].response.complete(
+            _statusResponse('nothing_deployed'),
+          );
+          await apply;
+          await refreshB;
+          if (refreshA != null) await refreshA;
+          expect(
+            core.requests.where((request) => request.command == 'mgr_apply'),
+            hasLength(1),
+          );
+          expect(n.state.statusRoot, returnToOriginal ? 'A' : 'B');
+          expect(n.state.busy, isFalse);
+        },
+      );
+    }
+  });
+
   group('StatusNotifier.refresh', () {
     test(
       'null gameRoot records the set-path sentinel without calling FFI',

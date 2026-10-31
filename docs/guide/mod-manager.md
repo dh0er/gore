@@ -263,6 +263,36 @@ base and deploys the whole enabled set, backups first. It is not an incremental
 patch on top of whatever happened to be installed, which is what makes
 disabling a mod in the middle of the order safe.
 
+GORE-authored script packages also retain their complete authored `.as` modules
+and the original module fingerprints. When the pristine game cache changes,
+Apply recompiles the winning source-backed modules together against the updated
+cache with the bundled standalone compiler, including dependencies supplied by
+other source-backed mods. Unchanged game modules are loaded from the new
+cache; this does not decompile or recompile the entire vanilla source tree.
+Imported binary-only script mods still require their author to publish an update.
+
+If an edited vanilla module changed or disappeared, Manager names the affected
+mod and module and asks for confirmation: the supplied mod source can replace
+fixes introduced by the game update. Cancel leaves the deployed installation
+unchanged. Confirm permits the rebuild with those sources; it does not merge
+the developer's changes into the mod or bypass compiler errors. An authored new
+module which now collides with an official module also requires confirmation.
+
+The CLI displays the same warnings and an explicit `y/N` prompt. Noninteractive
+callers can provide the exact reported token with
+`gore mgr apply --script-update-confirmation <TOKEN>`.
+The native `mgr_apply` command returns `SCRIPT_REBUILD_CONFIRMATION_REQUIRED`
+with `error.details = {token, warnings}` and accepts that token through
+`script_rebuild_confirmation`. The token binds the selected installation,
+effective game cache, enabled mod order and source identities. A changed input
+requires a new review. No game process is launched during source recompilation.
+
+Rebuilds require a compatible authenticated standalone compiler profile and
+matching native bindings. A changed vanilla-module warning can be accepted;
+missing compiler support, invalid sources and compiler diagnostics remain errors.
+Raw whole-cache replacements remain bases; source rebuilds against a raw base
+different from the installed pristine cache are not supported.
+
 An older Manager deployment that owns containers but lacks the numeric-priority
 schema marker is reported as changes pending even when its loadout is unchanged.
 The next Apply migrates only its receipt- and hash-owned old names; Reset then

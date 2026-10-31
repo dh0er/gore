@@ -10,6 +10,7 @@ pub mod force;
 pub mod full_graph_plan;
 pub mod generation_receipt;
 pub mod generation_receipt_v2;
+pub mod manager_rebuild;
 pub mod standalone_package;
 pub mod standalone_package_resolver;
 pub mod standalone_sidecar;

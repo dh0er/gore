@@ -163,7 +163,24 @@ pub fn build(
     let _ = model;
     let json = std::fs::read_to_string(&spec_path)
         .with_context(|| format!("reading spec '{}'", spec_path.display()))?;
-    let mut spec: gore_mod::BuildSpec = serde_json::from_str(&json).context("parsing build spec")?;
+    #[derive(serde::Deserialize)]
+    struct SourceMetadata {
+        #[serde(default)]
+        script_sources: Option<gore_mod::script_sources::ScriptSourcesManifestV1>,
+    }
+    let source_metadata: SourceMetadata =
+        serde_json::from_str(&json).context("parsing script source metadata")?;
+    let mut spec: gore_mod::BuildSpec =
+        serde_json::from_str(&json).context("parsing build spec")?;
+    let original_scripts: Vec<gore_mod::ScriptEntry> = spec
+        .scripts
+        .iter()
+        .map(|script| gore_mod::ScriptEntry {
+            op: script.op.clone(),
+            module: script.module_name.clone(),
+            mini: script.mini_cache.clone(),
+        })
+        .collect();
     // `.value-minis` is the compiler workspace under `out`. Rejecting it here is before that
     // workspace is created, so a rebuild cannot write an invocation child into the old bundle.
     gore_mod::validate_mod_name(&spec.meta.name)?;
@@ -239,6 +256,23 @@ pub fn build(
         .map_err(|e| anyhow::anyhow!("{e}"))
         .with_context(|| format!("building bundle from spec '{}'", spec_path.display()))?;
     verify_value_script_inputs(&bundle, &script_input_seals)?;
+    if let Some(manifest) = source_metadata.script_sources {
+        let scripts: Vec<gore_mod::ScriptEntry> = serde_json::from_slice(
+            bundle
+                .files
+                .get("scripts/manifest.json")
+                .context("source metadata requires a script component")?,
+        )?;
+        gore_mod::script_sources::package_explicit_script_sources_v1(
+            &mut bundle.files,
+            "scripts",
+            &scripts,
+            &original_scripts,
+            base,
+            &manifest,
+        )
+        .context("packaging supplied script source metadata")?;
+    }
     if let Some(generation) = value_generation {
         bundle.files.insert(
             "scripts/value-generation.json".into(),

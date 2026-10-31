@@ -364,5 +364,22 @@
   "minimize": "Minimize",
   "restore": "Restore",
   "maximize": "Maximize",
-  "close": "Close"
+  "close": "Close",
+  "scriptUpdateConfirmationTitle": "Review script changes after game update",
+  "scriptUpdateConfirmationBody": "The game update affects script modules also supplied or changed by these mods. Rebuilding from the bundled mod sources can overwrite game fixes or restore outdated game logic. Continue only if you accept this risk.",
+  "scriptUpdateConfirmationAction": "Rebuild and apply",
+  "scriptUpdateConfirmationModule": "{modName}: {module}",
+  "scriptUpdateModuleChanged": "The original game module changed.",
+  "scriptUpdateModuleMissing": "The original game module is no longer present.",
+  "@scriptUpdateConfirmationModule": {
+    "placeholders": {
+      "modName": {
+        "type": "String"
+      },
+      "module": {
+        "type": "String"
+      }
+    }
+  },
+  "scriptUpdateModuleNowExists": "The game now includes a module with the same name as this mod’s new module."
 }

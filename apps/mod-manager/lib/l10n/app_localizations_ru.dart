@@ -748,4 +748,30 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get close => 'Закрыть';
+
+  @override
+  String get scriptUpdateConfirmationTitle =>
+      'Проверка скриптов после обновления игры';
+
+  @override
+  String get scriptUpdateConfirmationBody =>
+      'Обновление игры затронуло модули скриптов, которые также добавляют или меняют эти моды. Перекомпиляция из включённых исходников модов может перезаписать исправления игры или вернуть устаревшую логику. Продолжайте, только если принимаете этот риск.';
+
+  @override
+  String get scriptUpdateConfirmationAction => 'Перекомпилировать и применить';
+
+  @override
+  String scriptUpdateConfirmationModule(String modName, String module) {
+    return '$modName: $module';
+  }
+
+  @override
+  String get scriptUpdateModuleChanged => 'Исходный модуль игры изменён.';
+
+  @override
+  String get scriptUpdateModuleMissing => 'Исходного модуля больше нет в игре.';
+
+  @override
+  String get scriptUpdateModuleNowExists =>
+      'Игра теперь содержит модуль с тем же именем, что и новый модуль этого мода.';
 }

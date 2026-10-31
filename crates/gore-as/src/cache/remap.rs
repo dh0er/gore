@@ -258,10 +258,18 @@ impl IdentityBudget {
         total_input_len: usize,
         already_charged: usize,
     ) -> Result<Self, WireError> {
+        Self::for_composed_input_with_max(total_input_len, already_charged, MAX_IDENTITY_BUDGET)
+    }
+
+    fn for_composed_input_with_max(
+        total_input_len: usize,
+        already_charged: usize,
+        max_identity_budget: usize,
+    ) -> Result<Self, WireError> {
         let max = total_input_len
             .checked_mul(4)
             .unwrap_or(usize::MAX)
-            .clamp(MIN_IDENTITY_BUDGET, MAX_IDENTITY_BUDGET);
+            .clamp(MIN_IDENTITY_BUDGET, max_identity_budget);
         let remaining = max
             .checked_sub(already_charged)
             .ok_or(WireError::IdentityBudgetExceeded { max })?;
@@ -1112,6 +1120,18 @@ impl SymTables {
         total_source_bytes: usize,
         already_charged: usize,
     ) -> Result<Self, WireError> {
+        Self::build_with_identity_budget(
+            bytes,
+            fallback,
+            IdentityBudget::for_composed_input(total_source_bytes, already_charged)?,
+        )
+    }
+
+    fn build_with_identity_budget(
+        bytes: &[u8],
+        fallback: Option<&SymTables>,
+        mut identity_budget: IdentityBudget,
+    ) -> Result<Self, WireError> {
         let tail = preflight_tail_tables(bytes)?.tail;
         let mut c = Cursor::at(bytes, tail);
 
@@ -1166,8 +1186,6 @@ impl SymTables {
         // T1 Name (no module/namespace), so a subtype contributes NO namespace field — the only
         // collapsed nested template arguments; nested skeletons and namespaces now travel too.
         let mut memo = HashMap::new();
-        let mut identity_budget =
-            IdentityBudget::for_composed_input(total_source_bytes, already_charged)?;
         for rt in &raw_types {
             let identity = resolve_type_identity(
                 rt.key,
@@ -4069,114 +4087,161 @@ impl EffectiveReferenceBase {
         state: &EffectiveReferenceState,
         mini: &[u8],
     ) -> Result<ReferenceContribution, RemapError> {
-        preflight_mini_module_work(mini)?;
+        self.validate_inner(state, mini, false, MAX_IDENTITY_BUDGET)
+    }
+
+    fn validate_inner(
+        &self,
+        state: &EffectiveReferenceState,
+        mini: &[u8],
+        complete_cache: bool,
+        max_identity_budget: usize,
+    ) -> Result<ReferenceContribution, RemapError> {
+        if complete_cache {
+            let work = preflight_cache_module_work(mini)?;
+            if work.max_function_bytecode_dwords
+                > super::splice::MAX_MINI_FUNCTION_BYTECODE_DWORDS as usize
+            {
+                return Err(WireError::BadLen {
+                    pos: 0,
+                    len: work.max_function_bytecode_dwords as i64,
+                    field: "complete-cache function bytecode dwords",
+                }
+                .into());
+            }
+        } else {
+            preflight_mini_module_work(mini)?;
+        }
         let base_syms = &self.base.syms;
-        let total_source_bytes = self
-            .base
-            .source_bytes
-            .checked_add(state.accepted_source_bytes)
-            .and_then(|bytes| bytes.checked_add(mini.len()))
-            .ok_or(WireError::IdentityBudgetExceeded {
-                max: MAX_IDENTITY_BUDGET,
-            })?;
+        let total_source_bytes = if complete_cache {
+            self.base.source_bytes
+        } else {
+            self.base
+                .source_bytes
+                .checked_add(state.accepted_source_bytes)
+                .and_then(|bytes| bytes.checked_add(mini.len()))
+                .ok_or(WireError::IdentityBudgetExceeded {
+                    max: MAX_IDENTITY_BUDGET,
+                })?
+        };
         let already_charged = base_syms
             .identity_bytes
             .checked_add(state.accepted_identity_bytes)
             .ok_or(WireError::IdentityBudgetExceeded {
                 max: MAX_IDENTITY_BUDGET,
             })?;
-        let mini_syms = SymTables::build_with_type_fallback_and_budget(
-            mini,
-            base_syms,
-            total_source_bytes,
-            already_charged,
-        )?;
-        let meta = TailMetadata::build(mini)?;
-        let current_module_authorities = inner_module_names(mini)?;
-        let mut comparison_budget = IdentityComparisonBudget::new(
-            total_source_bytes
-                .saturating_add(already_charged)
-                .saturating_add(self.base.declarations.declarations.bytes),
-        );
-        let current_declarations = collect_declaration_inventory(
-            mini,
-            &mini_syms,
-            Some(base_syms),
-            Some(&self.base.declarations.script_owners),
-            &meta,
-            &mut comparison_budget,
-        )?
-        .declarations;
-        validate_novel_declaration_membership(
-            &meta,
-            &mini_syms,
-            base_syms,
-            &self.base.declarations,
-            &current_declarations,
-            |module| {
-                self.base.module_authorities.contains(module)
-                    || current_module_authorities.contains(module)
-            },
-            |key| !base_syms.type_ident_of_ptr.contains_key(&key),
-            |key| !base_syms.func_ident_of_ptr.contains_key(&key),
-            |key| !base_syms.global_ident_of_ptr.contains_key(&key),
-            &mut comparison_budget,
-        )?;
-        validate_novel_property_membership(
-            &meta,
-            &mini_syms,
-            base_syms,
-            &self.base.declarations,
-            &current_declarations,
-            |row| !self.base_property_keys.contains(&row.key),
-            &mut comparison_budget,
-        )?;
+        // Complete validation is called only with the exact bytes that built this final
+        // authority. Reuse its maps: rebuilding the same identities would charge them twice
+        // against the construction ceiling. Ordinary minis still build and budget their rows.
+        let parsed_mini = if complete_cache {
+            None
+        } else {
+            Some((
+                SymTables::build_with_identity_budget(
+                    mini,
+                    Some(base_syms),
+                    IdentityBudget::for_composed_input_with_max(
+                        total_source_bytes,
+                        already_charged,
+                        max_identity_budget,
+                    )?,
+                )?,
+                TailMetadata::build(mini)?,
+            ))
+        };
+        let (mini_syms, meta) = match &parsed_mini {
+            Some((syms, meta)) => (syms, meta),
+            None => (&self.base.syms, &self.base.meta),
+        };
+        // All rows in a final context already belong to this exact cache. Admission/uniqueness
+        // checks only concern incoming minis; repeating them would rebuild its declaration map.
+        if !complete_cache {
+            let current_module_authorities = inner_module_names(mini)?;
+            let mut comparison_budget = IdentityComparisonBudget::new(
+                total_source_bytes
+                    .saturating_add(already_charged)
+                    .saturating_add(self.base.declarations.declarations.bytes),
+            );
+            let current_declarations = collect_declaration_inventory(
+                mini,
+                &mini_syms,
+                Some(base_syms),
+                Some(&self.base.declarations.script_owners),
+                &meta,
+                &mut comparison_budget,
+            )?
+            .declarations;
+            validate_novel_declaration_membership(
+                &meta,
+                &mini_syms,
+                base_syms,
+                &self.base.declarations,
+                &current_declarations,
+                |module| {
+                    self.base.module_authorities.contains(module)
+                        || current_module_authorities.contains(module)
+                },
+                |key| !base_syms.type_ident_of_ptr.contains_key(&key),
+                |key| !base_syms.func_ident_of_ptr.contains_key(&key),
+                |key| !base_syms.global_ident_of_ptr.contains_key(&key),
+                &mut comparison_budget,
+            )?;
+            validate_novel_property_membership(
+                &meta,
+                &mini_syms,
+                base_syms,
+                &self.base.declarations,
+                &current_declarations,
+                |row| !self.base_property_keys.contains(&row.key),
+                &mut comparison_budget,
+            )?;
 
-        // A retained row may repeat an existing key byte-for-byte (the collision layer proves
-        // that), but it may not register an already-known portable symbol identity under
-        // a second key. Non-colliding duplicate registrations are just as fatal as stale refs.
-        ensure_unique_symbol_identities(
-            0,
-            &base_syms.type_ident_of_ptr,
-            &self.base.identity_summaries.types,
-            &state.accepted_type_identities,
-            &mini_syms.type_ident_of_ptr,
-        )?;
-        ensure_unique_symbol_identities(
-            2,
-            &base_syms.func_ident_of_ptr,
-            &self.base.identity_summaries.functions,
-            &state.accepted_func_identities,
-            &mini_syms.func_ident_of_ptr,
-        )?;
-        ensure_unique_symbol_identities_filtered(
-            4,
-            &base_syms.global_ident_of_ptr,
-            &self.base.identity_summaries.globals,
-            &state.accepted_global_identities,
-            &mini_syms.global_ident_of_ptr,
-            |key| {
-                !mini_syms
-                    .global_is_string_of_ptr
-                    .get(&key)
-                    .copied()
-                    .unwrap_or(false)
-            },
-        )?;
-        ensure_unique_id_pointers(
-            1,
-            &base_syms.typeid_to_ptr,
-            &self.base_type_ids,
-            &state.accepted_type_ids,
-            &mini_syms.typeid_to_ptr,
-        )?;
-        ensure_unique_id_pointers(
-            3,
-            &base_syms.funcid_to_ptr,
-            &self.base_func_ids,
-            &state.accepted_func_ids,
-            &mini_syms.funcid_to_ptr,
-        )?;
+            // A retained row may repeat an existing key byte-for-byte (the collision layer proves
+            // that), but it may not register an already-known portable symbol identity under
+            // a second key. Non-colliding duplicate registrations are just as fatal as stale refs.
+            ensure_unique_symbol_identities(
+                0,
+                &base_syms.type_ident_of_ptr,
+                &self.base.identity_summaries.types,
+                &state.accepted_type_identities,
+                &mini_syms.type_ident_of_ptr,
+            )?;
+            ensure_unique_symbol_identities(
+                2,
+                &base_syms.func_ident_of_ptr,
+                &self.base.identity_summaries.functions,
+                &state.accepted_func_identities,
+                &mini_syms.func_ident_of_ptr,
+            )?;
+            ensure_unique_symbol_identities_filtered(
+                4,
+                &base_syms.global_ident_of_ptr,
+                &self.base.identity_summaries.globals,
+                &state.accepted_global_identities,
+                &mini_syms.global_ident_of_ptr,
+                |key| {
+                    !mini_syms
+                        .global_is_string_of_ptr
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(false)
+                },
+            )?;
+            ensure_unique_id_pointers(
+                1,
+                &base_syms.typeid_to_ptr,
+                &self.base_type_ids,
+                &state.accepted_type_ids,
+                &mini_syms.typeid_to_ptr,
+            )?;
+            ensure_unique_id_pointers(
+                3,
+                &base_syms.funcid_to_ptr,
+                &self.base_func_ids,
+                &state.accepted_func_ids,
+                &mini_syms.funcid_to_ptr,
+            )?;
+        }
 
         let has_type_ptr = |key: i64| {
             key == 0
@@ -4362,7 +4427,7 @@ impl EffectiveReferenceBase {
             }
         }
 
-        let spans = collect_module_spans(mini)?;
+        let spans = collect_module_spans_preflighted(mini)?;
         for span in &spans.code {
             let code: Vec<i32> = (0..span.count)
                 .map(|index| {
@@ -4521,6 +4586,18 @@ impl EffectiveReferenceBase {
                 EmbedKind::TypePtr(_) => {}
             }
         }
+        let Some((mini_syms, _)) = parsed_mini else {
+            // A complete cache contributes no incoming state; all rows belong to its authority.
+            return Ok(ReferenceContribution {
+                type_identities: HashMap::new(),
+                func_identities: HashMap::new(),
+                global_identities: HashMap::new(),
+                type_ids: HashMap::new(),
+                func_ids: HashMap::new(),
+                source_bytes: mini.len(),
+                identity_bytes: 0,
+            });
+        };
         let mut persistent_identity_bytes = 0usize;
         for (&key, identity) in &mini_syms.type_ident_of_ptr {
             if !base_syms.type_ident_of_ptr.contains_key(&key)
@@ -4615,9 +4692,161 @@ impl EffectiveReferenceBase {
         })
     }
 
+    /// Only complete Manager edits can authorize an omission. Original orphans, native rows,
+    /// string literals, template rows, and all unrelated declarations retain their authority.
+    /// The caller MUST validate every reference against the pruned final graph before publishing.
+    pub(super) fn prune_manager_source_declarations(
+        &self,
+        bytes: &[u8],
+        replaceable: &HashSet<String>,
+    ) -> Result<Vec<u8>, RemapError> {
+        preflight_cache_module_work(bytes)?;
+        let syms = SymTables::build(bytes)?;
+        let meta = TailMetadata::build(bytes)?;
+        let mut budget = IdentityComparisonBudget::new(
+            bytes
+                .len()
+                .saturating_add(syms.identity_bytes)
+                .saturating_add(self.base.declarations.declarations.bytes),
+        );
+        let declarations =
+            collect_declaration_inventory(bytes, &syms, None, None, &meta, &mut budget)?
+                .declarations;
+        let mut removed: [HashSet<i64>; super::tables::N_TABLES] =
+            std::array::from_fn(|_| HashSet::new());
+        for row in &meta.types {
+            let descriptor = type_declaration_descriptor(row);
+            if descriptor.kind == TypeDeclarationKind::ScriptLeaf
+                && replaceable.contains(&row.module)
+                && self.base.syms.type_ident_of_ptr.contains_key(&row.key)
+                && match_declaration_identities(
+                    &[&self.base.declarations.declarations],
+                    &descriptor.identity,
+                    DeclarationSetKind::Type,
+                    &mut budget,
+                )? == FunctionDeclarationMatch::Unique
+                && match_declaration_identities(
+                    &[&declarations],
+                    &descriptor.identity,
+                    DeclarationSetKind::Type,
+                    &mut budget,
+                )? == FunctionDeclarationMatch::Missing
+            {
+                removed[0].insert(row.key);
+            }
+        }
+        for row in &meta.funcs {
+            let owner_module = if row.is_method {
+                meta.type_row(row.owner_dep.1)
+                    .map(|owner| owner.module.as_str())
+            } else {
+                Some(row.module.as_str())
+            };
+            if !owner_module.is_some_and(|module| replaceable.contains(module))
+                || self.base.declarations.orphan_functions.contains(&row.key)
+                || !self.base.syms.func_ident_of_ptr.contains_key(&row.key)
+                || is_native_function_row(row, &meta, &self.base.declarations)
+            {
+                continue;
+            }
+            if let Some(identity) = syms.func_ident_of_ptr.get(&row.key) {
+                if match_function_declarations(&[&declarations], identity, &mut budget)?
+                    == FunctionDeclarationMatch::Missing
+                {
+                    removed[2].insert(row.key);
+                }
+            }
+        }
+        for row in &meta.globals {
+            let identity = DeclarationIdentity {
+                module: row.module.clone(),
+                namespace: row.namespace.clone(),
+                name: row.name.clone(),
+            };
+            if !row.is_string
+                && replaceable.contains(&row.module)
+                && self.base.syms.global_ident_of_ptr.contains_key(&row.key)
+                && match_declaration_identities(
+                    &[&self.base.declarations.declarations],
+                    &identity,
+                    DeclarationSetKind::Global,
+                    &mut budget,
+                )? == FunctionDeclarationMatch::Unique
+                && match_declaration_identities(
+                    &[&declarations],
+                    &identity,
+                    DeclarationSetKind::Global,
+                    &mut budget,
+                )? == FunctionDeclarationMatch::Missing
+            {
+                removed[4].insert(row.key);
+            }
+        }
+        for row in &meta.type_ids {
+            if removed[0].contains(&row.ptr) {
+                removed[1].insert(row.id as i64);
+            }
+        }
+        for row in &meta.func_ids {
+            if removed[2].contains(&row.ptr) {
+                removed[3].insert(row.id as i64);
+            }
+        }
+        for row in &meta.properties {
+            if removed[1].contains(&(row.old_type_id as i64)) {
+                removed[6].insert(row.key);
+            }
+        }
+        let tail = module_region_end(bytes)?;
+        let tables = super::tables::parse_tail_tables(bytes, tail)?;
+        let mut out = Vec::with_capacity(bytes.len());
+        out.extend_from_slice(&bytes[..tail]);
+        for (index, table) in tables.tables.iter().enumerate() {
+            if removed[index].is_empty() {
+                out.extend_from_slice(&bytes[table.entries_start - 4..table.entries_end]);
+                continue;
+            }
+            let count = table
+                .keys
+                .iter()
+                .filter(|key| !removed[index].contains(key))
+                .count();
+            out.extend_from_slice(&(count as u32).to_le_bytes());
+            for (row, key) in table.keys.iter().enumerate() {
+                if !removed[index].contains(key) {
+                    let start = table.entry_starts[row];
+                    let end = table
+                        .entry_starts
+                        .get(row + 1)
+                        .copied()
+                        .unwrap_or(table.entries_end);
+                    out.extend_from_slice(&bytes[start..end]);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     pub(super) fn validate_composed_declarations(&self, bytes: &[u8]) -> Result<(), RemapError> {
         validate_composed_module_records_with_pristine(bytes, Some(&self.base.declarations))
     }
+}
+
+/// Construct reference authority exclusively from these exact final bytes. Kept private to
+/// composition so no caller can accidentally validate against a different, unpruned universe.
+pub(super) fn validate_complete_cache_references(
+    cache: &[u8],
+    native_authority: Option<&PristineNativeApiAuthority>,
+) -> Result<(), RemapError> {
+    let references = EffectiveReferenceBase::build_with_native_authority(cache, native_authority)?;
+    references
+        .validate_inner(
+            &EffectiveReferenceState::default(),
+            cache,
+            true,
+            MAX_IDENTITY_BUDGET,
+        )
+        .map(|_| ())
 }
 
 impl EffectiveReferenceState {
@@ -6010,6 +6239,11 @@ pub(super) fn validate_composed_module_records(bytes: &[u8]) -> Result<(), Remap
 /// unit, so its modules share one span set; `module`/`inner_module` name the last module read.
 fn collect_module_spans(mini: &[u8]) -> Result<ModuleSpans, WireError> {
     preflight_mini_module_work(mini)?;
+    collect_module_spans_preflighted(mini)
+}
+
+/// Caller has performed either the mini or complete-cache work preflight.
+fn collect_module_spans_preflighted(mini: &[u8]) -> Result<ModuleSpans, WireError> {
     let mut c = Cursor::at(mini, CacheHeader::SIZE);
     let count = super::walk_modules::module_count(mini) as usize;
     c.ensure_minimum_remaining(count, 60, "Modules")?;
@@ -10130,6 +10364,20 @@ pub(super) fn remap_module_to_base_with_loadout_plan(
         analyzed,
         true,
     )
+}
+
+/// Normalize the complete selected Manager mini before preservation and final publication.
+/// Retain the original native authority even when the base contains admitted binary providers.
+pub(super) fn canonicalize_manager_source_mini(
+    mini: &[u8],
+    base: &[u8],
+    native_authority: &PristineNativeApiAuthority,
+) -> Result<Vec<u8>, RemapError> {
+    let mut builder = LoadoutScriptIdPlanBuilder::new_with_config_and_native_authority(
+        base, PRODUCTION_LOADOUT_PLAN_LIMITS, PRODUCTION_ALLOCATION_DOMAINS, Some(native_authority))?;
+    builder.inspect(mini)?;
+    let plan = builder.finish()?;
+    remap_module_to_base_with_loadout_plan(mini, base, &plan).map(|(bytes, _)| bytes)
 }
 
 fn remap_module_allow_new(

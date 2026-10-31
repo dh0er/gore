@@ -25,6 +25,7 @@ import 'preflight/domain/preflight_notifier.dart';
 import 'settings/ui/settings_tab.dart';
 import 'status/domain/status_notifier.dart';
 import 'status/ui/status_details_dialog.dart';
+import 'status/ui/script_rebuild_confirmation_dialog.dart';
 
 bool _preflightFindingUsesInstallRecoveryGuide(PreflightCheckView finding) =>
     switch (finding.action) {
@@ -880,13 +881,31 @@ class _ModsTab extends ConsumerWidget {
       return;
     }
     try {
-      await ref.read(statusProvider.notifier).apply(root);
+      await ref
+          .read(statusProvider.notifier)
+          .apply(
+            root,
+            confirmScriptRebuild: (confirmation) async {
+              if (!context.mounted || _gameRoot(ref) != root) return false;
+              final confirmed = await showDialog<bool>(
+                context: context,
+                barrierDismissible: false,
+                builder: (_) =>
+                    ScriptRebuildConfirmationDialog(confirmation: confirmation),
+              );
+              return confirmed == true &&
+                  context.mounted &&
+                  _gameRoot(ref) == root;
+            },
+          );
     } finally {
       // Applying can change install/recovery evidence even when native reports
       // an error. Discard the old snapshot and re-read after status/conflicts
       // settle rather than leaving a stale setup finding authoritative.
-      ref.invalidate(conflictsProvider);
-      ref.read(preflightProvider.notifier).invalidateLibrary();
+      if (context.mounted) {
+        ref.invalidate(conflictsProvider);
+        ref.read(preflightProvider.notifier).invalidateLibrary();
+      }
     }
   }
 

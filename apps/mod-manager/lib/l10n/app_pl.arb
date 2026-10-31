@@ -221,5 +221,12 @@
   "minimize": "Minimalizuj",
   "restore": "Przywróć",
   "maximize": "Maksymalizuj",
-  "close": "Zamknij"
+  "close": "Zamknij",
+  "scriptUpdateConfirmationTitle": "Sprawdź skrypty po aktualizacji gry",
+  "scriptUpdateConfirmationBody": "Aktualizacja gry dotyczy modułów skryptów także dostarczanych lub zmienianych przez te mody. Ponowna kompilacja z dołączonych źródeł może nadpisać poprawki gry lub przywrócić nieaktualną logikę. Kontynuuj tylko wtedy, gdy akceptujesz to ryzyko.",
+  "scriptUpdateConfirmationAction": "Kompiluj i zastosuj",
+  "scriptUpdateConfirmationModule": "{modName}: {module}",
+  "scriptUpdateModuleChanged": "Oryginalny moduł gry został zmieniony.",
+  "scriptUpdateModuleMissing": "Oryginalnego modułu nie ma już w grze.",
+  "scriptUpdateModuleNowExists": "Gra zawiera teraz moduł o tej samej nazwie co nowy moduł tego moda."
 }

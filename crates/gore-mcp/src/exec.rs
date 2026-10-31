@@ -38,8 +38,13 @@ const PIPE_CHUNK_BYTES: usize = 16 * 1024;
 /// grace period and then take whatever they have captured so far.
 const READER_GRACE: Duration = Duration::from_millis(500);
 
-/// stderr is progress chatter and error text, never a payload, so it gets a fixed small cap.
+/// Ordinary stderr is progress chatter and error text, so it gets a fixed small cap.
 pub const MAX_STDERR_BYTES: usize = 32 * 1024;
+
+/// Manager Apply carries its complete script-update warning selection and exact approval token
+/// on stderr. Native admits at most 256 source modules with 4096-byte identities and 198-byte
+/// mod names/IDs. Two MiB retains that entire dialog, including its instructions and token.
+pub const MAX_MANAGER_APPLY_STDERR_BYTES: usize = 2 * 1024 * 1024;
 
 /// What a finished (or killed) child left behind.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -162,7 +167,13 @@ impl Spawn for ProcessSpawn {
         let stdout_pipe = child.stdout.take().expect("stdout was piped");
         let stderr_pipe = child.stderr.take().expect("stderr was piped");
         let stdout_cap = self.limits.max_stdout_bytes;
-        let stderr_cap = self.limits.max_stderr_bytes;
+        let stderr_cap = if invocation.path == "mgr apply" {
+            self.limits
+                .max_stderr_bytes
+                .max(MAX_MANAGER_APPLY_STDERR_BYTES)
+        } else {
+            self.limits.max_stderr_bytes
+        };
 
         // Drain both pipes on their own threads. A child that fills a pipe we are not reading
         // blocks forever, which would turn a large output into a hang rather than a truncation.
@@ -479,6 +490,59 @@ mod tests {
         let group = spec::group(tool).expect("group");
         let invocation = argv::build(group, sub, &args, &options()).expect("build");
         (invocation, group.command(sub).expect("command"))
+    }
+
+    #[test]
+    #[cfg(any(windows, unix))]
+    fn manager_warning_dialog_is_fully_captured_and_other_stderr_stays_capped() {
+        let token = "f".repeat(64);
+        // Cover the complete 256-entry selection with maximum-size module identities and
+        // room for both 198-byte mod labels. This also exceeds the ordinary stdout budget.
+        let warning = "a".repeat(4096 + 2 * 198 + 128);
+        #[cfg(windows)]
+        let (exe, argv) = (
+            PathBuf::from("cmd"),
+            vec![
+                "/D".into(),
+                "/C".into(),
+                format!("(for /L %i in (1,1,256) do @echo warning-%i-{warning}) 1>&2 & echo Exact confirmation token: {token} 1>&2 & exit /B 1"),
+            ],
+        );
+        #[cfg(unix)]
+        let (exe, argv) = (
+            PathBuf::from("/bin/sh"),
+            vec![
+                "-c".into(),
+                format!("i=1; while [ \"$i\" -le 256 ]; do printf 'warning-%s-%s\\n' \"$i\" '{warning}' >&2; i=$((i+1)); done; printf 'Exact confirmation token: %s\\n' '{token}' >&2; exit 1"),
+            ],
+        );
+        let spawn = ProcessSpawn::new(exe, 16);
+        let (mut inv, command) = invocation("gore_mgr", "apply", json!({}));
+        inv.argv = argv.into_iter().map(Into::into).collect();
+        inv.timeout = Duration::from_secs(60);
+        let outcome = spawn.run(&inv).expect("warning replay");
+        assert_eq!(outcome.status, Some(1));
+        assert!(outcome.stderr_total > crate::server::DEFAULT_MAX_STDOUT_BYTES);
+        assert!(!outcome.stderr_truncated);
+        assert!(outcome.stderr.len() <= MAX_MANAGER_APPLY_STDERR_BYTES);
+        assert_eq!(outcome.stderr.matches("warning-").count(), 256);
+        assert!(outcome.stderr.contains("warning-256-"));
+        assert!(outcome
+            .stderr
+            .contains(&format!("Exact confirmation token: {token}")));
+        let result = to_call_result(&inv, command, &outcome);
+        assert_eq!(result["isError"], true);
+        let rendered = result.to_string();
+        assert!(rendered.contains("warning-256-"));
+        assert!(rendered.contains(&token));
+        assert!(!rendered.contains("[truncated"));
+
+        inv.path = "config get".into();
+        let ordinary = spawn.run(&inv).expect("ordinary error replay");
+        assert_eq!(ordinary.stderr_total, outcome.stderr_total);
+        assert!(ordinary.stderr_truncated);
+        assert!(ordinary.stderr.len() <= MAX_STDERR_BYTES);
+        assert!(!ordinary.stderr.contains(&token));
     }
 
     #[test]
