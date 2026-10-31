@@ -1,7 +1,8 @@
 name: Release
 
 # Monorepo releases are per-project, triggered by prefixed tags:
-#   gore-save-editor-vX.Y.Z  -> gore-save-editor (Flutter app, WinSparkle updater)
+#   gore-save-editor-vX.Y.Z  -> gore-save-editor (Flutter app, WinSparkle updater;
+#                               plus a Linux tar.gz from gore-save-editor-linux)
 #   gore-mod-studio-vX.Y.Z   -> gore-mod-studio (Flutter app, WinSparkle updater)
 #   gore-mod-manager-vX.Y.Z  -> gore-mod-manager (Flutter app, WinSparkle updater)
 #   gore-cli-vX.Y.Z          -> gore-cli (Rust binary)
@@ -90,8 +91,78 @@ jobs:
             }
             core.info(`Using successful manual CI: ${run.html_url}`);
 
-  gore-save-editor:
+  # Builds the Linux tarball only. It never publishes: the Windows job below
+  # waits for it and uploads both platforms in one release step, so a tag
+  # either ships Windows and Linux together or ships nothing.
+  # Signing is Authenticode-only (Windows), so this job neither signs nor sees
+  # the signing credentials.
+  gore-save-editor-linux:
     needs: quality-gates
+    if: >-
+      (github.event_name == 'push' &&
+        github.ref_type == 'tag' &&
+        startsWith(github.ref_name, 'gore-save-editor-v')) ||
+      (github.event_name == 'workflow_dispatch' &&
+        inputs.project == 'gore-save-editor')
+    runs-on: ubuntu-latest
+    env:
+      GORE_SIGN: "0"
+      TRUSTED_SIGNING_ENDPOINT: ""
+      TRUSTED_SIGNING_ACCOUNT: ""
+      TRUSTED_SIGNING_PROFILE: ""
+      AZURE_TENANT_ID: ""
+      AZURE_CLIENT_ID: ""
+      AZURE_CLIENT_SECRET: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve and verify version
+        id: version
+        shell: pwsh
+        run: |
+          $pubspec = Get-Content apps/save-editor/pubspec.yaml -Raw
+          if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$') {
+            Write-Error 'pubspec.yaml version must be plain X.Y.Z (no build number)'
+            exit 1
+          }
+          $version = $Matches[1]
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $tag = $env:GITHUB_REF_NAME
+            if ($tag -ne "gore-save-editor-v$version") {
+              Write-Error "tag $tag does not match pubspec version $version"
+              exit 1
+            }
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.0
+          channel: stable
+          cache: true
+
+      # Flutter's Linux desktop toolchain (see docs/development.md).
+      - name: Install Linux desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev
+
+      # build.py builds the native libgore_save.so, the Flutter Linux bundle,
+      # and packs gore-save-editor-X.Y.Z-linux-x64.tar.gz.
+      - name: Build Linux tarball
+        run: python build.py gore-save-editor dist
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gore-save-editor-linux-x64
+          retention-days: 3
+          path: dist/gore-save-editor/*.tar.gz
+
+  gore-save-editor:
+    needs: [quality-gates, gore-save-editor-linux]
     if: >-
       (github.event_name == 'push' &&
         github.ref_type == 'tag' &&
@@ -179,6 +250,13 @@ jobs:
             dist/gore-save-editor/*.exe
             dist/gore-save-editor/appcast-windows.xml
 
+      # Unguarded so a smoke dispatch also proves the hand-off works.
+      - name: Download Linux build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gore-save-editor-linux-x64
+          path: dist/gore-save-editor
+
       # make_latest=true purely so the repo's landing release is the flagship
       # product. The updater no longer depends on it (see the feed step below),
       # so this flag can move to another product without breaking any client.
@@ -190,6 +268,7 @@ jobs:
           files: |
             dist/gore-save-editor/*.zip
             dist/gore-save-editor/*.exe
+            dist/gore-save-editor/*.tar.gz
             dist/gore-save-editor/appcast-windows.xml
           body_path: dist/gore-save-editor/RELEASE_NOTES.md
 

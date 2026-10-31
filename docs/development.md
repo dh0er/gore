@@ -88,7 +88,9 @@ Per-project build and run details live in each component's own README, e.g.
 On Linux, only Save Editor currently has a desktop runner. From the repository
 root, use `python build.py gore-save-editor run --debug`, or build its native
 core with `cargo build -p gore-save` and run `flutter run -d linux` from
-`apps/save-editor/`. Linux release packaging and the other GUI apps remain
+`apps/save-editor/`. `python build.py gore-save-editor dist` packs its
+Linux tarball; the release workflow builds it in the `gore-save-editor-linux`
+job and publishes it with the Windows files. The other products remain
 Windows-only.
 
 ## Release quality gates

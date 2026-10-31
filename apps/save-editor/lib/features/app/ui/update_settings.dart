@@ -5,8 +5,7 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 
 /// Update settings (auto-check toggle, manual check) shown in the Settings
-/// tab. Controls are disabled for builds that cannot update themselves
-/// (dev runs and the portable zip).
+/// tab. Controls are disabled for dev runs, which never check for updates.
 class UpdateSettingsCard extends ConsumerWidget {
   const UpdateSettingsCard({super.key});
 
@@ -15,8 +14,9 @@ class UpdateSettingsCard extends ConsumerWidget {
     final l10n = AppLocalizations.of(context);
     final autoCheck = ref.watch(autoUpdateCheckProvider);
     final available = isUpdateCheckAvailable;
-    // The portable build can check and point to a download, but cannot
-    // replace itself in place, so it shows a hint about copying the files.
+    // The portable zip and the Linux tarball can check and point to a
+    // download, but cannot replace themselves in place, so they show a hint
+    // about replacing the files.
     final showPortableNotice = available && !isInstalledBuild;
     final textTheme = Theme.of(context).textTheme;
     return Card(

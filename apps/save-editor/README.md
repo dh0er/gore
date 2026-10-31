@@ -79,13 +79,27 @@ Download `gore-save-editor-<version>-setup.exe` from the
 The app checks for updates on startup and prompts you when a new version is
 available.
 
-A portable zip is also attached to each release; the portable build does not
-auto-update.
+A portable zip is also attached to each release. The portable build does not
+replace itself: when a new version is out it opens the release page, and you
+replace your files with the new download.
+
+On Linux, download `gore-save-editor-<version>-linux-x64.tar.gz` from the same
+release, unpack it anywhere you can write to, and start `goresave` inside the
+unpacked folder:
+
+```sh
+tar -xzf gore-save-editor-<version>-linux-x64.tar.gz
+./gore-save-editor-<version>-linux-x64/goresave
+```
+
+It needs GTK 3, which desktop distributions and SteamOS already ship. Like
+the portable zip, it checks for new versions and opens the release page
+instead of updating itself.
 
 ## Requirements
 
 - Windows 10 or newer for the released installer and portable builds.
-- Linux x64 for running from source; release packages are currently Windows-only.
+- Linux x64 for the released tarball and for running from source.
 - Rust toolchain.
 - Flutter with Windows desktop support on Windows, or Linux desktop support on Linux.
 - Visual Studio 2022 with Desktop development with C++ for Windows builds.
@@ -140,6 +154,9 @@ python build.py gore-save-editor dist
 ```
 
 Add `installer` instead of `dist` to also compile the Inno Setup installer.
+
+On Linux, the same `dist` command builds the native `libgore_save.so` and the
+Flutter Linux bundle, and packs `dist/gore-save-editor/gore-save-editor-<version>-linux-x64.tar.gz`.
 
 ## Safety
 
