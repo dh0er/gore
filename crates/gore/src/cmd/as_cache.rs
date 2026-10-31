@@ -2960,6 +2960,20 @@ fn fail_after_full_graph_side_output_error<T>(
     );
 }
 
+/// Refuse an existing compile-module output before compiling. Publication is no-clobber, so
+/// without this check a lengthy compile would only fail at the very end.
+fn preflight_compile_module_output_absent(out: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(out) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => bail!(
+            "compiler output already exists (no-clobber): {}; choose a new output or remove the previous generated output before recompiling",
+            out.display()
+        ),
+        Err(error) => Err(error)
+            .with_context(|| format!("inspecting compiler output destination {}", out.display())),
+    }
+}
+
 /// Publish a synced mini without clobbering an existing output, retaining its creation handle
 /// and parent chain before it becomes visible. Reuse the durable CLI cache publication primitive.
 fn publish_cli_mini_noclobber(
@@ -3948,6 +3962,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let game = gore_loc::config::game_root(game).context("resolving game path")?;
             let expected_base = expected_base_from_args(expect_base, expect_base_sha256)?;
             let work_dir = resolve_compile_module_work_dir(work_dir, &game)?;
+            preflight_compile_module_output_absent(&out)?;
             gore_mod::script_sources::preflight_script_source_provenance_v1(&out)?;
             let source_bytes = read_regular_bounded(
                 &source,
@@ -7210,6 +7225,17 @@ mod default_cli_tests {
             publish_compile_module_outputs(&out, &mini, &base, publication_source(), || Ok(()))
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn compile_module_preflight_refuses_an_existing_output_before_compiling() {
+        let root = tempfile::tempdir().unwrap();
+        let out = root.path().join("authored.cache");
+        preflight_compile_module_output_absent(&out).unwrap();
+        std::fs::write(&out, b"previous build").unwrap();
+        let error = preflight_compile_module_output_absent(&out).unwrap_err();
+        assert!(error.to_string().contains("already exists (no-clobber)"));
+        assert_eq!(std::fs::read(&out).unwrap(), b"previous build");
     }
 
     #[cfg(windows)]

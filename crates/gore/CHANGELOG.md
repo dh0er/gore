@@ -8,7 +8,8 @@ uses the matching version section as the GitHub release notes.
 - Roll back compiler minis together with their captured source manifest and payloads
   when receipt publication or receipt-directory creation fails. Preserve substituted
   outputs and user-added files, and report recovery requirements when cleanup cannot
-  complete safely. Mini publication uses no-clobber semantics for every backend.
+  complete safely. Mini publication uses no-clobber semantics for every backend;
+  `gore as compile-module` refuses an existing output before compiling.
   Resolve junction/symlink output parents before pinning and publishing to their
   physical directory so ordinary redirected output locations remain supported.
 

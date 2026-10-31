@@ -1852,26 +1852,45 @@ fn apply_loadout_with_recompiler(
         let (winning_scripts, winner_edits_after_add, shadowed_add_targets, needs_source_rebuild) =
             retain_last_script_target_winners(scripts, targets, &mut script_source_groups)?;
         scripts = winning_scripts;
-        let (base, pristine_source) =
+        let (base, pristine_source, raw_base) =
             match rawfile_sources.remove(&raw_target_identity(&RawTarget::ScriptCache)) {
                 Some((_target, source)) => {
                     let pristine_source = crate::select_pristine_source(&gp.script_cache, prior)?;
                     (
                         read_raw_for_patch(&source, limits, &mut budget)?,
                         pristine_source,
+                        true,
                     )
                 }
-                None => read_pristine_for_patch(&gp.script_cache, prior, limits, &mut budget)?,
+                None => {
+                    let (base, pristine_source) =
+                        read_pristine_for_patch(&gp.script_cache, prior, limits, &mut budget)?;
+                    (base, pristine_source, false)
+                }
             };
+        // Sources record the pristine cache they were compiled against, so staleness means a
+        // pristine update. A raw whole-cache replacement over an unchanged pristine keeps the
+        // binary composition it always had instead of forcing an unsupported raw-base rebuild.
+        let pristine_sha256 = if raw_base {
+            pristine_source
+                .basis
+                .pristine
+                .strip_prefix("sha256:")
+                .ok_or_else(|| {
+                    ModError::Other("selected script pristine has no SHA-256 identity".into())
+                })?
+                .to_owned()
+        } else {
+            crate::script_sources::script_source_sha256_v1(&base)
+        };
         plan.bind_backup_identity(&gp.script_cache, pristine_source.basis)?;
-        let base_sha256 = crate::script_sources::script_source_sha256_v1(&base);
         let stale_keys = scripts
             .iter()
             .filter_map(|(_, _, payload)| {
                 let key = script_payload_key(payload);
                 script_source_groups
                     .get(&key)
-                    .filter(|group| group.base_cache_sha256 != base_sha256)
+                    .filter(|group| group.base_cache_sha256 != pristine_sha256)
                     .map(|_| key)
             })
             .collect::<BTreeSet<_>>();
@@ -3779,6 +3798,40 @@ mod tests {
         let error =
             apply_source_test(&game, &loadout(&[(&id, true)]), None, &mut compiler).unwrap_err();
         assert!(error.to_string().contains("source hash mismatch"));
+        assert_eq!(fs::read(game.script_cache()).unwrap(), original);
+    }
+
+    #[test]
+    fn script_sources_over_raw_cache_with_unchanged_pristine_compose_without_rebuild() {
+        let game = FakeGame::new();
+        let original = source_test_cache(&[("Diego", 1)], 1);
+        fs::write(game.script_cache(), &original).unwrap();
+        // A raw whole-cache replacement with the pristine GUID but different bytes.
+        let raw = source_test_cache(&[("Diego", 1), ("Extra", 5)], 1);
+        assert_ne!(raw, original);
+        let raw_id = game.add_rawfile_mod("raw-script", "RawSc", RawTarget::ScriptCache, &raw);
+        let id = add_source_test_mod(&game, "diego", "Diego", &original, "edit");
+        let mut compiler = TestScriptRecompiler::default();
+        let report = apply_source_test(
+            &game,
+            &loadout(&[(&raw_id, true), (&id, true)]),
+            None,
+            &mut compiler,
+        )
+        .unwrap();
+        assert!(compiler.calls.is_empty());
+        assert!(!report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("recompiled")));
+        let deployed = fs::read(game.script_cache()).unwrap();
+        let fingerprints = gore_as::manager_rebuild::module_fingerprints(&deployed).unwrap();
+        assert!(fingerprints.contains_key("Extra"));
+        assert_ne!(
+            fingerprints["Diego"],
+            gore_as::manager_rebuild::module_fingerprints(&original).unwrap()["Diego"]
+        );
+        undeploy_all(&game.root).unwrap();
         assert_eq!(fs::read(game.script_cache()).unwrap(), original);
     }
 
